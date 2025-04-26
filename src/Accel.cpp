@@ -1,5 +1,4 @@
 ﻿#include "Accel.h"
-#include <stdexcept>
 
 Accel::Accel() = default;
 

@@ -4,6 +4,7 @@ struct HitPayload
     vec3 normal;
     vec3 emission;
     vec3 brdf;
+    bool isPathtracing;
     bool done;
 };
 

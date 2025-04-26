@@ -7,6 +7,8 @@
 
 #include <vector>
 
+#include "Camera.h"
+
 constexpr int WIDTH = 800;
 constexpr int HEIGHT = 800;
 
@@ -94,9 +96,9 @@ int main() {
     Accel topAccel{context, instanceGeometry, 1, vk::AccelerationStructureTypeKHR::eTopLevel};
 
     // Load shaders
-    const std::vector<char> raygenCode = Utils::readFile("../shaders/raygen.rgen.spv");
-    const std::vector<char> missCode = Utils::readFile("../shaders/miss.rmiss.spv");
-    const std::vector<char> chitCode = Utils::readFile("../shaders/closesthit.rchit.spv");
+    const std::vector<char> raygenCode = Utils::readFile("../shaders/raygen.spv");
+    const std::vector<char> missCode = Utils::readFile("../shaders/miss.spv");
+    const std::vector<char> chitCode = Utils::readFile("../shaders/closesthit.spv");
 
     std::vector<vk::UniqueShaderModule> shaderModules(3);
     shaderModules[0] = context.device->createShaderModuleUnique({{}, raygenCode.size(), reinterpret_cast<const uint32_t*>(raygenCode.data())});
@@ -130,7 +132,7 @@ int main() {
     // Create pipeline layout
     vk::PushConstantRange pushRange;
     pushRange.setOffset(0);
-    pushRange.setSize(sizeof(int));
+    pushRange.setSize(sizeof(PushConstants));
     pushRange.setStageFlags(vk::ShaderStageFlagBits::eRaygenKHR);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
@@ -196,12 +198,20 @@ int main() {
     writes[4].setBufferInfo(faceBuffer.descBufferInfo);
     context.device->updateDescriptorSets(writes, nullptr);
 
+    //CAMERA
+    PerspectiveCamera camera(glm::vec3(0, -1, 3.25), glm::vec3(0, -1, 0), glm::vec3(0, -1, 0), static_cast<float>(WIDTH)/HEIGHT, 50);
+
     // Main loop
     uint32_t imageIndex = 0;
     int frame = 0;
     vk::UniqueSemaphore imageAcquiredSemaphore = context.device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
     while (!glfwWindowShouldClose(context.window)) {
         glfwPollEvents();
+
+        //CAMERA
+        auto cameraData = camera.getGpuCameraData();
+
+        PushConstants pushConstantData(frame, cameraData);
 
         // Acquire next image
         imageIndex = context.device->acquireNextImageKHR(*swapchain, UINT64_MAX, *imageAcquiredSemaphore).value;
@@ -211,7 +221,7 @@ int main() {
         commandBuffer.begin(vk::CommandBufferBeginInfo());
         commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipeline);
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, *pipelineLayout, 0, *descSet, nullptr);
-        commandBuffer.pushConstants(*pipelineLayout, vk::ShaderStageFlagBits::eRaygenKHR, 0, sizeof(int), &frame);
+        commandBuffer.pushConstants(*pipelineLayout, vk::ShaderStageFlagBits::eRaygenKHR, 0, sizeof(PushConstants), &pushConstantData);
         commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, WIDTH, HEIGHT, 1);
 
         vk::Image srcImage = *outputImage.image;

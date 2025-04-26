@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <fstream>
+#include <cstdint>
 #include <vector>
 #include <string>
 #include "Mesh.h"

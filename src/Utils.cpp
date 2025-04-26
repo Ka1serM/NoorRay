@@ -10,7 +10,7 @@ void Utils::loadFromFile(std::vector<Vertex>& vertices, std::vector<uint32_t>& i
     std::vector<tinyobj::material_t> materials;
     std::string warn, err;
 
-    if (!LoadObj(&attrib, &shapes, &materials, &warn, &err, "../assets/CornellBox-Original.obj", "../assets")) {
+    if (!LoadObj(&attrib, &shapes, &materials, &warn, &err, "../assets/CornellBoxMarcel.obj", "../assets")) {
         throw std::runtime_error(warn + err);
     }
 

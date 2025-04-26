@@ -3,14 +3,20 @@ project(GpuPathtracer VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
-# GLFW Setup
+# GLFW
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/glfw)
 
+# GLM
+add_subdirectory(external/glm)
+
 # === Collect all source files in src directory ===
-file(GLOB_RECURSE SRC_FILES src/*.cpp)
+file(GLOB_RECURSE SRC_FILES
+    src/*.cpp
+    src/*.h
+)
 
 # === Collect shader files (but don't compile them) ===
 file(GLOB_RECURSE SHADER_FILES shaders/*)
@@ -21,42 +27,19 @@ file(GLOB_RECURSE ASSET_FILES assets/*)
 # === Create the main executable (GpuPathtracer) ===
 add_executable(GpuPathtracer ${SRC_FILES})
 
-# Link libraries and set include directories
-target_link_libraries(GpuPathtracer PUBLIC glfw)
+# Link libraries
+target_link_libraries(GpuPathtracer
+    PUBLIC
+        glfw
+        glm
+)
+
+# Include Directories
 target_include_directories(GpuPathtracer PUBLIC
     "$ENV{VULKAN_SDK}/Include"
     "${PROJECT_SOURCE_DIR}/external/tinyobjloader"
     "${PROJECT_SOURCE_DIR}/src"
 )
-
-# === Shader compilation target (dynamic) ===
-add_custom_target(CompileShaders ALL
-    COMMENT "Compiling shaders..."
-)
-
-# Loop through each shader file and compile it to SPIR-V
-foreach(SHADER_FILE ${SHADER_FILES})
-    # Skip files that are already .spv or other shader-related extensions
-    if(SHADER_FILE MATCHES ".*\\.(spv|glsl)$")
-        continue()
-    endif()
-    
-    # Get the shader name (basename without extension)
-    get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
-    get_filename_component(SHADER_EXT ${SHADER_FILE} EXT)
-    set(SHADER_OUTPUT "${CMAKE_SOURCE_DIR}/shaders/${SHADER_NAME}${SHADER_EXT}.spv")
-    
-    # Add a custom command for shader compilation using glslc
-    add_custom_command(
-        TARGET CompileShaders
-        COMMAND $ENV{VULKAN_SDK}/Bin/glslc.exe ${SHADER_FILE} -o ${SHADER_OUTPUT} --target-env=vulkan1.3
-        DEPENDS ${SHADER_FILE}
-        COMMENT "Compiling shader: ${SHADER_NAME}"
-    )
-endforeach()
-
-# Ensure the main executable depends on shader compilation
-add_dependencies(GpuPathtracer CompileShaders)
 
 # This creates a source group for organizing files in Visual Studio's Solution Explorer
 source_group("Shaders" FILES ${SHADER_FILES})

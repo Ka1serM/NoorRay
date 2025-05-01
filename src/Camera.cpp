@@ -1,77 +1,88 @@
 ﻿#include "Camera.h"
 
-PerspectiveCamera::PerspectiveCamera(
-    const glm::vec3& origin,
-    const glm::vec3& lookAt,
-    const glm::vec3& up,
-    float aspect,
-    float aperture,
-    float focusDist,
-    float focalLengthMM,
-    float sensorWidthMM
-) : origin(origin)
-{
-    float focalLengthMeters = focalLengthMM * 0.001f;
-    lensRadius = (aperture > 0.0f) ? (focalLengthMeters / (2.0f * aperture * 0.1f)) : 0.0f;
+#define GLM_ENABLE_EXPERIMENTAL
+#include "GLFW/glfw3.h"
+#include "glm/gtx/rotate_vector.hpp"
 
-    float fovRadians = 2.0f * atanf((sensorWidthMM * 0.5f) / focalLengthMM);
-    float halfHeight = tanf(fovRadians * 0.5f);
-    float halfWidth = aspect * halfHeight;
+PerspectiveCamera::PerspectiveCamera(const glm::vec3& origin, const glm::vec3& lookAt, const glm::vec3& up, float aspect, float fovDegrees)
+    : UP(up), position(origin), prevX(-1), prevY(-1) {
 
-    viewVector   = normalize(origin - lookAt);
-    rightVector  = normalize(cross(up, viewVector));
-    upVector     = cross(viewVector, rightVector);
-
-    lowerLeft = origin
-              - rightVector * halfWidth * focusDist
-              - upVector    * halfHeight * focusDist
-              - viewVector  * focusDist;
-
-    horizontal = rightVector * 2.0f * halfWidth * focusDist;
-    vertical   = upVector    * 2.0f * halfHeight * focusDist;
-}
-
-PerspectiveCamera::PerspectiveCamera(
-    const glm::vec3& origin,
-    const glm::vec3& lookAt,
-    const glm::vec3& up,
-    float aspect,
-    float fovDegrees
-) : origin(origin), lensRadius(0.0f)
-{
     float theta = glm::radians(fovDegrees);
     float halfHeight = tanf(theta * 0.5f);
     float halfWidth = aspect * halfHeight;
-    float focusDist = 1.0f;
 
-    viewVector   = normalize(origin - lookAt);
-    rightVector  = normalize(cross(up, viewVector));
-    upVector     = cross(viewVector, rightVector);
+    glm::vec3 viewVector = normalize(lookAt - origin); // Forward
+    glm::vec3 rightVector = normalize(cross(viewVector, UP));
+    glm::vec3 upVector = cross(rightVector, viewVector); // Recompute orthogonal up
 
-    lowerLeft = origin
-              - rightVector * halfWidth * focusDist
-              - upVector    * halfHeight * focusDist
-              - viewVector  * focusDist;
-
-    horizontal = rightVector * 2.0f * halfWidth * focusDist;
-    vertical   = upVector    * 2.0f * halfHeight * focusDist;
+    direction = viewVector;
+    horizontal = rightVector * halfWidth;
+    vertical = upVector * halfHeight;
 }
 
-void PerspectiveCamera::update(GLFWwindow *window, double mouseX, double mouseY)
-{
+CameraData PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
+    //Detect movement
+    glm::vec3 oldDirection = direction;
+    glm::vec3 oldPosition = position;
 
+    // Update mouse delta and get it
+    double deltaX, deltaY;
+    inputTracker.getMouseDelta(deltaX, deltaY);
+
+    float sensitivity = 10.0f * deltaTime;
+
+    //Apply mouse movement (yaw and pitch)
+    glm::vec3 right = normalize(cross(direction, UP));         //Right from camera basis
+    glm::vec3 up = normalize(cross(right, direction));         //True up vector (orthogonalized)
+
+    //Apply yaw (around UP)
+    glm::mat4 yawRot = glm::rotate(glm::mat4(1.0f), glm::radians(-static_cast<float>(deltaX) * sensitivity), UP);
+    direction = glm::vec3(yawRot * glm::vec4(direction, 0.0f));
+
+    //Recompute right after yaw rotation
+    right = normalize(cross(direction, UP));
+
+    //Apply pitch (around local right)
+    glm::mat4 pitchRot = glm::rotate(glm::mat4(1.0f), glm::radians(-static_cast<float>(deltaY) * sensitivity), right);
+    direction = glm::vec3(pitchRot * glm::vec4(direction, 0.0f));
+    direction = normalize(direction);
+
+    right = normalize(cross(direction, UP));
+    up = normalize(cross(right, direction));
+
+    horizontal = right * length(horizontal);
+    vertical = up * length(vertical);
+
+    //Scaled by deltaTime
+    float movementSpeed = 20.0f * deltaTime;
+    if (inputTracker.isKeyHeld(GLFW_KEY_LEFT_SHIFT)) //Sprinting
+        movementSpeed *= 10.0f;
+
+    if (inputTracker.isKeyHeld(GLFW_KEY_W))
+        position += direction * movementSpeed;
+
+    if (inputTracker.isKeyHeld(GLFW_KEY_S))
+        position -= direction * movementSpeed;
+
+    if (inputTracker.isKeyHeld(GLFW_KEY_A))
+        position -= normalize(cross(direction, UP)) * movementSpeed;
+
+    if (inputTracker.isKeyHeld(GLFW_KEY_D))
+        position += normalize(cross(direction, UP)) * movementSpeed;
+
+    if (inputTracker.isKeyHeld(GLFW_KEY_E))
+        position += UP * movementSpeed;
+
+    if (inputTracker.isKeyHeld(GLFW_KEY_Q))
+        position -= UP * movementSpeed;
+
+    isMoving = (oldDirection != direction) || (oldPosition != position);
+
+    CameraData cameraData{};
+    cameraData.direction = direction;
+    cameraData.isMoving = isMoving;
+    cameraData.position = position;
+    cameraData.horizontal = horizontal;
+    cameraData.vertical = vertical;
+    return cameraData;
 }
-
-CameraData PerspectiveCamera::getGpuCameraData() const {
-    return CameraData(
-        origin,
-        lowerLeft,
-        horizontal,
-        vertical,
-        rightVector,
-        upVector,
-        viewVector,
-        lensRadius
-    );
-}
-

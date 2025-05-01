@@ -19,6 +19,9 @@ Buffer::Buffer(const Context& context, Type type, vk::DeviceSize size, const voi
     } else if (type == Type::ShaderBindingTable) {
         usage = Usage::eShaderBindingTableKHR | Usage::eShaderDeviceAddress;
         memoryProps = Memory::eHostVisible | Memory::eHostCoherent;
+    } else if (type == Type::Storage) {
+        usage = Usage::eStorageBuffer | Usage::eShaderDeviceAddress;
+        memoryProps = Memory::eHostVisible | Memory::eHostCoherent | Memory::eDeviceLocal;
     }
 
     buffer = context.device->createBufferUnique({{}, size, usage});

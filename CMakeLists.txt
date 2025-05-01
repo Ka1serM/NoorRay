@@ -14,14 +14,14 @@ add_subdirectory(external/glm)
 
 # === Collect all source files in src directory ===
 file(GLOB_RECURSE SRC_FILES
-    src/*.cpp
-    src/*.h
+        src/*.cpp
+        src/*.h
 )
 
-# === Collect shader files (but don't compile them) ===
-file(GLOB_RECURSE SHADER_FILES shaders/*)
+# === Collect shader files from the src/shaders directory (do not compile) ===
+file(GLOB_RECURSE SHADER_FILES src/shaders/*)
 
-# === Collect asset files (but don't compile them) ===
+# === Collect asset files (do not compile) ===
 file(GLOB_RECURSE ASSET_FILES assets/*)
 
 # === Create the main executable (GpuPathtracer) ===
@@ -29,25 +29,26 @@ add_executable(GpuPathtracer ${SRC_FILES})
 
 # Link libraries
 target_link_libraries(GpuPathtracer
-    PUBLIC
+        PUBLIC
         glfw
         glm
 )
 
 # Include Directories
 target_include_directories(GpuPathtracer PUBLIC
-    "$ENV{VULKAN_SDK}/Include"
-    "${PROJECT_SOURCE_DIR}/external/tinyobjloader"
-    "${PROJECT_SOURCE_DIR}/src"
+        "$ENV{VULKAN_SDK}/Include"
+        "${PROJECT_SOURCE_DIR}/external/tinyobjloader"
+        "${PROJECT_SOURCE_DIR}/external/stb"
+        "${PROJECT_SOURCE_DIR}/src"
 )
 
 # This creates a source group for organizing files in Visual Studio's Solution Explorer
-source_group("Shaders" FILES ${SHADER_FILES})
+source_group("src/shaders" FILES ${SHADER_FILES})
 source_group("Assets" FILES ${ASSET_FILES})
 
 # For Visual Studio, add the files as resources but not for compilation
-set_source_files_properties(${SHADER_FILES} ${ASSET_FILES} PROPERTIES 
-    HEADER_FILE_ONLY TRUE  # Mark as header-only so they won't be compiled
+set_source_files_properties(${SHADER_FILES} ${ASSET_FILES} PROPERTIES
+        HEADER_FILE_ONLY TRUE  # Mark as header-only so they won't be compiled
 )
 
 # Add shader and asset files to IDE only, not for compilation

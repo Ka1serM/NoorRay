@@ -5,6 +5,7 @@
 class Buffer {
 public:
     enum class Type {
+        Storage,
         Scratch,
         AccelInput,
         AccelStorage,

@@ -5,7 +5,6 @@
 
 class Accel {
 public:
-    Accel();
     Accel(const Context& context, vk::AccelerationStructureGeometryKHR geometry, uint32_t primitiveCount, vk::AccelerationStructureTypeKHR type);
 
     Buffer buffer;

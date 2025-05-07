@@ -38,6 +38,7 @@ target_link_libraries(GpuPathtracer
 target_include_directories(GpuPathtracer PUBLIC
         "$ENV{VULKAN_SDK}/Include"
         "${PROJECT_SOURCE_DIR}/external/tinyobjloader"
+        "${PROJECT_SOURCE_DIR}/external/tinygltf"
         "${PROJECT_SOURCE_DIR}/external/stb"
         "${PROJECT_SOURCE_DIR}/src"
 )

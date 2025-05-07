@@ -1,7 +1,5 @@
 ﻿#include "Accel.h"
 
-Accel::Accel() = default;
-
 Accel::Accel(const Context& context, vk::AccelerationStructureGeometryKHR geometry, uint32_t primitiveCount, vk::AccelerationStructureTypeKHR type) {
     vk::AccelerationStructureBuildGeometryInfoKHR buildGeometryInfo;
     buildGeometryInfo.setType(type);
@@ -9,7 +7,8 @@ Accel::Accel(const Context& context, vk::AccelerationStructureGeometryKHR geomet
     buildGeometryInfo.setGeometries(geometry);
 
     // Create buffer
-    vk::AccelerationStructureBuildSizesInfoKHR buildSizesInfo = context.device->getAccelerationStructureBuildSizesKHR( //
+    vk::AccelerationStructureBuildSizesInfoKHR buildSizesInfo = context.device->getAccelerationStructureBuildSizesKHR(
+        //
         vk::AccelerationStructureBuildTypeKHR::eDevice, buildGeometryInfo, primitiveCount);
     vk::DeviceSize size = buildSizesInfo.accelerationStructureSize;
     buffer = Buffer{context, Buffer::Type::AccelStorage, size};

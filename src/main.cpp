@@ -9,10 +9,9 @@
 #include "Accel.h"
 #include "Utils.h"
 #include "Camera.h"
-#include "PushConstants.h"
-
-constexpr int WIDTH = 1000;
-constexpr int HEIGHT = 1000;
+#include "ConvertImageComputeShader.h"
+#include "Globals.h"
+#include "Texture.h"
 
 int main() {
     Context context(WIDTH, HEIGHT);
@@ -38,24 +37,36 @@ int main() {
     commandBufferInfo.setCommandBufferCount(static_cast<uint32_t>(swapchainImages.size()));
     std::vector<vk::UniqueCommandBuffer> commandBuffers = context.device->allocateCommandBuffersUnique(commandBufferInfo);
 
+    Image inputImage{context, WIDTH, HEIGHT, vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst};
     Image outputImage{context,WIDTH, HEIGHT, vk::Format::eB8G8R8A8Unorm, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst};
 
-//REGION BUFFERS
+    //REGION BUFFERS
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
     std::vector<Material> materials;
     std::vector<PointLight> pointLights;
 
-    //pointLights.push_back(PointLight{});
+    // PointLight placeholder{};
+    // placeholder.intensity = 1.0f;
+    // placeholder.color = glm::vec3(1.0f, 1.0f, 1.0f);
+    // placeholder.position = glm::vec3(1000.0f, -1000.0f, 0.0f);
+    // pointLights.push_back(placeholder);
 
-    Utils::loadObj("../assets/Valorant.obj", vertices, indices, faces, materials, pointLights);
+    std::vector<Texture> textures;
+    Utils::loadObj(context, "../assets/LittleTokyo.obj", vertices, indices, faces, materials, pointLights, textures);
+    //Utils::loadGltf("../assets/Valorant.gltf", vertices, indices, faces, materials, pointLights);
 
     Buffer vertexBuffer{context, Buffer::Type::AccelInput, sizeof(Vertex) * vertices.size(), vertices.data()};
     Buffer indexBuffer{context, Buffer::Type::AccelInput, sizeof(uint32_t) * indices.size(), indices.data()};
     Buffer faceBuffer{context, Buffer::Type::AccelInput, sizeof(Face) * faces.size(), faces.data()};
     Buffer materialBuffer{context, Buffer::Type::Storage, sizeof(Material) * materials.size(), materials.data()};
     Buffer pointLightBuffer{context, Buffer::Type::Storage, sizeof(PointLight) * pointLights.size(), pointLights.data()};
+
+    std::vector<vk::DescriptorImageInfo> textureImageInfos;
+    for (const auto& texture : textures)
+        textureImageInfos.push_back(texture.getDescriptorInfo());
+    Buffer textureBuffer{context, Buffer::Type::Storage, sizeof(vk::DescriptorImageInfo) * textureImageInfos.size(), textureImageInfos.data()};
 
     //Create bottom level accel structure
     vk::AccelerationStructureGeometryTrianglesDataKHR triangleData;
@@ -72,23 +83,33 @@ int main() {
     triangleGeometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
 
     const auto primitiveCount = static_cast<uint32_t>(indices.size() / 3);
-
     Accel bottomAccel{context, triangleGeometry, primitiveCount, vk::AccelerationStructureTypeKHR::eBottomLevel};
 
     //Create top level accel structure
-    vk::TransformMatrixKHR transformMatrix = std::array{
-        std::array{1.0f, 0.0f, 0.0f, 0.0f},
-        std::array{0.0f, 1.0f, 0.0f, 0.0f},
-        std::array{0.0f, 0.0f, 1.0f, 0.0f},
-    };
+    std::vector<vk::AccelerationStructureInstanceKHR> accelInstances;
 
-    vk::AccelerationStructureInstanceKHR accelInstance;
-    accelInstance.setTransform(transformMatrix);
-    accelInstance.setMask(0xFF);
-    accelInstance.setAccelerationStructureReference(bottomAccel.buffer.deviceAddress);
-    accelInstance.setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
+    int gridSize = 4;
+    float spacing = 100.0f;
 
-    Buffer instancesBuffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR), &accelInstance};
+    for (int x = 0; x < gridSize; ++x) {
+        for (int z = 0; z < gridSize; ++z) {
+            vk::TransformMatrixKHR transformMatrix = std::array{
+                std::array{1.0f, 0.0f, 0.0f, x * spacing},
+                std::array{0.0f, 1.0f, 0.0f, 0.0f},
+                std::array{0.0f, 0.0f, 1.0f, z * spacing},
+            };
+
+            vk::AccelerationStructureInstanceKHR accelInstance;
+            accelInstance.setTransform(transformMatrix);
+            accelInstance.setMask(0xFF);
+            accelInstance.setAccelerationStructureReference(bottomAccel.buffer.deviceAddress);
+            accelInstance.setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
+
+            accelInstances.push_back(accelInstance);
+        }
+    }
+
+    Buffer instancesBuffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * accelInstances.size(), accelInstances.data()};
 
     vk::AccelerationStructureGeometryInstancesDataKHR instancesData;
     instancesData.setArrayOfPointers(false);
@@ -99,7 +120,7 @@ int main() {
     instanceGeometry.setGeometry({instancesData});
     instanceGeometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
 
-    Accel topAccel{context, instanceGeometry, 1, vk::AccelerationStructureTypeKHR::eTopLevel};
+    Accel topAccel{context, instanceGeometry, static_cast<uint32_t>(accelInstances.size()), vk::AccelerationStructureTypeKHR::eTopLevel};
 
     std::vector<std::pair<std::string, vk::ShaderStageFlagBits>> shaderPaths = {
         {"../src/shaders/RayGeneration.spv", vk::ShaderStageFlagBits::eRaygenKHR},
@@ -136,40 +157,69 @@ int main() {
         }
     }
 
-    //Descriptor Sets
+    // Descriptor Set Layout Bindings
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
-        {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Binding = 0 : TLAS
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Binding = 1 : Storage image
-        {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR}, // Binding = 2 : Vertices
-        {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR}, // Binding = 3 : Indices
-        {4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR}, // Binding = 4 : Faces
-        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eRaygenKHR}, // Binding = 5 : Materials
-        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eRaygenKHR}, // Binding = 6 : PointLights
+        {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+        {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
+        {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
+        {4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
+        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
+        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
+        {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR}
     };
 
-    // Create desc set layout
-    vk::DescriptorSetLayoutCreateInfo descSetLayoutInfo;
+    //Descriptor binding flags for bindless
+    std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
+    bindingFlags[7] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
+
+    vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+    bindingFlagsInfo.setBindingFlags(bindingFlags);
+
+    //Create descriptor set layout
+    vk::DescriptorSetLayoutCreateInfo descSetLayoutInfo{};
     descSetLayoutInfo.setBindings(bindings);
+    descSetLayoutInfo.setPNext(&bindingFlagsInfo);
+
     vk::UniqueDescriptorSetLayout descSetLayout = context.device->createDescriptorSetLayoutUnique(descSetLayoutInfo);
 
-    // Create desc set
-    vk::UniqueDescriptorSet descSet = context.allocateDescSet(*descSetLayout);
+    //Descriptor set allocation with variable descriptor count
+    uint32_t actualTextureCount = static_cast<uint32_t>(textureImageInfos.size());
+
+    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
+    variableCountAllocInfo.setDescriptorCounts(actualTextureCount);
+
+    vk::DescriptorSetAllocateInfo allocInfo{};
+    allocInfo.setDescriptorPool(context.descPool.get());
+    allocInfo.setSetLayouts(*descSetLayout);
+    allocInfo.setDescriptorSetCount(1);
+    allocInfo.setPNext(&variableCountAllocInfo);
+
+    std::vector<vk::UniqueDescriptorSet> descSets = context.device->allocateDescriptorSetsUnique(allocInfo);
+    vk::UniqueDescriptorSet descSet = std::move(descSets[0]);
+
+    // Descriptor writes
     std::vector<vk::WriteDescriptorSet> writes(bindings.size());
-    for (int i = 0; i < bindings.size(); i++) {
+    for (size_t i = 0; i < bindings.size(); ++i) {
         writes[i].setDstSet(*descSet);
+        writes[i].setDstBinding(bindings[i].binding);
         writes[i].setDescriptorType(bindings[i].descriptorType);
         writes[i].setDescriptorCount(bindings[i].descriptorCount);
-        writes[i].setDstBinding(bindings[i].binding);
     }
 
+    // Now assign the descriptor-specific info
     writes[0].setPNext(&topAccel.descAccelInfo);
-    writes[1].setImageInfo(outputImage.descImageInfo);
+    writes[1].setImageInfo(inputImage.descImageInfo);
     writes[2].setBufferInfo(vertexBuffer.descBufferInfo);
     writes[3].setBufferInfo(indexBuffer.descBufferInfo);
     writes[4].setBufferInfo(faceBuffer.descBufferInfo);
     writes[5].setBufferInfo(materialBuffer.descBufferInfo);
     writes[6].setBufferInfo(pointLightBuffer.descBufferInfo);
-    context.device->updateDescriptorSets(writes, nullptr);
+    writes[7].setImageInfo(textureImageInfos);
+    writes[7].setDescriptorCount(actualTextureCount);
+
+    //Final descriptor update
+    context.device->updateDescriptorSets(writes, {});
 
     //Create pipeline layout
     vk::PushConstantRange pushRange;
@@ -189,7 +239,7 @@ int main() {
     rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
     rtPipelineInfo.setLayout(*pipelineLayout);
 
-    auto result = context.device->createRayTracingPipelineKHRUnique(nullptr, nullptr, rtPipelineInfo);
+    auto result = context.device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
     if (result.result != vk::Result::eSuccess)
         throw std::runtime_error("failed to create ray tracing pipeline.");
 
@@ -210,7 +260,6 @@ int main() {
         throw std::runtime_error("failed to get ray tracing shader group handles.");
 
     //Create Shader Binding Table (SBT)
-
     //Calculate the total size for each group
     uint32_t raygenSize = raygenCount * handleSizeAligned;
     uint32_t missSize = missCount * handleSizeAligned;
@@ -232,11 +281,11 @@ int main() {
     //Setup Input
     glfwSetInputMode(context.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
 
-    static bool isPathtracing = false;
+    static bool isRayTracing = false;
     glfwSetKeyCallback(context.window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
         if (key == GLFW_KEY_P && action == GLFW_PRESS) {
-            isPathtracing = !isPathtracing;
-            std::cout << (isPathtracing ? "Path tracing enabled" : "Path tracing disabled") << std::endl;
+            isRayTracing = !isRayTracing;
+            std::cout << (isRayTracing ? "Switched to simple Ray Tracing" : "Switched to Path Tracing") << std::endl;
         }
     });
 
@@ -244,24 +293,39 @@ int main() {
 
     vk::UniqueSemaphore imageAcquiredSemaphore = context.device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
 
-    // Main loop
+    ConvertImageComputeShader convertImage("../src/shaders/ConvertImage.spv", context, inputImage.view.get(), outputImage.view.get());
+
+    //Main loop
     int frame = 0;
     uint32_t imageIndex = 0;
     auto lastTime = std::chrono::high_resolution_clock::now();
+    float timeAccumulator = 0.0f;
+    int frameCounter = 0;
+
     while (!glfwWindowShouldClose(context.window)) {
         //Delta time
         auto currentTime = std::chrono::high_resolution_clock::now();
         float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
         lastTime = currentTime;
 
-        std::cout << "FPS: " << 1.0f / deltaTime << std::endl;
+        timeAccumulator += deltaTime;
+        frameCounter++;
+
+        if (timeAccumulator >= 1.0f) {
+            std::cout << "Average FPS: " << frameCounter / timeAccumulator << std::endl;
+            timeAccumulator = 0.0f;
+            frameCounter = 0;
+        }
 
         //Camera Update
         glfwPollEvents();
         inputTracker.update();
 
         //Push Constants
-        PushConstants pushConstantData(frame, isPathtracing, camera.update(inputTracker, deltaTime));
+        PushConstants pushConstantData;
+        pushConstantData.push.frame = frame;
+        pushConstantData.push.isRayTracing = isRayTracing;
+        pushConstantData.camera = camera.update(inputTracker, deltaTime);
 
         //Acquire next image
         imageIndex = context.device->acquireNextImageKHR(*swapchain, UINT64_MAX, *imageAcquiredSemaphore).value;
@@ -270,18 +334,15 @@ int main() {
         vk::CommandBuffer commandBuffer = *commandBuffers[imageIndex];
         commandBuffer.begin(vk::CommandBufferBeginInfo());
         commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipeline);
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, *pipelineLayout, 0, *descSet, nullptr);
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, *pipelineLayout, 0, *descSet, {});
         commandBuffer.pushConstants(*pipelineLayout, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR, 0, sizeof(PushConstants), &pushConstantData);
         commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, WIDTH, HEIGHT, 1);
 
-        vk::Image srcImage = *outputImage.image;
-        vk::Image dstImage = swapchainImages[imageIndex];
-        Image::setImageLayout(commandBuffer, srcImage, vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal);
-        Image::setImageLayout(commandBuffer, dstImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-        Image::copyImage(commandBuffer, srcImage, dstImage, outputImage.info.extent);
-        Image::setImageLayout(commandBuffer, srcImage, vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eGeneral);
-        Image::setImageLayout(commandBuffer, dstImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR);
+        //Convert 32bit float to 8bit image for display, read from inputImage and write to outputImage
+        convertImage.dispatch(commandBuffer, (WIDTH + 15) / 16, (HEIGHT + 15) / 16, 1);
 
+        //Transition output image to presentable layout
+        outputImage.transitionAndCopyTo(commandBuffer, swapchainImages[imageIndex], {WIDTH, HEIGHT, 1});
         commandBuffer.end();
 
         //Submit
@@ -298,7 +359,11 @@ int main() {
             throw std::runtime_error("failed to present.");
 
         context.queue.waitIdle();
-        frame++;
+
+        if (pushConstantData.camera.isMoving) //reset frame counter when cam is moving
+            frame = 0;
+        else
+            frame++;
     }
 
     context.device->waitIdle();

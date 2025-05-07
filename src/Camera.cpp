@@ -43,9 +43,8 @@ CameraData PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime
     right = normalize(cross(direction, UP));
 
     //Apply pitch (around local right)
-    glm::mat4 pitchRot = glm::rotate(glm::mat4(1.0f), glm::radians(-static_cast<float>(deltaY) * sensitivity), right);
-    direction = glm::vec3(pitchRot * glm::vec4(direction, 0.0f));
-    direction = normalize(direction);
+    glm::mat4 pitchRot = rotate(glm::mat4(1.0f), glm::radians(-static_cast<float>(deltaY) * sensitivity), right);
+    direction = normalize(glm::vec3(pitchRot * glm::vec4(direction, 0.0f)));
 
     right = normalize(cross(direction, UP));
     up = normalize(cross(right, direction));
@@ -76,7 +75,8 @@ CameraData PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime
     if (inputTracker.isKeyHeld(GLFW_KEY_Q))
         position -= UP * movementSpeed;
 
-    isMoving = (oldDirection != direction) || (oldPosition != position);
+    float epsylon = 0.001f;
+    bool isMoving = !all(epsilonEqual(oldDirection, direction, epsylon)) || !all(epsilonEqual(oldPosition, position, epsylon));
 
     CameraData cameraData{};
     cameraData.direction = direction;

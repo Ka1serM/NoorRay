@@ -1,7 +1,19 @@
 const highp float PI = 3.14159265358979323846;
 
 const float RAY_EPSYLON = 0.000001;
-const float SHADOW_EPSYLON = 0.001;
+const float SHADOW_EPSYLON = 0.00001;
+
+vec3 calculateBarycentric(vec3 attribs) {
+    return vec3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
+}
+
+vec3 interpolateBarycentric(vec3 bary, vec3 p0, vec3 p1, vec3 p2) {
+    return p0 * bary.x + p1 * bary.y + p2 * bary.z;
+}
+
+vec2 interpolateBarycentric(vec3 bary, vec2 p0, vec2 p1, vec2 p2) {
+    return p0 * bary.x + p1 * bary.y + p2 * bary.z;
+}
 
 float D_GGX(float NdotH, float roughness) {
     float a = roughness * roughness;

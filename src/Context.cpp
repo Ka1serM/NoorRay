@@ -1,5 +1,7 @@
 ﻿#include "Context.h"
 #include <iostream>
+
+#include "Globals.h"
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 Context::Context(int width, int height) {
@@ -76,6 +78,7 @@ Context::Context(int width, int height) {
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME // BINDLESS
     };
 
     if (!checkDeviceExtensionSupport(deviceExtensions)) {
@@ -86,17 +89,46 @@ Context::Context(int width, int height) {
     deviceInfo.setQueueCreateInfos(queueCreateInfo);
     deviceInfo.setPEnabledExtensionNames(deviceExtensions);
 
-    vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{true};
-    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures{true};
-    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{true};
-    vk::StructureChain createInfoChain{
-        deviceInfo,
-        bufferDeviceAddressFeatures,
-        rayTracingPipelineFeatures,
-        accelerationStructureFeatures,
-    };
+    //SAMPLER
+    vk::PhysicalDeviceFeatures2 deviceFeatures{};
+    deviceFeatures.features.samplerAnisotropy = VK_TRUE;
+
+    vk::StructureChain<
+        vk::DeviceCreateInfo,
+        vk::PhysicalDeviceBufferDeviceAddressFeatures,
+        vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+        vk::PhysicalDeviceDescriptorIndexingFeatures,
+        vk::PhysicalDeviceFeatures2
+    > createInfoChain;
+
+    createInfoChain.get<vk::DeviceCreateInfo>()
+        .setQueueCreateInfos(queueCreateInfo)
+        .setPEnabledExtensionNames(deviceExtensions);
+
+    createInfoChain.get<vk::PhysicalDeviceFeatures2>()
+        .features.samplerAnisotropy = VK_TRUE;
+
+    createInfoChain.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
+        .bufferDeviceAddress = VK_TRUE;
+
+    createInfoChain.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>()
+        .rayTracingPipeline = VK_TRUE;
+
+    createInfoChain.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>()
+        .accelerationStructure = VK_TRUE;
+
+    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
+        .runtimeDescriptorArray = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
+        .descriptorBindingVariableDescriptorCount = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
+        .descriptorBindingPartiallyBound = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
+        .shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
 
     device = physicalDevice.createDeviceUnique(createInfoChain.get<vk::DeviceCreateInfo>());
+
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
 
     queue = device->getQueue(queueFamilyIndex, 0);
@@ -112,12 +144,14 @@ Context::Context(int width, int height) {
         {vk::DescriptorType::eAccelerationStructureKHR, 1},
         {vk::DescriptorType::eStorageImage, 1},
         {vk::DescriptorType::eStorageBuffer, 3},
+    {vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES}, //BINDLESS
     };
+
 
     vk::DescriptorPoolCreateInfo descPoolInfo;
     descPoolInfo.setPoolSizes(poolSizes);
     descPoolInfo.setMaxSets(1);
-    descPoolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
+    descPoolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind); //BINDLESS
     descPool = device->createDescriptorPoolUnique(descPoolInfo);
 }
 

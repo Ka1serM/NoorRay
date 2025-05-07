@@ -1,11 +1,13 @@
-#ifdef __cplusplus
+#ifdef __cplusplus //In C++, use glm::
     #pragma once
+    #include "glm/vec2.hpp"
     #include <glm/vec3.hpp>
-    typedef glm::vec3 vec3; //In C++, use glm::vec3 as vec3
+    typedef glm::vec2 vec2;
+    typedef glm::vec3 vec3;
 #endif
 
 struct PushData {
-    int frame, isPathtracing, _pad0, _pad1;
+    int frame, isRayTracing, _pad0, _pad1;
 };
 
 struct CameraData {
@@ -15,6 +17,13 @@ struct CameraData {
     vec3 vertical; int _pad3;
 };
 
+#ifdef __cplusplus //C++ only Struct
+struct PushConstants {
+    PushData push;
+    CameraData camera;
+};
+#endif
+
 struct PointLight {
     vec3 position; float radius;
     vec3 color; float intensity;
@@ -23,6 +32,7 @@ struct PointLight {
 struct Vertex {
     vec3 position; int _pad0;
     vec3 normal; int _pad1;
+    vec2 uv; int _pad2, _pad3;
 };
 
 struct Face {
@@ -30,10 +40,11 @@ struct Face {
 };
 
 struct Material {
-    vec3 albedo; int _pad0;
+    vec3 albedo; int albedoIndex;
     float specular, metallic, roughness, ior;
     vec3 transmission; int _pad1;
     vec3 emission; int _pad2;
+    int specularIndex, metallicIndex, roughnessIndex, normalIndex;
 };
 
 //Vulkan Only

@@ -3,6 +3,7 @@
 
 #extension GL_EXT_ray_tracing : enable
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : enable
 
 #include "../SharedStructs.h"
 #include "../Common.glsl"
@@ -13,6 +14,7 @@ layout(binding = 3, set = 0) buffer Indices { uint indices[]; };
 layout(binding = 4, set = 0) buffer Faces { Face faces[]; };
 layout(binding = 5, set = 0) buffer Materials { Material materials[]; };
 layout(binding = 6, set = 0) buffer PointLights { PointLight pointLights[]; };
+layout(binding = 7, set = 0) uniform sampler2D textureSamplers[];
 
 layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
 
@@ -42,14 +44,19 @@ void main() {
     const Vertex v2 = vertices[i2];
 
     //Barycentric
-    const vec3 bary = vec3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
-    const vec3 position = v0.position * bary.x + v1.position * bary.y + v2.position * bary.z;
-    const vec3 normal = normalize(v0.normal * bary.x + v1.normal * bary.y + v2.normal * bary.z);
+    const vec3 bary = calculateBarycentric(attribs);
+    const vec3 position = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
+    const vec3 normal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
+    const vec2 uv = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
 
     payload.position = position;
     payload.normal = normal;
 
-    vec3 ambient = 0.2 * material.albedo;
+    vec3 albedo = material.albedo;
+    if (material.albedoIndex != -1)
+        albedo *= texture(textureSamplers[material.albedoIndex], uv).rgb;
+
+    vec3 ambient = 0.2 * albedo;
     vec3 totalDiffuse = vec3(0.0);
     vec3 totalSpecular = vec3(0.0);
     vec3 viewDir = normalize(pushConstants.position - position);
@@ -71,28 +78,13 @@ void main() {
         if(NdotL < 0.0)
             continue;
 
-        totalDiffuse += NdotL * material.albedo * lightIntensity;
+        totalDiffuse += NdotL * albedo * lightIntensity;
 
         //Blinn-Phong
         vec3 halfVec = normalize(lightDir + viewDir);
         float specAngle = max(dot(normal, halfVec), 0.0);
         float specularStrength = pow(specAngle, 32.0); //Shininess
         totalSpecular += specularStrength * material.specular * lightIntensity;
-    }
-
-    //DIR LIGHT
-    const vec3 dirLightDirection = normalize(vec3(0, -1.0, 0));
-    const vec3 dirLightColor = vec3(1.0, 1.0, 1.0);
-    const float dirLightIntensity = 0.5;
-
-    vec3 lightDir = normalize(dirLightDirection);
-    float NdotL = dot(normal, lightDir);
-
-    if (NdotL > 0.0) {
-        vec3 lightIntensity = dirLightColor * dirLightIntensity;
-
-        // Diffuse
-        totalDiffuse += NdotL * material.albedo * lightIntensity;
     }
 
     payload.color = material.emission + ambient + totalDiffuse + totalSpecular;

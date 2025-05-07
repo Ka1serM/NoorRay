@@ -11,6 +11,6 @@ layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
 
 void main()
 {
-    payload.color = vec3(1.0, 1.0, 1.0);
+    payload.color = vec3(0.0, 0.0, 0.0);
     payload.done = true;
 }

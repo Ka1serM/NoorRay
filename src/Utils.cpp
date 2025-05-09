@@ -31,7 +31,7 @@ void Utils::loadObj(const Context& context, const std::string& filepath, std::ve
         material.roughness    = mat.roughness;
         material.ior          = mat.ior;
         material.transmission = glm::vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
-        material.emission     = glm::vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
+        material.emission     = glm::vec3(mat.emission[0], mat.emission[1], mat.emission[2]) * 20.0f;
 
         //Load textures
         material.albedoIndex = -1;
@@ -70,8 +70,8 @@ void Utils::loadObj(const Context& context, const std::string& filepath, std::ve
             face.materialIndex = shape.mesh.material_ids[f];
             const Material& material = materials[face.materialIndex];
 
-            //spawn point light if emission is greater than 1
-            if (material.emission.x > 1 || material.emission.y > 1 || material.emission.z > 1) {
+            //spawn point light if emission is greater than 0.01
+            if (material.emission.x > 0.01 || material.emission.y > 0.01 || material.emission.z > 0.01) {
                 glm::vec3 p0 = glm::vec3(
                     attrib.vertices[3 * shape.mesh.indices[indexOffset + 0].vertex_index + 0],
                     -attrib.vertices[3 * shape.mesh.indices[indexOffset + 0].vertex_index + 1],
@@ -93,34 +93,34 @@ void Utils::loadObj(const Context& context, const std::string& filepath, std::ve
                 PointLight light{};
                 light.position = center - glm::vec3(0.0f, -10.0f, 0.0f);
                 light.color = material.emission;
-                light.intensity = 5.00f;
+                light.intensity = 1.0f;
 
                 pointLights.push_back(light);
             }
 
             for (int v = 0; v < fv; ++v) {
-                tinyobj::index_t idx = shape.mesh.indices[indexOffset + v];
+                auto [vertex_index, normal_index, texcoord_index] = shape.mesh.indices[indexOffset + v];
 
                 Vertex vertex{};
                 vertex.position = glm::vec3(
-                    attrib.vertices[3 * idx.vertex_index + 0],
-                    -attrib.vertices[3 * idx.vertex_index + 1],
-                    attrib.vertices[3 * idx.vertex_index + 2]
+                    attrib.vertices[3 * vertex_index + 0],
+                    -attrib.vertices[3 * vertex_index + 1],
+                    attrib.vertices[3 * vertex_index + 2]
                 );
 
-                if (!attrib.normals.empty() && idx.normal_index >= 0) {
+                if (!attrib.normals.empty() && normal_index >= 0) {
                     vertex.normal = glm::vec3(
-                        attrib.normals[3 * idx.normal_index + 0],
-                        -attrib.normals[3 * idx.normal_index + 1],
-                        attrib.normals[3 * idx.normal_index + 2]
+                        attrib.normals[3 * normal_index + 0],
+                        -attrib.normals[3 * normal_index + 1],
+                        attrib.normals[3 * normal_index + 2]
                     );
                 } else
                     vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
 
-                if (!attrib.texcoords.empty() && idx.texcoord_index >= 0) {
+                if (!attrib.texcoords.empty() && texcoord_index >= 0) {
                     vertex.uv = glm::vec2(
-                        attrib.texcoords[2 * idx.texcoord_index + 0],
-                        1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]
+                        attrib.texcoords[2 * texcoord_index + 0],
+                        1.0f - attrib.texcoords[2 * texcoord_index + 1]
                     );
                 } else
                     vertex.uv = glm::vec2(0.0f);

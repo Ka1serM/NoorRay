@@ -56,36 +56,5 @@ void main() {
     if (material.albedoIndex != -1)
         albedo *= texture(textureSamplers[material.albedoIndex], uv).rgb;
 
-    vec3 ambient = 0.2 * albedo;
-    vec3 totalDiffuse = vec3(0.0);
-    vec3 totalSpecular = vec3(0.0);
-    vec3 viewDir = normalize(pushConstants.position - position);
-
-    for (int i = 0; i < pointLights.length(); ++i) {
-        PointLight light = pointLights[i];
-
-        vec3 lightVec = light.position - position;
-        float distance = length(lightVec);
-        vec3 lightDir = normalize(lightVec);
-
-        //Linear Falloff
-        float falloff = 1.0 / distance;
-        vec3 lightIntensity = light.color * light.intensity * falloff;
-
-        //Lambert
-        float NdotL = dot(normal, lightDir);
-
-        if(NdotL < 0.0)
-            continue;
-
-        totalDiffuse += NdotL * albedo * lightIntensity;
-
-        //Blinn-Phong
-        vec3 halfVec = normalize(lightDir + viewDir);
-        float specAngle = max(dot(normal, halfVec), 0.0);
-        float specularStrength = pow(specAngle, 32.0); //Shininess
-        totalSpecular += specularStrength * material.specular * lightIntensity;
-    }
-
-    payload.color = material.emission + ambient + totalDiffuse + totalSpecular;
+    payload.color = material.emission + albedo;
 }

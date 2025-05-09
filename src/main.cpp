@@ -9,7 +9,7 @@
 #include "Accel.h"
 #include "Utils.h"
 #include "Camera.h"
-#include "ConvertImageComputeShader.h"
+#include "HdrToLdrCompute.h"
 #include "Globals.h"
 #include "Texture.h"
 
@@ -282,27 +282,27 @@ int main() {
     glfwSetInputMode(context.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
 
     static bool isRayTracing = false;
+    static int frame = 0;
     glfwSetKeyCallback(context.window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
         if (key == GLFW_KEY_P && action == GLFW_PRESS) {
             isRayTracing = !isRayTracing;
-            std::cout << (isRayTracing ? "Switched to simple Ray Tracing" : "Switched to Path Tracing") << std::endl;
+            frame = 0;
+            std::cout << (isRayTracing ? "Switched to Ray Tracing" : "Switched to Path Tracing") << std::endl;
         }
     });
 
-    InputTracker inputTracker = InputTracker(context.window);
-
-    vk::UniqueSemaphore imageAcquiredSemaphore = context.device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
-
-    ConvertImageComputeShader convertImage("../src/shaders/ConvertImage.spv", context, inputImage.view.get(), outputImage.view.get());
+    InputTracker inputTracker(context.window);
+    HdrToLdrCompute hdrToLdrCompute(context.device.get(), inputImage.view.get(), outputImage.view.get());
 
     //Main loop
-    int frame = 0;
     uint32_t imageIndex = 0;
     auto lastTime = std::chrono::high_resolution_clock::now();
     float timeAccumulator = 0.0f;
     int frameCounter = 0;
 
+    vk::UniqueSemaphore imageAcquiredSemaphore = context.device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
     while (!glfwWindowShouldClose(context.window)) {
+
         //Delta time
         auto currentTime = std::chrono::high_resolution_clock::now();
         float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
@@ -322,7 +322,7 @@ int main() {
         inputTracker.update();
 
         //Push Constants
-        PushConstants pushConstantData;
+        PushConstants pushConstantData{};
         pushConstantData.push.frame = frame;
         pushConstantData.push.isRayTracing = isRayTracing;
         pushConstantData.camera = camera.update(inputTracker, deltaTime);
@@ -339,7 +339,7 @@ int main() {
         commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, WIDTH, HEIGHT, 1);
 
         //Convert 32bit float to 8bit image for display, read from inputImage and write to outputImage
-        convertImage.dispatch(commandBuffer, (WIDTH + 15) / 16, (HEIGHT + 15) / 16, 1);
+        hdrToLdrCompute.dispatch(commandBuffer, (WIDTH + 15) / 16, (HEIGHT + 15) / 16, 1);
 
         //Transition output image to presentable layout
         outputImage.transitionAndCopyTo(commandBuffer, swapchainImages[imageIndex], {WIDTH, HEIGHT, 1});
@@ -349,12 +349,12 @@ int main() {
         context.queue.submit(vk::SubmitInfo().setCommandBuffers(commandBuffer));
 
         //Present image
-        vk::PresentInfoKHR presentInfo;
+        vk::PresentInfoKHR presentInfo{};
         presentInfo.setSwapchains(*swapchain);
         presentInfo.setImageIndices(imageIndex);
         presentInfo.setWaitSemaphores(*imageAcquiredSemaphore);
-        auto result = context.queue.presentKHR(presentInfo);
 
+        auto result = context.queue.presentKHR(presentInfo);
         if (result != vk::Result::eSuccess)
             throw std::runtime_error("failed to present.");
 

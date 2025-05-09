@@ -55,7 +55,7 @@ void main() {
     payload.position = position;
     payload.normal = normal;
 
-    payload.color = material.emission * 2.0;
+    payload.color = material.emission;
 
     //Calculate new ray direction using random sampling
     uint seedX = i0 + pushConstants.frame;

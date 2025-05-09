@@ -13,6 +13,6 @@ echo Compiling shaders...
 %GLSLC% PathTracing/Miss.glsl -o PathTracing/Miss.spv --target-env=vulkan1.3
 %GLSLC% ShadowRay/Miss.glsl -o ShadowRay/Miss.spv --target-env=vulkan1.3
 
-%GLSLC% ConvertImage.glsl -o ConvertImage.spv --target-env=vulkan1.3
+%GLSLC% HdrToLdrCompute.glsl -o HdrToLdrCompute.spv --target-env=vulkan1.3
 
 echo Shader compilation complete.

@@ -33,7 +33,7 @@ CameraData PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime
 
     //Apply mouse movement (yaw and pitch)
     glm::vec3 right = normalize(cross(direction, UP));         //Right from camera basis
-    glm::vec3 up = normalize(cross(right, direction));         //True up vector (orthogonalized)
+    glm::vec3 up = normalize(cross(right, direction));         //True up vector
 
     //Apply yaw (around UP)
     glm::mat4 yawRot = glm::rotate(glm::mat4(1.0f), glm::radians(-static_cast<float>(deltaX) * sensitivity), UP);

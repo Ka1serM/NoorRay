@@ -6,7 +6,9 @@
 #include <vector>
 #include <functional>
 
-struct Context {
+class Context {
+public:
+
     Context(int width, int height);
 
     bool checkDeviceExtensionSupport(const std::vector<const char*>& requiredExtensions) const;

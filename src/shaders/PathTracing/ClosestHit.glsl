@@ -66,7 +66,7 @@ void main() {
     float cosTheta = max(0.0, dot(sampledDir, normal));
     float pdf = cosTheta / PI; //Lambertian PDF
 
-    // Apply Lambertian BRDF to throughput
+    //Apply Lambertian BRDF to throughput
     vec3 brdf = albedo / PI;
     payload.throughput *= brdf * cosTheta / max(pdf, 0.00001);
 }

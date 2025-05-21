@@ -4,9 +4,7 @@
 #include "GLFW/glfw3.h"
 #include "glm/gtx/rotate_vector.hpp"
 
-PerspectiveCamera::PerspectiveCamera(const glm::vec3& origin, const glm::vec3& lookAt, const glm::vec3& up, float aspect, float fovDegrees)
-    : UP(up), position(origin), prevX(-1), prevY(-1) {
-
+PerspectiveCamera::PerspectiveCamera(const glm::vec3& origin, const glm::vec3& lookAt, const glm::vec3& up, float aspect, float fovDegrees) : UP(up), position(origin) {
     float theta = glm::radians(fovDegrees);
     float halfHeight = tanf(theta * 0.5f);
     float halfWidth = aspect * halfHeight;
@@ -18,9 +16,21 @@ PerspectiveCamera::PerspectiveCamera(const glm::vec3& origin, const glm::vec3& l
     direction = viewVector;
     horizontal = rightVector * halfWidth;
     vertical = upVector * halfHeight;
+
+    //init gpu struct to cam values
+    cameraData.position = position;
+    cameraData.direction = direction;
+    cameraData.horizontal = horizontal;
+    cameraData.vertical = vertical;
 }
 
-CameraData PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
+void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
+
+    if (!inputTracker.isMouseButtonHeld(GLFW_MOUSE_BUTTON_LEFT) && !inputTracker.isMouseButtonHeld(GLFW_MOUSE_BUTTON_RIGHT)) {
+        cameraData.isMoving = false;
+        return;
+    }
+
     //Detect movement
     glm::vec3 oldDirection = direction;
     glm::vec3 oldPosition = position;
@@ -75,14 +85,15 @@ CameraData PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime
     if (inputTracker.isKeyHeld(GLFW_KEY_Q))
         position -= UP * movementSpeed;
 
-    float epsylon = 0.001f;
-    bool isMoving = !all(epsilonEqual(oldDirection, direction, epsylon)) || !all(epsilonEqual(oldPosition, position, epsylon));
-
-    CameraData cameraData{};
     cameraData.direction = direction;
-    cameraData.isMoving = isMoving;
     cameraData.position = position;
     cameraData.horizontal = horizontal;
     cameraData.vertical = vertical;
+
+    float epsylon = 0.001f;
+    cameraData.isMoving = !all(epsilonEqual(oldDirection, direction, epsylon)) || !all(epsilonEqual(oldPosition, position, epsylon));
+}
+
+const CameraData& PerspectiveCamera::getCameraData() const {
     return cameraData;
 }

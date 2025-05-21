@@ -55,12 +55,17 @@ Context::Context(int width, int height) {
     // Find queue family
     std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
     for (int i = 0; i < queueFamilies.size(); i++) {
-        auto supportCompute = queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute;
-        auto supportPresent = physicalDevice.getSurfaceSupportKHR(i, *surface);
-        if (supportCompute && supportPresent) {
+        auto flags = queueFamilies[i].queueFlags;
+        bool supportGraphics = (flags & vk::QueueFlagBits::eGraphics) != vk::QueueFlags{};
+        bool supportCompute = (flags & vk::QueueFlagBits::eCompute) != vk::QueueFlags{};
+        bool supportPresent = physicalDevice.getSurfaceSupportKHR(i, *surface);
+
+        if (supportGraphics && supportCompute && supportPresent) {
             queueFamilyIndex = i;
+            break;
         }
     }
+
 
     // Create device
     constexpr float queuePriority = 1.0f;

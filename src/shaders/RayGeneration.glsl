@@ -45,8 +45,8 @@ void main() {
         payload.color = vec3(0.0);
         payload.normal = vec3(0.0);
         payload.position = vec3(0.0);
-        payload.done = false;
         payload.throughput = vec3(1.0);
+        payload.done = false;
 
         //primary ray
         traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, rayOrigin, 0.001, rayDirection, 10000.0, 0);
@@ -81,10 +81,10 @@ void main() {
         payload.color = vec3(0.0);
         payload.normal = vec3(0.0);
         payload.position = vec3(0.0);
-        payload.done = false;
         payload.throughput = vec3(1.0);
+        payload.done = false;
 
-        int maxDepth = 10;
+        int maxDepth = 6;
         for (int depth = 0; depth < maxDepth; ++depth) {
             traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 1, 0, 1, rayOrigin, 0.001, rayDirection, 10000.0, 0);
 

@@ -1,11 +1,10 @@
 ﻿#include "InputTracker.h"
 
-InputTracker::InputTracker(GLFWwindow* window)
-    : window(window), lastX(0.0), lastY(0.0), deltaX(0.0), deltaY(0.0) {
+InputTracker::InputTracker(GLFWwindow* window) : window(window), lastX(0.0), lastY(0.0), deltaX(0.0), deltaY(0.0) {
 }
 
 void InputTracker::update() {
-    // pdate key states
+    // update key states
     for (int key = 0; key <= GLFW_KEY_LAST; ++key) {
         prevKeyStates[key] = keyStates[key];
         keyStates[key] = glfwGetKey(window, key) == GLFW_PRESS;
@@ -54,7 +53,7 @@ void InputTracker::getMousePosition(double& xpos, double& ypos) const {
     glfwGetCursorPos(window, &xpos, &ypos);
 }
 
-void InputTracker::getMouseDelta(double& outDeltaX, double& outDeltaY) {
+void InputTracker::getMouseDelta(double& outDeltaX, double& outDeltaY) const {
     outDeltaX = deltaX;
     outDeltaY = deltaY;
 }

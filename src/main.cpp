@@ -1,4 +1,7 @@
 #include <chrono>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 #include <iostream>
 #include <ostream>
 #include <vector>
@@ -11,6 +14,7 @@
 #include "Camera.h"
 #include "HdrToLdrCompute.h"
 #include "Globals.h"
+#include "ImGuiOverlay.h"
 #include "Texture.h"
 
 int main() {
@@ -23,9 +27,9 @@ int main() {
     swapchainInfo.setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear);
     swapchainInfo.setImageExtent({WIDTH, HEIGHT});
     swapchainInfo.setImageArrayLayers(1);
-    swapchainInfo.setImageUsage(vk::ImageUsageFlagBits::eTransferDst);
+    swapchainInfo.setImageUsage(vk::ImageUsageFlagBits::eTransferDst |vk::ImageUsageFlagBits::eColorAttachment);
     swapchainInfo.setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity);
-    swapchainInfo.setPresentMode(vk::PresentModeKHR::eFifo);
+    swapchainInfo.setPresentMode(vk::PresentModeKHR::eMailbox);
     swapchainInfo.setClipped(true);
     swapchainInfo.setQueueFamilyIndices(context.queueFamilyIndex);
     vk::UniqueSwapchainKHR swapchain = context.device->createSwapchainKHRUnique(swapchainInfo);
@@ -142,31 +146,31 @@ int main() {
     for (uint32_t i = 0; i < shaderPaths.size(); ++i) {
         const auto& [path, stage] = shaderPaths[i];
         auto code = Utils::readFile(path);
-        shaderModules.push_back(context.device->createShaderModuleUnique({{}, code.size(), reinterpret_cast<const uint32_t*>(code.data())}));
+        shaderModules.emplace_back(context.device->createShaderModuleUnique({{}, code.size(), reinterpret_cast<const uint32_t*>(code.data())}));
         shaderStages.push_back({{}, stage, *shaderModules.back(), "main"});
 
         if (stage == vk::ShaderStageFlagBits::eRaygenKHR) {
-            shaderGroups.push_back({vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR});
+            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             raygenCount++;
         } else if (stage == vk::ShaderStageFlagBits::eMissKHR) {
-            shaderGroups.push_back({vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR});
+            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             missCount++;
         } else if (stage == vk::ShaderStageFlagBits::eClosestHitKHR) {
-            shaderGroups.push_back({vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR});
+            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             hitCount++;
         }
     }
 
     // Descriptor Set Layout Bindings
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
-        {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-        {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-        {4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-        {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR}
+            {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+            {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+            {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
+            {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
+            {4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
+            {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
+            {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
+            {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR}
     };
 
     //Descriptor binding flags for bindless
@@ -279,9 +283,8 @@ int main() {
     static PerspectiveCamera camera(glm::vec3(0, -1, 3.25), glm::vec3(0, -1, 0), glm::vec3(0, -1, 0), static_cast<float>(WIDTH)/HEIGHT, 105);
 
     //Setup Input
-    glfwSetInputMode(context.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
-
     static bool isRayTracing = false;
+    bool prevIsRayTracing = isRayTracing;
     static int frame = 0;
     glfwSetKeyCallback(context.window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
         if (key == GLFW_KEY_P && action == GLFW_PRESS) {
@@ -291,8 +294,20 @@ int main() {
         }
     });
 
+    glfwSetMouseButtonCallback(context.window, [](GLFWwindow* window, int button, int action, int mods) {
+        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+            if (action == GLFW_PRESS) {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
+            } else if (action == GLFW_RELEASE) {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+        }
+    });
+
     InputTracker inputTracker(context.window);
     HdrToLdrCompute hdrToLdrCompute(context.device.get(), inputImage.view.get(), outputImage.view.get());
+
+    ImGuiOverlay imguiManager(context, swapchainImages);
 
     //Main loop
     uint32_t imageIndex = 0;
@@ -317,15 +332,18 @@ int main() {
             frameCounter = 0;
         }
 
-        //Camera Update
+        //Window Update
         glfwPollEvents();
+
+        //Camera Update
         inputTracker.update();
+        camera.update(inputTracker, deltaTime);
 
         //Push Constants
         PushConstants pushConstantData{};
         pushConstantData.push.frame = frame;
         pushConstantData.push.isRayTracing = isRayTracing;
-        pushConstantData.camera = camera.update(inputTracker, deltaTime);
+        pushConstantData.camera = camera.getCameraData();
 
         //Acquire next image
         imageIndex = context.device->acquireNextImageKHR(*swapchain, UINT64_MAX, *imageAcquiredSemaphore).value;
@@ -343,6 +361,33 @@ int main() {
 
         //Transition output image to presentable layout
         outputImage.transitionAndCopyTo(commandBuffer, swapchainImages[imageIndex], {WIDTH, HEIGHT, 1});
+
+        //IMGUI
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::Begin("Debug");
+
+        ImGui::Text("Overlayed on RT Pipeline");
+
+        if (ImGui::RadioButton("Path Tracing", !isRayTracing))
+            isRayTracing = false;
+
+        ImGui::SameLine();
+
+        if (ImGui::RadioButton("Ray Tracing", isRayTracing))
+            isRayTracing = true;
+
+        if (isRayTracing != prevIsRayTracing) {
+            frame = 0;  //Reset frame on mode change
+            prevIsRayTracing = isRayTracing;
+        }
+
+        ImGui::End();
+
+        imguiManager.Render(commandBuffer, imageIndex);
+
         commandBuffer.end();
 
         //Submit

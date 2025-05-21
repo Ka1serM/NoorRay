@@ -18,7 +18,7 @@ public:
 
     void getMousePosition(double& xpos, double& ypos) const;
 
-    void getMouseDelta(double& outDeltaX, double& outDeltaY);
+    void getMouseDelta(double& outDeltaX, double& outDeltaY) const;
 
 private:
     GLFWwindow* window;

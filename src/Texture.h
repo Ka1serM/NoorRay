@@ -7,7 +7,7 @@
 
 class Texture {
 public:
-    Texture(const Context& context, const std::string& filepath);
+    Texture(const std::shared_ptr<Context> &context, const std::string& filepath);
 
     const vk::DescriptorImageInfo& getDescriptorInfo() const { return descriptorInfo; }
     const vk::Sampler& getSampler() const { return *sampler; }

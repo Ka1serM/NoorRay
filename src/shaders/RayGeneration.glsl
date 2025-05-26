@@ -3,15 +3,20 @@
 
 #extension GL_EXT_ray_tracing : enable
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "SharedStructs.h"
 #include "Common.glsl"
 
-layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
-layout(binding = 1, set = 0, rgba32f) uniform image2D outputImage;
-layout(binding = 5, set = 0) buffer Materials { Material materials[]; };
-layout(binding = 6, set = 0) buffer PointLights { PointLight pointLights[]; };
-layout(binding = 7, set = 0) uniform sampler2D textureSamplers[];
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, rgba32f) uniform image2D outputImage;
+layout(set = 0, binding = 3) buffer Materials { Material materials[]; };
+layout(set = 0, binding = 4) buffer PointLights { PointLight pointLights[]; };
+layout(set = 0, binding = 5) uniform sampler2D textureSamplers[];
 
 layout(push_constant) uniform PushConstants {
     PushData pushData;
@@ -25,18 +30,52 @@ void main() {
     ivec2 pixelCoord = ivec2(gl_LaunchIDEXT.xy);
     ivec2 screenSize = ivec2(gl_LaunchSizeEXT.xy);
 
+    // Random jitter for anti-aliasing
     uvec2 seed = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.pushData.frame * 16777619));
-    vec2 jitter = (vec2(rand(seed.x), rand(seed.y)) - 0.5f * 1.5f) * min(pushConstants.pushData.frame, 1.0f);
+    vec2 jitter = (vec2(rand(seed.x), rand(seed.y)) - 0.5) * 1.5 * min(pushConstants.pushData.frame, 1.0);
 
     vec2 uv = (vec2(pixelCoord) + jitter) / vec2(screenSize);
     uv.y = 1.0 - uv.y;
 
-    vec3 rayOrigin = pushConstants.camera.position;
-    vec3 rayDirection = normalize(
-        pushConstants.camera.direction +
-        pushConstants.camera.horizontal * (uv.x - 0.5) +
-        pushConstants.camera.vertical * (uv.y - 0.5)
-    );
+    // --- Generate primary ray direction ---
+
+    // Compute image plane point in sensor space:
+    // The camera.horizontal and camera.vertical are in meters on the image plane at focal length distance,
+    // but we want a ray through the sensor pixel:
+    // The uv.x and uv.y are in [0,1], remap to [-0.5, 0.5]
+    vec2 sensorOffset = vec2(uv.x - 0.5, uv.y - 0.5);
+
+    // Point on image plane at focal length distance (meters)
+    vec3 imagePlanePoint = pushConstants.camera.position
+    + pushConstants.camera.direction * (pushConstants.camera.focalLength * 0.001) // focal length in meters
+    + pushConstants.camera.horizontal * sensorOffset.x
+    + pushConstants.camera.vertical * sensorOffset.y;
+
+    // For depth of field, sample a point on the lens aperture disk:
+
+    // Convert f-stop to aperture diameter: aperture diameter = focalLength / fStop
+    float focalLengthMeters = pushConstants.camera.focalLength * 0.001;
+    float apertureDiameter = focalLengthMeters / pushConstants.camera.aperture;
+    float apertureRadius = apertureDiameter * 0.5;
+
+    // Sample lens aperture disk (in meters)
+    vec2 lensSample = (vec2(rand(seed.x), rand(seed.y)) - 0.5) * 2.0; // [-1,1]
+    lensSample *= apertureRadius;
+
+    // Camera basis
+    vec3 right = normalize(pushConstants.camera.horizontal);
+    vec3 up = normalize(pushConstants.camera.vertical);
+
+    // Offset ray origin by lens sample
+    vec3 rayOrigin = pushConstants.camera.position + right * lensSample.x + up * lensSample.y;
+
+    // Compute new ray direction passing through the focus plane at focusDistance (meters)
+    float focusDistance = pushConstants.camera.focusDistance;
+
+    // Compute point on the focal plane
+    vec3 focusPoint = pushConstants.camera.position + normalize(imagePlanePoint - pushConstants.camera.position) * focusDistance;
+
+    vec3 rayDirection = normalize(focusPoint - rayOrigin);
 
     vec3 color = vec3(0.0);
     if (bool(pushConstants.pushData.isRayTracing)) {

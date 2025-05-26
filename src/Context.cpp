@@ -12,7 +12,7 @@ Context::Context(int width, int height) {
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     window = glfwCreateWindow(width, height, "GpuPathtracer", nullptr, nullptr);
 
-    // Prepase extensions and layers
+    // Prepare extensions and layers
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
@@ -34,7 +34,7 @@ Context::Context(int width, int height) {
     instance = createInstanceUnique(instanceInfo);
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
 
-    // Pick first gpu
+    //TODO Pick best gpu
     physicalDevice = instance->enumeratePhysicalDevices().back();
 
     // Create debug messenger
@@ -52,7 +52,7 @@ Context::Context(int width, int height) {
     }
     surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {*instance});
 
-    // Find queue family
+    // Find queue family with support for graphics and compute
     std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
     for (int i = 0; i < queueFamilies.size(); i++) {
         auto flags = queueFamilies[i].queueFlags;
@@ -90,14 +90,6 @@ Context::Context(int width, int height) {
         throw std::runtime_error("Some required extensions are not supported");
     }
 
-    vk::DeviceCreateInfo deviceInfo;
-    deviceInfo.setQueueCreateInfos(queueCreateInfo);
-    deviceInfo.setPEnabledExtensionNames(deviceExtensions);
-
-    //SAMPLER
-    vk::PhysicalDeviceFeatures2 deviceFeatures{};
-    deviceFeatures.features.samplerAnisotropy = VK_TRUE;
-
     vk::StructureChain<
         vk::DeviceCreateInfo,
         vk::PhysicalDeviceBufferDeviceAddressFeatures,
@@ -111,26 +103,18 @@ Context::Context(int width, int height) {
         .setQueueCreateInfos(queueCreateInfo)
         .setPEnabledExtensionNames(deviceExtensions);
 
-    createInfoChain.get<vk::PhysicalDeviceFeatures2>()
-        .features.samplerAnisotropy = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceFeatures2>().features.shaderInt64 = VK_TRUE;
 
-    createInfoChain.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
-        .bufferDeviceAddress = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>().bufferDeviceAddress = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>().rayTracingPipeline = VK_TRUE;
+    createInfoChain.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure = VK_TRUE;
 
-    createInfoChain.get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>()
-        .rayTracingPipeline = VK_TRUE;
-
-    createInfoChain.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>()
-        .accelerationStructure = VK_TRUE;
-
-    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
-        .runtimeDescriptorArray = VK_TRUE;
-    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
-        .descriptorBindingVariableDescriptorCount = VK_TRUE;
-    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
-        .descriptorBindingPartiallyBound = VK_TRUE;
-    createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>()
-        .shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    auto& indexingFeatures = createInfoChain.get<vk::PhysicalDeviceDescriptorIndexingFeatures>();
+    indexingFeatures.runtimeDescriptorArray = VK_TRUE;
+    indexingFeatures.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
+    indexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
 
     device = physicalDevice.createDeviceUnique(createInfoChain.get<vk::DeviceCreateInfo>());
 
@@ -148,7 +132,7 @@ Context::Context(int width, int height) {
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eAccelerationStructureKHR, 1},
         {vk::DescriptorType::eStorageImage, 1},
-        {vk::DescriptorType::eStorageBuffer, 3},
+        {vk::DescriptorType::eStorageBuffer, 3 * MAX_MESHES}, //BINDLESS, Vertices + Indices + Faces = 3
     {vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES}, //BINDLESS
     };
 
@@ -164,18 +148,16 @@ bool Context::checkDeviceExtensionSupport(const std::vector<const char*>& requir
     std::vector<vk::ExtensionProperties> availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
     std::vector<std::string> requiredExtensionNames(requiredExtensions.begin(), requiredExtensions.end());
 
-    for (const auto& extension : availableExtensions) {
+    for (const auto& extension : availableExtensions)
         std::erase(requiredExtensionNames, extension.extensionName);
-    }
 
-    if (requiredExtensionNames.empty()) {
-        std::cout << "All required extensions are supported by the device." << std::endl;
+    if (requiredExtensionNames.empty()) // All good, return
         return true;
-    }
+
     std::cout << "The following required extensions are not supported by the device:" << std::endl;
-    for (const auto& name : requiredExtensionNames) {
+    for (const auto& name : requiredExtensionNames)
         std::cout << "\t" << name << std::endl;
-    }
+
     return false;
 }
 

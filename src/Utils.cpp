@@ -13,7 +13,15 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 
-void Utils::loadObj(const Context& context, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces, std::vector<Material>& materials, std::vector<PointLight>& pointLights, std::vector<Texture>& textures) {
+void Utils::loadObj(
+    const std::shared_ptr<Context>& context,
+    const std::string& filepath,
+    std::vector<Vertex>& vertices,
+    std::vector<uint32_t>& indices,
+    std::vector<Face>& faces,
+    std::vector<Material>& materials,   // global materials array
+    std::vector<Texture>& textures      // global textures array
+) {
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> mats;
@@ -22,7 +30,11 @@ void Utils::loadObj(const Context& context, const std::string& filepath, std::ve
     if (!LoadObj(&attrib, &shapes, &mats, &warn, &err, filepath.c_str(), "../assets"))
         throw std::runtime_error("Failed to load OBJ: " + warn + err);
 
-    materials.reserve(mats.size());
+    // Store how many materials already exist globally
+    size_t baseMaterialIndex = materials.size();
+
+    // Append new materials from the OBJ file
+    materials.reserve(baseMaterialIndex + mats.size());
     for (const auto& mat : mats) {
         Material material{};
         material.albedo       = glm::vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
@@ -33,13 +45,14 @@ void Utils::loadObj(const Context& context, const std::string& filepath, std::ve
         material.transmission = glm::vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
         material.emission     = glm::vec3(mat.emission[0], mat.emission[1], mat.emission[2]) * 20.0f;
 
-        //Load textures
+        // Textures indices default to -1
         material.albedoIndex = -1;
         material.specularIndex = -1;
         material.roughnessIndex = -1;
         material.normalIndex = -1;
+
         if (!mat.diffuse_texname.empty()) {
-            textures.emplace_back(context, "../assets/" + mat.diffuse_texname); //emplace back creates a new Texture object
+            textures.emplace_back(context, "../assets/" + mat.diffuse_texname);
             material.albedoIndex = static_cast<int>(textures.size() - 1);
         }
         if (!mat.specular_texname.empty()) {
@@ -58,6 +71,7 @@ void Utils::loadObj(const Context& context, const std::string& filepath, std::ve
         materials.push_back(material);
     }
 
+    // Now process shapes and faces
     for (const auto& shape : shapes) {
         size_t indexOffset = 0;
 
@@ -67,37 +81,13 @@ void Utils::loadObj(const Context& context, const std::string& filepath, std::ve
                 throw std::runtime_error("Non-triangle face detected. Only triangles are supported.");
 
             Face face{};
-            face.materialIndex = shape.mesh.material_ids[f];
+            // Update face.materialIndex to global index
+            int originalMatIndex = shape.mesh.material_ids[f];
+            face.materialIndex = (originalMatIndex >= 0) ? static_cast<uint32_t>(baseMaterialIndex + originalMatIndex) : 0;
+
             const Material& material = materials[face.materialIndex];
 
-            //spawn point light if emission is greater than 0.01
-            if (material.emission.x > 0.01 || material.emission.y > 0.01 || material.emission.z > 0.01) {
-                glm::vec3 p0 = glm::vec3(
-                    attrib.vertices[3 * shape.mesh.indices[indexOffset + 0].vertex_index + 0],
-                    -attrib.vertices[3 * shape.mesh.indices[indexOffset + 0].vertex_index + 1],
-                    attrib.vertices[3 * shape.mesh.indices[indexOffset + 0].vertex_index + 2]
-                );
-                glm::vec3 p1 = glm::vec3(
-                    attrib.vertices[3 * shape.mesh.indices[indexOffset + 1].vertex_index + 0],
-                    -attrib.vertices[3 * shape.mesh.indices[indexOffset + 1].vertex_index + 1],
-                    attrib.vertices[3 * shape.mesh.indices[indexOffset + 1].vertex_index + 2]
-                );
-                glm::vec3 p2 = glm::vec3(
-                    attrib.vertices[3 * shape.mesh.indices[indexOffset + 2].vertex_index + 0],
-                    -attrib.vertices[3 * shape.mesh.indices[indexOffset + 2].vertex_index + 1],
-                    attrib.vertices[3 * shape.mesh.indices[indexOffset + 2].vertex_index + 2]
-                );
-
-                glm::vec3 center = (p0 + p1 + p2) / 3.0f;
-
-                PointLight light{};
-                light.position = center - glm::vec3(0.0f, -10.0f, 0.0f);
-                light.color = material.emission;
-                light.intensity = 1.0f;
-
-                pointLights.push_back(light);
-            }
-
+            // Spawn point lights
             for (int v = 0; v < fv; ++v) {
                 auto [vertex_index, normal_index, texcoord_index] = shape.mesh.indices[indexOffset + v];
 

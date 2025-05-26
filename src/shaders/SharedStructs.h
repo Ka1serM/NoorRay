@@ -12,9 +12,9 @@ struct PushData {
 
 struct CameraData {
     vec3 position; int isMoving;
-    vec3 direction; int _pad1;
-    vec3 horizontal; int _pad2;
-    vec3 vertical; int _pad3;
+    vec3 direction; float aperture;
+    vec3 horizontal; float focusDistance;
+    vec3 vertical; float focalLength;
 };
 
 #ifdef __cplusplus //C++ only Struct
@@ -48,6 +48,12 @@ struct Material {
 };
 
 //Vulkan Only
+
+struct MeshAddresses {
+    uint64_t vertexAddress;
+    uint64_t indexAddress;
+    uint64_t faceAddress;
+};
 
 struct PrimaryRayPayload
 {

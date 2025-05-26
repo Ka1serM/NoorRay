@@ -12,5 +12,6 @@ layout(binding = 1, rgba8) writeonly uniform image2D outputImage;
 
 void main() {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-    imageStore(outputImage, coord, vec4(agx(imageLoad(inputImage, coord).rgb), 1.0f));
+    ivec2 flippedCoord = ivec2(coord.x, imageSize(inputImage).y - 1 - coord.y);
+    imageStore(outputImage, coord, vec4(agx(imageLoad(inputImage, flippedCoord).rgb), 1.0));
 }

@@ -15,13 +15,15 @@
 #include "HdrToLdrCompute.h"
 #include "Globals.h"
 #include "ImGuiOverlay.h"
+#include "MeshAsset.h"
+#include "MeshInstance.h"
 #include "Texture.h"
 
 int main() {
-    Context context(WIDTH, HEIGHT);
+    auto context = std::make_shared<Context>(WIDTH, HEIGHT);
 
     vk::SwapchainCreateInfoKHR swapchainInfo;
-    swapchainInfo.setSurface(*context.surface);
+    swapchainInfo.setSurface(*context->surface);
     swapchainInfo.setMinImageCount(3);
     swapchainInfo.setImageFormat(vk::Format::eB8G8R8A8Unorm);
     swapchainInfo.setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear);
@@ -31,100 +33,38 @@ int main() {
     swapchainInfo.setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity);
     swapchainInfo.setPresentMode(vk::PresentModeKHR::eMailbox);
     swapchainInfo.setClipped(true);
-    swapchainInfo.setQueueFamilyIndices(context.queueFamilyIndex);
-    vk::UniqueSwapchainKHR swapchain = context.device->createSwapchainKHRUnique(swapchainInfo);
+    swapchainInfo.setQueueFamilyIndices(context->queueFamilyIndex);
+    vk::UniqueSwapchainKHR swapchain = context->device->createSwapchainKHRUnique(swapchainInfo);
 
-    std::vector<vk::Image> swapchainImages = context.device->getSwapchainImagesKHR(*swapchain);
+    std::vector<vk::Image> swapchainImages = context->device->getSwapchainImagesKHR(*swapchain);
 
     vk::CommandBufferAllocateInfo commandBufferInfo;
-    commandBufferInfo.setCommandPool(*context.commandPool);
+    commandBufferInfo.setCommandPool(*context->commandPool);
     commandBufferInfo.setCommandBufferCount(static_cast<uint32_t>(swapchainImages.size()));
-    std::vector<vk::UniqueCommandBuffer> commandBuffers = context.device->allocateCommandBuffersUnique(commandBufferInfo);
+    std::vector<vk::UniqueCommandBuffer> commandBuffers = context->device->allocateCommandBuffersUnique(commandBufferInfo);
 
     Image inputImage{context, WIDTH, HEIGHT, vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst};
-    Image outputImage{context,WIDTH, HEIGHT, vk::Format::eB8G8R8A8Unorm, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst};
+    Image outputImage{context,WIDTH, HEIGHT, vk::Format::eB8G8R8A8Unorm, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst };
 
-    //REGION BUFFERS
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<Face> faces;
-    std::vector<Material> materials;
-    std::vector<PointLight> pointLights;
+    auto scene = std::make_shared<Scene>(context);
 
-    // PointLight placeholder{};
-    // placeholder.intensity = 1.0f;
-    // placeholder.color = glm::vec3(1.0f, 1.0f, 1.0f);
-    // placeholder.position = glm::vec3(1000.0f, -1000.0f, 0.0f);
-    // pointLights.push_back(placeholder);
+    PointLight pointLight;
 
-    std::vector<Texture> textures;
-    Utils::loadObj(context, "../assets/LittleTokyo.obj", vertices, indices, faces, materials, pointLights, textures);
-    //Utils::loadGltf("../assets/Valorant.gltf", vertices, indices, faces, materials, pointLights);
+    scene->pointLights.push_back(pointLight);
 
-    Buffer vertexBuffer{context, Buffer::Type::AccelInput, sizeof(Vertex) * vertices.size(), vertices.data()};
-    Buffer indexBuffer{context, Buffer::Type::AccelInput, sizeof(uint32_t) * indices.size(), indices.data()};
-    Buffer faceBuffer{context, Buffer::Type::AccelInput, sizeof(Face) * faces.size(), faces.data()};
-    Buffer materialBuffer{context, Buffer::Type::Storage, sizeof(Material) * materials.size(), materials.data()};
-    Buffer pointLightBuffer{context, Buffer::Type::Storage, sizeof(PointLight) * pointLights.size(), pointLights.data()};
+    //auto meshAsset = std::make_shared<MeshAsset>(context, scene, "../assets/LittleTokyo.obj");
 
-    std::vector<vk::DescriptorImageInfo> textureImageInfos;
-    for (const auto& texture : textures)
-        textureImageInfos.push_back(texture.getDescriptorInfo());
-    Buffer textureBuffer{context, Buffer::Type::Storage, sizeof(vk::DescriptorImageInfo) * textureImageInfos.size(), textureImageInfos.data()};
+    auto meshAsset2 = std::make_shared<MeshAsset>(context, scene, "../assets/LittleTokyo.obj");
+    scene->addMeshAsset(meshAsset2);
 
-    //Create bottom level accel structure
-    vk::AccelerationStructureGeometryTrianglesDataKHR triangleData;
-    triangleData.setVertexFormat(vk::Format::eR32G32B32Sfloat);
-    triangleData.setVertexData(vertexBuffer.deviceAddress);
-    triangleData.setVertexStride(sizeof(Vertex));
-    triangleData.setMaxVertex(static_cast<uint32_t>(vertices.size()));
-    triangleData.setIndexType(vk::IndexType::eUint32);
-    triangleData.setIndexData(indexBuffer.deviceAddress);
+    auto meshInstance = std::make_unique<MeshInstance>("Mesh Instance 1", meshAsset2, Transform(glm::vec3(0, 100, 0), glm::vec3(0, 0, 0), glm::vec3(1, 1, 1)));
+    auto meshInstance2 = std::make_unique<MeshInstance>("Instance 2", meshAsset2, Transform());
 
-    vk::AccelerationStructureGeometryKHR triangleGeometry;
-    triangleGeometry.setGeometryType(vk::GeometryTypeKHR::eTriangles);
-    triangleGeometry.setGeometry({triangleData});
-    triangleGeometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+    scene->addMeshInstance(std::move(meshInstance));
+    scene->addMeshInstance(std::move(meshInstance2));
 
-    const auto primitiveCount = static_cast<uint32_t>(indices.size() / 3);
-    Accel bottomAccel{context, triangleGeometry, primitiveCount, vk::AccelerationStructureTypeKHR::eBottomLevel};
-
-    //Create top level accel structure
-    std::vector<vk::AccelerationStructureInstanceKHR> accelInstances;
-
-    int gridSize = 4;
-    float spacing = 100.0f;
-
-    for (int x = 0; x < gridSize; ++x) {
-        for (int z = 0; z < gridSize; ++z) {
-            vk::TransformMatrixKHR transformMatrix = std::array{
-                std::array{1.0f, 0.0f, 0.0f, x * spacing},
-                std::array{0.0f, 1.0f, 0.0f, 0.0f},
-                std::array{0.0f, 0.0f, 1.0f, z * spacing},
-            };
-
-            vk::AccelerationStructureInstanceKHR accelInstance;
-            accelInstance.setTransform(transformMatrix);
-            accelInstance.setMask(0xFF);
-            accelInstance.setAccelerationStructureReference(bottomAccel.buffer.deviceAddress);
-            accelInstance.setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
-
-            accelInstances.push_back(accelInstance);
-        }
-    }
-
-    Buffer instancesBuffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * accelInstances.size(), accelInstances.data()};
-
-    vk::AccelerationStructureGeometryInstancesDataKHR instancesData;
-    instancesData.setArrayOfPointers(false);
-    instancesData.setData(instancesBuffer.deviceAddress);
-
-    vk::AccelerationStructureGeometryKHR instanceGeometry;
-    instanceGeometry.setGeometryType(vk::GeometryTypeKHR::eInstances);
-    instanceGeometry.setGeometry({instancesData});
-    instanceGeometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
-
-    Accel topAccel{context, instanceGeometry, static_cast<uint32_t>(accelInstances.size()), vk::AccelerationStructureTypeKHR::eTopLevel};
+    scene->buildBuffersGPU();
+    scene->buildTLAS();
 
     std::vector<std::pair<std::string, vk::ShaderStageFlagBits>> shaderPaths = {
         {"../src/shaders/RayGeneration.spv", vk::ShaderStageFlagBits::eRaygenKHR},
@@ -146,7 +86,7 @@ int main() {
     for (uint32_t i = 0; i < shaderPaths.size(); ++i) {
         const auto& [path, stage] = shaderPaths[i];
         auto code = Utils::readFile(path);
-        shaderModules.emplace_back(context.device->createShaderModuleUnique({{}, code.size(), reinterpret_cast<const uint32_t*>(code.data())}));
+        shaderModules.emplace_back(context->device->createShaderModuleUnique({{}, code.size(), reinterpret_cast<const uint32_t*>(code.data())}));
         shaderStages.push_back({{}, stage, *shaderModules.back(), "main"});
 
         if (stage == vk::ShaderStageFlagBits::eRaygenKHR) {
@@ -166,16 +106,14 @@ int main() {
             {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
             {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
             {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-            {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-            {4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-            {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-            {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-            {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR}
+            {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
+            {4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
+            {5, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR}
     };
 
     //Descriptor binding flags for bindless
     std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
-    bindingFlags[7] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
+    bindingFlags[5] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
 
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
     bindingFlagsInfo.setBindingFlags(bindingFlags);
@@ -185,21 +123,21 @@ int main() {
     descSetLayoutInfo.setBindings(bindings);
     descSetLayoutInfo.setPNext(&bindingFlagsInfo);
 
-    vk::UniqueDescriptorSetLayout descSetLayout = context.device->createDescriptorSetLayoutUnique(descSetLayoutInfo);
+    vk::UniqueDescriptorSetLayout descSetLayout = context->device->createDescriptorSetLayoutUnique(descSetLayoutInfo);
 
     //Descriptor set allocation with variable descriptor count
-    uint32_t actualTextureCount = static_cast<uint32_t>(textureImageInfos.size());
+    uint32_t actualTextureCount = static_cast<uint32_t>(scene->textures.size());
 
     vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
     variableCountAllocInfo.setDescriptorCounts(actualTextureCount);
 
     vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.setDescriptorPool(context.descPool.get());
+    allocInfo.setDescriptorPool(context->descPool.get());
     allocInfo.setSetLayouts(*descSetLayout);
     allocInfo.setDescriptorSetCount(1);
     allocInfo.setPNext(&variableCountAllocInfo);
 
-    std::vector<vk::UniqueDescriptorSet> descSets = context.device->allocateDescriptorSetsUnique(allocInfo);
+    std::vector<vk::UniqueDescriptorSet> descSets = context->device->allocateDescriptorSetsUnique(allocInfo);
     vk::UniqueDescriptorSet descSet = std::move(descSets[0]);
 
     // Descriptor writes
@@ -212,18 +150,17 @@ int main() {
     }
 
     // Now assign the descriptor-specific info
-    writes[0].setPNext(&topAccel.descAccelInfo);
+    writes[0].setPNext(&scene->tlas.get()->descAccelInfo);
     writes[1].setImageInfo(inputImage.descImageInfo);
-    writes[2].setBufferInfo(vertexBuffer.descBufferInfo);
-    writes[3].setBufferInfo(indexBuffer.descBufferInfo);
-    writes[4].setBufferInfo(faceBuffer.descBufferInfo);
-    writes[5].setBufferInfo(materialBuffer.descBufferInfo);
-    writes[6].setBufferInfo(pointLightBuffer.descBufferInfo);
-    writes[7].setImageInfo(textureImageInfos);
-    writes[7].setDescriptorCount(actualTextureCount);
+    writes[2].setBufferInfo(scene->meshBuffer.getDescriptorInfo());
+    writes[3].setBufferInfo(scene->materialBuffer.getDescriptorInfo());
+    writes[4].setBufferInfo(scene->pointLightBuffer.getDescriptorInfo());
+    writes[5].setImageInfo(scene->textureImageInfos);
+
+    writes[5].setDescriptorCount(actualTextureCount);
 
     //Final descriptor update
-    context.device->updateDescriptorSets(writes, {});
+    context->device->updateDescriptorSets(writes, {});
 
     //Create pipeline layout
     vk::PushConstantRange pushRange;
@@ -234,7 +171,7 @@ int main() {
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setSetLayouts(*descSetLayout);
     pipelineLayoutInfo.setPushConstantRanges(pushRange);
-    vk::UniquePipelineLayout pipelineLayout = context.device->createPipelineLayoutUnique(pipelineLayoutInfo);
+    vk::UniquePipelineLayout pipelineLayout = context->device->createPipelineLayoutUnique(pipelineLayoutInfo);
 
     //Create pipeline
     vk::RayTracingPipelineCreateInfoKHR rtPipelineInfo;
@@ -243,14 +180,14 @@ int main() {
     rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
     rtPipelineInfo.setLayout(*pipelineLayout);
 
-    auto result = context.device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
+    auto result = context->device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
     if (result.result != vk::Result::eSuccess)
         throw std::runtime_error("failed to create ray tracing pipeline.");
 
     vk::UniquePipeline pipeline = std::move(result.value);
 
     //Get ray tracing properties
-    auto properties = context.physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+    auto properties = context->physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
     auto rtProperties = properties.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
 
     //Calculate shader binding table (SBT) size
@@ -260,7 +197,7 @@ int main() {
 
     //Get shader group handles
     std::vector<uint8_t> handleStorage(sbtSize);
-    if (context.device->getRayTracingShaderGroupHandlesKHR(*pipeline, 0, groupCount, sbtSize, handleStorage.data()) != vk::Result::eSuccess)
+    if (context->device->getRayTracingShaderGroupHandlesKHR(*pipeline, 0, groupCount, sbtSize, handleStorage.data()) != vk::Result::eSuccess)
         throw std::runtime_error("failed to get ray tracing shader group handles.");
 
     //Create Shader Binding Table (SBT)
@@ -275,48 +212,51 @@ int main() {
     Buffer hitSBT{context,Buffer::Type::ShaderBindingTable,hitSize,handleStorage.data() + (raygenSize + hitSize)};
 
     //Create StridedDeviceAddressRegion
-    vk::StridedDeviceAddressRegionKHR raygenRegion{ raygenSBT.deviceAddress, handleSizeAligned, raygenSize};
-    vk::StridedDeviceAddressRegionKHR missRegion{ missSBT.deviceAddress, handleSizeAligned, missSize };
-    vk::StridedDeviceAddressRegionKHR hitRegion{ hitSBT.deviceAddress, handleSizeAligned, hitSize };
+    vk::StridedDeviceAddressRegionKHR raygenRegion{ raygenSBT.getDeviceAddress(), handleSizeAligned, raygenSize};
+    vk::StridedDeviceAddressRegionKHR missRegion{ missSBT.getDeviceAddress(), handleSizeAligned, missSize };
+    vk::StridedDeviceAddressRegionKHR hitRegion{ hitSBT.getDeviceAddress(), handleSizeAligned, hitSize };
 
     //CAMERA
-    static PerspectiveCamera camera(glm::vec3(0, -1, 3.25), glm::vec3(0, -1, 0), glm::vec3(0, -1, 0), static_cast<float>(WIDTH)/HEIGHT, 105);
+    float fStop = 2.0f;
+    float focalLength = 50.0f; // mm
+    static PerspectiveCamera camera(
+        glm::vec3(0, -1, 3.25f),    // origin
+        glm::vec3(0, -1, 0),        // lookAt
+        static_cast<float>(WIDTH) / static_cast<float>(HEIGHT),  // aspect ratio
+        36.0f,   // sensor width in mm (Full-frame)
+        24.0f,   // sensor height in mm
+        focalLength,  // focal length in mm
+        fStop,  // aperture in fstop
+        10.0f    // focus distance in meters
+    );
 
     //Setup Input
     static bool isRayTracing = false;
     bool prevIsRayTracing = isRayTracing;
     static int frame = 0;
-    glfwSetKeyCallback(context.window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
-        if (key == GLFW_KEY_P && action == GLFW_PRESS) {
-            isRayTracing = !isRayTracing;
-            frame = 0;
-            std::cout << (isRayTracing ? "Switched to Ray Tracing" : "Switched to Path Tracing") << std::endl;
-        }
-    });
 
-    glfwSetMouseButtonCallback(context.window, [](GLFWwindow* window, int button, int action, int mods) {
-        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-            if (action == GLFW_PRESS) {
+    glfwSetMouseButtonCallback(context->window, [](GLFWwindow* window, int button, int action, int mods) {
+        if (button == GLFW_MOUSE_BUTTON_RIGHT)
+            if (action == GLFW_PRESS)
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
-            } else if (action == GLFW_RELEASE) {
+            else if (action == GLFW_RELEASE)
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-            }
-        }
     });
 
-    InputTracker inputTracker(context.window);
-    HdrToLdrCompute hdrToLdrCompute(context.device.get(), inputImage.view.get(), outputImage.view.get());
+    InputTracker inputTracker(context->window);
+    HdrToLdrCompute hdrToLdrCompute(context->device.get(), inputImage.view.get(), outputImage.view.get());
 
-    ImGuiOverlay imguiManager(context, swapchainImages);
+    ImGuiOverlay imGuiOverlay(context, swapchainImages, outputImage);
 
     //Main loop
     uint32_t imageIndex = 0;
     auto lastTime = std::chrono::high_resolution_clock::now();
     float timeAccumulator = 0.0f;
     int frameCounter = 0;
+    bool dirty = false;
 
-    vk::UniqueSemaphore imageAcquiredSemaphore = context.device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
-    while (!glfwWindowShouldClose(context.window)) {
+    vk::UniqueSemaphore imageAcquiredSemaphore = context->device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
+    while (!glfwWindowShouldClose(context->window)) {
 
         //Delta time
         auto currentTime = std::chrono::high_resolution_clock::now();
@@ -327,7 +267,6 @@ int main() {
         frameCounter++;
 
         if (timeAccumulator >= 1.0f) {
-            std::cout << "Average FPS: " << frameCounter / timeAccumulator << std::endl;
             timeAccumulator = 0.0f;
             frameCounter = 0;
         }
@@ -345,8 +284,11 @@ int main() {
         pushConstantData.push.isRayTracing = isRayTracing;
         pushConstantData.camera = camera.getCameraData();
 
+        //Accumulate dirty state
+        dirty |= pushConstantData.camera.isMoving;
+
         //Acquire next image
-        imageIndex = context.device->acquireNextImageKHR(*swapchain, UINT64_MAX, *imageAcquiredSemaphore).value;
+        imageIndex = context->device->acquireNextImageKHR(*swapchain, UINT64_MAX, *imageAcquiredSemaphore).value;
 
         //Record commands
         vk::CommandBuffer commandBuffer = *commandBuffers[imageIndex];
@@ -357,41 +299,124 @@ int main() {
         commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, WIDTH, HEIGHT, 1);
 
         //Convert 32bit float to 8bit image for display, read from inputImage and write to outputImage
+        outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
         hdrToLdrCompute.dispatch(commandBuffer, (WIDTH + 15) / 16, (HEIGHT + 15) / 16, 1);
 
-        //Transition output image to presentable layout
-        outputImage.transitionAndCopyTo(commandBuffer, swapchainImages[imageIndex], {WIDTH, HEIGHT, 1});
+        // Transition swapchain image layout to draw
+        Image::setImageLayout(commandBuffer, swapchainImages[imageIndex], vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
 
-        //IMGUI
+        // Start new ImGui frame
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::Begin("Debug");
+        auto* mainViewport = ImGui::GetMainViewport();
+        float menuBarSize = ImGui::GetFrameHeight(); //Height of menu bar
+        ImGui::SetNextWindowPos(ImVec2(mainViewport->Pos.x, mainViewport->Pos.y + menuBarSize));
+        ImGui::SetNextWindowSize(ImVec2(mainViewport->Size.x, mainViewport->Size.y - menuBarSize));
+        ImGui::SetNextWindowViewport(mainViewport->ID);
 
-        ImGui::Text("Overlayed on RT Pipeline");
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                 ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDecoration;
 
-        if (ImGui::RadioButton("Path Tracing", !isRayTracing))
-            isRayTracing = false;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
 
-        ImGui::SameLine();
+        ImGui::Begin("DockSpaceHost", nullptr, flags);
+        ImGui::PopStyleVar(3);
 
-        if (ImGui::RadioButton("Ray Tracing", isRayTracing))
-            isRayTracing = true;
+        // Create the dockspace
+        ImGuiID dockspaceID = ImGui::GetID("MyDockSpace");
+        ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
 
-        if (isRayTracing != prevIsRayTracing) {
-            frame = 0;  //Reset frame on mode change
-            prevIsRayTracing = isRayTracing;
+        if (ImGui::BeginMainMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("New")) { /* Handle New */ }
+                if (ImGui::MenuItem("Open...", "Ctrl+O")) { /* Handle Open */ }
+                if (ImGui::BeginMenu("Open Recent")) {
+                    // Add recent files logic here
+                    ImGui::MenuItem("RecentFile1.blend");
+                    ImGui::MenuItem("RecentFile2.blend");
+                    ImGui::EndMenu();
+                }
+
+                ImGui::Separator();
+
+                if (ImGui::MenuItem("Save", "Ctrl+S")) { /* Handle Save */ }
+                if (ImGui::MenuItem("Save As...", "Shift+Ctrl+S")) { /* Handle Save As */ }
+                if (ImGui::MenuItem("Save Copy...")) { /* Handle Save Copy */ }
+
+                ImGui::Separator();
+
+                if (ImGui::BeginMenu("Import")) {
+                    ImGui::MenuItem("Import Option 1");
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Export")) {
+                    ImGui::MenuItem("Export Option 1");
+                    ImGui::EndMenu();
+                }
+
+                ImGui::Separator();
+
+                ImGui::Separator();
+
+                if (ImGui::MenuItem("Quit", "Ctrl+Q")) { /* Handle Quit */ }
+
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar();
         }
 
+        // =========================
+        //   Debug Panel
+        // =========================
+        ImGui::Begin("Debug");
+
+        // Info section
+        ImGui::SeparatorText("Info");
+        ImGui::Text("FPS: %.2f", static_cast<float>(frameCounter) / timeAccumulator);
+        //ImGui::Text("Triangle Count: %d", static_cast<int>(scene->faces.size()));
+        //ImGui::Text("Instance Count: %d", static_cast<int>(accelInstances.size()));
+        //ImGui::Text("Light Count: %d", static_cast<int>(scene->pointLights.size()));
+
+        // Settings section
+        ImGui::SeparatorText("Settings");
+        if (ImGui::RadioButton("Path Tracing", !isRayTracing)) isRayTracing = false;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Ray Tracing", isRayTracing)) isRayTracing = true;
+
+        ImGui::End(); // End Debug panel
+
+        // =========================
+        //   Viewport Panel
+        // =========================
+        ImGui::Begin("Viewport");
+
+        outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+        ImVec2 size = ImGui::GetContentRegionAvail();
+        ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<VkDescriptorSet>(imGuiOverlay.outputImageDescriptorSet.get())), size, ImVec2(0, 1), ImVec2(1, 0));
+        ImGui::End(); // End Viewport panel
+
+        camera.renderUI(dirty);
+
+        scene->renderUI();
+
+        // End the main dockspace host window
         ImGui::End();
 
-        imguiManager.Render(commandBuffer, imageIndex);
+        // Final render call
+        imGuiOverlay.Render(commandBuffer, imageIndex);
+
+        //Transition swapchain image layout to present
+        Image::setImageLayout(commandBuffer, swapchainImages[imageIndex], vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR);
 
         commandBuffer.end();
 
         //Submit
-        context.queue.submit(vk::SubmitInfo().setCommandBuffers(commandBuffer));
+        context->queue.submit(vk::SubmitInfo().setCommandBuffers(commandBuffer));
 
         //Present image
         vk::PresentInfoKHR presentInfo{};
@@ -399,19 +424,28 @@ int main() {
         presentInfo.setImageIndices(imageIndex);
         presentInfo.setWaitSemaphores(*imageAcquiredSemaphore);
 
-        auto result = context.queue.presentKHR(presentInfo);
+        auto result = context->queue.presentKHR(presentInfo);
         if (result != vk::Result::eSuccess)
             throw std::runtime_error("failed to present.");
 
-        context.queue.waitIdle();
+        context->queue.waitIdle();
 
-        if (pushConstantData.camera.isMoving) //reset frame counter when cam is moving
+        if (dirty) //reset frame counter if something changed
             frame = 0;
         else
             frame++;
-    }
 
-    context.device->waitIdle();
-    glfwDestroyWindow(context.window);
+        if (isRayTracing != prevIsRayTracing) {
+            prevIsRayTracing = isRayTracing;
+            frame = 0;  //Reset frame on mode change
+        }
+
+        //set to false for next frame
+        dirty = false;
+
+    } //End Render Loop
+
+    context->device->waitIdle();
+    glfwDestroyWindow(context->window);
     glfwTerminate();
 }

@@ -1,22 +1,30 @@
 ﻿#pragma once
 
+#include <memory>
+
 #include "Context.h"
 
 class Buffer {
 public:
     enum class Type {
-        Storage,
-        Scratch,
         AccelInput,
+        Scratch,
         AccelStorage,
         ShaderBindingTable,
+        Storage,
+        Custom
     };
 
     Buffer();
-    Buffer(const Context& context, Type type, vk::DeviceSize size, const void* data = nullptr);
+    Buffer(const std::shared_ptr<Context>& context, Type type, vk::DeviceSize size, const void* data = nullptr, vk::BufferUsageFlags usage = {}, vk::MemoryPropertyFlags memoryProps = {});
 
+    vk::DeviceAddress getDeviceAddress() const { return deviceAddress; }
+    const vk::DescriptorBufferInfo& getDescriptorInfo() const { return descBufferInfo; }
+    const vk::Buffer& getBuffer() const { return buffer.get(); }
+
+private:
     vk::UniqueBuffer buffer;
     vk::UniqueDeviceMemory memory;
     vk::DescriptorBufferInfo descBufferInfo;
-    uint64_t deviceAddress = 0;
+    vk::DeviceAddress deviceAddress;
 };

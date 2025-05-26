@@ -2,8 +2,8 @@
 #include <stdexcept>
 
 #include "Utils.h"
-#include "shaders/SharedStructs.h"
-#include "Texture.h"
+#include "Shaders/SharedStructs.h"
+#include "Vulkan/Texture.h"
 
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION

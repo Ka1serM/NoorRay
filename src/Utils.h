@@ -1,13 +1,11 @@
 ﻿#pragma once
 
-#include <cstdint>
 #include <memory>
 #include <vector>
 #include <string>
 
-#include "Image.h"
-#include "Texture.h"
-#include "shaders/SharedStructs.h"
+#include "Vulkan/Texture.h"
+#include "Shaders/SharedStructs.h"
 
 class Utils {
 public:

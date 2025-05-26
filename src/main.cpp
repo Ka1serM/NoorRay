@@ -1,28 +1,29 @@
 #include <chrono>
-#include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
-#include <iostream>
-#include <ostream>
 #include <vector>
 
-#include "Context.h"
-#include "Buffer.h"
-#include "Image.h"
-#include "Accel.h"
+#include "Vulkan/Context.h"
+#include "Vulkan/Buffer.h"
+#include "Vulkan/Image.h"
+#include "Vulkan/Accel.h"
 #include "Utils.h"
-#include "Camera.h"
-#include "HdrToLdrCompute.h"
+#include "Camera/PerspectiveCamera.h"
+#include "Vulkan/HdrToLdrCompute.h"
 #include "Globals.h"
-#include "ImGuiOverlay.h"
-#include "MeshAsset.h"
-#include "MeshInstance.h"
-#include "Texture.h"
+#include "UI/ImGuiManager.h"
+#include "Mesh/MeshAsset.h"
+#include "Scene/MeshInstance.h"
+#include "UI/DebugPanel.h"
+
+#include "UI/MainMenuBar.h"
+#include "UI/OutlinerDetailsPanel.h"
+#include "UI/ViewportPanel.h"
 
 int main() {
     auto context = std::make_shared<Context>(WIDTH, HEIGHT);
 
-    vk::SwapchainCreateInfoKHR swapchainInfo;
+    vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(*context->surface);
     swapchainInfo.setMinImageCount(3);
     swapchainInfo.setImageFormat(vk::Format::eB8G8R8A8Unorm);
@@ -34,8 +35,8 @@ int main() {
     swapchainInfo.setPresentMode(vk::PresentModeKHR::eMailbox);
     swapchainInfo.setClipped(true);
     swapchainInfo.setQueueFamilyIndices(context->queueFamilyIndex);
-    vk::UniqueSwapchainKHR swapchain = context->device->createSwapchainKHRUnique(swapchainInfo);
 
+    vk::UniqueSwapchainKHR swapchain = context->device->createSwapchainKHRUnique(swapchainInfo);
     std::vector<vk::Image> swapchainImages = context->device->getSwapchainImagesKHR(*swapchain);
 
     vk::CommandBufferAllocateInfo commandBufferInfo;
@@ -48,17 +49,14 @@ int main() {
 
     auto scene = std::make_shared<Scene>(context);
 
-    PointLight pointLight;
-
+    PointLight pointLight{};
     scene->pointLights.push_back(pointLight);
-
-    //auto meshAsset = std::make_shared<MeshAsset>(context, scene, "../assets/LittleTokyo.obj");
 
     auto meshAsset2 = std::make_shared<MeshAsset>(context, scene, "../assets/LittleTokyo.obj");
     scene->addMeshAsset(meshAsset2);
 
-    auto meshInstance = std::make_unique<MeshInstance>("Mesh Instance 1", meshAsset2, Transform(glm::vec3(0, 100, 0), glm::vec3(0, 0, 0), glm::vec3(1, 1, 1)));
-    auto meshInstance2 = std::make_unique<MeshInstance>("Instance 2", meshAsset2, Transform());
+    auto meshInstance = std::make_unique<MeshInstance>(scene, "Mesh Instance 1", meshAsset2, Transform(glm::vec3(0, 100, 0), glm::vec3(0, 0, 0), glm::vec3(1, 1, 1)));
+    auto meshInstance2 = std::make_unique<MeshInstance>(scene, "Instance 2", meshAsset2, Transform());
 
     scene->addMeshInstance(std::move(meshInstance));
     scene->addMeshInstance(std::move(meshInstance2));
@@ -126,7 +124,7 @@ int main() {
     vk::UniqueDescriptorSetLayout descSetLayout = context->device->createDescriptorSetLayoutUnique(descSetLayoutInfo);
 
     //Descriptor set allocation with variable descriptor count
-    uint32_t actualTextureCount = static_cast<uint32_t>(scene->textures.size());
+    uint32_t actualTextureCount = scene->textures.size();
 
     vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
     variableCountAllocInfo.setDescriptorCounts(actualTextureCount);
@@ -150,7 +148,7 @@ int main() {
     }
 
     // Now assign the descriptor-specific info
-    writes[0].setPNext(&scene->tlas.get()->descAccelInfo);
+    writes[0].setPNext(&scene->tlas->descAccelInfo);
     writes[1].setImageInfo(inputImage.descImageInfo);
     writes[2].setBufferInfo(scene->meshBuffer.getDescriptorInfo());
     writes[3].setBufferInfo(scene->materialBuffer.getDescriptorInfo());
@@ -180,11 +178,11 @@ int main() {
     rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
     rtPipelineInfo.setLayout(*pipelineLayout);
 
-    auto result = context->device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
-    if (result.result != vk::Result::eSuccess)
+    auto pipelineResult = context->device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
+    if (pipelineResult.result != vk::Result::eSuccess)
         throw std::runtime_error("failed to create ray tracing pipeline.");
 
-    vk::UniquePipeline pipeline = std::move(result.value);
+    vk::UniquePipeline pipeline = std::move(pipelineResult.value);
 
     //Get ray tracing properties
     auto properties = context->physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
@@ -192,7 +190,7 @@ int main() {
 
     //Calculate shader binding table (SBT) size
     uint32_t handleSizeAligned = rtProperties.shaderGroupHandleAlignment;
-    uint32_t groupCount = static_cast<uint32_t>(shaderGroups.size());
+    uint32_t groupCount = shaderGroups.size();
     uint32_t sbtSize = groupCount * handleSizeAligned;
 
     //Get shader group handles
@@ -217,43 +215,69 @@ int main() {
     vk::StridedDeviceAddressRegionKHR hitRegion{ hitSBT.getDeviceAddress(), handleSizeAligned, hitSize };
 
     //CAMERA
-    float fStop = 2.0f;
-    float focalLength = 50.0f; // mm
-    static PerspectiveCamera camera(
-        glm::vec3(0, -1, 3.25f),    // origin
-        glm::vec3(0, -1, 0),        // lookAt
-        static_cast<float>(WIDTH) / static_cast<float>(HEIGHT),  // aspect ratio
-        36.0f,   // sensor width in mm (Full-frame)
-        24.0f,   // sensor height in mm
-        focalLength,  // focal length in mm
-        fStop,  // aperture in fstop
-        10.0f    // focus distance in meters
+    auto cam = std::make_unique<PerspectiveCamera>(
+        scene,
+        "Main Camera",
+       Transform{},              // transform
+        16.0f / 9.0f,          // aspect ratio
+        36.0f,                 // sensor width in mm (typical full-frame)
+        24.0f,                 // sensor height in mm
+        50.0f,                 // focal length in mm
+        2.8f,                  // aperture (f-stop)
+        10.0f                  // focus distance in meters
     );
+
+    scene->addSceneObject(std::move(cam));
 
     //Setup Input
     static bool isRayTracing = false;
-    bool prevIsRayTracing = isRayTracing;
     static int frame = 0;
-
-    glfwSetMouseButtonCallback(context->window, [](GLFWwindow* window, int button, int action, int mods) {
-        if (button == GLFW_MOUSE_BUTTON_RIGHT)
-            if (action == GLFW_PRESS)
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
-            else if (action == GLFW_RELEASE)
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-    });
-
-    InputTracker inputTracker(context->window);
-    HdrToLdrCompute hdrToLdrCompute(context->device.get(), inputImage.view.get(), outputImage.view.get());
-
-    ImGuiOverlay imGuiOverlay(context, swapchainImages, outputImage);
 
     //Main loop
     uint32_t imageIndex = 0;
     auto lastTime = std::chrono::high_resolution_clock::now();
     float timeAccumulator = 0.0f;
     int frameCounter = 0;
-    bool dirty = false;
+
+    glfwSetMouseButtonCallback(context->window, [](GLFWwindow* window, int button, int action, int mods) {
+        if (button == GLFW_MOUSE_BUTTON_RIGHT)
+        {
+            if (action == GLFW_PRESS)
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
+            else if (action == GLFW_RELEASE)
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+    });
+
+    InputTracker inputTracker(context->window);
+    HdrToLdrCompute hdrToLdrCompute(context->device.get(), inputImage.view.get(), outputImage.view.get());
+
+    ImGuiManager imGuiManager(context, swapchainImages);
+
+    // Create Ui components
+    auto mainMenuBar = std::make_unique<MainMenuBar>();
+    auto debugPanel = std::make_unique<DebugPanel>();
+    auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene->sceneObjects);
+    auto viewportPanel = std::make_unique<ViewportPanel>(context, imGuiManager.getDescriptorPool(), outputImage.view.get());
+
+    debugPanel->setSceneStats(0,scene->instances.size(),scene->pointLights.size());
+
+    // Set up callbacks
+    debugPanel->setModeChangedCallback([&]
+    {
+        isRayTracing = !isRayTracing;
+        scene->markDirty();
+    });
+
+    mainMenuBar->setCallback("File.Quit", [&]() {
+        glfwSetWindowShouldClose(context->window, GLFW_TRUE);
+    });
+
+    // Add components to manager
+    imGuiManager.addComponent(std::move(mainMenuBar));
+    imGuiManager.addComponent(std::move(debugPanel));
+    imGuiManager.addComponent(std::move(outlinerDetailsPanel));
+    imGuiManager.addComponent(std::move(viewportPanel));
 
     vk::UniqueSemaphore imageAcquiredSemaphore = context->device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
     while (!glfwWindowShouldClose(context->window)) {
@@ -267,6 +291,10 @@ int main() {
         frameCounter++;
 
         if (timeAccumulator >= 1.0f) {
+            //update FPS in UI
+            if (auto* debugPanelPtr = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug")))
+                debugPanelPtr->setFps(static_cast<float>(frameCounter) / timeAccumulator);
+            //reset
             timeAccumulator = 0.0f;
             frameCounter = 0;
         }
@@ -274,18 +302,18 @@ int main() {
         //Window Update
         glfwPollEvents();
 
+        // ImGui Update
+        imGuiManager.renderUi();
+
         //Camera Update
         inputTracker.update();
-        camera.update(inputTracker, deltaTime);
+        scene->getActiveCamera()->update(inputTracker, deltaTime);
 
         //Push Constants
         PushConstants pushConstantData{};
         pushConstantData.push.frame = frame;
         pushConstantData.push.isRayTracing = isRayTracing;
-        pushConstantData.camera = camera.getCameraData();
-
-        //Accumulate dirty state
-        dirty |= pushConstantData.camera.isMoving;
+        pushConstantData.camera = scene->getActiveCamera()->getCameraData();
 
         //Acquire next image
         imageIndex = context->device->acquireNextImageKHR(*swapchain, UINT64_MAX, *imageAcquiredSemaphore).value;
@@ -301,121 +329,17 @@ int main() {
         //Convert 32bit float to 8bit image for display, read from inputImage and write to outputImage
         outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
         hdrToLdrCompute.dispatch(commandBuffer, (WIDTH + 15) / 16, (HEIGHT + 15) / 16, 1);
-
-        // Transition swapchain image layout to draw
-        Image::setImageLayout(commandBuffer, swapchainImages[imageIndex], vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
-
-        // Start new ImGui frame
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-
-        auto* mainViewport = ImGui::GetMainViewport();
-        float menuBarSize = ImGui::GetFrameHeight(); //Height of menu bar
-        ImGui::SetNextWindowPos(ImVec2(mainViewport->Pos.x, mainViewport->Pos.y + menuBarSize));
-        ImGui::SetNextWindowSize(ImVec2(mainViewport->Size.x, mainViewport->Size.y - menuBarSize));
-        ImGui::SetNextWindowViewport(mainViewport->ID);
-
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                 ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDecoration;
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
-
-        ImGui::Begin("DockSpaceHost", nullptr, flags);
-        ImGui::PopStyleVar(3);
-
-        // Create the dockspace
-        ImGuiID dockspaceID = ImGui::GetID("MyDockSpace");
-        ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-
-        if (ImGui::BeginMainMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("New")) { /* Handle New */ }
-                if (ImGui::MenuItem("Open...", "Ctrl+O")) { /* Handle Open */ }
-                if (ImGui::BeginMenu("Open Recent")) {
-                    // Add recent files logic here
-                    ImGui::MenuItem("RecentFile1.blend");
-                    ImGui::MenuItem("RecentFile2.blend");
-                    ImGui::EndMenu();
-                }
-
-                ImGui::Separator();
-
-                if (ImGui::MenuItem("Save", "Ctrl+S")) { /* Handle Save */ }
-                if (ImGui::MenuItem("Save As...", "Shift+Ctrl+S")) { /* Handle Save As */ }
-                if (ImGui::MenuItem("Save Copy...")) { /* Handle Save Copy */ }
-
-                ImGui::Separator();
-
-                if (ImGui::BeginMenu("Import")) {
-                    ImGui::MenuItem("Import Option 1");
-                    ImGui::EndMenu();
-                }
-                if (ImGui::BeginMenu("Export")) {
-                    ImGui::MenuItem("Export Option 1");
-                    ImGui::EndMenu();
-                }
-
-                ImGui::Separator();
-
-                ImGui::Separator();
-
-                if (ImGui::MenuItem("Quit", "Ctrl+Q")) { /* Handle Quit */ }
-
-                ImGui::EndMenu();
-            }
-            ImGui::EndMainMenuBar();
-        }
-
-        // =========================
-        //   Debug Panel
-        // =========================
-        ImGui::Begin("Debug");
-
-        // Info section
-        ImGui::SeparatorText("Info");
-        ImGui::Text("FPS: %.2f", static_cast<float>(frameCounter) / timeAccumulator);
-        //ImGui::Text("Triangle Count: %d", static_cast<int>(scene->faces.size()));
-        //ImGui::Text("Instance Count: %d", static_cast<int>(accelInstances.size()));
-        //ImGui::Text("Light Count: %d", static_cast<int>(scene->pointLights.size()));
-
-        // Settings section
-        ImGui::SeparatorText("Settings");
-        if (ImGui::RadioButton("Path Tracing", !isRayTracing)) isRayTracing = false;
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Ray Tracing", isRayTracing)) isRayTracing = true;
-
-        ImGui::End(); // End Debug panel
-
-        // =========================
-        //   Viewport Panel
-        // =========================
-        ImGui::Begin("Viewport");
-
         outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
-        ImVec2 size = ImGui::GetContentRegionAvail();
-        ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<VkDescriptorSet>(imGuiOverlay.outputImageDescriptorSet.get())), size, ImVec2(0, 1), ImVec2(1, 0));
-        ImGui::End(); // End Viewport panel
 
-        camera.renderUI(dirty);
-
-        scene->renderUI();
-
-        // End the main dockspace host window
-        ImGui::End();
-
-        // Final render call
-        imGuiOverlay.Render(commandBuffer, imageIndex);
-
+        //Transition swapchain image layout to draw
+        Image::setImageLayout(commandBuffer, swapchainImages[imageIndex], vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
+        //Draw ImGui
+        imGuiManager.Draw(commandBuffer, imageIndex);
         //Transition swapchain image layout to present
         Image::setImageLayout(commandBuffer, swapchainImages[imageIndex], vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR);
 
-        commandBuffer.end();
-
         //Submit
+        commandBuffer.end();
         context->queue.submit(vk::SubmitInfo().setCommandBuffers(commandBuffer));
 
         //Present image
@@ -430,18 +354,14 @@ int main() {
 
         context->queue.waitIdle();
 
-        if (dirty) //reset frame counter if something changed
+        //reset frame counter if something changed
+        if (scene->getDirty())
             frame = 0;
         else
             frame++;
 
-        if (isRayTracing != prevIsRayTracing) {
-            prevIsRayTracing = isRayTracing;
-            frame = 0;  //Reset frame on mode change
-        }
-
         //set to false for next frame
-        dirty = false;
+        scene->resetDirty();
 
     } //End Render Loop
 

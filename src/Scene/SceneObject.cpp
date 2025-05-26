@@ -1,0 +1,50 @@
+﻿#include "SceneObject.h"
+#include <glm/gtc/type_ptr.hpp>
+#include <utility>
+#include <imgui.h>
+
+#include "Scene.h"
+#include "../UI/ImGuiManager.h"
+
+SceneObject::SceneObject(const std::shared_ptr<Scene>& scene, std::string  name, const Transform& transform) : transform(transform), scene(scene), name(std::move(name)) {
+
+}
+
+void SceneObject::setPosition(const glm::vec3& position) {
+    transform.setPosition(position);
+    scene->markDirty();
+}
+
+void SceneObject::setRotationEuler(const glm::vec3& rotation) {
+    transform.setRotationEuler(rotation);
+    scene->markDirty();
+}
+
+void SceneObject::setScale(const glm::vec3& scale) {
+    transform.setScale(scale);
+    scene->markDirty();
+}
+
+void SceneObject::renderUi() {
+
+    // Name (read-only)
+    ImGuiManager::tableRowLabel("Name");
+    ImGui::TextUnformatted(name.c_str());
+
+    ImGui::SeparatorText("Transform");
+
+    // Position
+    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.1f, [&](const glm::vec3 v) {
+        setPosition(v);
+    });
+
+    // Rotation
+    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const glm::vec3 v) {
+        setRotationEuler(v);
+    });
+
+    // Scale
+    ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const glm::vec3 v) {
+        setScale(v);
+    });
+}

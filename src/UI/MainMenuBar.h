@@ -9,7 +9,6 @@ class MainMenuBar : public ImGuiComponent {
 public:
 
     MainMenuBar();
-    virtual ~MainMenuBar() = default;
 
     void renderUi() override;
     std::string getType() const override { return "Main Menu"; }

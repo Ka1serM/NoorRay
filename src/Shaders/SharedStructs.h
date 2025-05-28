@@ -48,7 +48,6 @@ struct Material {
 };
 
 //Vulkan Only
-
 struct MeshAddresses {
     uint64_t vertexAddress;
     uint64_t indexAddress;

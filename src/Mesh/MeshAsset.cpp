@@ -1,14 +1,22 @@
 ﻿#include "MeshAsset.h"
 
 #include "Utils.h"
+#include "Vulkan/Renderer.h"
 
-MeshAsset::MeshAsset(const std::shared_ptr<Context> &context, const std::shared_ptr<Scene> &scene, const std::string& objFilePath)
-: context(context), scene(scene), name(objFilePath) {
+MeshAsset::MeshAsset(Context& context, Renderer& renderer, const std::string& objFilePath)
+: name(objFilePath) {
+
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
 
-    Utils::loadObj(context, objFilePath, vertices, indices, faces, scene->materials, scene->textures);
+    std::vector<Material> materials;
+    std::vector<Texture> textures;
+
+    Utils::loadObj(context, objFilePath, vertices, indices, faces, materials, textures);
+
+    renderer.add(materials);
+    renderer.add(std::move(textures));
 
     // Upload mesh data to GPU
     vertexBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(Vertex) * vertices.size(), vertices.data()};
@@ -29,11 +37,13 @@ MeshAsset::MeshAsset(const std::shared_ptr<Context> &context, const std::shared_
     geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
 
     // Create bottom-level acceleration structure (BLAS)
-    blas = std::make_unique<Accel>(context, geometry, static_cast<uint32_t>(indices.size() / 3), vk::AccelerationStructureTypeKHR::eBottomLevel);
+    blas.build(context, geometry, static_cast<uint32_t>(indices.size() / 3), vk::AccelerationStructureTypeKHR::eBottomLevel);
+
+    renderer.add(getBufferAddresses());
 }
 
 uint64_t MeshAsset::getBlasAddress() const {
-    return blas->buffer.getDeviceAddress();
+    return blas.buffer.getDeviceAddress();
 }
 
 MeshAddresses MeshAsset::getBufferAddresses() const {

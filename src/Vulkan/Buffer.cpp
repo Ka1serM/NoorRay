@@ -2,7 +2,7 @@
 
 Buffer::Buffer() = default;
 
-Buffer::Buffer(const std::shared_ptr<Context>& context, Type type, vk::DeviceSize size, const void* data, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memoryProps) {
+Buffer::Buffer(Context& context, Type type, vk::DeviceSize size, const void* data, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memoryProps) {
 
     using Usage = vk::BufferUsageFlagBits;
     using Memory = vk::MemoryPropertyFlagBits;
@@ -26,10 +26,10 @@ Buffer::Buffer(const std::shared_ptr<Context>& context, Type type, vk::DeviceSiz
         }
     }
 
-    buffer = context->device->createBufferUnique({{}, size, usage});
+    buffer = context.device->createBufferUnique({{}, size, usage});
 
-    const vk::MemoryRequirements requirements = context->device->getBufferMemoryRequirements(*buffer);
-    const uint32_t memoryTypeIndex = context->findMemoryType(requirements.memoryTypeBits, memoryProps);
+    const vk::MemoryRequirements requirements = context.device->getBufferMemoryRequirements(*buffer);
+    const uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, memoryProps);
 
     constexpr vk::MemoryAllocateFlagsInfo flagsInfo{vk::MemoryAllocateFlagBits::eDeviceAddress};
     vk::MemoryAllocateInfo memoryInfo;
@@ -37,19 +37,19 @@ Buffer::Buffer(const std::shared_ptr<Context>& context, Type type, vk::DeviceSiz
     memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
     memoryInfo.setPNext(&flagsInfo);
 
-    memory = context->device->allocateMemoryUnique(memoryInfo);
-    context->device->bindBufferMemory(*buffer, *memory, 0);
+    memory = context.device->allocateMemoryUnique(memoryInfo);
+    context.device->bindBufferMemory(*buffer, *memory, 0);
 
     const vk::BufferDeviceAddressInfoKHR bufferDeviceAI{*buffer};
-    deviceAddress = context->device->getBufferAddressKHR(&bufferDeviceAI);
+    deviceAddress = context.device->getBufferAddressKHR(&bufferDeviceAI);
 
     descBufferInfo.setBuffer(*buffer);
     descBufferInfo.setOffset(0);
     descBufferInfo.setRange(size);
 
     if (data) {
-        void* mapped = context->device->mapMemory(*memory, 0, size);
+        void* mapped = context.device->mapMemory(*memory, 0, size);
         memcpy(mapped, data, size);
-        context->device->unmapMemory(*memory);
+        context.device->unmapMemory(*memory);
     }
 }

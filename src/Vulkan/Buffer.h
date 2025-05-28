@@ -16,7 +16,7 @@ public:
     };
 
     Buffer();
-    Buffer(const std::shared_ptr<Context>& context, Type type, vk::DeviceSize size, const void* data = nullptr, vk::BufferUsageFlags usage = {}, vk::MemoryPropertyFlags memoryProps = {});
+    Buffer(Context& context, Type type, vk::DeviceSize size, const void* data = nullptr, vk::BufferUsageFlags usage = {}, vk::MemoryPropertyFlags memoryProps = {});
 
     vk::DeviceAddress getDeviceAddress() const { return deviceAddress; }
     const vk::DescriptorBufferInfo& getDescriptorInfo() const { return descBufferInfo; }

@@ -3,7 +3,7 @@
 
 #include "Globals.h"
 
-ViewportPanel::ViewportPanel(const std::shared_ptr<Context>& context, const vk::DescriptorPool descriptorPool, const vk::ImageView imageView)
+ViewportPanel::ViewportPanel(Context& context, const vk::DescriptorPool descriptorPool, const vk::ImageView imageView)
 {
     // Create Vulkan sampler
     vk::SamplerCreateInfo samplerInfo{};
@@ -13,7 +13,7 @@ ViewportPanel::ViewportPanel(const std::shared_ptr<Context>& context, const vk::
     samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
 
-    sampler = context->device->createSamplerUnique(samplerInfo);
+    sampler = context.device->createSamplerUnique(samplerInfo);
 
     // Create descriptor set layout
     vk::DescriptorSetLayoutBinding binding{
@@ -27,7 +27,7 @@ ViewportPanel::ViewportPanel(const std::shared_ptr<Context>& context, const vk::
     layoutInfo.bindingCount = 1;
     layoutInfo.pBindings = &binding;
 
-    descriptorSetLayout = context->device->createDescriptorSetLayoutUnique(layoutInfo);
+    descriptorSetLayout = context.device->createDescriptorSetLayoutUnique(layoutInfo);
 
     // Allocate descriptor set
     vk::DescriptorSetAllocateInfo allocInfo{};
@@ -35,7 +35,7 @@ ViewportPanel::ViewportPanel(const std::shared_ptr<Context>& context, const vk::
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &descriptorSetLayout.get();
 
-    auto sets = context->device->allocateDescriptorSetsUnique(allocInfo);
+    auto sets = context.device->allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
 
     // Update descriptor set with image info
@@ -52,7 +52,7 @@ ViewportPanel::ViewportPanel(const std::shared_ptr<Context>& context, const vk::
     write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
     write.pImageInfo = &imageInfo;
 
-    context->device->updateDescriptorSets(write, nullptr);
+    context.device->updateDescriptorSets(write, nullptr);
 }
 
 void ViewportPanel::renderUi() {

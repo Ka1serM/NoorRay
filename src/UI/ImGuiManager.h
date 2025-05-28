@@ -20,14 +20,14 @@ private:
     // GUI component system
     std::vector<std::unique_ptr<ImGuiComponent>> components;
 
-    void CreateDescriptorPool(const std::shared_ptr<Context>& context);
-    void CreateRenderPass(const std::shared_ptr<Context>& context);
-    void CreateFrameBuffers(const std::shared_ptr<Context>& context, const std::vector<vk::Image>& images);
+    void CreateDescriptorPool(Context& context);
+    void CreateRenderPass(Context& context);
+    void CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images);
     static void SetBlenderTheme();
     static void setupDockSpace();
 
 public:
-    ImGuiManager(const std::shared_ptr<Context>& context, const std::vector<vk::Image>& swapchainImages);
+    ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages);
     ~ImGuiManager();
 
     vk::DescriptorPool getDescriptorPool() const { return descriptorPool.get(); }

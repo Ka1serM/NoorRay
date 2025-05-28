@@ -6,9 +6,9 @@
 class Image {
 public:
 
-    Image(const std::shared_ptr<Context> &context, const std::string &filepath);
+    Image(Context& context, const std::string &filepath);
 
-    Image(const std::shared_ptr<Context> &context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage);
+    Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage);
 
     void setImageLayout(vk::CommandBuffer commandBuffer, vk::ImageLayout newLayout);
 

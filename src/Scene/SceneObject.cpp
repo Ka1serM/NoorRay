@@ -6,23 +6,23 @@
 #include "Scene.h"
 #include "../UI/ImGuiManager.h"
 
-SceneObject::SceneObject(const std::shared_ptr<Scene>& scene, std::string  name, const Transform& transform) : transform(transform), scene(scene), name(std::move(name)) {
+SceneObject::SceneObject(Renderer& renderer, std::string  name, const Transform& transform) : transform(transform), renderer(renderer), name(std::move(name)) {
 
 }
 
 void SceneObject::setPosition(const glm::vec3& position) {
     transform.setPosition(position);
-    scene->markDirty();
+    renderer.markDirty();
 }
 
 void SceneObject::setRotationEuler(const glm::vec3& rotation) {
     transform.setRotationEuler(rotation);
-    scene->markDirty();
+    renderer.markDirty();
 }
 
 void SceneObject::setScale(const glm::vec3& scale) {
     transform.setScale(scale);
-    scene->markDirty();
+    renderer.markDirty();
 }
 
 void SceneObject::renderUi() {

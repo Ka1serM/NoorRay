@@ -1,6 +1,15 @@
 ﻿#include "InputTracker.h"
 
-InputTracker::InputTracker(GLFWwindow* window) : window(window), lastX(0.0), lastY(0.0), deltaX(0.0), deltaY(0.0) {
+InputTracker::InputTracker(GLFWwindow* window) : window(window), deltaX(0.0), deltaY(0.0), lastX(0.0), lastY(0.0) {
+    glfwSetMouseButtonCallback(window, [](GLFWwindow* window, int button, int action, int mods) {
+        if (button == GLFW_MOUSE_BUTTON_RIGHT)
+        {
+            if (action == GLFW_PRESS)
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); //capture cursor
+            else if (action == GLFW_RELEASE)
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+    });
 }
 
 void InputTracker::update() {

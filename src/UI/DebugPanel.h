@@ -12,7 +12,7 @@ public:
 
     std::string getType() const override { return "Debug"; }
 
-    void setFps(float newFps) {
+    void setFps(const float newFps) {
         fps = newFps;
     }
 

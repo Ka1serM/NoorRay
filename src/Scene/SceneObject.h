@@ -1,24 +1,25 @@
 ﻿#pragma once
 
-#include <memory>
 #include <string>
+
 #include "../Mesh/Transform.h"
 #include "UI/ImGuiComponent.h"
-
-class Scene;
+#include "Vulkan/Renderer.h"
 
 class SceneObject : public ImGuiComponent {
 
 protected:
     Transform transform;
-    std::shared_ptr<Scene> scene;
+    Renderer& renderer;
 
 public:
+
+    SceneObject(Renderer& renderer, std::string name, const Transform& transform);
+
     std::string getType() const override { return "Scene Object"; }
 
     std::string name;
 
-    SceneObject(const std::shared_ptr<Scene>& scene, std::string  name, const Transform& transform);
 
     Transform getTransform() const {
         return transform;

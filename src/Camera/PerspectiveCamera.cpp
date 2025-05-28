@@ -14,7 +14,7 @@ static constexpr glm::vec3 FRONT = glm::vec3(0, 0, 1);
 static constexpr glm::vec3 WORLD_UP = glm::vec3(0.0f, -1.0f, 0.0f);
 
 PerspectiveCamera::PerspectiveCamera(
-    const std::shared_ptr<Scene>& scene,
+    Renderer& renderer,
     const std::string& name,
     Transform transform,
     float aspect,
@@ -23,7 +23,7 @@ PerspectiveCamera::PerspectiveCamera(
     float focalLength,
     float aperture,
     float focusDistance
-) : SceneObject(scene, name, transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight) {
+) : SceneObject(renderer, name, transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight) {
 
     cameraData.focalLength = focalLength;
     cameraData.aperture = aperture;
@@ -57,29 +57,29 @@ void PerspectiveCamera::updateHorizontalVertical() {
 void PerspectiveCamera::setFocalLength(const float val) {
     cameraData.focalLength = val;
     updateHorizontalVertical();
-    scene->markDirty();
+    renderer.markDirty();
 }
 
 void PerspectiveCamera::setAperture(const float val) {
     cameraData.aperture = val;
-    scene->markDirty();
+    renderer.markDirty();
 }
 
 void PerspectiveCamera::setFocusDistance(const float val) {
     cameraData.focusDistance = val;
-    scene->markDirty();
+    renderer.markDirty();
 }
 
 void PerspectiveCamera::setSensorSize(const float width, const float height) {
     sensorWidth = width;
     sensorHeight = height;
     updateHorizontalVertical();
-    scene->markDirty();
+    renderer.markDirty();
 }
 
 void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
     const bool rmbHeld = inputTracker.isMouseButtonHeld(GLFW_MOUSE_BUTTON_RIGHT);
-    const bool wasDirty = scene->getDirty();
+    const bool wasDirty = renderer.getDirty();
 
     const glm::vec3 oldPosition = transform.getPosition();
     const glm::vec3 oldDirection = cameraData.direction;
@@ -148,7 +148,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
 
     if (changed) {
         updateHorizontalVertical();
-        scene->markDirty();
+        renderer.markDirty();
     }
 }
 

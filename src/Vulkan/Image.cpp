@@ -3,7 +3,7 @@
 
 #include "Image.h"
 
-Image::Image(const std::shared_ptr<Context> &context, const std::string& filepath) {
+Image::Image(Context& context, const std::string& filepath) {
     currentLayout = vk::ImageLayout::eUndefined;
 
     int texWidth, texHeight, texChannels;
@@ -25,21 +25,21 @@ Image::Image(const std::shared_ptr<Context> &context, const std::string& filepat
     bufferInfo.setSize(imageSize);
     bufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
     bufferInfo.setSharingMode(vk::SharingMode::eExclusive);
-    vk::UniqueBuffer stagingBuffer = context->device->createBufferUnique(bufferInfo);
+    vk::UniqueBuffer stagingBuffer = context.device->createBufferUnique(bufferInfo);
 
-    vk::MemoryRequirements memRequirements = context->device->getBufferMemoryRequirements(*stagingBuffer);
-    uint32_t memTypeIndex = context->findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    vk::MemoryRequirements memRequirements = context.device->getBufferMemoryRequirements(*stagingBuffer);
+    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     vk::MemoryAllocateInfo allocInfo{};
     allocInfo.setAllocationSize(memRequirements.size);
     allocInfo.setMemoryTypeIndex(memTypeIndex);
-    vk::UniqueDeviceMemory stagingMemory = context->device->allocateMemoryUnique(allocInfo);
+    vk::UniqueDeviceMemory stagingMemory = context.device->allocateMemoryUnique(allocInfo);
 
-    context->device->bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
+    context.device->bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
 
     //Map and copy image data
-    void* data = context->device->mapMemory(*stagingMemory, 0, imageSize);
+    void* data = context.device->mapMemory(*stagingMemory, 0, imageSize);
     memcpy(data, pixels.get(), imageSize);
-    context->device->unmapMemory(*stagingMemory);
+    context.device->unmapMemory(*stagingMemory);
 
     //Create GPU image
     vk::ImageCreateInfo imageInfo;
@@ -51,16 +51,16 @@ Image::Image(const std::shared_ptr<Context> &context, const std::string& filepat
     imageInfo.setUsage(vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
     info = imageInfo;
 
-    image = context->device->createImageUnique(imageInfo);
+    image = context.device->createImageUnique(imageInfo);
 
-    vk::MemoryRequirements requirements = context->device->getImageMemoryRequirements(*image);
-    uint32_t memoryTypeIndex = context->findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    vk::MemoryRequirements requirements = context.device->getImageMemoryRequirements(*image);
+    uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk::MemoryAllocateInfo memoryInfo;
     memoryInfo.setAllocationSize(requirements.size);
     memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
-    memory = context->device->allocateMemoryUnique(memoryInfo);
+    memory = context.device->allocateMemoryUnique(memoryInfo);
 
-    context->device->bindImageMemory(*image, *memory, 0);
+    context.device->bindImageMemory(*image, *memory, 0);
 
     //Create image view
     vk::ImageViewCreateInfo imageViewInfo;
@@ -68,10 +68,10 @@ Image::Image(const std::shared_ptr<Context> &context, const std::string& filepat
     imageViewInfo.setViewType(vk::ImageViewType::e2D);
     imageViewInfo.setFormat(vk::Format::eR8G8B8A8Unorm);
     imageViewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
-    view = context->device->createImageViewUnique(imageViewInfo);
+    view = context.device->createImageViewUnique(imageViewInfo);
 
     //Copy and transition
-    context->oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
+    context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
 
         setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
@@ -95,7 +95,7 @@ Image::Image(const std::shared_ptr<Context> &context, const std::string& filepat
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-Image::Image(const std::shared_ptr<Context> &context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) {
+Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) {
     // Create image
     vk::ImageCreateInfo imageInfo;
     imageInfo.setImageType(vk::ImageType::e2D);
@@ -108,18 +108,18 @@ Image::Image(const std::shared_ptr<Context> &context, uint32_t width, uint32_t h
     currentLayout = vk::ImageLayout::eUndefined;
 
     info = imageInfo;
-    image = context->device->createImageUnique(imageInfo);
+    image = context.device->createImageUnique(imageInfo);
 
     // Allocate memory
-    vk::MemoryRequirements requirements = context->device->getImageMemoryRequirements(*image);
-    uint32_t memoryTypeIndex = context->findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    vk::MemoryRequirements requirements = context.device->getImageMemoryRequirements(*image);
+    uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk::MemoryAllocateInfo memoryInfo;
     memoryInfo.setAllocationSize(requirements.size);
     memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
-    memory = context->device->allocateMemoryUnique(memoryInfo);
+    memory = context.device->allocateMemoryUnique(memoryInfo);
 
     // Bind memory
-    context->device->bindImageMemory(*image, *memory, 0);
+    context.device->bindImageMemory(*image, *memory, 0);
 
     // Create image view
     vk::ImageViewCreateInfo imageViewInfo;
@@ -127,7 +127,7 @@ Image::Image(const std::shared_ptr<Context> &context, uint32_t width, uint32_t h
     imageViewInfo.setViewType(vk::ImageViewType::e2D);
     imageViewInfo.setFormat(format);
     imageViewInfo.setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-    view = context->device->createImageViewUnique(imageViewInfo);
+    view = context.device->createImageViewUnique(imageViewInfo);
 
     // Update descriptor image info
     descImageInfo.setImageView(*view);
@@ -135,7 +135,7 @@ Image::Image(const std::shared_ptr<Context> &context, uint32_t width, uint32_t h
     descImageInfo.setSampler(nullptr); // if needed
 
     // Transition image layout
-    context->oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
+    context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
         setImageLayout(commandBuffer,image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
     });
 }

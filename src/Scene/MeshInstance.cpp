@@ -5,7 +5,7 @@
 #include <utility>
 #include "../UI/ImGuiManager.h"
 
-MeshInstance::MeshInstance(const std::shared_ptr<Scene>& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf) : SceneObject(scene, name, transf), meshAsset(std::move(asset)) {
+MeshInstance::MeshInstance(Renderer& renderer, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf) : SceneObject(renderer, name, transf), meshAsset(std::move(asset)) {
 
     instanceData = vk::AccelerationStructureInstanceKHR{};
     instanceData.setTransform(transform.getVkTransformMatrix());
@@ -15,11 +15,14 @@ MeshInstance::MeshInstance(const std::shared_ptr<Scene>& scene, const std::strin
     instanceData.setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
 
     instanceData.setAccelerationStructureReference(meshAsset->getBlasAddress());
+
+    renderer.add(instanceData);
 }
 
 void MeshInstance::updateInstanceTransform() {
     instanceData.setTransform(transform.getVkTransformMatrix());
-    //TODO update scene
+    renderer.buildTLAS();
+    renderer.markDirty();
 }
 
 void MeshInstance::renderUi() {

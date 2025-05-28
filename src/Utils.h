@@ -9,7 +9,7 @@
 
 class Utils {
 public:
-    static void loadObj(const std::shared_ptr<Context> &context, const std::string &filepath, std::vector<Vertex> &vertices, std::vector<uint32_t> &indices, std
+    static void loadObj(Context& context, const std::string &filepath, std::vector<Vertex> &vertices, std::vector<uint32_t> &indices, std
                         ::vector<Face> &faces, std::vector<Material> &materials, std::vector<Texture> &
                         textures);
 

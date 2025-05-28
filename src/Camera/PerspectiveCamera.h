@@ -17,8 +17,7 @@ private:
 
     static constexpr glm::vec3 UP = glm::vec3(0, 1, 0);
 public:
-
-    PerspectiveCamera(const std::shared_ptr<Scene>& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance);
+    PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance);
 
     // Accessors for camera params
     float getFocalLength() const { return cameraData.focalLength; }
@@ -38,7 +37,6 @@ public:
 
 private:
     void updateHorizontalVertical();
-
     glm::vec3 calculateDirection() const;
     void updateCameraData();
 };

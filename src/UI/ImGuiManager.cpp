@@ -11,7 +11,7 @@
 #include <vector>
 #include <functional>
 
-ImGuiManager::ImGuiManager(const std::shared_ptr<Context>& context, const std::vector<vk::Image>& swapchainImages)
+ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages)
 {
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -26,7 +26,7 @@ ImGuiManager::ImGuiManager(const std::shared_ptr<Context>& context, const std::v
     SetBlenderTheme();
 
     // Setup Platform backend
-    ImGui_ImplGlfw_InitForVulkan(context->window, true);
+    ImGui_ImplGlfw_InitForVulkan(context.window, true);
 
     CreateDescriptorPool(context);
     CreateRenderPass(context);
@@ -34,11 +34,11 @@ ImGuiManager::ImGuiManager(const std::shared_ptr<Context>& context, const std::v
 
     // Setup ImGui Vulkan backend
     ImGui_ImplVulkan_InitInfo init_info = {};
-    init_info.Instance = context->instance.get();
-    init_info.PhysicalDevice = context->physicalDevice;
-    init_info.Device = context->device.get();
-    init_info.QueueFamily = context->queueFamilyIndex;
-    init_info.Queue = context->queue;
+    init_info.Instance = context.instance.get();
+    init_info.PhysicalDevice = context.physicalDevice;
+    init_info.Device = context.device.get();
+    init_info.QueueFamily = context.queueFamilyIndex;
+    init_info.Queue = context.queue;
     init_info.PipelineCache = VK_NULL_HANDLE;
     init_info.DescriptorPool = descriptorPool.get();
     init_info.RenderPass = renderPass.get();
@@ -126,7 +126,7 @@ void ImGuiManager::SetBlenderTheme() {
     style.PopupBorderSize = 1.f;
 }
 
-void ImGuiManager::CreateDescriptorPool(const std::shared_ptr<Context>& context) {
+void ImGuiManager::CreateDescriptorPool(Context& context) {
     std::vector<vk::DescriptorPoolSize> poolSizes = {
         { vk::DescriptorType::eSampler, 1000 },
         { vk::DescriptorType::eCombinedImageSampler, 1000 },
@@ -147,10 +147,10 @@ void ImGuiManager::CreateDescriptorPool(const std::shared_ptr<Context>& context)
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
 
-    descriptorPool = context->device.get().createDescriptorPoolUnique(poolInfo);
+    descriptorPool = context.device.get().createDescriptorPoolUnique(poolInfo);
 }
 
-void ImGuiManager::CreateRenderPass(const std::shared_ptr<Context>& context) {
+void ImGuiManager::CreateRenderPass(Context& context) {
     vk::AttachmentDescription colorAttachment{};
     colorAttachment.format = vk::Format::eB8G8R8A8Unorm; // Must match swapchain format
     colorAttachment.samples = vk::SampleCountFlagBits::e1;
@@ -186,10 +186,10 @@ void ImGuiManager::CreateRenderPass(const std::shared_ptr<Context>& context) {
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
 
-    renderPass = context->device->createRenderPassUnique(renderPassInfo);
+    renderPass = context.device->createRenderPassUnique(renderPassInfo);
 }
 
-void ImGuiManager::CreateFrameBuffers(const std::shared_ptr<Context>& context, const std::vector<vk::Image>& images) {
+void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images) {
     for (const auto& image : images) {
         vk::ImageViewCreateInfo viewInfo{};
         viewInfo.image = image;
@@ -199,7 +199,7 @@ void ImGuiManager::CreateFrameBuffers(const std::shared_ptr<Context>& context, c
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
 
-        imageViews.push_back(context->device->createImageViewUnique(viewInfo));
+        imageViews.push_back(context.device->createImageViewUnique(viewInfo));
 
         vk::FramebufferCreateInfo framebufferInfo{};
         framebufferInfo.renderPass = renderPass.get();
@@ -209,7 +209,7 @@ void ImGuiManager::CreateFrameBuffers(const std::shared_ptr<Context>& context, c
         framebufferInfo.height = HEIGHT;
         framebufferInfo.layers = 1;
 
-        frameBuffers.push_back(context->device->createFramebufferUnique(framebufferInfo));
+        frameBuffers.push_back(context.device->createFramebufferUnique(framebufferInfo));
     }
 }
 

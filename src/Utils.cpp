@@ -14,7 +14,7 @@
 #include "tiny_obj_loader.h"
 
 void Utils::loadObj(
-    const std::shared_ptr<Context>& context,
+    Context& context,
     const std::string& filepath,
     std::vector<Vertex>& vertices,
     std::vector<uint32_t>& indices,

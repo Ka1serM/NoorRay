@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "../Mesh/MeshAsset.h"
+#include "Mesh/MeshAsset.h"
 #include "SceneObject.h"
 
 class MeshInstance : public SceneObject {
@@ -10,8 +10,7 @@ public:
     const std::shared_ptr<MeshAsset> meshAsset;
     vk::AccelerationStructureInstanceKHR instanceData;
 
-
-    MeshInstance(const std::shared_ptr<Scene>& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transform);
+    MeshInstance(Renderer& renderer, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf);
     void updateInstanceTransform();
     void renderUi() override;
 

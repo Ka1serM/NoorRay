@@ -2,7 +2,7 @@
 
 #include <memory>
 
-Texture::Texture(const std::shared_ptr<Context> &context, const std::string& filepath) : image(context, filepath)
+Texture::Texture(Context& context, const std::string& filepath) : image(context, filepath)
 {
     //Create sampler
     vk::SamplerCreateInfo samplerInfo;
@@ -13,7 +13,7 @@ Texture::Texture(const std::shared_ptr<Context> &context, const std::string& fil
     samplerInfo.setAddressModeW(vk::SamplerAddressMode::eRepeat);
     samplerInfo.setAnisotropyEnable(true);
     samplerInfo.setMaxAnisotropy(16.0f);
-    sampler = context->device->createSamplerUnique(samplerInfo); //Unique = automatic managed, member so it stays alive
+    sampler = context.device->createSamplerUnique(samplerInfo); //Unique = automatic managed, member so it stays alive
 
     descriptorInfo.setImageView(*image.view);
     descriptorInfo.setSampler(*sampler);

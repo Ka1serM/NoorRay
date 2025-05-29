@@ -10,13 +10,7 @@ MeshAsset::MeshAsset(Context& context, Renderer& renderer, const std::string& ob
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
 
-    std::vector<Material> materials;
-    std::vector<Texture> textures;
-
-    Utils::loadObj(context, objFilePath, vertices, indices, faces, materials, textures);
-
-    renderer.add(materials);
-    renderer.add(std::move(textures));
+    Utils::loadObj(context, renderer, objFilePath, vertices, indices, faces);
 
     // Upload mesh data to GPU
     vertexBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(Vertex) * vertices.size(), vertices.data()};

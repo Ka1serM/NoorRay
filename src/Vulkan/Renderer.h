@@ -22,9 +22,8 @@ private:
     std::vector<vk::Image> swapchainImages;
 
     std::vector<MeshAddresses> meshAddresses;
-    std::vector<Material> materials;
+
     std::vector<PointLight> pointLights;
-    std::vector<Texture> textures;
     Buffer materialBuffer;
     Buffer pointLightBuffer;
     Buffer textureBuffer;
@@ -39,6 +38,8 @@ private:
     void updateTextureDescriptors(const std::vector<Texture>& textures_);
 
 public:
+    std::vector<Material> materials;
+    std::vector<Texture> textures;
 
     Renderer(Context& context);
 

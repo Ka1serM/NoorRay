@@ -9,6 +9,7 @@
 #include "UI/ImGuiManager.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
+#include "Scene/Scene.h"
 #include "UI/DebugPanel.h"
 
 #include "UI/MainMenuBar.h"
@@ -31,11 +32,14 @@ int main() {
     PointLight pointLight{};
     renderer.add(pointLight);
 
-    auto meshAsset2 = std::make_shared<MeshAsset>(context, renderer, "../assets/LittleTokyo.obj");
+    auto meshAsset = std::make_shared<MeshAsset>(context, renderer, "../assets/LittleTokyo.obj");
+    scene.addMeshAsset(meshAsset);
+
+    auto meshAsset2 = std::make_shared<MeshAsset>(context, renderer, "../assets/Shiba.obj");
     scene.addMeshAsset(meshAsset2);
 
-    auto meshInstance = std::make_unique<MeshInstance>(renderer, "Mesh Instance 1", meshAsset2, Transform(glm::vec3(0, 100, 0), glm::vec3(0, 0, 0), glm::vec3(1, 1, 1)));
-    auto meshInstance2 = std::make_unique<MeshInstance>(renderer, "Instance 2", meshAsset2, Transform());
+    auto meshInstance = std::make_unique<MeshInstance>(renderer, "Mesh Instance 1", meshAsset, Transform());
+    auto meshInstance2 = std::make_unique<MeshInstance>(renderer, "Mesh Instance 2", meshAsset2, Transform(glm::vec3(0, 0, 15), glm::vec3(0, 0, 0), glm::vec3(1, 1, 1)));
     scene.addMeshInstance(std::move(meshInstance));
     scene.addMeshInstance(std::move(meshInstance2));
 

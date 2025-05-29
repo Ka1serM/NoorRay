@@ -6,7 +6,6 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : enable
-#extension GL_EXT_buffer_reference : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "../SharedStructs.h"
@@ -36,7 +35,6 @@ layout(push_constant) uniform PushConstants {
 } pushConstants;
 
 void main() {
-    //Instance-based mesh selection
     const uint instIdx = gl_InstanceCustomIndexEXT;
     const MeshAddresses mesh = instances[instIdx];
 
@@ -56,28 +54,35 @@ void main() {
     const Vertex v1 = vertexBuf.data[i1];
     const Vertex v2 = vertexBuf.data[i2];
 
-    // Interpolate barycentric attributes
     const vec3 bary = calculateBarycentric(attribs);
-    const vec3 position = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
-    const vec3 normal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
+    const vec3 localPosition = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
+    const vec3 localNormal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
     const vec2 uv = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
 
-    // Material color
+    // Transform position to world space
+    const vec3 worldPosition = (gl_ObjectToWorldEXT * vec4(localPosition, 1.0)).xyz;
+
+    // Correct normal transformation using inverse transpose
+    mat3 objectToWorld3x3 = mat3(gl_ObjectToWorldEXT);
+    mat3 normalMatrix = transpose(inverse(objectToWorld3x3));
+    vec3 worldNormal = normalize(normalMatrix * localNormal);
+
+    // Sample albedo texture if present
     vec3 albedo = material.albedo;
     if (material.albedoIndex != -1)
     albedo *= texture(textureSamplers[material.albedoIndex], uv).rgb;
 
-    // Output payload
-    payload.position = position;
-    payload.normal = normal;
+    // Output payload (in world space)
+    payload.position = worldPosition;
+    payload.normal = worldNormal;
     payload.color = material.emission;
 
     // Path tracing BRDF sample
     uint seedX = i0 + pushConstants.frame;
     uint seedY = i1 + pushConstants.frame + 1;
-    vec3 sampledDir = sampleDirection(rand(seedX), rand(seedY), normal);
+    vec3 sampledDir = sampleDirection(rand(seedX), rand(seedY), worldNormal);
 
-    float cosTheta = max(0.0, dot(sampledDir, normal));
+    float cosTheta = max(0.0, dot(sampledDir, worldNormal));
     float pdf = cosTheta / PI;
     vec3 brdf = albedo / PI;
 

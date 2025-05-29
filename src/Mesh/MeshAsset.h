@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include <string>
-#include "Scene/Scene.h"
 #include "Vulkan/Accel.h"
 #include "Vulkan/Renderer.h"
 

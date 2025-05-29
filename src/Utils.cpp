@@ -12,16 +12,9 @@
 
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
+#include "Vulkan/Renderer.h"
 
-void Utils::loadObj(
-    Context& context,
-    const std::string& filepath,
-    std::vector<Vertex>& vertices,
-    std::vector<uint32_t>& indices,
-    std::vector<Face>& faces,
-    std::vector<Material>& materials,   // global materials array
-    std::vector<Texture>& textures      // global textures array
-) {
+void Utils::loadObj(Context& context, Renderer& renderer, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces) {
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> mats;
@@ -31,10 +24,10 @@ void Utils::loadObj(
         throw std::runtime_error("Failed to load OBJ: " + warn + err);
 
     // Store how many materials already exist globally
-    size_t baseMaterialIndex = materials.size();
+    size_t baseMaterialIndex = renderer.materials.size();
 
     // Append new materials from the OBJ file
-    materials.reserve(baseMaterialIndex + mats.size());
+    renderer.materials.reserve(baseMaterialIndex + mats.size());
     for (const auto& mat : mats) {
         Material material{};
         material.albedo       = glm::vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
@@ -52,23 +45,23 @@ void Utils::loadObj(
         material.normalIndex = -1;
 
         if (!mat.diffuse_texname.empty()) {
-            textures.emplace_back(context, "../assets/" + mat.diffuse_texname);
-            material.albedoIndex = static_cast<int>(textures.size() - 1);
+            renderer.add(Texture(context, "../assets/" + mat.diffuse_texname));
+            material.albedoIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.specular_texname.empty()) {
-            textures.emplace_back(context, "../assets/" + mat.specular_texname);
-            material.specularIndex = static_cast<int>(textures.size() - 1);
+             renderer.add(Texture(context, "../assets/" + mat.specular_texname));
+            material.specularIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.roughness_texname.empty()) {
-            textures.emplace_back(context, "../assets/" + mat.roughness_texname);
-            material.roughnessIndex = static_cast<int>(textures.size() - 1);
+             renderer.add(Texture(context, "../assets/" + mat.roughness_texname));
+            material.roughnessIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.normal_texname.empty()) {
-            textures.emplace_back(context, "../assets/" + mat.normal_texname);
-            material.normalIndex = static_cast<int>(textures.size() - 1);
+            renderer.add(Texture(context, "../assets/" + mat.normal_texname));
+            material.normalIndex = static_cast<int>(renderer.textures.size() - 1);
         }
 
-        materials.push_back(material);
+        renderer.add(material);
     }
 
     // Now process shapes and faces
@@ -84,8 +77,6 @@ void Utils::loadObj(
             // Update face.materialIndex to global index
             int originalMatIndex = shape.mesh.material_ids[f];
             face.materialIndex = (originalMatIndex >= 0) ? static_cast<uint32_t>(baseMaterialIndex + originalMatIndex) : 0;
-
-            const Material& material = materials[face.materialIndex];
 
             // Spawn point lights
             for (int v = 0; v < fv; ++v) {

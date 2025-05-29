@@ -6,7 +6,6 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : enable
-#extension GL_EXT_buffer_reference : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "../SharedStructs.h"
@@ -37,6 +36,7 @@ layout(push_constant) uniform PushConstants {
 } pushConstants;
 
 void main() {
+    // Fetch mesh by instance index
     const uint instIdx = gl_InstanceCustomIndexEXT;
     const MeshAddresses mesh = meshAddresses[instIdx];
 
@@ -56,18 +56,28 @@ void main() {
     const Vertex v1 = vertexBuf.data[i1];
     const Vertex v2 = vertexBuf.data[i2];
 
-    // Barycentric interpolation
+    // Barycentric interpolation in local space
     const vec3 bary = calculateBarycentric(attribs);
-    const vec3 position = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
-    const vec3 normal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
+    const vec3 localPosition = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
+    const vec3 localNormal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
     const vec2 uv = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
 
-    payload.position = position;
-    payload.normal = normal;
+    // Transform position to world space
+    const vec3 worldPosition = (gl_ObjectToWorldEXT * vec4(localPosition, 1.0)).xyz;
 
+    // Properly transform normal using inverse transpose of 3x3 matrix
+    mat3 objectToWorld3x3 = mat3(gl_ObjectToWorldEXT);
+    mat3 normalMatrix = transpose(inverse(objectToWorld3x3));
+    const vec3 worldNormal = normalize(normalMatrix * localNormal);
+
+    // Sample texture if available
     vec3 albedo = material.albedo;
-    if (material.albedoIndex != -1)
-    albedo *= texture(textureSamplers[material.albedoIndex], uv).rgb;
+    if (material.albedoIndex != -1) {
+        albedo *= texture(textureSamplers[material.albedoIndex], uv).rgb;
+    }
 
+    // Write outputs to payload (in world space)
+    payload.position = worldPosition;
+    payload.normal = worldNormal;
     payload.color = material.emission + albedo;
 }

@@ -35,7 +35,7 @@ private:
 
     template <class T>
     void updateStorageBuffer(uint32_t binding, const std::vector<T>& data, Buffer& buffer);
-    void updateTextureDescriptors(const std::vector<Texture>& textures_);
+    void updateTextureDescriptors(const std::vector<Texture>& textures);
 
 public:
     std::vector<Material> materials;
@@ -47,17 +47,17 @@ public:
 
     void render(uint32_t imageIndex, const PushConstants& pushConstants);
 
-    void updateStorageImage(vk::ImageView storageImageView);
+    void updateStorageImage(const vk::ImageView& storageImageView);
 
-    vk::CommandBuffer getCommandBuffer(uint32_t imageIndex);
-    vk::SwapchainKHR getSwapChain() const;
-    std::vector<vk::Image>& getSwapchainImages();
+    const vk::CommandBuffer& getCommandBuffer(uint32_t imageIndex) const;
+    const vk::SwapchainKHR& getSwapChain() const;
+    const std::vector<vk::Image>& getSwapchainImages() const;
 
     void add(Texture&& element);
     void add(const PointLight& element);
     void add(const MeshAddresses& element);
     void add(const Material& element);
-    void add(vk::AccelerationStructureInstanceKHR& element);
+    void add(const vk::AccelerationStructureInstanceKHR& element);
 
     void add(std::vector<Texture>&& elements);
     void add(const std::vector<PointLight>& elements);

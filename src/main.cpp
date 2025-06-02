@@ -149,8 +149,7 @@ int main() {
 
         //Present image
         vk::PresentInfoKHR presentInfo{};
-        vk::SwapchainKHR rawSwapchain = renderer.getSwapChain();
-        presentInfo.setPSwapchains(&rawSwapchain);
+        presentInfo.setPSwapchains(&renderer.getSwapChain());
         presentInfo.setImageIndices(imageIndex);
         presentInfo.setWaitSemaphores(*imageAcquiredSemaphore);
 

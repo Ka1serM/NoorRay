@@ -7,7 +7,7 @@
 Renderer::Renderer(Context& context) : dirty(false), context(context) {
 
     vk::SwapchainCreateInfoKHR swapchainInfo{};
-    swapchainInfo.setSurface(*context.surface);
+    swapchainInfo.setSurface(context.surface.get());
     swapchainInfo.setMinImageCount(3);
     swapchainInfo.setImageFormat(vk::Format::eB8G8R8A8Unorm);
     swapchainInfo.setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear);
@@ -20,7 +20,7 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
     swapchainInfo.setQueueFamilyIndices(context.queueFamilyIndex);
 
     swapchain = context.device->createSwapchainKHRUnique(swapchainInfo);
-    swapchainImages = context.device->getSwapchainImagesKHR(*swapchain);
+    swapchainImages = context.device->getSwapchainImagesKHR(swapchain.get());
 
     vk::CommandBufferAllocateInfo commandBufferInfo;
     commandBufferInfo.setCommandPool(*context.commandPool);
@@ -72,9 +72,12 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
         {5, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR}
     };
 
-    //Descriptor binding flags for bindless
+    //Descriptor binding flags for Bindless
     std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
     bindingFlags[5] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
+    //AllocationInfo for Bindless
+    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
+    variableCountAllocInfo.setDescriptorCounts(MAX_TEXTURES);
 
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
     bindingFlagsInfo.setBindingFlags(bindingFlags);
@@ -86,17 +89,13 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
 
     descSetLayout = context.device->createDescriptorSetLayoutUnique(descSetLayoutInfo);
 
-    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
-    variableCountAllocInfo.setDescriptorCounts(MAX_TEXTURES);
-
     vk::DescriptorSetAllocateInfo allocInfo{};
     allocInfo.setDescriptorPool(context.descPool.get());
     allocInfo.setSetLayouts(descSetLayout.get());
     allocInfo.setDescriptorSetCount(1);
     allocInfo.setPNext(&variableCountAllocInfo);
 
-    auto descriptorSets = context.device->allocateDescriptorSetsUnique(allocInfo);
-    descriptorSet = std::move(descriptorSets.at(0));
+    descriptorSet = std::move(context.device->allocateDescriptorSetsUnique(allocInfo).front());
 
     //Create pipeline layout
     vk::PushConstantRange pushRange;
@@ -105,7 +104,7 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
     pushRange.setStageFlags(vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
-    pipelineLayoutInfo.setSetLayouts(*descSetLayout);
+    pipelineLayoutInfo.setSetLayouts(descSetLayout.get());
     pipelineLayoutInfo.setPushConstantRanges(pushRange);
     pipelineLayout = context.device->createPipelineLayoutUnique(pipelineLayoutInfo);
 
@@ -114,7 +113,7 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
     rtPipelineInfo.setStages(shaderStages);
     rtPipelineInfo.setGroups(shaderGroups);
     rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
-    rtPipelineInfo.setLayout(*pipelineLayout);
+    rtPipelineInfo.setLayout(pipelineLayout.get());
 
     auto pipelineResult = context.device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
     if (pipelineResult.result != vk::Result::eSuccess)
@@ -133,7 +132,7 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
 
     //Get shader group handles
     std::vector<uint8_t> handleStorage(sbtSize);
-    if (context.device->getRayTracingShaderGroupHandlesKHR(*pipeline, 0, groupCount, sbtSize, handleStorage.data()) != vk::Result::eSuccess)
+    if (context.device->getRayTracingShaderGroupHandlesKHR(pipeline.get(), 0, groupCount, sbtSize, handleStorage.data()) != vk::Result::eSuccess)
         throw std::runtime_error("failed to get ray tracing shader group handles.");
 
     //Create Shader Binding Table (SBT)
@@ -157,9 +156,8 @@ void Renderer::buildTLAS() {
     std::vector<vk::AccelerationStructureInstanceKHR> instanceData;
     instanceData.reserve(instancePtrs.size());
 
-    for (const auto* instPtr : instancePtrs) {
+    for (const auto* instPtr : instancePtrs)
         instanceData.push_back(*instPtr); // fresh copy of the latest transform and data
-    }
 
     instancesBuffer = Buffer{context,Buffer::Type::AccelInput,sizeof(vk::AccelerationStructureInstanceKHR) * instanceData.size(),instanceData.data()};
 
@@ -188,7 +186,7 @@ void Renderer::buildTLAS() {
     context.device->updateDescriptorSets(accelWrite, {});
 }
 
-void Renderer::updateStorageImage(vk::ImageView storageImageView) {
+void Renderer::updateStorageImage(const vk::ImageView& storageImageView) {
     vk::DescriptorImageInfo storageImageInfo{};
     storageImageInfo.setImageView(storageImageView);
     storageImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
@@ -217,9 +215,9 @@ void Renderer::updateStorageBuffer(uint32_t binding, const std::vector<T>& data,
     context.device->updateDescriptorSets(write, {});
 }
 
-void Renderer::updateTextureDescriptors(const std::vector<Texture>& textures_) {
+void Renderer::updateTextureDescriptors(const std::vector<Texture>& textures) {
     textureImageInfos.clear();
-    for (const auto& texture : textures_)
+    for (const auto& texture : textures)
         textureImageInfos.push_back(texture.getDescriptorInfo());
 
     vk::WriteDescriptorSet write{};
@@ -242,17 +240,17 @@ void Renderer::render(uint32_t imageIndex, const PushConstants& pushConstants)
     commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, WIDTH, HEIGHT, 1);
 }
 
-vk::CommandBuffer Renderer::getCommandBuffer(uint32_t imageIndex)
+const vk::CommandBuffer& Renderer::getCommandBuffer(uint32_t imageIndex) const
 {
     return commandBuffers[imageIndex].get();
 }
 
-vk::SwapchainKHR Renderer::getSwapChain() const
+const vk::SwapchainKHR& Renderer::getSwapChain() const
 {
     return swapchain.get();
 }
 
-std::vector<vk::Image>& Renderer::getSwapchainImages()
+const std::vector<vk::Image>& Renderer::getSwapchainImages() const
 {
     return swapchainImages;
 }
@@ -277,16 +275,14 @@ void Renderer::add(const Material& element) {
     updateStorageBuffer(3, materials, materialBuffer);
 }
 
-void Renderer::add(vk::AccelerationStructureInstanceKHR& element) {
+void Renderer::add(const vk::AccelerationStructureInstanceKHR& element) {
     instancePtrs.push_back(&element);
     buildTLAS();
 }
 
 // Vector add overloads
 void Renderer::add(std::vector<Texture>&& elements) {
-    textures.insert(textures.end(),
-                    std::make_move_iterator(elements.begin()),
-                    std::make_move_iterator(elements.end()));
+    textures.insert(textures.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
     updateTextureDescriptors(textures);
 }
 

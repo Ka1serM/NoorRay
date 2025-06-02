@@ -22,7 +22,6 @@ MeshInstance::MeshInstance(Renderer& renderer, const std::string& name, std::sha
 void MeshInstance::updateInstanceTransform() {
     instanceData.setTransform(transform.getVkTransformMatrix());
     renderer.buildTLAS();
-    renderer.markDirty();
 }
 
 void MeshInstance::renderUi() {
@@ -39,18 +38,18 @@ void MeshInstance::renderUi() {
 
 void MeshInstance::setPosition(const glm::vec3& pos)
 {
-    SceneObject::setPosition(pos);
     updateInstanceTransform();
+    SceneObject::setPosition(pos);
 }
 
 void MeshInstance::setRotationEuler(const glm::vec3& rot)
 {
-    SceneObject::setRotationEuler(rot);
     updateInstanceTransform();
+    SceneObject::setRotationEuler(rot);
 }
 
 void MeshInstance::setScale(const glm::vec3& scale)
 {
-    SceneObject::setScale(scale);
     updateInstanceTransform();
+    SceneObject::setScale(scale);
 }

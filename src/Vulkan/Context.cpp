@@ -10,7 +10,7 @@ Context::Context(int width, int height) {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    window = glfwCreateWindow(width, height, "GpuPathtracer", nullptr, nullptr);
+    window = glfwCreateWindow(width, height, "VulkanToyPathtracer", nullptr, nullptr);
 
     // Prepare extensions and layers
     uint32_t glfwExtensionCount = 0;
@@ -32,7 +32,7 @@ Context::Context(int width, int height) {
     instanceInfo.setPEnabledLayerNames(layers);
     instanceInfo.setPEnabledExtensionNames(extensions);
     instance = createInstanceUnique(instanceInfo);
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
     //TODO Pick best gpu
     physicalDevice = instance->enumeratePhysicalDevices().back();
@@ -46,11 +46,11 @@ Context::Context(int width, int height) {
 
     // Create surface
     VkSurfaceKHR _surface;
-    VkResult res = glfwCreateWindowSurface(*instance, window, nullptr, &_surface);
+    VkResult res = glfwCreateWindowSurface(instance.get(), window, nullptr, &_surface);
     if (res != VK_SUCCESS) {
         throw std::runtime_error("failed to create window surface!");
     }
-    surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {*instance});
+    surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {instance.get()});
 
     // Find queue family with support for graphics and compute
     std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
@@ -58,7 +58,7 @@ Context::Context(int width, int height) {
         auto flags = queueFamilies[i].queueFlags;
         bool supportGraphics = (flags & vk::QueueFlagBits::eGraphics) != vk::QueueFlags{};
         bool supportCompute = (flags & vk::QueueFlagBits::eCompute) != vk::QueueFlags{};
-        bool supportPresent = physicalDevice.getSurfaceSupportKHR(i, *surface);
+        bool supportPresent = physicalDevice.getSurfaceSupportKHR(i, surface.get());
 
         if (supportGraphics && supportCompute && supportPresent) {
             queueFamilyIndex = i;
@@ -118,7 +118,7 @@ Context::Context(int width, int height) {
 
     device = physicalDevice.createDeviceUnique(createInfoChain.get<vk::DeviceCreateInfo>());
 
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
 
     queue = device->getQueue(queueFamilyIndex, 0);
 
@@ -173,7 +173,7 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
 
 void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const {
     vk::CommandBufferAllocateInfo commandBufferInfo;
-    commandBufferInfo.setCommandPool(*commandPool);
+    commandBufferInfo.setCommandPool(commandPool.get());
     commandBufferInfo.setCommandBufferCount(1);
 
     vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(commandBufferInfo).front());
@@ -189,7 +189,7 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
 
 vk::UniqueDescriptorSet Context::allocateDescSet(vk::DescriptorSetLayout descSetLayout) {
     vk::DescriptorSetAllocateInfo descSetInfo;
-    descSetInfo.setDescriptorPool(*descPool);
+    descSetInfo.setDescriptorPool(descPool.get());
     descSetInfo.setSetLayouts(descSetLayout);
     return std::move(device->allocateDescriptorSetsUnique(descSetInfo).front());
 }
@@ -197,7 +197,8 @@ vk::UniqueDescriptorSet Context::allocateDescSet(vk::DescriptorSetLayout descSet
 VKAPI_ATTR VkBool32 VKAPI_CALL Context::debugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                                                                     VkDebugUtilsMessageTypeFlagsEXT messageTypes,
                                                                     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-                                                                    void* pUserData) {
+                                                                    void* pUserData)
+{
     std::cerr << pCallbackData->pMessage << std::endl;
     return VK_FALSE;
 }

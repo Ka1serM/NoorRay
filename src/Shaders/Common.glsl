@@ -15,32 +15,13 @@ vec2 interpolateBarycentric(vec3 bary, vec2 p0, vec2 p1, vec2 p2) {
     return p0 * bary.x + p1 * bary.y + p2 * bary.z;
 }
 
-float D_GGX(float NdotH, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float denom = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom);
-}
-
-float G_Smith(float NdotV, float NdotL, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-
-    float gv = NdotV / (NdotV * (1.0 - k) + k);
-    float gl = NdotL / (NdotL * (1.0 - k) + k);
-    return gv * gl;
-}
-
-vec3 Fresnel_Schlick(float cosTheta, vec3 F0) {
-    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
-}
 
 void createCoordinateSystem(in vec3 N, out vec3 T, out vec3 B)
 {
     if(abs(N.x) > abs(N.y))
-    T = vec3(N.z, 0, -N.x) / sqrt(N.x * N.x + N.z * N.z);
+        T = vec3(N.z, 0, -N.x) / sqrt(N.x * N.x + N.z * N.z);
     else
-    T = vec3(0, -N.z, N.y) / sqrt(N.y * N.y + N.z * N.z);
+        T = vec3(0, -N.z, N.y) / sqrt(N.y * N.y + N.z * N.z);
     B = cross(N, T);
 }
 

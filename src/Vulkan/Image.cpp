@@ -163,11 +163,11 @@ vk::AccessFlags Image::toAccessFlags(vk::ImageLayout layout) {
     }
 }
 
-void Image::setImageLayout(vk::CommandBuffer commandBuffer, vk::ImageLayout newLayout) {
+void Image::setImageLayout(const vk::CommandBuffer& commandBuffer, vk::ImageLayout newLayout) {
     setImageLayout(commandBuffer, image.get(), currentLayout, newLayout);
 }
 
-void Image::setImageLayout(vk::CommandBuffer commandBuffer, vk::Image image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout) {
+void Image::setImageLayout(const vk::CommandBuffer& commandBuffer, const vk::Image& image, vk::ImageLayout oldLayout, const vk::ImageLayout newLayout) {
     vk::ImageMemoryBarrier barrier;
     barrier.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
     barrier.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);

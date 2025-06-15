@@ -4,8 +4,10 @@
 HdrToLdrCompute::HdrToLdrCompute(vk::Device device, vk::ImageView inputImageView, vk::ImageView outputImageView)
 {
     // Load shader
-    auto code = Utils::readFile("../src/shaders/HdrToLdrCompute.spv");
-    shaderModule = device.createShaderModuleUnique({ {}, code.size(), reinterpret_cast<const uint32_t*>(code.data()) });
+    static constexpr unsigned char code[] = {
+        #embed "../shaders/HdrToLdrCompute.spv"
+    };
+    shaderModule = device.createShaderModuleUnique({ {}, sizeof(code), reinterpret_cast<const uint32_t*>(code) });
 
     // Descriptor set layout with 2 storage images
     std::vector<vk::DescriptorSetLayoutBinding> bindings = {

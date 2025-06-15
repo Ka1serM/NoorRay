@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(VulkanToyPathtracer VERSION 0.1.0)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
 # -----------------------------------------------------------------------------

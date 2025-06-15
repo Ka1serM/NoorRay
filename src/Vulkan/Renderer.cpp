@@ -27,36 +27,83 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
     commandBufferInfo.setCommandBufferCount(static_cast<uint32_t>(swapchainImages.size()));
     commandBuffers = context.device->allocateCommandBuffersUnique(commandBufferInfo);
 
-    std::vector<std::pair<std::string, vk::ShaderStageFlagBits>> shaderPaths = {
-        {"../src/shaders/RayGeneration.spv", vk::ShaderStageFlagBits::eRaygenKHR},
-        {"../src/shaders/RayTracing/Miss.spv", vk::ShaderStageFlagBits::eMissKHR},
-        {"../src/shaders/PathTracing/Miss.spv", vk::ShaderStageFlagBits::eMissKHR},
-        {"../src/shaders/ShadowRay/Miss.spv", vk::ShaderStageFlagBits::eMissKHR},
-        {"../src/shaders/RayTracing/ClosestHit.spv", vk::ShaderStageFlagBits::eClosestHitKHR},
-        {"../src/shaders/PathTracing/ClosestHit.spv", vk::ShaderStageFlagBits::eClosestHitKHR},
-        {"../src/shaders/ShadowRay/ClosestHit.spv", vk::ShaderStageFlagBits::eClosestHitKHR}
+    // Embed all shaders as constexpr unsigned char arrays
+    static constexpr unsigned char RayGeneration[] = {
+        #embed "../shaders/RayGeneration.spv"
+    };
+    static constexpr unsigned char RayTracingMiss[] = {
+        #embed "../shaders/RayTracing/Miss.spv"
+    };
+    static constexpr unsigned char PathTracingMiss[] = {
+        #embed "../shaders/PathTracing/Miss.spv"
+    };
+    static constexpr unsigned char ShadowRayMiss[] = {
+        #embed "../shaders/ShadowRay/Miss.spv"
+    };
+    static constexpr unsigned char RayTracingClosestHit[] = {
+        #embed "../shaders/RayTracing/ClosestHit.spv"
+    };
+    static constexpr unsigned char PathTracingClosestHit[] = {
+        #embed "../shaders/PathTracing/ClosestHit.spv"
+    };
+    static constexpr unsigned char ShadowRayClosestHit[] = {
+        #embed "../shaders/ShadowRay/ClosestHit.spv"
     };
 
+    // Parallel arrays for shaders, sizes, and stages
+    constexpr const unsigned char* shaders[] = {
+        RayGeneration,
+        RayTracingMiss,
+        PathTracingMiss,
+        ShadowRayMiss,
+        RayTracingClosestHit,
+        PathTracingClosestHit,
+        ShadowRayClosestHit
+    };
+
+    constexpr size_t shaderSizes[] = {
+        sizeof(RayGeneration),
+        sizeof(RayTracingMiss),
+        sizeof(PathTracingMiss),
+        sizeof(ShadowRayMiss),
+        sizeof(RayTracingClosestHit),
+        sizeof(PathTracingClosestHit),
+        sizeof(ShadowRayClosestHit)
+    };
+
+    constexpr vk::ShaderStageFlagBits shaderStages[] = {
+        vk::ShaderStageFlagBits::eRaygenKHR,
+        vk::ShaderStageFlagBits::eMissKHR,
+        vk::ShaderStageFlagBits::eMissKHR,
+        vk::ShaderStageFlagBits::eMissKHR,
+        vk::ShaderStageFlagBits::eClosestHitKHR,
+        vk::ShaderStageFlagBits::eClosestHitKHR,
+        vk::ShaderStageFlagBits::eClosestHitKHR
+    };
+
+    // Create shader modules, stages, and shader groups
     std::vector<vk::UniqueShaderModule> shaderModules;
-    std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
+    std::vector<vk::PipelineShaderStageCreateInfo> shaderStagesVector;
     std::vector<vk::RayTracingShaderGroupCreateInfoKHR> shaderGroups;
 
     uint32_t raygenCount = 0;
     uint32_t missCount = 0;
     uint32_t hitCount = 0;
-    for (uint32_t i = 0; i < shaderPaths.size(); ++i) {
-        const auto& [path, stage] = shaderPaths[i];
-        auto code = Utils::readFile(path);
-        shaderModules.emplace_back(context.device->createShaderModuleUnique({{}, code.size(), reinterpret_cast<const uint32_t*>(code.data())}));
-        shaderStages.push_back({{}, stage, *shaderModules.back(), "main"});
 
-        if (stage == vk::ShaderStageFlagBits::eRaygenKHR) {
+    for (size_t i = 0; i < std::size(shaders); ++i) {
+        shaderModules.emplace_back(context.device->createShaderModuleUnique({
+            {}, shaderSizes[i], reinterpret_cast<const uint32_t*>(shaders[i])
+        }));
+
+        shaderStagesVector.push_back({{}, shaderStages[i], *shaderModules.back(), "main"});
+
+        if (shaderStages[i] == vk::ShaderStageFlagBits::eRaygenKHR) {
             shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             raygenCount++;
-        } else if (stage == vk::ShaderStageFlagBits::eMissKHR) {
+        } else if (shaderStages[i] == vk::ShaderStageFlagBits::eMissKHR) {
             shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             missCount++;
-        } else if (stage == vk::ShaderStageFlagBits::eClosestHitKHR) {
+        } else if (shaderStages[i] == vk::ShaderStageFlagBits::eClosestHitKHR) {
             shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             hitCount++;
         }
@@ -110,7 +157,7 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
 
     //Create pipeline
     vk::RayTracingPipelineCreateInfoKHR rtPipelineInfo;
-    rtPipelineInfo.setStages(shaderStages);
+    rtPipelineInfo.setStages(shaderStagesVector);
     rtPipelineInfo.setGroups(shaderGroups);
     rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
     rtPipelineInfo.setLayout(pipelineLayout.get());

@@ -15,6 +15,7 @@ public:
     void renderUi() override;
 
     void setPosition(const glm::vec3& pos) override;
+    void setRotation(const glm::quat& rot) override;
     void setRotationEuler(const glm::vec3& rot) override;
     void setScale(const glm::vec3& scale) override;
 };

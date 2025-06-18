@@ -4,7 +4,9 @@
 
 #include "../Mesh/Transform.h"
 #include "UI/ImGuiComponent.h"
-#include "Vulkan/Renderer.h"
+
+//forward declaration to avoid circular dependency
+class Renderer;
 
 class SceneObject : public ImGuiComponent {
 
@@ -29,6 +31,10 @@ public:
         return transform.getPosition();
     }
 
+    glm::quat getRotation() const {
+        return transform.getRotation();
+    }
+
     glm::vec3 getRotationEuler() const {
         return transform.getRotationEuler();
     }
@@ -39,6 +45,7 @@ public:
 
     void renderUi() override;
     virtual void setPosition(const glm::vec3& pos);
+    virtual void setRotation(const glm::quat& rot);
     virtual void setRotationEuler(const glm::vec3& rot);
     virtual void setScale(const glm::vec3& scale);
 };

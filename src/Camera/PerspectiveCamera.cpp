@@ -2,29 +2,29 @@
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <imgui.h>
-
 #include <cmath>
 #include "GLFW/glfw3.h"
 #include "glm/gtx/rotate_vector.hpp"
-
-#include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
+#include "Vulkan/Renderer.h"
 
 static constexpr glm::vec3 FRONT = glm::vec3(0, 0, 1);
 static constexpr glm::vec3 WORLD_UP = glm::vec3(0.0f, -1.0f, 0.0f);
 
-PerspectiveCamera::PerspectiveCamera(
-    Renderer& renderer,
-    const std::string& name,
-    Transform transform,
-    float aspect,
-    float sensorWidth,
-    float sensorHeight,
-    float focalLength,
-    float aperture,
-    float focusDistance
-) : SceneObject(renderer, name, transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight) {
+static std::shared_ptr<MeshAsset> cameraMesh = nullptr;
 
+static std::shared_ptr<MeshAsset> getOrCreateCameraMesh(Renderer& renderer) {
+    if (cameraMesh)
+        return cameraMesh;
+    
+    cameraMesh = MeshAsset::CreatePlane(renderer.context, "Camera Mesh");
+    renderer.add(cameraMesh);
+    return cameraMesh;
+}
+
+PerspectiveCamera::PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance
+) : MeshInstance(renderer, name, getOrCreateCameraMesh(renderer), transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight) 
+{
     cameraData.focalLength = focalLength;
     cameraData.aperture = aperture;
     cameraData.focusDistance = focusDistance;
@@ -34,17 +34,17 @@ PerspectiveCamera::PerspectiveCamera(
 }
 
 glm::vec3 PerspectiveCamera::calculateDirection() const {
-    return glm::normalize(transform.getRotation() * glm::vec3(0.0f, 0.0f, 1.0f)); // Vulkan +Z
+    return glm::normalize(getRotation() * glm::vec3(0.0f, 0.0f, 1.0f)); // Vulkan +Z
 }
 
 void PerspectiveCamera::updateCameraData() {
-    cameraData.position = transform.getPosition();
+    cameraData.position = getPosition();
     cameraData.direction = calculateDirection();
 }
 
 void PerspectiveCamera::updateHorizontalVertical() {
-    const float sensorWidthMeters = sensorWidth * 0.001f;
     const float sensorHeightMeters = sensorHeight * 0.001f;
+    const float sensorWidthMeters = sensorHeightMeters * aspectRatio;
 
     const glm::vec3 direction = cameraData.direction;
     const glm::vec3 right = glm::normalize(glm::cross(direction, WORLD_UP));
@@ -53,6 +53,7 @@ void PerspectiveCamera::updateHorizontalVertical() {
     cameraData.horizontal = right * sensorWidthMeters;
     cameraData.vertical = up * sensorHeightMeters;
 }
+
 
 void PerspectiveCamera::setFocalLength(const float val) {
     cameraData.focalLength = val;
@@ -81,7 +82,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
     const bool rmbHeld = inputTracker.isMouseButtonHeld(GLFW_MOUSE_BUTTON_RIGHT);
     const bool wasDirty = renderer.getDirty();
 
-    const glm::vec3 oldPosition = transform.getPosition();
+    const glm::vec3 oldPosition = getPosition();
     const glm::vec3 oldDirection = cameraData.direction;
 
     if (rmbHeld) {
@@ -93,7 +94,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
         const float yaw = glm::radians(-static_cast<float>(dx) * sensitivity);
         const float pitch = glm::radians(-static_cast<float>(dy) * sensitivity); // Invert pitch to match natural movement
 
-        glm::quat rot = transform.getRotation();
+        glm::quat rot = getRotation();
 
         // Camera forward (local +Z)
         glm::vec3 forward = rot * FRONT;
@@ -110,7 +111,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
         // Combine rotations: pitch * yaw * current rotation
         glm::quat newRot = glm::normalize(pitchQuat * yawQuat * rot);
 
-        transform.setRotation(newRot);
+        setRotation(newRot);
 
 
         // --- Movement ---
@@ -118,7 +119,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
         if (inputTracker.isKeyHeld(GLFW_KEY_LEFT_SHIFT))
             speed *= 10.0f;
 
-        glm::vec3 position = transform.getPosition();
+        glm::vec3 position = getPosition();
         forward = newRot * glm::vec3(0, 0, 1);
         right = glm::normalize(glm::cross(forward, WORLD_UP));
         glm::vec3 upDir = WORLD_UP;
@@ -136,14 +137,14 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
         if (inputTracker.isKeyHeld(GLFW_KEY_Q))
             position -= upDir * speed;
 
-        transform.setPosition(position);
+        setPosition(position);
     }
 
     updateCameraData();
 
     const bool changed =
         !glm::all(glm::epsilonEqual(oldDirection, cameraData.direction, 0.001f)) ||
-        !glm::all(glm::epsilonEqual(oldPosition, transform.getPosition(), 0.001f)) ||
+        !glm::all(glm::epsilonEqual(oldPosition, getPosition(), 0.001f)) ||
         wasDirty;
 
     if (changed) {
@@ -154,7 +155,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
 
 
 void PerspectiveCamera::renderUi() {
-    SceneObject::renderUi();
+    MeshInstance::renderUi();
 
     ImGui::SeparatorText("Camera Lens");
 
@@ -178,3 +179,25 @@ void PerspectiveCamera::renderUi() {
         setSensorSize(sensorWidth, v);
     });
 }
+
+//don't update the mesh instance transform, just the SceneObject transform
+void PerspectiveCamera::setPosition(const glm::vec3& pos)
+{
+    SceneObject::setPosition(pos);
+}
+
+void PerspectiveCamera::setRotation(const glm::quat& rot)
+{
+    SceneObject::setRotation(rot);
+}
+
+void PerspectiveCamera::setRotationEuler(const glm::vec3& rot)
+{
+    SceneObject::setRotationEuler(rot);
+}
+
+void PerspectiveCamera::setScale(const glm::vec3& scale)
+{
+    SceneObject::setScale(scale);
+}
+

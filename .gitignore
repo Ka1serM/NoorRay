@@ -11,5 +11,8 @@ CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
 /cmake-build-debug
+/cmake-build-release
 *.blend1
 *.spv
+/build
+/.idea

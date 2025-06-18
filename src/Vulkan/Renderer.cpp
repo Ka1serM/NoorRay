@@ -1,17 +1,21 @@
 ﻿#include <memory>
 #include "Renderer.h"
+
+#include <iostream>
+#include <ranges>
+
 #include "Buffer.h"
 #include "Globals.h"
 #include "Utils.h"
 
-Renderer::Renderer(Context& context) : dirty(false), context(context) {
+Renderer::Renderer(Context& context, uint32_t width, uint32_t height) : dirty(false), context(context), width(width), height(height) {
 
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.surface.get());
     swapchainInfo.setMinImageCount(3);
     swapchainInfo.setImageFormat(vk::Format::eB8G8R8A8Unorm);
     swapchainInfo.setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear);
-    swapchainInfo.setImageExtent({WIDTH, HEIGHT});
+    swapchainInfo.setImageExtent({width, height});
     swapchainInfo.setImageArrayLayers(1);
     swapchainInfo.setImageUsage(vk::ImageUsageFlagBits::eTransferDst |vk::ImageUsageFlagBits::eColorAttachment);
     swapchainInfo.setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity);
@@ -199,14 +203,16 @@ Renderer::Renderer(Context& context) : dirty(false), context(context) {
     hitRegion = vk::StridedDeviceAddressRegionKHR{ hitSBT.getDeviceAddress(), handleSizeAligned, hitSize };
 }
 
-void Renderer::buildTLAS() {
-    std::vector<vk::AccelerationStructureInstanceKHR> instanceData;
-    instanceData.reserve(instancePtrs.size());
+void Renderer::rebuildTLAS() {
+    
+    std::vector<vk::AccelerationStructureInstanceKHR> instances;
+    instances.reserve(sceneObjects.size());
 
-    for (const auto* instPtr : instancePtrs)
-        instanceData.push_back(*instPtr); // fresh copy of the latest transform and data
-
-    instancesBuffer = Buffer{context,Buffer::Type::AccelInput,sizeof(vk::AccelerationStructureInstanceKHR) * instanceData.size(),instanceData.data()};
+    for (const auto& objPtr : sceneObjects)
+        if (auto* meshInstance = dynamic_cast<MeshInstance*>(objPtr.get()))
+            instances.push_back(meshInstance->instanceData);  //always latest data
+    
+    instancesBuffer = Buffer{context,Buffer::Type::AccelInput,sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(),instances.data()};
 
     vk::AccelerationStructureGeometryInstancesDataKHR instancesData;
     instancesData.setArrayOfPointers(false);
@@ -217,7 +223,7 @@ void Renderer::buildTLAS() {
     instanceGeometry.setGeometry({instancesData});
     instanceGeometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
 
-    tlas.build(context, instanceGeometry, static_cast<uint32_t>(instanceData.size()), vk::AccelerationStructureTypeKHR::eTopLevel);
+    tlas.build(context, instanceGeometry, static_cast<uint32_t>(instances.size()), vk::AccelerationStructureTypeKHR::eTopLevel);
 
     vk::WriteDescriptorSetAccelerationStructureKHR accelInfo{};
     accelInfo.setAccelerationStructureCount(1);
@@ -231,6 +237,7 @@ void Renderer::buildTLAS() {
     accelWrite.setPNext(&accelInfo);
 
     context.device->updateDescriptorSets(accelWrite, {});
+    markDirty();
 }
 
 void Renderer::updateStorageImage(const vk::ImageView& storageImageView) {
@@ -284,7 +291,7 @@ void Renderer::render(uint32_t imageIndex, const PushConstants& pushConstants)
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, pipeline.get());
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, pipelineLayout.get(), 0, descriptorSet.get(), {});
     commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR, 0, sizeof(PushConstants), &pushConstants);
-    commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, WIDTH, HEIGHT, 1);
+    commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, width, height, 1);
 }
 
 const vk::CommandBuffer& Renderer::getCommandBuffer(uint32_t imageIndex) const
@@ -309,46 +316,67 @@ void Renderer::add(Texture&& element) {
 
 void Renderer::add(const PointLight& element) {
     pointLights.push_back(element);
-    updateStorageBuffer(4, pointLights, pointLightBuffer);
-}
-
-void Renderer::add(const MeshAddresses& element) {
-    meshAddresses.push_back(element);
-    updateStorageBuffer(2, meshAddresses, meshBuffer);
+    updateStorageBuffer(4, pointLights, pointLightsBuffer);
+    markDirty();
 }
 
 void Renderer::add(const Material& element) {
     materials.push_back(element);
-    updateStorageBuffer(3, materials, materialBuffer);
+    updateStorageBuffer(3, materials, materialsBuffer);
 }
 
-void Renderer::add(const vk::AccelerationStructureInstanceKHR& element) {
-    instancePtrs.push_back(&element);
-    buildTLAS();
+std::shared_ptr<MeshAsset> Renderer::get(const std::string& name) const
+{
+    for (const auto& meshAsset : meshAssets)
+        if (meshAsset->path == name)
+            return meshAsset;
+    return nullptr;
 }
 
-// Vector add overloads
-void Renderer::add(std::vector<Texture>&& elements) {
-    textures.insert(textures.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
-    updateTextureDescriptors(textures);
+int Renderer::add(std::unique_ptr<SceneObject> sceneObject) {
+    // If the object is a PerspectiveCamera, save a raw pointer to activeCamera
+    if (auto camera = dynamic_cast<PerspectiveCamera*>(sceneObject.get()))
+        activeCamera = camera;
+
+    sceneObjects.push_back(std::move(sceneObject));
+    rebuildTLAS();
+
+    return sceneObjects.size() - 1;
 }
 
-void Renderer::add(const std::vector<PointLight>& elements) {
-    pointLights.insert(pointLights.end(), elements.begin(), elements.end());
-    updateStorageBuffer(4, pointLights, pointLightBuffer);
-}
-
-void Renderer::add(const std::vector<MeshAddresses>& elements) {
-    meshAddresses.insert(meshAddresses.end(), elements.begin(), elements.end());
+void Renderer::rebuildMeshBuffer() {
+    std::vector<MeshAddresses> meshAddresses;
+    meshAddresses.reserve(meshAssets.size());
+    for (const auto& meshAsset : meshAssets)
+        meshAddresses.push_back(meshAsset->getBufferAddresses());
     updateStorageBuffer(2, meshAddresses, meshBuffer);
+    markDirty();
 }
 
-void Renderer::add(const std::vector<Material>& elements) {
-    materials.insert(materials.end(), elements.begin(), elements.end());
-    updateStorageBuffer(3, materials, materialBuffer);
+void Renderer::add(const std::shared_ptr<MeshAsset>& meshAsset) {
+    meshAsset->setMeshIndex(static_cast<uint32_t>(meshAssets.size()));
+    meshAssets.push_back(meshAsset);
+    rebuildMeshBuffer();
 }
 
-void Renderer::add(const std::vector<const vk::AccelerationStructureInstanceKHR*>& elements) {
-    instancePtrs.insert(instancePtrs.end(), elements.begin(), elements.end());
-    buildTLAS();
+
+bool Renderer::remove(const SceneObject* obj) {
+    // Don't remove the active camera
+    if (activeCamera == obj) {
+        std::cerr << "Warning: Cannot remove active camera from scene." << std::endl;
+        return false;
+    }
+
+    auto it = std::find_if(sceneObjects.begin(), sceneObjects.end(),
+        [obj](const std::unique_ptr<SceneObject>& ptr) {
+            return ptr.get() == obj;
+        });
+
+    if (it != sceneObjects.end())
+    {
+        sceneObjects.erase(it);
+        rebuildTLAS();
+        return true;
+    }
+    return false;
 }

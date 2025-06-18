@@ -2,7 +2,6 @@
 
 #include "../Vulkan/Context.h"
 #include "../Globals.h"
-
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -11,7 +10,9 @@
 #include <vector>
 #include <functional>
 
-ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages)
+#include "glm/gtc/type_ptr.inl"
+
+ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height)
 {
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -21,7 +22,10 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    io.Fonts->AddFontFromFileTTF("../assets/Inter-Regular.ttf", 24);
+    static constexpr unsigned char font[] = {
+        #embed "../../assets/Inter-Regular.ttf"
+    };
+    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), 24.0f);
 
     SetBlenderTheme();
 
@@ -30,7 +34,7 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
 
     CreateDescriptorPool(context);
     CreateRenderPass(context);
-    CreateFrameBuffers(context, swapchainImages);
+    CreateFrameBuffers(context, swapchainImages, width, height);
 
     // Setup ImGui Vulkan backend
     ImGui_ImplVulkan_InitInfo init_info = {};
@@ -189,7 +193,7 @@ void ImGuiManager::CreateRenderPass(Context& context) {
     renderPass = context.device->createRenderPassUnique(renderPassInfo);
 }
 
-void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images) {
+void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images, uint32_t width, uint32_t height) {
     for (const auto& image : images) {
         vk::ImageViewCreateInfo viewInfo{};
         viewInfo.image = image;
@@ -205,8 +209,8 @@ void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Im
         framebufferInfo.renderPass = renderPass.get();
         framebufferInfo.attachmentCount = 1;
         framebufferInfo.pAttachments = &imageViews.back().get();
-        framebufferInfo.width = WIDTH; //TODO
-        framebufferInfo.height = HEIGHT;
+        framebufferInfo.width = width; //TODO
+        framebufferInfo.height = height;
         framebufferInfo.layers = 1;
 
         frameBuffers.push_back(context.device->createFramebufferUnique(framebufferInfo));
@@ -237,15 +241,15 @@ void ImGuiManager::setupDockSpace() {
     ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
 }
 
-void ImGuiManager::Draw(const vk::CommandBuffer commandBuffer, uint32_t imageIndex)
+void ImGuiManager::Draw(const vk::CommandBuffer commandBuffer, uint32_t imageIndex, uint32_t width, uint32_t height)
 {
     constexpr VkClearValue clear_value = { { 0.0f, 0.0f, 0.0f, 1.0f } };
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass = renderPass.get();
     rpInfo.framebuffer = frameBuffers[imageIndex].get();
-    rpInfo.renderArea.extent.width = WIDTH;
-    rpInfo.renderArea.extent.height = HEIGHT;
+    rpInfo.renderArea.extent.width = width;
+    rpInfo.renderArea.extent.height = height;
     rpInfo.clearValueCount = 1;
     rpInfo.pClearValues = &clear_value;
 

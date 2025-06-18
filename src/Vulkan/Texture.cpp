@@ -1,10 +1,32 @@
 ﻿#include "Texture.h"
+#include <stdexcept>
+#include <vector>
+#include <stb_image.h>
 
-#include <memory>
-
-Texture::Texture(Context& context, const std::string& filepath) : image(context, filepath)
+Texture::Texture(Context& context, const void* rgbaData, int width, int height)
+    : image(context, rgbaData, width, height)
 {
-    //Create sampler
+    createSampler(context);
+}
+
+Texture::Texture(Context& context, const std::string& filepath)
+: image([&]() -> Image {
+    int texWidth, texHeight, texChannels;
+    stbi_uc* rawPixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!rawPixels)
+        throw std::runtime_error(std::string("Failed to load texture from file: ") + filepath);
+
+    Image img(context, rawPixels, texWidth, texHeight);
+
+    stbi_image_free(rawPixels);
+    return img;
+}())
+{
+    createSampler(context);
+}
+
+void Texture::createSampler(Context& context)
+{
     vk::SamplerCreateInfo samplerInfo;
     samplerInfo.setMagFilter(vk::Filter::eLinear);
     samplerInfo.setMinFilter(vk::Filter::eLinear);
@@ -13,7 +35,8 @@ Texture::Texture(Context& context, const std::string& filepath) : image(context,
     samplerInfo.setAddressModeW(vk::SamplerAddressMode::eRepeat);
     samplerInfo.setAnisotropyEnable(true);
     samplerInfo.setMaxAnisotropy(16.0f);
-    sampler = context.device->createSamplerUnique(samplerInfo); //Unique = automatic managed, member so it stays alive
+
+    sampler = context.device->createSamplerUnique(samplerInfo);
 
     descriptorInfo.setImageView(*image.view);
     descriptorInfo.setSampler(*sampler);

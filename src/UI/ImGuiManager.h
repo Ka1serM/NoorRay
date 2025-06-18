@@ -4,9 +4,7 @@
 #include <vector>
 #include <string>
 #include <glm/vec3.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
-#include "imgui.h"
 #include "ImGuiComponent.h"
 #include "Vulkan/Context.h"
 
@@ -22,19 +20,19 @@ private:
 
     void CreateDescriptorPool(Context& context);
     void CreateRenderPass(Context& context);
-    void CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images);
+    void CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images, uint32_t width, uint32_t height);
     static void SetBlenderTheme();
     static void setupDockSpace();
 
 public:
-    ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages);
+    ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height);
     ~ImGuiManager();
 
     vk::DescriptorPool getDescriptorPool() const { return descriptorPool.get(); }
 
     void renderUi() const;
 
-    void Draw(vk::CommandBuffer commandBuffer, uint32_t imageIndex);
+    void Draw(vk::CommandBuffer commandBuffer, uint32_t imageIndex, uint32_t width, uint32_t height);
 
     // Component system
     void addComponent(std::unique_ptr<ImGuiComponent> component);

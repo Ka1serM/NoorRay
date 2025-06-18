@@ -8,6 +8,7 @@
 
 class Utils {
 public:
+    static std::string nameFromPath(const std::string& path);
     static void loadObj(Context& context, Renderer& renderer, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>
                         & indices, std::vector<Face>& faces);
 

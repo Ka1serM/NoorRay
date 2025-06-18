@@ -2,9 +2,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <utility>
 #include <imgui.h>
-
-#include "Scene.h"
 #include "../UI/ImGuiManager.h"
+#include "Vulkan/Renderer.h"
 
 SceneObject::SceneObject(Renderer& renderer, std::string  name, const Transform& transform) : transform(transform), renderer(renderer), name(std::move(name)) {
 
@@ -12,6 +11,11 @@ SceneObject::SceneObject(Renderer& renderer, std::string  name, const Transform&
 
 void SceneObject::setPosition(const glm::vec3& position) {
     transform.setPosition(position);
+    renderer.markDirty();
+}
+
+void SceneObject::setRotation(const glm::quat& rotation) {
+    transform.setRotation(rotation);
     renderer.markDirty();
 }
 

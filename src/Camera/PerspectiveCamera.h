@@ -3,10 +3,11 @@
 #include <string>
 #include "InputTracker.h"
 #include "glm/glm.hpp"
+#include "Scene/MeshInstance.h"
 #include "Scene/SceneObject.h"
 #include "Shaders/SharedStructs.h"
 
-class PerspectiveCamera : public SceneObject {
+class PerspectiveCamera : public MeshInstance {
 
 private:
     float aspectRatio;
@@ -39,4 +40,9 @@ private:
     void updateHorizontalVertical();
     glm::vec3 calculateDirection() const;
     void updateCameraData();
+
+    void setPosition(const glm::vec3& pos) override;
+    void setRotation(const glm::quat& rot) override;
+    void setRotationEuler(const glm::vec3& rot) override;
+    void setScale(const glm::vec3& scale) override;
 };

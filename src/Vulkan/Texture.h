@@ -7,7 +7,10 @@
 
 class Texture {
 public:
+    Texture(Context& context, const void* rgbaData, int width, int height);
     Texture(Context& context, const std::string& filepath);
+    
+    void createSampler(Context& context);
 
     const vk::DescriptorImageInfo& getDescriptorInfo() const { return descriptorInfo; }
     const vk::Sampler& getSampler() const { return *sampler; }

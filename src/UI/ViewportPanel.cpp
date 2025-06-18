@@ -1,9 +1,9 @@
 ﻿#include "ViewportPanel.h"
 #include <imgui.h>
 
-#include "Globals.h"
 
-ViewportPanel::ViewportPanel(Context& context, const vk::DescriptorPool descriptorPool, const vk::ImageView imageView)
+ViewportPanel::ViewportPanel(Context& context, const vk::DescriptorPool descriptorPool, const vk::ImageView imageView,uint32_t width, uint32_t height)
+: width(width), height(height)
 {
     // Create Vulkan sampler
     vk::SamplerCreateInfo samplerInfo{};
@@ -59,7 +59,7 @@ void ViewportPanel::renderUi() {
     ImGui::Begin(getType().c_str());
 
     ImVec2 availSize = ImGui::GetContentRegionAvail();
-    float aspectRatio = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT);
+    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
     float availAspectRatio = availSize.x / availSize.y;
 
     ImVec2 imageSize;

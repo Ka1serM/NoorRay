@@ -1,26 +1,14 @@
 ﻿#include <stb_image.h>
 #include <memory>
-
 #include "Image.h"
 
-Image::Image(Context& context, const std::string& filepath) {
+Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight)
+{
     currentLayout = vk::ImageLayout::eUndefined;
 
-    int texWidth, texHeight, texChannels;
+    vk::DeviceSize imageSize = texWidth * texHeight * 4; // 4 = RGBA8
 
-    //Load image and force 4 channels (RGBA)
-    stbi_uc* rawPixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    if (!rawPixels)
-        throw std::runtime_error("Failed to load texture image!");
-
-    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(rawPixels, stbi_image_free);
-
-    //if (texChannels != 4)
-    //    std::cerr << "Warning: Loaded image has " << texChannels << " channels, forcing to 4.\n";
-
-    vk::DeviceSize imageSize = texWidth * texHeight * 4;
-
-    //Create staging buffer
+    // Create staging buffer
     vk::BufferCreateInfo bufferInfo{};
     bufferInfo.setSize(imageSize);
     bufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
@@ -36,12 +24,11 @@ Image::Image(Context& context, const std::string& filepath) {
 
     context.device->bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
 
-    //Map and copy image data
-    void* data = context.device->mapMemory(*stagingMemory, 0, imageSize);
-    memcpy(data, pixels.get(), imageSize);
+    void* mappedData = context.device->mapMemory(*stagingMemory, 0, imageSize);
+    memcpy(mappedData, rgbaData, imageSize);
     context.device->unmapMemory(*stagingMemory);
 
-    //Create GPU image
+    // Create GPU image
     vk::ImageCreateInfo imageInfo;
     imageInfo.setImageType(vk::ImageType::e2D);
     imageInfo.setExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
@@ -62,7 +49,7 @@ Image::Image(Context& context, const std::string& filepath) {
 
     context.device->bindImageMemory(*image, *memory, 0);
 
-    //Create image view
+    // Create image view
     vk::ImageViewCreateInfo imageViewInfo;
     imageViewInfo.setImage(*image);
     imageViewInfo.setViewType(vk::ImageViewType::e2D);
@@ -70,24 +57,20 @@ Image::Image(Context& context, const std::string& filepath) {
     imageViewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
     view = context.device->createImageViewUnique(imageViewInfo);
 
-    //Copy and transition
+    // Copy buffer to image and transition layout
     context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
-
         setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
         vk::BufferImageCopy copyRegion{};
         copyRegion.setBufferOffset(0);
         copyRegion.setBufferRowLength(0);
         copyRegion.setBufferImageHeight(0);
-        copyRegion.imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 };
-        copyRegion.imageExtent = vk::Extent3D{
-            static_cast<uint32_t>(texWidth),
-            static_cast<uint32_t>(texHeight),
-            1
-        };
+        copyRegion.setImageSubresource({ vk::ImageAspectFlagBits::eColor, 0, 0, 1 });
+        copyRegion.setImageExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
 
         commandBuffer.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, 1, &copyRegion);
-        Image::setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
     });
 
     // Final descriptor

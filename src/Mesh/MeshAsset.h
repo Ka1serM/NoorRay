@@ -1,16 +1,25 @@
 ﻿#pragma once
 
 #include <string>
+
+#include "Shaders/SharedStructs.h"
 #include "Vulkan/Accel.h"
-#include "Vulkan/Renderer.h"
+
+class Renderer;
 
 class MeshAsset {
 
 public:
 
-    std::string name;
+    std::string path;
 
-    MeshAsset(Context& context, Renderer& renderer, const std::string& objFilePath);
+    static std::shared_ptr<MeshAsset> CreateCube(Context& context, const std::string& name);
+    static std::shared_ptr<MeshAsset> CreatePlane(Context& context, const std::string& name);
+    static std::shared_ptr<MeshAsset> CreateSphere(Context& context, const std::string& name, uint32_t latitudeSegments = 16, uint32_t longitudeSegments = 16);
+    static std::shared_ptr<MeshAsset> CreateFromObj(Context& context, Renderer& renderer, const std::string& objFilePath);
+
+    
+    MeshAsset(Context& context,  const std::string& name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces);
     uint64_t getBlasAddress() const;
     MeshAddresses getBufferAddresses() const;
 

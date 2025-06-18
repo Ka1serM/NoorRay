@@ -20,4 +20,5 @@ private:
     std::map<std::string, std::function<void()>> callbacks;
     
     void renderFileMenu();
+    void renderAddMenu();
 };

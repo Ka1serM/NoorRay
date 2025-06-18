@@ -10,7 +10,7 @@ Context::Context(int width, int height) {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    window = glfwCreateWindow(width, height, "VulkanToyPathtracer", nullptr, nullptr);
+    window = glfwCreateWindow(width, height, "Vulkan Toy Pathtracer by Marcel K.", nullptr, nullptr);
 
     // Prepare extensions and layers
     uint32_t glfwExtensionCount = 0;

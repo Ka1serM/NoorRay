@@ -2,18 +2,23 @@
 
 #include "Scene/MeshInstance.h"
 
+class InputTracker;
+class Scene;
+
 class OutlinerDetailsPanel : public ImGuiComponent {
 public:
-    // Constructor accepts a const reference to the vector
-    OutlinerDetailsPanel(const std::vector<std::unique_ptr<SceneObject>>& sceneObjects);
-
+    // Constructor accepts a const reference
+    OutlinerDetailsPanel(Renderer& renderer, InputTracker& inputTracker);
     void renderUi() override;
 
     std::string getType() const override { return "Outliner Details"; }
 
+    void setSelectedIndex(int index);
+
 private:
     // Store the reference
-    const std::vector<std::unique_ptr<SceneObject>>& sceneObjects;
-
-    int selectedObjectIndex = -1;
+    Renderer& renderer;
+    InputTracker& inputTracker;
+    
+    int selectedObjectIndex;
 };

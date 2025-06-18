@@ -12,7 +12,26 @@ void MainMenuBar::setCallback(const std::string& action, std::function<void()> c
 void MainMenuBar::renderUi() {
     if (ImGui::BeginMainMenuBar()) {
         renderFileMenu();
+        renderAddMenu();
         ImGui::EndMainMenuBar();
+    }
+}
+
+void MainMenuBar::renderAddMenu() {
+    if (ImGui::BeginMenu("Add")) {
+        if (ImGui::MenuItem("Cube")) {
+            if (callbacks.contains("Add.Cube"))
+                callbacks["Add.Cube"]();
+        }
+        if (ImGui::MenuItem("Plane")) {
+            if (callbacks.contains("Add.Plane"))
+                callbacks["Add.Plane"]();
+        }
+        if (ImGui::MenuItem("Sphere")) {
+            if (callbacks.contains("Add.Sphere"))
+                callbacks["Add.Sphere"]();
+        }
+        ImGui::EndMenu();
     }
 }
 
@@ -28,8 +47,8 @@ void MainMenuBar::renderFileMenu() {
         
         if (ImGui::BeginMenu("Open Recent")) {
             // Add recent files logic here
-            ImGui::MenuItem("RecentFile1.obj");
-            ImGui::MenuItem("RecentFile2.obj");
+            ImGui::MenuItem("RecentFile1.MarcelScene");
+            ImGui::MenuItem("RecentFile2.MarcelScene");
             ImGui::EndMenu();
         }
 
@@ -50,7 +69,10 @@ void MainMenuBar::renderFileMenu() {
         ImGui::Separator();
 
         if (ImGui::BeginMenu("Import")) {
-            ImGui::MenuItem("Import Option 1");
+            if (ImGui::MenuItem("Wavefront .obj")) {
+                if (callbacks.contains("File.Import"))
+                    callbacks["File.Import"]();
+            }
             ImGui::EndMenu();
         }
         

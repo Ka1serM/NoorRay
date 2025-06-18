@@ -1,13 +1,10 @@
 #pragma once
 
-#include <memory>
 #include "Context.h"
 
 class Image {
 public:
-
-    Image(Context& context, const std::string &filepath);
-
+    Image(Context& context, const void* rgbaData, int texWidth, int texHeight);
     Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage);
 
     void setImageLayout(const vk::CommandBuffer& commandBuffer, vk::ImageLayout newLayout);

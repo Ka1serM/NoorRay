@@ -1,6 +1,5 @@
 ﻿#include <fstream>
 #include <stdexcept>
-
 #include "Utils.h"
 #include "Shaders/SharedStructs.h"
 #include "Vulkan/Texture.h"
@@ -14,13 +13,33 @@
 #include "tiny_obj_loader.h"
 #include "Vulkan/Renderer.h"
 
-void Utils::loadObj(Context& context, Renderer& renderer, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces) {
+std::string Utils::nameFromPath(const std::string& path) {
+    size_t lastSlash = path.find_last_of("/\\");
+    std::string name = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
+
+    size_t lastDot = name.find_last_of('.');
+    if (lastDot != std::string::npos)
+        name = name.substr(0, lastDot);
+
+    return name;
+}
+
+void Utils::loadObj(Context& context, Renderer& renderer, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces)
+{
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> mats;
     std::string warn, err;
 
-    if (!LoadObj(&attrib, &shapes, &mats, &warn, &err, filepath.c_str(), "../assets"))
+    // Extract directory from the filepath
+    std::string objDir;
+    size_t lastSlash = filepath.find_last_of("/\\");
+    if (lastSlash != std::string::npos)
+        objDir = filepath.substr(0, lastSlash);
+    else
+        objDir = "."; // fallback to current directory
+
+    if (!tinyobj::LoadObj(&attrib, &shapes, &mats, &warn, &err, filepath.c_str(), objDir.c_str()))
         throw std::runtime_error("Failed to load OBJ: " + warn + err);
 
     // Store how many materials already exist globally
@@ -44,20 +63,21 @@ void Utils::loadObj(Context& context, Renderer& renderer, const std::string& fil
         material.roughnessIndex = -1;
         material.normalIndex = -1;
 
+        // Load textures relative to objDir
         if (!mat.diffuse_texname.empty()) {
-            renderer.add(Texture(context, "../assets/" + mat.diffuse_texname));
+            renderer.add(Texture(context, objDir + "/" + mat.diffuse_texname));
             material.albedoIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.specular_texname.empty()) {
-             renderer.add(Texture(context, "../assets/" + mat.specular_texname));
+            renderer.add(Texture(context, objDir + "/" + mat.specular_texname));
             material.specularIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.roughness_texname.empty()) {
-             renderer.add(Texture(context, "../assets/" + mat.roughness_texname));
+            renderer.add(Texture(context, objDir + "/" + mat.roughness_texname));
             material.roughnessIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.normal_texname.empty()) {
-            renderer.add(Texture(context, "../assets/" + mat.normal_texname));
+            renderer.add(Texture(context, objDir + "/" + mat.normal_texname));
             material.normalIndex = static_cast<int>(renderer.textures.size() - 1);
         }
 

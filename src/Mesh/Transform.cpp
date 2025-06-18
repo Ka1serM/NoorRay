@@ -1,12 +1,13 @@
 ﻿#include "Transform.h"
-
 #include "glm/gtx/quaternion.hpp"
 
-Transform::Transform() : position(0.0f), rotation(1.0f, 0.0f, 0.0f, 0.0f), scale(1.0f) {}
+Transform::Transform(const glm::vec3 position) : position(position), rotation(), scale(1.0f) {}
 
-Transform::Transform(const glm::vec3 translation, const glm::quat rotation, const glm::vec3 scale) : position(translation), rotation(rotation), scale(scale) {}
+Transform::Transform() : position(), rotation(), scale(1.0f) {}
 
-Transform::Transform(const glm::vec3 translation, const glm::vec3 rotationDegrees, const glm::vec3 scale) : position(translation), scale(scale), rotation(glm::quat(radians(rotationDegrees))) {}
+Transform::Transform(const glm::vec3 position, const glm::quat rotation, const glm::vec3 scale) : position(position), rotation(rotation), scale(scale) {}
+
+Transform::Transform(const glm::vec3 position, const glm::vec3 rotationDegrees, const glm::vec3 scale) : position(position), scale(scale), rotation(glm::quat(radians(rotationDegrees))) {}
 
 glm::mat4 Transform::getMatrix() const {
     glm::mat4 mat = translate(glm::mat4(1.0f), position);

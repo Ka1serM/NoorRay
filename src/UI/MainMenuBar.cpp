@@ -19,18 +19,39 @@ void MainMenuBar::renderUi() {
 
 void MainMenuBar::renderAddMenu() {
     if (ImGui::BeginMenu("Add")) {
-        if (ImGui::MenuItem("Cube")) {
-            if (callbacks.contains("Add.Cube"))
-                callbacks["Add.Cube"]();
+
+        if (ImGui::BeginMenu("Primitives")) {
+            if (ImGui::MenuItem("Cube")) {
+                if (callbacks.contains("Add.Cube"))
+                    callbacks["Add.Cube"]();
+            }
+            if (ImGui::MenuItem("Plane")) {
+                if (callbacks.contains("Add.Plane"))
+                    callbacks["Add.Plane"]();
+            }
+            if (ImGui::MenuItem("Sphere")) {
+                if (callbacks.contains("Add.Sphere"))
+                    callbacks["Add.Sphere"]();
+            }
+            ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Plane")) {
-            if (callbacks.contains("Add.Plane"))
-                callbacks["Add.Plane"]();
+
+        if (ImGui::BeginMenu("Lights")) {
+            if (ImGui::MenuItem("Sphere Light")) {
+                if (callbacks.contains("Add.SphereLight"))
+                    callbacks["Add.SphereLight"]();
+            }
+            if (ImGui::MenuItem("Rect Light")) {
+                if (callbacks.contains("Add.RectLight"))
+                    callbacks["Add.RectLight"]();
+            }
+            if (ImGui::MenuItem("Disk Light")) {
+                if (callbacks.contains("Add.DiskLight"))
+                    callbacks["Add.DiskLight"]();
+            }
+            ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Sphere")) {
-            if (callbacks.contains("Add.Sphere"))
-                callbacks["Add.Sphere"]();
-        }
+
         ImGui::EndMenu();
     }
 }

@@ -16,12 +16,7 @@ ViewportPanel::ViewportPanel(Context& context, const vk::DescriptorPool descript
     sampler = context.device->createSamplerUnique(samplerInfo);
 
     // Create descriptor set layout
-    vk::DescriptorSetLayoutBinding binding{
-        0,
-        vk::DescriptorType::eCombinedImageSampler,
-        1,
-        vk::ShaderStageFlagBits::eFragment
-    };
+    vk::DescriptorSetLayoutBinding binding{0,vk::DescriptorType::eCombinedImageSampler,1,vk::ShaderStageFlagBits::eFragment};
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.bindingCount = 1;
@@ -39,14 +34,10 @@ ViewportPanel::ViewportPanel(Context& context, const vk::DescriptorPool descript
     outputImageDescriptorSet = std::move(sets.front());
 
     // Update descriptor set with image info
-    vk::DescriptorImageInfo imageInfo{
-        sampler.get(),
-        imageView,  // assumes `image->view` is a `vk::UniqueImageView`
-        vk::ImageLayout::eShaderReadOnlyOptimal
-    };
+    vk::DescriptorImageInfo imageInfo{sampler.get(),imageView,vk::ImageLayout::eShaderReadOnlyOptimal};
 
     vk::WriteDescriptorSet write{};
-    write.dstSet = outputImageDescriptorSet.get(); // <-- fixed from outputImageDescriptorSet
+    write.dstSet = outputImageDescriptorSet.get();
     write.dstBinding = 0;
     write.descriptorCount = 1;
     write.descriptorType = vk::DescriptorType::eCombinedImageSampler;

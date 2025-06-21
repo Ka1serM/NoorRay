@@ -45,5 +45,7 @@ public:
 
     // Vec3 row
     static void dragFloat3Row(const char* label, glm::vec3 value, float speed, const std::function<void(glm::vec3)>& setter);
+    
+    static void colorEdit3Row(const char* label, glm::vec3 value, const std::function<void(glm::vec3)>& setter);
 
 };

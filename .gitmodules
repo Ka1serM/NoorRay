@@ -24,3 +24,6 @@
 [submodule "external/portable-file-dialogs"]
 	path = external/portable-file-dialogs
 	url = https://github.com/samhocevar/portable-file-dialogs
+[submodule "external/ImGuizmo"]
+	path = external/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo

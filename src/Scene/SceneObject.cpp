@@ -38,12 +38,12 @@ void SceneObject::renderUi() {
     ImGui::SeparatorText("Transform");
 
     // Position
-    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.1f, [&](const glm::vec3 v) {
+    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const glm::vec3 v) {
         setPosition(v);
     });
 
     // Rotation
-    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const glm::vec3 v) {
+    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.01f, [&](const glm::vec3 v) {
         setRotationEuler(v);
     });
 

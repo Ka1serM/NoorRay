@@ -13,14 +13,15 @@
 
 // Buffer reference declarations
 layout(buffer_reference, scalar) buffer VertexBuffer { Vertex data[]; };
-layout(buffer_reference, scalar) buffer IndexBuffer  { uint data[]; };
-layout(buffer_reference, scalar) buffer FaceBuffer   { Face data[]; };
+layout(buffer_reference, scalar) buffer IndexBuffer { uint data[]; };
+layout(buffer_reference, scalar) buffer FaceBuffer { Face data[]; };
+layout(buffer_reference, scalar) buffer MaterialBuffer { Material data[]; };
+
 
 // Bindless resources
 layout(set = 0, binding = 2) buffer MeshAddressesBuffer { MeshAddresses meshAddresses[]; };
-layout(set = 0, binding = 3) buffer Materials { Material materials[]; };
-layout(set = 0, binding = 4) buffer PointLights { PointLight pointLights[]; };
-layout(set = 0, binding = 5) uniform sampler2D textureSamplers[];
+layout(set = 0, binding = 3) buffer PointLights { PointLight pointLights[]; };
+layout(set = 0, binding = 4) uniform sampler2D textureSamplers[];
 
 // Ray payload and attributes
 layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
@@ -43,10 +44,11 @@ void main() {
     VertexBuffer vertexBuf = VertexBuffer(mesh.vertexAddress);
     IndexBuffer  indexBuf  = IndexBuffer(mesh.indexAddress);
     FaceBuffer   faceBuf   = FaceBuffer(mesh.faceAddress);
+    MaterialBuffer materialBuf = MaterialBuffer(mesh.materialAddress);
 
     const uint primitiveIndex = gl_PrimitiveID;
     const Face face = faceBuf.data[primitiveIndex];
-    const Material material = materials[face.materialIndex];
+    const Material material = materialBuf.data[face.materialIndex];
 
     const uint i0 = indexBuf.data[3 * primitiveIndex + 0];
     const uint i1 = indexBuf.data[3 * primitiveIndex + 1];

@@ -10,6 +10,7 @@
 #include <vector>
 #include <functional>
 
+#include "imgui_internal.h"
 #include "glm/gtc/type_ptr.inl"
 
 ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height)
@@ -289,12 +290,16 @@ ImGuiComponent* ImGuiManager::getComponent(const std::string& name) const
     return nullptr;
 }
 
-
 void ImGuiManager::tableRowLabel(const char* label) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::TextUnformatted(label);
-    ImGui::TableSetColumnIndex(1);
+    if (ImGui::GetCurrentTable()) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+    } else {
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine();
+    }
 }
 
 void ImGuiManager::dragFloatRow(const char* label, float value, float speed, float min, float max, const std::function<void(float)>& setter) {
@@ -310,6 +315,15 @@ void ImGuiManager::dragFloat3Row(const char* label, glm::vec3 value, float speed
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed)) {
         setter(value);
+    }
+}
+
+void ImGuiManager::colorEdit3Row(const char* label, glm::vec3 value, const std::function<void(glm::vec3)>& setter) {
+    tableRowLabel(label);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    glm::vec3 temp = value;
+    if (ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp))) {
+        setter(temp);
     }
 }
 

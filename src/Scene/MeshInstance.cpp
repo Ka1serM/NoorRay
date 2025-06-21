@@ -27,12 +27,7 @@ void MeshInstance::renderUi() {
     SceneObject::renderUi();
 
     ImGui::SeparatorText("Mesh Asset");
-
-    ImGuiManager::tableRowLabel("Source");
-
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-    ImGui::Text("%s", meshAsset->path.c_str());
-    ImGui::PopStyleColor();
+    meshAsset.get()->renderUi();
 }
 
 void MeshInstance::setPosition(const glm::vec3& pos)

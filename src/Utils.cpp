@@ -24,7 +24,7 @@ std::string Utils::nameFromPath(const std::string& path) {
     return name;
 }
 
-void Utils::loadObj(Context& context, Renderer& renderer, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces)
+void Utils::loadObj(Renderer& renderer, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces, std::vector<Material>& materials)
 {
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
@@ -42,11 +42,8 @@ void Utils::loadObj(Context& context, Renderer& renderer, const std::string& fil
     if (!tinyobj::LoadObj(&attrib, &shapes, &mats, &warn, &err, filepath.c_str(), objDir.c_str()))
         throw std::runtime_error("Failed to load OBJ: " + warn + err);
 
-    // Store how many materials already exist globally
-    size_t baseMaterialIndex = renderer.materials.size();
 
     // Append new materials from the OBJ file
-    renderer.materials.reserve(baseMaterialIndex + mats.size());
     for (const auto& mat : mats) {
         Material material{};
         material.albedo       = glm::vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
@@ -55,7 +52,7 @@ void Utils::loadObj(Context& context, Renderer& renderer, const std::string& fil
         material.roughness    = mat.roughness;
         material.ior          = mat.ior;
         material.transmission = glm::vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
-        material.emission     = glm::vec3(mat.emission[0], mat.emission[1], mat.emission[2]) * 20.0f;
+        material.emission     = glm::vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
 
         // Textures indices default to -1
         material.albedoIndex = -1;
@@ -65,23 +62,23 @@ void Utils::loadObj(Context& context, Renderer& renderer, const std::string& fil
 
         // Load textures relative to objDir
         if (!mat.diffuse_texname.empty()) {
-            renderer.add(Texture(context, objDir + "/" + mat.diffuse_texname));
+            renderer.add(Texture(renderer.context, objDir + "/" + mat.diffuse_texname));
             material.albedoIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.specular_texname.empty()) {
-            renderer.add(Texture(context, objDir + "/" + mat.specular_texname));
+            renderer.add(Texture(renderer.context, objDir + "/" + mat.specular_texname));
             material.specularIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.roughness_texname.empty()) {
-            renderer.add(Texture(context, objDir + "/" + mat.roughness_texname));
+            renderer.add(Texture(renderer.context, objDir + "/" + mat.roughness_texname));
             material.roughnessIndex = static_cast<int>(renderer.textures.size() - 1);
         }
         if (!mat.normal_texname.empty()) {
-            renderer.add(Texture(context, objDir + "/" + mat.normal_texname));
+            renderer.add(Texture(renderer.context, objDir + "/" + mat.normal_texname));
             material.normalIndex = static_cast<int>(renderer.textures.size() - 1);
         }
 
-        renderer.add(material);
+        materials.emplace_back(material);
     }
 
     // Now process shapes and faces
@@ -94,11 +91,20 @@ void Utils::loadObj(Context& context, Renderer& renderer, const std::string& fil
                 throw std::runtime_error("Non-triangle face detected. Only triangles are supported.");
 
             Face face{};
-            // Update face.materialIndex to global index
             int originalMatIndex = shape.mesh.material_ids[f];
-            face.materialIndex = (originalMatIndex >= 0) ? static_cast<uint32_t>(baseMaterialIndex + originalMatIndex) : 0;
+            if (originalMatIndex >= 0)
+                face.materialIndex = originalMatIndex;
+            else
+                face.materialIndex = 0;
 
-            // Spawn point lights
+            // Accumulate positions for center calculation
+            glm::vec3 faceCenter(0.0f);
+            glm::vec3 faceNormal(0.0f);
+
+            // Temporary storage for vertices of the face to compute normal
+            glm::vec3 verts[3];
+
+            // Process each vertex of the face
             for (int v = 0; v < fv; ++v) {
                 auto [vertex_index, normal_index, texcoord_index] = shape.mesh.indices[indexOffset + v];
 
@@ -109,25 +115,49 @@ void Utils::loadObj(Context& context, Renderer& renderer, const std::string& fil
                     attrib.vertices[3 * vertex_index + 2]
                 );
 
+                verts[v] = vertex.position;
+                faceCenter += vertex.position;
+
                 if (!attrib.normals.empty() && normal_index >= 0) {
                     vertex.normal = glm::vec3(
                         attrib.normals[3 * normal_index + 0],
                         -attrib.normals[3 * normal_index + 1],
                         attrib.normals[3 * normal_index + 2]
                     );
-                } else
+                } else {
                     vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                }
 
                 if (!attrib.texcoords.empty() && texcoord_index >= 0) {
                     vertex.uv = glm::vec2(
                         attrib.texcoords[2 * texcoord_index + 0],
                         1.0f - attrib.texcoords[2 * texcoord_index + 1]
                     );
-                } else
+                } else {
                     vertex.uv = glm::vec2(0.0f);
+                }
 
                 vertices.push_back(vertex);
                 indices.push_back(static_cast<uint32_t>(indices.size()));
+            }
+
+            faceCenter /= static_cast<float>(fv);
+
+            // Compute face normal from cross product of edges
+            glm::vec3 edge1 = verts[1] - verts[0];
+            glm::vec3 edge2 = verts[2] - verts[0];
+            faceNormal = glm::normalize(glm::cross(edge1, edge2));
+
+            // Add point light if emissive material
+            if (face.materialIndex < materials.size()) {
+                const Material& mat = materials[face.materialIndex];
+                if (glm::length(mat.emission) > 1e-6f) {
+                    PointLight light{};
+                    light.position = faceCenter + faceNormal * -0.01f;
+                    light.color = mat.emission;
+                    light.intensity = 0.01f;
+                    renderer.add(light);
+                }
             }
 
             faces.push_back(face);

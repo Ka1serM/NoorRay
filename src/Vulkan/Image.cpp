@@ -2,6 +2,96 @@
 #include <memory>
 #include "Image.h"
 
+Image::Image(Context& context, const void* floatData, int texWidth, int texHeight, vk::Format format)
+{
+    currentLayout = vk::ImageLayout::eUndefined;
+
+    // Determine pixel size based on format
+    size_t pixelSize = 0;
+    switch (format) {
+        case vk::Format::eR32G32B32A32Sfloat:
+            pixelSize = 4 * sizeof(float); // 4 floats per pixel
+            break;
+        case vk::Format::eR16G16B16A16Sfloat:
+            pixelSize = 4 * 2; // 4 half-floats (2 bytes each)
+            break;
+        default:
+            throw std::runtime_error("Unsupported float format in Image constructor");
+    }
+
+    vk::DeviceSize imageSize = texWidth * texHeight * pixelSize;
+
+    // Create staging buffer
+    vk::BufferCreateInfo bufferInfo{};
+    bufferInfo.setSize(imageSize);
+    bufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
+    bufferInfo.setSharingMode(vk::SharingMode::eExclusive);
+    vk::UniqueBuffer stagingBuffer = context.device->createBufferUnique(bufferInfo);
+
+    vk::MemoryRequirements memRequirements = context.device->getBufferMemoryRequirements(*stagingBuffer);
+    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    vk::MemoryAllocateInfo allocInfo{};
+    allocInfo.setAllocationSize(memRequirements.size);
+    allocInfo.setMemoryTypeIndex(memTypeIndex);
+    vk::UniqueDeviceMemory stagingMemory = context.device->allocateMemoryUnique(allocInfo);
+
+    context.device->bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
+
+    void* mappedData = context.device->mapMemory(*stagingMemory, 0, imageSize);
+    memcpy(mappedData, floatData, imageSize);
+    context.device->unmapMemory(*stagingMemory);
+
+    // Create GPU image
+    vk::ImageCreateInfo imageInfo;
+    imageInfo.setImageType(vk::ImageType::e2D);
+    imageInfo.setExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
+    imageInfo.setMipLevels(1);
+    imageInfo.setArrayLayers(1);
+    imageInfo.setFormat(format);
+    imageInfo.setUsage(vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
+    info = imageInfo;
+
+    image = context.device->createImageUnique(imageInfo);
+
+    vk::MemoryRequirements requirements = context.device->getImageMemoryRequirements(*image);
+    uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    vk::MemoryAllocateInfo memoryInfo{};
+    memoryInfo.setAllocationSize(requirements.size);
+    memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
+    memory = context.device->allocateMemoryUnique(memoryInfo);
+
+    context.device->bindImageMemory(*image, *memory, 0);
+
+    // Create image view
+    vk::ImageViewCreateInfo imageViewInfo{};
+    imageViewInfo.setImage(*image);
+    imageViewInfo.setViewType(vk::ImageViewType::e2D);
+    imageViewInfo.setFormat(format);
+    imageViewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
+    view = context.device->createImageViewUnique(imageViewInfo);
+
+    // Copy buffer to image and transition layout
+    context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
+        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+
+        vk::BufferImageCopy copyRegion{};
+        copyRegion.setBufferOffset(0);
+        copyRegion.setBufferRowLength(0);
+        copyRegion.setBufferImageHeight(0);
+        copyRegion.setImageSubresource({ vk::ImageAspectFlagBits::eColor, 0, 0, 1 });
+        copyRegion.setImageExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
+
+        commandBuffer.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, 1, &copyRegion);
+
+        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    });
+
+    // Final descriptor
+    descImageInfo.setImageView(*view);
+    descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
 Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight)
 {
     currentLayout = vk::ImageLayout::eUndefined;
@@ -42,7 +132,7 @@ Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight
 
     vk::MemoryRequirements requirements = context.device->getImageMemoryRequirements(*image);
     uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo memoryInfo;
+    vk::MemoryAllocateInfo memoryInfo {};
     memoryInfo.setAllocationSize(requirements.size);
     memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
     memory = context.device->allocateMemoryUnique(memoryInfo);
@@ -96,7 +186,7 @@ Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format forma
     // Allocate memory
     vk::MemoryRequirements requirements = context.device->getImageMemoryRequirements(*image);
     uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo memoryInfo;
+    vk::MemoryAllocateInfo memoryInfo {};
     memoryInfo.setAllocationSize(requirements.size);
     memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
     memory = context.device->allocateMemoryUnique(memoryInfo);

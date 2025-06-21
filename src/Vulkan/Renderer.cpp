@@ -8,8 +8,9 @@
 #include "Globals.h"
 #include "Utils.h"
 
-Renderer::Renderer(Context& context, uint32_t width, uint32_t height) : dirty(false), context(context), width(width), height(height) {
-
+Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
+: inputImage(context, width, height, vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst), dirty(false), width(width), height(height), context(context)
+{    
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.surface.get());
     swapchainInfo.setMinImageCount(3);
@@ -119,13 +120,12 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height) : dirty(fa
         {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
         {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
         {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-        {4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-        {5, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR}
+        {4, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR }
     };
 
     //Descriptor binding flags for Bindless
     std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
-    bindingFlags[5] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
+    bindingFlags[4] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
     //AllocationInfo for Bindless
     vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
     variableCountAllocInfo.setDescriptorCounts(MAX_TEXTURES);
@@ -201,6 +201,18 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height) : dirty(fa
     raygenRegion = vk::StridedDeviceAddressRegionKHR{ raygenSBT.getDeviceAddress(), handleSizeAligned, raygenSize};
     missRegion = vk::StridedDeviceAddressRegionKHR{ missSBT.getDeviceAddress(), handleSizeAligned, missSize };
     hitRegion = vk::StridedDeviceAddressRegionKHR{ hitSBT.getDeviceAddress(), handleSizeAligned, hitSize };
+
+    // bind storage image to pipeline
+    vk::DescriptorImageInfo storageImageInfo{};
+    storageImageInfo.setImageView(inputImage.view.get());
+    storageImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
+    vk::WriteDescriptorSet storageImageWrite{};
+    storageImageWrite.setDstSet(descriptorSet.get());
+    storageImageWrite.setDstBinding(1);
+    storageImageWrite.setDescriptorType(vk::DescriptorType::eStorageImage);
+    storageImageWrite.setDescriptorCount(1);
+    storageImageWrite.setImageInfo(storageImageInfo);
+    context.device->updateDescriptorSets(storageImageWrite, {});
 }
 
 void Renderer::rebuildTLAS() {
@@ -240,21 +252,6 @@ void Renderer::rebuildTLAS() {
     markDirty();
 }
 
-void Renderer::updateStorageImage(const vk::ImageView& storageImageView) {
-    vk::DescriptorImageInfo storageImageInfo{};
-    storageImageInfo.setImageView(storageImageView);
-    storageImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
-
-    vk::WriteDescriptorSet storageImageWrite{};
-    storageImageWrite.setDstSet(descriptorSet.get());
-    storageImageWrite.setDstBinding(1);
-    storageImageWrite.setDescriptorType(vk::DescriptorType::eStorageImage);
-    storageImageWrite.setDescriptorCount(1);
-    storageImageWrite.setImageInfo(storageImageInfo);
-
-    context.device->updateDescriptorSets(storageImageWrite, {});
-}
-
 template<typename T>
 void Renderer::updateStorageBuffer(uint32_t binding, const std::vector<T>& data, Buffer& buffer) {
     buffer = Buffer{context, Buffer::Type::Storage, sizeof(T) * data.size(), data.data()};
@@ -276,7 +273,7 @@ void Renderer::updateTextureDescriptors(const std::vector<Texture>& textures) {
 
     vk::WriteDescriptorSet write{};
     write.setDstSet(descriptorSet.get());
-    write.setDstBinding(5);
+    write.setDstBinding(4);
     write.setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
     write.setDescriptorCount(static_cast<uint32_t>(textureImageInfos.size()));
     write.setImageInfo(textureImageInfos);
@@ -316,13 +313,8 @@ void Renderer::add(Texture&& element) {
 
 void Renderer::add(const PointLight& element) {
     pointLights.push_back(element);
-    updateStorageBuffer(4, pointLights, pointLightsBuffer);
+    updateStorageBuffer(3, pointLights, pointLightsBuffer);
     markDirty();
-}
-
-void Renderer::add(const Material& element) {
-    materials.push_back(element);
-    updateStorageBuffer(3, materials, materialsBuffer);
 }
 
 std::shared_ptr<MeshAsset> Renderer::get(const std::string& name) const
@@ -367,7 +359,7 @@ bool Renderer::remove(const SceneObject* obj) {
         return false;
     }
 
-    auto it = std::find_if(sceneObjects.begin(), sceneObjects.end(),
+    const auto it = std::ranges::find_if(sceneObjects,
         [obj](const std::unique_ptr<SceneObject>& ptr) {
             return ptr.get() == obj;
         });

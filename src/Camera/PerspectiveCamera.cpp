@@ -16,8 +16,7 @@ static std::shared_ptr<MeshAsset> cameraMesh = nullptr;
 static std::shared_ptr<MeshAsset> getOrCreateCameraMesh(Renderer& renderer) {
     if (cameraMesh)
         return cameraMesh;
-    
-    cameraMesh = MeshAsset::CreatePlane(renderer.context, "Camera Mesh");
+    cameraMesh = MeshAsset::CreatePlane(renderer, "Camera Mesh", {});
     renderer.add(cameraMesh);
     return cameraMesh;
 }
@@ -115,7 +114,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
 
 
         // --- Movement ---
-        float speed = 20.0f * deltaTime;
+        float speed = deltaTime;
         if (inputTracker.isKeyHeld(GLFW_KEY_LEFT_SHIFT))
             speed *= 10.0f;
 
@@ -163,11 +162,11 @@ void PerspectiveCamera::renderUi() {
         setFocalLength(v);
     });
 
-    ImGuiManager::dragFloatRow("Aperture", getAperture(), 0.05f, 0.1f, 16.0f, [&](const float v) {
+    ImGuiManager::dragFloatRow("Aperture", getAperture(), 0.01f, 0.1f, 16.0f, [&](const float v) {
         setAperture(v);
     });
 
-    ImGuiManager::dragFloatRow("Focus Distance", getFocusDistance(), 0.1f, 0.01f, 1000.0f, [&](const float v) {
+    ImGuiManager::dragFloatRow("Focus Distance", getFocusDistance(), 0.01f, 0.01f, 1000.0f, [&](const float v) {
         setFocusDistance(v);
     });
 
@@ -200,4 +199,3 @@ void PerspectiveCamera::setScale(const glm::vec3& scale)
 {
     SceneObject::setScale(scale);
 }
-

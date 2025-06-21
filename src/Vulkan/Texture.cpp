@@ -3,6 +3,22 @@
 #include <vector>
 #include <stb_image.h>
 
+Texture::Texture(Context& context, const std::string& hdrFilepath, vk::Format format)
+: image([&]() -> Image {
+    int texWidth, texHeight, texChannels;
+    float* rawPixels = stbi_loadf(hdrFilepath.c_str(), &texWidth, &texHeight, &texChannels, 4); // force 4 channels (RGBA)
+    if (!rawPixels)
+        throw std::runtime_error(std::string("Failed to load HDR texture from file: ") + hdrFilepath);
+
+    Image img(context, rawPixels, texWidth, texHeight, format);
+
+    stbi_image_free(rawPixels);
+    return img;
+}())
+{
+    createSampler(context);
+}
+
 Texture::Texture(Context& context, const void* rgbaData, int width, int height)
     : image(context, rgbaData, width, height)
 {

@@ -7,19 +7,20 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_debug_printf : enable
 
 #include "../SharedStructs.h"
 #include "../Common.glsl"
 
 // Buffer reference types
 layout(buffer_reference, scalar) buffer VertexBuffer { Vertex data[]; };
-layout(buffer_reference, scalar) buffer IndexBuffer  { uint data[]; };
-layout(buffer_reference, scalar) buffer FaceBuffer   { Face data[]; };
+layout(buffer_reference, scalar) buffer IndexBuffer { uint data[]; };
+layout(buffer_reference, scalar) buffer FaceBuffer { Face data[]; };
+layout(buffer_reference, scalar) buffer MaterialBuffer { Material data[]; };
 
 layout(set = 0, binding = 2) buffer MeshAddressesBuffer { MeshAddresses instances[]; };
-layout(set = 0, binding = 3) buffer Materials { Material materials[]; };
-layout(set = 0, binding = 4) buffer PointLights { PointLight pointLights[]; };
-layout(set = 0, binding = 5) uniform sampler2D textureSamplers[];
+layout(set = 0, binding = 3) buffer PointLights { PointLight pointLights[]; };
+layout(set = 0, binding = 4) uniform sampler2D textureSamplers[];
 
 // Ray payload and attributes
 layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
@@ -34,17 +35,146 @@ layout(push_constant) uniform PushConstants {
     vec3 vertical; int _pad5;
 } pushConstants;
 
-void main() {
-    const uint instIdx = gl_InstanceCustomIndexEXT;
-    const MeshAddresses mesh = instances[instIdx];
+// --- Helper: build tangent frame from normal ---
+void buildTangentFrame(vec3 N, out vec3 T, out vec3 B) {
+    if (abs(N.z) < 0.999) {
+        T = normalize(cross(N, vec3(0.0, 0.0, 1.0)));
+    } else {
+        T = normalize(cross(N, vec3(0.0, 1.0, 0.0)));
+    }
+    B = cross(T, N);
+}
 
+// --- Sample diffuse direction (cosine-weighted hemisphere) ---
+vec3 sampleDiffuse(vec3 N, inout uint rngState) {
+    float u1 = rand(rngState);
+    float u2 = rand(rngState);
+
+    float r = sqrt(u1);
+    float theta = 2.0 * PI * u2;
+
+    float x = r * cos(theta);
+    float y = r * sin(theta);
+    float z = sqrt(1.0 - u1);
+
+    vec3 T, B;
+    buildTangentFrame(N, T, B);
+
+    return normalize(x * T + y * B + z * N);
+}
+
+// --- PDF for diffuse direction ---
+float pdfDiffuse(vec3 N, vec3 L) {
+    float NoL = max(dot(N, L), 0.0);
+    return NoL / PI;
+}
+
+// --- GGX distribution function used for specular PDF ---
+float distributionGGX(float NoH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = max(a * a, 1e-5);  // Prevent extremely small denom
+
+    float denom = (NoH * NoH) * (a2 - 1.0) + 1.0;
+    float denom2 = denom * denom + 1e-7;  // Avoid div-by-zero
+    return a2 / (PI * denom2);
+}
+
+// --- Sample GGX half vector ---
+vec3 sampleGGX(float roughness, vec3 N, inout uint rngState) {
+    float u1 = rand(rngState);
+    float u2 = rand(rngState);
+
+    float a = roughness * roughness;
+
+    float phi = 2.0 * PI * u1;
+    float cosTheta = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    vec3 Ht = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+
+    vec3 T, B;
+    buildTangentFrame(N, T, B);
+
+    return normalize(Ht.x * T + Ht.y * B + Ht.z * N);
+}
+
+// --- Sample specular direction ---
+vec3 sampleSpecular(vec3 viewDir, vec3 N, float roughness, inout uint rngState) {
+    vec3 H = sampleGGX(roughness, N, rngState);
+
+    // Flip H if it's in the wrong hemisphere
+    if (dot(H, N) < 0.0) {
+        H = -H;
+    }
+
+    vec3 sampledDir = reflect(-viewDir, H);
+    return sampledDir;
+}
+
+
+// --- PDF for specular direction ---
+float pdfSpecular(vec3 viewDir, vec3 N, float roughness, vec3 L) {
+    vec3 H = normalize(viewDir + L);
+    float NoH = max(dot(N, H), 1e-4);
+    float VoH = max(dot(viewDir, H), 1e-4);
+
+    float D = distributionGGX(NoH, roughness);
+    return max((D * NoH) / (4.0 * VoH), 1e-6); // Clamp to avoid near-zero
+}
+
+
+// --- Fresnel Schlick approximation ---
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return  F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+}
+
+
+// --- Geometry function: Schlick-GGX ---
+float geometrySchlickGGX(float NoV, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NoV / (NoV * (1.0 - k) + k + 1e-6);
+}
+
+// --- Smith geometry function ---
+float geometrySmithGGX(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NoV = max(dot(N, V), 0.0);
+    float NoL = max(dot(N, L), 0.0);
+    float ggx1 = geometrySchlickGGX(NoV, roughness);
+    float ggx2 = geometrySchlickGGX(NoL, roughness);
+    return ggx1 * ggx2;
+}
+
+// --- Evaluate specular BRDF (Cook-Torrance) ---
+vec3 evaluateSpecularBRDF(vec3 viewDir, vec3 N, vec3 albedo, float metallic, float roughness, vec3 L) {
+    vec3 H = normalize(viewDir + L);
+
+    float NoV = max(dot(N, viewDir), 0.0);
+    float NoL = max(dot(N, L), 0.0);
+    float NoH = max(dot(N, H), 0.0);
+    float VoH = max(dot(viewDir, H), 0.0);
+
+    float D = distributionGGX(NoH, roughness);
+    float G = geometrySmithGGX(N, viewDir, L, roughness);
+
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    vec3 F = fresnelSchlick(VoH, F0);
+
+    vec3 numerator = F * D * G;
+    float denominator = max(4.0 * NoV * NoL, 1e-6);
+    return numerator / denominator;
+}
+
+void main() {
+    const MeshAddresses mesh = instances[gl_InstanceCustomIndexEXT];
     VertexBuffer vertexBuf = VertexBuffer(mesh.vertexAddress);
-    IndexBuffer  indexBuf  = IndexBuffer(mesh.indexAddress);
-    FaceBuffer   faceBuf   = FaceBuffer(mesh.faceAddress);
+    IndexBuffer indexBuf = IndexBuffer(mesh.indexAddress);
+    FaceBuffer faceBuf = FaceBuffer(mesh.faceAddress);
+    MaterialBuffer materialBuf = MaterialBuffer(mesh.materialAddress);
 
     const uint primitiveIndex = gl_PrimitiveID;
     const Face face = faceBuf.data[primitiveIndex];
-    const Material material = materials[face.materialIndex];
+    const Material material = materialBuf.data[face.materialIndex];
 
     const uint i0 = indexBuf.data[3 * primitiveIndex + 0];
     const uint i1 = indexBuf.data[3 * primitiveIndex + 1];
@@ -55,36 +185,129 @@ void main() {
     const Vertex v2 = vertexBuf.data[i2];
 
     const vec3 bary = calculateBarycentric(attribs);
-    const vec3 localPosition = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
-    const vec3 localNormal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
-    const vec2 uv = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
+    vec3 localPosition = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
+    vec3 localNormal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
+    vec2 interpolatedUV = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
 
-    // Transform position to world space
-    const vec3 worldPosition = (gl_ObjectToWorldEXT * vec4(localPosition, 1.0)).xyz;
-
-    // Correct normal transformation using inverse transpose
+    vec3 worldPosition = (gl_ObjectToWorldEXT * vec4(localPosition, 1.0)).xyz;
     mat3 objectToWorld3x3 = mat3(gl_ObjectToWorldEXT);
     mat3 normalMatrix = transpose(inverse(objectToWorld3x3));
-    vec3 worldNormal = normalize(normalMatrix * localNormal);
 
-    // Sample albedo texture if present
+    vec3 geometricNormalWorld = normalize(normalMatrix * localNormal);
+    vec3 normal = geometricNormalWorld;
+
+    payload.color = material.emission;
+    payload.position = worldPosition;
+    payload.normal = normal;
+
     vec3 albedo = material.albedo;
     if (material.albedoIndex != -1)
-    albedo *= texture(textureSamplers[material.albedoIndex], uv).rgb;
+    albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
 
-    // Output payload (in world space)
-    payload.position = worldPosition;
-    payload.normal = worldNormal;
-    payload.color = material.emission;
+    float metallic = material.metallic;
+    if (material.metallicIndex != -1)
+        metallic *= texture(textureSamplers[material.metallicIndex], interpolatedUV).r;
+    metallic = clamp(metallic, 0.0, 0.99);
+    
 
-    // Path tracing BRDF sample
-    uint seedX = i0 + pushConstants.frame;
-    uint seedY = i1 + pushConstants.frame + 1;
-    vec3 sampledDir = sampleDirection(rand(seedX), rand(seedY), worldNormal);
+    float roughness = material.roughness;
+    if (material.roughnessIndex != -1)
+        roughness *= texture(textureSamplers[material.roughnessIndex], interpolatedUV).r;
+    roughness = clamp(roughness, 0.001, 0.999);
 
-    float cosTheta = max(0.0, dot(sampledDir, worldNormal));
-    float pdf = cosTheta / PI;
-    vec3 brdf = albedo / PI;
+    float specular = material.specular;
+    if (material.specularIndex != -1)
+        specular *= texture(textureSamplers[material.specularIndex], interpolatedUV).r;
+    specular *= 2; //scale to 0 - 2
 
-    payload.throughput *= brdf * cosTheta / max(pdf, 0.00001);
+    //Refraction
+    float transmissionFactor = (material.transmission.r + material.transmission.g + material.transmission.b) / 3.0;
+    if (transmissionFactor > 0.0 && rand(payload.rngState) < transmissionFactor) {
+        vec3 I = normalize(gl_WorldRayDirectionEXT);
+
+        float etaI = 1.0;
+        float etaT = material.ior;
+        float eta;
+
+        if (dot(I, normal) > 0.0) {
+            normal = -normal;
+            float tmp = etaI;
+            etaI = etaT;
+            etaT = tmp;
+        }
+
+        eta = etaI / etaT;
+
+        vec3 refracted = refract(I, normal, eta);
+        if (length(refracted) < 1e-5)
+            payload.nextDirection = reflect(I, normal);
+        else
+            payload.nextDirection = refracted;
+
+        payload.throughput *= material.transmission;
+        return;
+    }
+
+    // diffuse + specular with MIS, lobe weights from average energy
+    vec3 viewDir = normalize(-gl_WorldRayDirectionEXT);
+
+    if (dot(normal, viewDir) < 0.0)
+        normal = -normal;
+
+    float NdotV = max(dot(normal, viewDir), 0.0);
+
+    // Fresnel at normal incidence
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+
+    // Average diffuse reflectance (energy)
+    float diffuseEnergy = (1.0 - metallic) * (1.0 - fresnelSchlick(NdotV, F0).r);
+
+    // Average specular reflectance (energy)
+    float specularEnergy = max(fresnelSchlick(NdotV, F0).r, 0.04);
+    specularEnergy *= max(1.0 - roughness * roughness, 0.05);
+    
+    // Normalize weights to sum to 1
+    float sumEnergy = diffuseEnergy + specularEnergy + 1e-6;
+    float probDiffuse = diffuseEnergy / sumEnergy;
+    float probSpecular = specularEnergy / sumEnergy;
+
+    // Choose lobe to sample
+    bool choseDiffuse = rand(payload.rngState) < probDiffuse;
+
+    vec3 sampledDir;
+    if (choseDiffuse)
+        sampledDir = sampleDiffuse(normal, payload.rngState);
+    else
+        sampledDir = sampleSpecular(viewDir, normal, roughness, payload.rngState);
+
+    // PDFs
+    float pdfDiffuseVal = max(pdfDiffuse(normal, sampledDir), 1e-6);
+    float pdfSpecularVal = max(pdfSpecular(viewDir, normal, roughness, sampledDir), 1e-6);
+
+    // Fresnel for the half vector of sampledDir
+    float VoH = max(dot(viewDir, normalize(viewDir + sampledDir)), 0.0);
+    vec3 F = fresnelSchlick(VoH, F0);
+
+    // BRDF evaluation
+    vec3 diffuseBRDF = albedo / PI * (1.0 - metallic);
+    vec3 specularBRDF = evaluateSpecularBRDF(viewDir, normal, albedo, metallic, roughness, sampledDir) * specular;
+
+    // Combined PDF
+    float pdfCombined = probDiffuse * pdfDiffuseVal + probSpecular * pdfSpecularVal;
+
+    //MIS with power heuristic
+    float wDiffuse = probDiffuse * pdfDiffuseVal;
+    float wSpecular = probSpecular * pdfSpecularVal;
+
+    float misWeight;
+    if (choseDiffuse)
+        misWeight = (wDiffuse * wDiffuse) / (wDiffuse * wDiffuse + wSpecular * wSpecular + 1e-6);
+    else
+        misWeight = (wSpecular * wSpecular) / (wDiffuse * wDiffuse + wSpecular * wSpecular + 1e-6);
+
+    float NoL = max(dot(normal, sampledDir), 0.0);
+    vec3 totalBRDF = diffuseBRDF + specularBRDF;
+
+    payload.throughput *= totalBRDF * NoL * misWeight / pdfCombined;
+    payload.nextDirection = normalize(sampledDir);
 }

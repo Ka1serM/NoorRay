@@ -28,11 +28,6 @@ public:
     void stop();
 
     void runOnMainThread(std::function<void()> task);
-    
-    void addMesh(const MeshData& mesh);
-
-    HWND getHwnd() const;
-
 private:
     void setupScene();
     void setupUI();
@@ -47,8 +42,6 @@ private:
 
     Context context;
     Renderer renderer;
-    Image inputImage;
-    Image outputImage;
     
     InputTracker inputTracker;
     HdrToLdrCompute hdrToLdrCompute;

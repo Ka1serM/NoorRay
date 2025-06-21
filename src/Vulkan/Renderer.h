@@ -17,6 +17,8 @@ class Renderer {
 
 public:
 
+    Image inputImage;
+
     bool dirty;
 
     uint32_t width, height;
@@ -28,8 +30,6 @@ public:
 
     std::vector<PointLight> pointLights;
     Buffer pointLightsBuffer;
-    std::vector<Material> materials;
-    Buffer materialsBuffer;
     std::vector<Texture> textures;
     Buffer texturesBuffer;
     std::vector<vk::DescriptorImageInfo> textureImageInfos;
@@ -67,16 +67,13 @@ public:
     Renderer(Context& context, uint32_t width, uint32_t height);
     
     void render(uint32_t imageIndex, const PushConstants& pushConstants);
-
-    void updateStorageImage(const vk::ImageView& storageImageView);
-
+    
     const vk::CommandBuffer& getCommandBuffer(uint32_t imageIndex) const;
     const vk::SwapchainKHR& getSwapChain() const;
     const std::vector<vk::Image>& getSwapchainImages() const;
 
     void add(Texture&& element);
     void add(const PointLight& element);
-    void add(const Material& element);
 
     std::shared_ptr<MeshAsset> get(const std::string& name) const;
     

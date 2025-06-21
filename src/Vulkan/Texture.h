@@ -7,6 +7,7 @@
 
 class Texture {
 public:
+    Texture(Context& context, const std::string& hdrFilepath, vk::Format format);
     Texture(Context& context, const void* rgbaData, int width, int height);
     Texture(Context& context, const std::string& filepath);
     

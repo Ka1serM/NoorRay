@@ -12,22 +12,15 @@
 #include "portable-file-dialogs.h"
 #include "Utils.h"
 
-HWND Viewer::getHwnd() const {
-    return glfwGetWin32Window(context.window);
-}
-
 Viewer::Viewer(int width, int height)
     : width(width),
       height(height),
       context(width, height),
       renderer(context, width, height),
-      inputImage(context, width, height, vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst),
-      outputImage(context, width, height, vk::Format::eB8G8R8A8Unorm, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst),
       inputTracker(context.window),
-      hdrToLdrCompute(context.device.get(), inputImage.view.get(), outputImage.view.get()),
+      hdrToLdrCompute(context, width, height, renderer.inputImage.view.get()),
       imGuiManager(context, renderer.getSwapchainImages(), width, height)
 {
-    renderer.updateStorageImage(inputImage.view.get());
     setupScene();
     setupUI();
 }
@@ -37,7 +30,8 @@ Viewer::~Viewer() {
 }
 
 void Viewer::stop() {
-    if (!running.load()) return;
+    if (!running.load())
+        return;
     running = false;
 }
 
@@ -45,10 +39,6 @@ void Viewer::runOnMainThread(std::function<void()> task)
 {
     std::lock_guard<std::mutex> lock(mainThreadQueueMutex);
     mainThreadQueue.push(std::move(task));
-}
-
-void Viewer::addMesh(const MeshData& mesh) {
-    
 }
 
 void Viewer::start() {
@@ -105,15 +95,11 @@ void Viewer::start() {
 
         vk::CommandBuffer commandBuffer = renderer.getCommandBuffer(imageIndex);
 
-        outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
         hdrToLdrCompute.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
-        outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 
-        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eUndefined,
-                             vk::ImageLayout::eColorAttachmentOptimal);
+        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
         imGuiManager.Draw(commandBuffer, imageIndex, width, height);
-        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eColorAttachmentOptimal,
-                             vk::ImageLayout::ePresentSrcKHR);
+        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR);
 
         commandBuffer.end();
 
@@ -144,19 +130,15 @@ void Viewer::start() {
 }
 
 void Viewer::setupScene() {
+    // Default PointLight for empty buffer
     PointLight pointLight{};
+    pointLight.intensity = 0;
     renderer.add(pointLight);
-
-    // Material with emission
-    Material material{};
-    material.albedo = glm::vec3(1.0f);
-    material.emission = glm::vec3(10.0f);
-    renderer.add(material);
-
-    // White 1x1 texture (one pixel white)
-    renderer.add(Texture(context, (const uint8_t[]){255, 255, 255, 255}, 1, 1));
     
-    auto cam = std::make_unique<PerspectiveCamera>(renderer, "Main Camera", Transform{glm::vec3(0), glm::vec3(0), glm::vec3(0)}, width / static_cast<float>(height), 36.0f, 24.0f, 50.0f, 2.8f, 10.0f);
+    // Add HDRI texture
+    renderer.add(Texture(context, R"(C:\Users\Marcel\Documents\GitRepositories\UniversalUmap\UniversalUmap.Rendering\assets\Ultimate_Skies_4k_0036.HDR)", vk::Format::eR32G32B32A32Sfloat));
+    
+    auto cam = std::make_unique<PerspectiveCamera>(renderer, "Main Camera", Transform{glm::vec3(0, -1.0f, 3.5f), glm::vec3(-180, 0, 180), glm::vec3(0)}, width / static_cast<float>(height), 36.0f, 24.0f, 30.0f, 16.0f, 3.0f);
     renderer.add(std::move(cam));
 }
 
@@ -164,7 +146,7 @@ void Viewer::setupUI() {
     auto mainMenuBar = std::make_unique<MainMenuBar>();
     auto debugPanel = std::make_unique<DebugPanel>();
     auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(renderer, inputTracker);
-    auto viewportPanel = std::make_unique<ViewportPanel>(context, imGuiManager.getDescriptorPool(), outputImage.view.get(), width, height);
+    auto viewportPanel = std::make_unique<ViewportPanel>(context, imGuiManager.getDescriptorPool(), hdrToLdrCompute.outputImage.view.get(), width, height);
 
     debugPanel->setSceneStats(0, 0, 0);
 
@@ -185,7 +167,7 @@ void Viewer::setupUI() {
                 std::string filePath = selection[0];
                 this->runOnMainThread([this, filePath]() {
                     try {
-                        auto meshAsset = MeshAsset::CreateFromObj(this->context, this->renderer, filePath);
+                        auto meshAsset = MeshAsset::CreateFromObj(this->renderer, filePath);
                         this->renderer.add(meshAsset);
                         auto instance = std::make_unique<MeshInstance>(this->renderer, Utils::nameFromPath(meshAsset->path) + " Instance", meshAsset, Transform(glm::vec3(0, 0, 0)));
                         int instanceIndex = this->renderer.add(std::move(instance));
@@ -198,10 +180,10 @@ void Viewer::setupUI() {
             }
         }).detach();
     });
-
+    
     //Add primitives callbacks
     mainMenuBar->setCallback("Add.Cube", [this] {
-        auto cube = MeshAsset::CreateCube(this->context, "Cube");
+        auto cube = MeshAsset::CreateCube(this->renderer, "Cube", {});
         this->renderer.add(cube);
         auto instance = std::make_unique<MeshInstance>(this->renderer, "Cube Instance", cube, Transform(glm::vec3(0, 0, 0)));
         int instanceIndex = this->renderer.add(std::move(instance));
@@ -210,7 +192,7 @@ void Viewer::setupUI() {
     });
 
     mainMenuBar->setCallback("Add.Plane", [this] {
-        auto plane = MeshAsset::CreatePlane(this->context, "Plane");
+        auto plane = MeshAsset::CreatePlane(this->renderer, "Plane", {});
         this->renderer.add(plane);
         auto instance = std::make_unique<MeshInstance>(this->renderer, "Plane Instance", plane, Transform(glm::vec3(0, 0, 0)));
         int instanceIndex = this->renderer.add(std::move(instance));
@@ -219,12 +201,45 @@ void Viewer::setupUI() {
     });
 
     mainMenuBar->setCallback("Add.Sphere", [this] {
-        auto sphere = MeshAsset::CreateSphere(this->context, "Sphere", 16, 32);
+        auto sphere = MeshAsset::CreateSphere(this->renderer, "Sphere", {}, 16, 32);
         this->renderer.add(sphere);
         auto instance = std::make_unique<MeshInstance>(this->renderer, "Sphere Instance", sphere, Transform(glm::vec3(0, 0, 0)));
         int instanceIndex = this->renderer.add(std::move(instance));
         if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
             outliner->setSelectedIndex(instanceIndex);
+    });
+
+    mainMenuBar->setCallback("Add.RectLight", [this] {
+        Material material{};
+        material.emission = glm::vec3(10);
+        auto plane = MeshAsset::CreatePlane(this->renderer, "RectLight", material);
+        this->renderer.add(plane);
+        auto instance = std::make_unique<MeshInstance>(this->renderer, "RectLight Instance", plane, Transform(glm::vec3(0, 0, 0)));
+        int instanceIndex = this->renderer.add(std::move(instance));
+        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
+            outliner->setSelectedIndex(instanceIndex);
+    });
+
+    mainMenuBar->setCallback("Add.SphereLight", [this] {
+        Material material{};
+        material.emission = glm::vec3(10);
+        auto sphere = MeshAsset::CreateSphere(this->renderer, "SphereLight", material, 16, 32);
+        this->renderer.add(sphere);
+        auto instance = std::make_unique<MeshInstance>(this->renderer, "SphereLight Instance", sphere, Transform(glm::vec3(0, 0, 0)));
+        int instanceIndex = this->renderer.add(std::move(instance));
+        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
+            outliner->setSelectedIndex(instanceIndex);
+    });
+
+    mainMenuBar->setCallback("Add.DiskLight", [this] {
+    Material material{};
+    material.emission = glm::vec3(10);
+    auto disk = MeshAsset::CreateDisk(this->renderer, "DiskLight", material, 32);
+    this->renderer.add(disk);
+    auto instance = std::make_unique<MeshInstance>(this->renderer, "DiskLight Instance", disk, Transform(glm::vec3(0, 0, 0)));
+    int instanceIndex = this->renderer.add(std::move(instance));
+    if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
+        outliner->setSelectedIndex(instanceIndex);
     });
     
     imGuiManager.addComponent(std::move(mainMenuBar));

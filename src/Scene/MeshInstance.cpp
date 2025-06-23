@@ -1,7 +1,5 @@
 ﻿#include "MeshInstance.h"
-
 #include <imgui.h>
-
 #include <utility>
 #include "../UI/ImGuiManager.h"
 #include "Vulkan/Renderer.h"
@@ -27,7 +25,7 @@ void MeshInstance::renderUi() {
     SceneObject::renderUi();
 
     ImGui::SeparatorText("Mesh Asset");
-    meshAsset.get()->renderUi();
+    meshAsset->renderUi();
 }
 
 void MeshInstance::setPosition(const glm::vec3& pos)

@@ -31,6 +31,7 @@ public:
     std::vector<PointLight> pointLights;
     Buffer pointLightsBuffer;
     std::vector<Texture> textures;
+    std::vector<std::string> textureNames;
     Buffer texturesBuffer;
     std::vector<vk::DescriptorImageInfo> textureImageInfos;
         
@@ -62,6 +63,7 @@ public:
     void rebuildMeshBuffer();
 
     void add(const std::shared_ptr<MeshAsset>& meshInstance);
+    std::string getTextureName(int id) const;
     bool remove(const SceneObject* obj);
         
     Renderer(Context& context, uint32_t width, uint32_t height);
@@ -99,4 +101,6 @@ public:
     void markDirty() { dirty = true; };
     void resetDirty() { dirty = false; };
     bool getDirty() const { return dirty; }
+
+    const std::vector<std::string>& getTextureNames() const { return textureNames; }
 };

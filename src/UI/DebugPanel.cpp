@@ -9,11 +9,7 @@ void DebugPanel::renderUi() {
     // Info section
     ImGui::SeparatorText("Info");
     ImGui::Text("FPS: %.2f", fps);
-
-    //ImGui::Text("Triangle Count: %d", triangleCount);
-    //ImGui::Text("Instance Count: %d", instanceCount);
-    ImGui::Text("Light Count: %d", lightCount);
-
+    
     // Settings section
     ImGui::SeparatorText("Settings");
     bool oldIsRayTracing = isRayTracing;

@@ -13,9 +13,17 @@
 #include "../Common.glsl"
 
 layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
+layout(set = 0, binding = 4) uniform sampler2D textureSamplers[];
 
 void main()
 {
-    payload.color = vec3(0.0, 0.0, 0.0);
+    vec3 viewDir = normalize(gl_WorldRayDirectionEXT);
+
+    //spherical projection
+    vec2 uv;
+    uv.x = atan(viewDir.z, viewDir.x) / (2.0 * PI) + 0.5;
+    uv.y = 1 - acos(clamp(viewDir.y, -1.0, 1.0)) / PI; //flip y
+
+    payload.color = texture(textureSamplers[0], uv).rgb * 10;
     payload.done = true;
 }

@@ -16,8 +16,10 @@ public:
     const vk::DescriptorImageInfo& getDescriptorInfo() const { return descriptorInfo; }
     const vk::Sampler& getSampler() const { return *sampler; }
     const Image& getImage() const { return image; }
+    const std::string& getName() const { return name; }
 
 private:
+    std::string name;
     Image image;
     vk::UniqueSampler sampler;
     vk::DescriptorImageInfo descriptorInfo;

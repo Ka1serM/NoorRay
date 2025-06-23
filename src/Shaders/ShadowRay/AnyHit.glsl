@@ -1,7 +1,7 @@
 #version 460
-#pragma shader_stage(closest)
+#pragma shader_stage(anyhit)
 
-#extension GL_EXT_ray_tracing : enable
+#extension GL_EXT_ray_tracing : require
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_buffer_reference : require
@@ -12,8 +12,10 @@
 #include "../SharedStructs.h"
 #include "../Common.glsl"
 
-layout(location = 0) rayPayloadInEXT ShadowRayPayload payload;
+layout(location = 1) rayPayloadInEXT ShadowRayPayload payload;
 
 void main() {
     payload.hit = true;
+
+    terminateRayEXT;
 }

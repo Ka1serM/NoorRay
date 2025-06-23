@@ -12,7 +12,7 @@
 #include "../SharedStructs.h"
 #include "../Common.glsl"
 
-layout(location = 0) rayPayloadInEXT ShadowRayPayload payload;
+layout(location = 1) rayPayloadInEXT ShadowRayPayload payload;
 
 void main() {
     payload.hit = false;

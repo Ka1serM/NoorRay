@@ -11,15 +11,13 @@
 #include "../SharedStructs.h"
 #include "../Common.glsl"
 
-// Buffer reference declarations
+// Buffer reference types
 layout(buffer_reference, scalar) buffer VertexBuffer { Vertex data[]; };
 layout(buffer_reference, scalar) buffer IndexBuffer { uint data[]; };
 layout(buffer_reference, scalar) buffer FaceBuffer { Face data[]; };
 layout(buffer_reference, scalar) buffer MaterialBuffer { Material data[]; };
 
-
-// Bindless resources
-layout(set = 0, binding = 2) buffer MeshAddressesBuffer { MeshAddresses meshAddresses[]; };
+layout(set = 0, binding = 2) buffer MeshAddressesBuffer { MeshAddresses instances[]; };
 layout(set = 0, binding = 3) buffer PointLights { PointLight pointLights[]; };
 layout(set = 0, binding = 4) uniform sampler2D textureSamplers[];
 
@@ -37,13 +35,10 @@ layout(push_constant) uniform PushConstants {
 } pushConstants;
 
 void main() {
-    // Fetch mesh by instance index
-    const uint instIdx = gl_InstanceCustomIndexEXT;
-    const MeshAddresses mesh = meshAddresses[instIdx];
-
+    const MeshAddresses mesh = instances[gl_InstanceCustomIndexEXT];
     VertexBuffer vertexBuf = VertexBuffer(mesh.vertexAddress);
-    IndexBuffer  indexBuf  = IndexBuffer(mesh.indexAddress);
-    FaceBuffer   faceBuf   = FaceBuffer(mesh.faceAddress);
+    IndexBuffer indexBuf = IndexBuffer(mesh.indexAddress);
+    FaceBuffer faceBuf = FaceBuffer(mesh.faceAddress);
     MaterialBuffer materialBuf = MaterialBuffer(mesh.materialAddress);
 
     const uint primitiveIndex = gl_PrimitiveID;
@@ -58,28 +53,24 @@ void main() {
     const Vertex v1 = vertexBuf.data[i1];
     const Vertex v2 = vertexBuf.data[i2];
 
-    // Barycentric interpolation in local space
     const vec3 bary = calculateBarycentric(attribs);
-    const vec3 localPosition = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
-    const vec3 localNormal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
-    const vec2 uv = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
+    vec3 localPosition = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
+    vec3 localNormal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
+    vec2 interpolatedUV = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
 
-    // Transform position to world space
-    const vec3 worldPosition = (gl_ObjectToWorldEXT * vec4(localPosition, 1.0)).xyz;
-
-    // Properly transform normal using inverse transpose of 3x3 matrix
+    vec3 worldPosition = (gl_ObjectToWorldEXT * vec4(localPosition, 1.0)).xyz;
     mat3 objectToWorld3x3 = mat3(gl_ObjectToWorldEXT);
     mat3 normalMatrix = transpose(inverse(objectToWorld3x3));
-    const vec3 worldNormal = normalize(normalMatrix * localNormal);
 
-    // Sample texture if available
+    vec3 geometricNormalWorld = normalize(normalMatrix * localNormal);
+    vec3 normal = geometricNormalWorld;
+    
+    //Sample texture if available
     vec3 albedo = material.albedo;
-    if (material.albedoIndex != -1) {
-        albedo *= texture(textureSamplers[material.albedoIndex], uv).rgb;
-    }
+    if (material.albedoIndex != -1)
+        albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
 
-    // Write outputs to payload (in world space)
-    payload.position = worldPosition;
-    payload.normal = worldNormal;
     payload.color = material.emission + albedo;
+    payload.position = worldPosition;
+    payload.normal = normal;
 }

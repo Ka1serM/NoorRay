@@ -69,13 +69,12 @@ void Viewer::start() {
             frameCounter = 0;
         }
 
-        {
-            std::lock_guard<std::mutex> lock(mainThreadQueueMutex);
-            while (!mainThreadQueue.empty()) {
-                auto task = std::move(mainThreadQueue.front());
-                mainThreadQueue.pop();
-                task();
-            }
+        
+        std::lock_guard<std::mutex> lock(mainThreadQueueMutex);
+        while (!mainThreadQueue.empty()) {
+            auto task = std::move(mainThreadQueue.front());
+            mainThreadQueue.pop();
+            task();
         }
 
         glfwPollEvents();
@@ -132,7 +131,6 @@ void Viewer::start() {
 void Viewer::setupScene() {
     // Default PointLight for empty buffer
     PointLight pointLight{};
-    pointLight.intensity = 0;
     renderer.add(pointLight);
     
     // Add HDRI texture
@@ -147,16 +145,18 @@ void Viewer::setupUI() {
     auto debugPanel = std::make_unique<DebugPanel>();
     auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(renderer, inputTracker);
     auto viewportPanel = std::make_unique<ViewportPanel>(context, imGuiManager.getDescriptorPool(), hdrToLdrCompute.outputImage.view.get(), width, height);
-
-    debugPanel->setSceneStats(0, 0, 0);
-
+    
     debugPanel->setModeChangedCallback([&] {
         isRayTracing = !isRayTracing;
         renderer.markDirty();
     });
 
     mainMenuBar->setCallback("File.Quit", [&] {
-        glfwSetWindowShouldClose(context.window, GLFW_TRUE);
+         debugPanel->setModeChangedCallback([&] {
+        isRayTracing = !isRayTracing;
+        renderer.markDirty();
+    });
+   glfwSetWindowShouldClose(context.window, GLFW_TRUE);
     });
 
     //Import callback
@@ -201,7 +201,7 @@ void Viewer::setupUI() {
     });
 
     mainMenuBar->setCallback("Add.Sphere", [this] {
-        auto sphere = MeshAsset::CreateSphere(this->renderer, "Sphere", {}, 16, 32);
+        auto sphere = MeshAsset::CreateSphere(this->renderer, "Sphere", {}, 24, 48);
         this->renderer.add(sphere);
         auto instance = std::make_unique<MeshInstance>(this->renderer, "Sphere Instance", sphere, Transform(glm::vec3(0, 0, 0)));
         int instanceIndex = this->renderer.add(std::move(instance));
@@ -223,7 +223,7 @@ void Viewer::setupUI() {
     mainMenuBar->setCallback("Add.SphereLight", [this] {
         Material material{};
         material.emission = glm::vec3(10);
-        auto sphere = MeshAsset::CreateSphere(this->renderer, "SphereLight", material, 16, 32);
+        auto sphere = MeshAsset::CreateSphere(this->renderer, "SphereLight", material, 24, 48);
         this->renderer.add(sphere);
         auto instance = std::make_unique<MeshInstance>(this->renderer, "SphereLight Instance", sphere, Transform(glm::vec3(0, 0, 0)));
         int instanceIndex = this->renderer.add(std::move(instance));
@@ -232,14 +232,14 @@ void Viewer::setupUI() {
     });
 
     mainMenuBar->setCallback("Add.DiskLight", [this] {
-    Material material{};
-    material.emission = glm::vec3(10);
-    auto disk = MeshAsset::CreateDisk(this->renderer, "DiskLight", material, 32);
-    this->renderer.add(disk);
-    auto instance = std::make_unique<MeshInstance>(this->renderer, "DiskLight Instance", disk, Transform(glm::vec3(0, 0, 0)));
-    int instanceIndex = this->renderer.add(std::move(instance));
-    if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-        outliner->setSelectedIndex(instanceIndex);
+        Material material{};
+        material.emission = glm::vec3(10);
+        auto disk = MeshAsset::CreateDisk(this->renderer, "DiskLight", material, 48);
+        this->renderer.add(disk);
+        auto instance = std::make_unique<MeshInstance>(this->renderer, "DiskLight Instance", disk, Transform(glm::vec3(0, 0, 0)));
+        int instanceIndex = this->renderer.add(std::move(instance));
+        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
+            outliner->setSelectedIndex(instanceIndex);
     });
     
     imGuiManager.addComponent(std::move(mainMenuBar));

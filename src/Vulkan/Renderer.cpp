@@ -51,11 +51,11 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     static constexpr unsigned char PathTracingClosestHit[] = {
         #embed "../shaders/PathTracing/ClosestHit.spv"
     };
-    static constexpr unsigned char ShadowRayClosestHit[] = {
-        #embed "../shaders/ShadowRay/ClosestHit.spv"
+    static constexpr unsigned char ShadowRayAnyHit[] = {
+        #embed "../shaders/ShadowRay/AnyHit.spv"
     };
 
-    // Parallel arrays for shaders, sizes, and stages
+    // Shader bytecode array
     constexpr const unsigned char* shaders[] = {
         RayGeneration,
         RayTracingMiss,
@@ -63,9 +63,10 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         ShadowRayMiss,
         RayTracingClosestHit,
         PathTracingClosestHit,
-        ShadowRayClosestHit
+        ShadowRayAnyHit
     };
 
+    // Shader sizes
     constexpr size_t shaderSizes[] = {
         sizeof(RayGeneration),
         sizeof(RayTracingMiss),
@@ -73,9 +74,10 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         sizeof(ShadowRayMiss),
         sizeof(RayTracingClosestHit),
         sizeof(PathTracingClosestHit),
-        sizeof(ShadowRayClosestHit)
+        sizeof(ShadowRayAnyHit)
     };
 
+    // Shader stages
     constexpr vk::ShaderStageFlagBits shaderStages[] = {
         vk::ShaderStageFlagBits::eRaygenKHR,
         vk::ShaderStageFlagBits::eMissKHR,
@@ -83,7 +85,7 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         vk::ShaderStageFlagBits::eMissKHR,
         vk::ShaderStageFlagBits::eClosestHitKHR,
         vk::ShaderStageFlagBits::eClosestHitKHR,
-        vk::ShaderStageFlagBits::eClosestHitKHR
+        vk::ShaderStageFlagBits::eAnyHitKHR
     };
 
     // Create shader modules, stages, and shader groups
@@ -101,7 +103,7 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         }));
 
         shaderStagesVector.push_back({{}, shaderStages[i], *shaderModules.back(), "main"});
-
+        
         if (shaderStages[i] == vk::ShaderStageFlagBits::eRaygenKHR) {
             shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             raygenCount++;
@@ -111,6 +113,9 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         } else if (shaderStages[i] == vk::ShaderStageFlagBits::eClosestHitKHR) {
             shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             hitCount++;
+        } else if (shaderStages[i] == vk::ShaderStageFlagBits::eAnyHitKHR) {
+            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR);
+            hitCount++; // treat as hit group for counting SBT size
         }
     }
 
@@ -123,22 +128,22 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         {4, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR }
     };
 
-    //Descriptor binding flags for Bindless
+    // Descriptor Binding Flags for Bindless
     std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
     bindingFlags[4] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
-    //AllocationInfo for Bindless
-    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
-    variableCountAllocInfo.setDescriptorCounts(MAX_TEXTURES);
 
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
     bindingFlagsInfo.setBindingFlags(bindingFlags);
 
-    //Create descriptor set layout
+    // Create Descriptor Set Layout
     vk::DescriptorSetLayoutCreateInfo descSetLayoutInfo{};
     descSetLayoutInfo.setBindings(bindings);
     descSetLayoutInfo.setPNext(&bindingFlagsInfo);
-
     descSetLayout = context.device->createDescriptorSetLayoutUnique(descSetLayoutInfo);
+
+    // Allocate Descriptor Set
+    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
+    variableCountAllocInfo.setDescriptorCounts(MAX_TEXTURES);
 
     vk::DescriptorSetAllocateInfo allocInfo{};
     allocInfo.setDescriptorPool(context.descPool.get());
@@ -148,7 +153,7 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
 
     descriptorSet = std::move(context.device->allocateDescriptorSetsUnique(allocInfo).front());
 
-    //Create pipeline layout
+    // Create Pipeline Layout
     vk::PushConstantRange pushRange;
     pushRange.setOffset(0);
     pushRange.setSize(sizeof(PushConstants));
@@ -157,13 +162,14 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setSetLayouts(descSetLayout.get());
     pipelineLayoutInfo.setPushConstantRanges(pushRange);
+
     pipelineLayout = context.device->createPipelineLayoutUnique(pipelineLayoutInfo);
 
-    //Create pipeline
+    // Create Ray Tracing Pipeline
     vk::RayTracingPipelineCreateInfoKHR rtPipelineInfo;
     rtPipelineInfo.setStages(shaderStagesVector);
     rtPipelineInfo.setGroups(shaderGroups);
-    rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
+    rtPipelineInfo.setMaxPipelineRayRecursionDepth(10);
     rtPipelineInfo.setLayout(pipelineLayout.get());
 
     auto pipelineResult = context.device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
@@ -172,46 +178,46 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
 
     pipeline = std::move(pipelineResult.value);
 
-    //Get ray tracing properties
+    // Ray Tracing Properties
     auto properties = context.physicalDevice.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
     auto rtProperties = properties.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
 
-    //Calculate shader binding table (SBT) size
     uint32_t handleSizeAligned = rtProperties.shaderGroupHandleAlignment;
-    uint32_t groupCount = shaderGroups.size();
+    uint32_t groupCount = static_cast<uint32_t>(shaderGroups.size());
     uint32_t sbtSize = groupCount * handleSizeAligned;
 
-    //Get shader group handles
+    // Get Shader Group Handles
     std::vector<uint8_t> handleStorage(sbtSize);
     if (context.device->getRayTracingShaderGroupHandlesKHR(pipeline.get(), 0, groupCount, sbtSize, handleStorage.data()) != vk::Result::eSuccess)
         throw std::runtime_error("failed to get ray tracing shader group handles.");
 
-    //Create Shader Binding Table (SBT)
-    //Calculate the total size for each group
+    // Calculate SBT Region Sizes
     uint32_t raygenSize = raygenCount * handleSizeAligned;
     uint32_t missSize = missCount * handleSizeAligned;
-    uint32_t hitSize = hitCount * handleSizeAligned;
+    uint32_t hitSize  = hitCount * handleSizeAligned;
 
-    //Create SBT buffers
-    raygenSBT = Buffer{context,Buffer::Type::ShaderBindingTable,raygenSize,handleStorage.data()};
-    missSBT = Buffer{context,Buffer::Type::ShaderBindingTable,missSize,handleStorage.data() + raygenSize};
-    hitSBT= Buffer{context,Buffer::Type::ShaderBindingTable,hitSize,handleStorage.data() + (raygenSize + hitSize)};
+    // Create Shader Binding Table Buffers
+    raygenSBT = Buffer{context, Buffer::Type::ShaderBindingTable, raygenSize, handleStorage.data()};
+    missSBT   = Buffer{context, Buffer::Type::ShaderBindingTable, missSize, handleStorage.data() + raygenSize};
+    hitSBT    = Buffer{context, Buffer::Type::ShaderBindingTable, hitSize, handleStorage.data() + raygenSize + missSize};
 
-    //Create StridedDeviceAddressRegion
-    raygenRegion = vk::StridedDeviceAddressRegionKHR{ raygenSBT.getDeviceAddress(), handleSizeAligned, raygenSize};
-    missRegion = vk::StridedDeviceAddressRegionKHR{ missSBT.getDeviceAddress(), handleSizeAligned, missSize };
-    hitRegion = vk::StridedDeviceAddressRegionKHR{ hitSBT.getDeviceAddress(), handleSizeAligned, hitSize };
+    // Create Strided Device Address Regions
+    raygenRegion = vk::StridedDeviceAddressRegionKHR{ raygenSBT.getDeviceAddress(), handleSizeAligned, raygenSize };
+    missRegion   = vk::StridedDeviceAddressRegionKHR{ missSBT.getDeviceAddress(), handleSizeAligned, missSize };
+    hitRegion    = vk::StridedDeviceAddressRegionKHR{ hitSBT.getDeviceAddress(), handleSizeAligned, hitSize };
 
-    // bind storage image to pipeline
+    // Bind Storage Image to Descriptor Set
     vk::DescriptorImageInfo storageImageInfo{};
     storageImageInfo.setImageView(inputImage.view.get());
     storageImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
+
     vk::WriteDescriptorSet storageImageWrite{};
     storageImageWrite.setDstSet(descriptorSet.get());
     storageImageWrite.setDstBinding(1);
     storageImageWrite.setDescriptorType(vk::DescriptorType::eStorageImage);
     storageImageWrite.setDescriptorCount(1);
     storageImageWrite.setImageInfo(storageImageInfo);
+
     context.device->updateDescriptorSets(storageImageWrite, {});
 }
 
@@ -309,6 +315,7 @@ const std::vector<vk::Image>& Renderer::getSwapchainImages() const
 void Renderer::add(Texture&& element) {
     textures.push_back(std::move(element)); // move only
     updateTextureDescriptors(textures);
+    textureNames.push_back(textures.back().getName());
 }
 
 void Renderer::add(const PointLight& element) {
@@ -350,7 +357,6 @@ void Renderer::add(const std::shared_ptr<MeshAsset>& meshAsset) {
     meshAssets.push_back(meshAsset);
     rebuildMeshBuffer();
 }
-
 
 bool Renderer::remove(const SceneObject* obj) {
     // Don't remove the active camera

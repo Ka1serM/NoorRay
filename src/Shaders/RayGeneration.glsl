@@ -35,26 +35,29 @@ void main() {
     vec2 uv = (vec2(pixelCoord) + jitter) / vec2(screenSize);
     uv.y = 1.0 - uv.y;
 
-    vec2 sensorOffset = vec2(uv.x - 0.5, uv.y - 0.5);
+    vec2 sensorOffset = uv * 2.0 - 1.0;  // [-1,1]
 
-    vec3 imagePlanePoint = pushConstants.camera.position
-    + pushConstants.camera.direction * (pushConstants.camera.focalLength * 0.001)
-    + pushConstants.camera.horizontal * sensorOffset.x
-    + pushConstants.camera.vertical * sensorOffset.y;
+    vec3 camPos   = pushConstants.camera.position;
+    vec3 camDir   = pushConstants.camera.direction;
+    vec3 camRight = pushConstants.camera.horizontal;
+    vec3 camUp    = pushConstants.camera.vertical;
 
-    float focalLengthMeters = pushConstants.camera.focalLength * 0.001;
-    float apertureDiameter = focalLengthMeters / pushConstants.camera.aperture;
-    float apertureRadius = apertureDiameter * 0.5;
+    float focalLength = pushConstants.camera.focalLength * 0.001; // [m]
+    float focusDist   = pushConstants.camera.focusDistance;
+    float aperture    = pushConstants.camera.aperture;
 
-    vec2 lensSample = (vec2(rand(seed.x), rand(seed.y)) - 0.5) * 2.0;
-    lensSample *= apertureRadius;
+    vec3 imagePlaneCenter = camPos + camDir * focalLength;
+    vec3 imagePlanePoint = imagePlaneCenter
+    + camRight * sensorOffset.x
+    + camUp    * sensorOffset.y;
+    
+    // Lens sampling: offset ray origin based on lens sample
+    float apertureRadius = (focalLength / aperture) * 0.5; // [m]
+    vec2 lensSample = (vec2(rand(seed.x), rand(seed.y)) - 0.5) * 2.0 * apertureRadius;
+    vec3 rayOrigin = camPos + camRight * lensSample.x + camUp * lensSample.y;
 
-    vec3 right = normalize(pushConstants.camera.horizontal);
-    vec3 up = normalize(pushConstants.camera.vertical);
-
-    vec3 rayOrigin = pushConstants.camera.position + right * lensSample.x + up * lensSample.y;
-    float focusDistance = pushConstants.camera.focusDistance;
-    vec3 focusPoint = pushConstants.camera.position + normalize(imagePlanePoint - pushConstants.camera.position) * focusDistance;
+    // Focus point and final ray direction
+    vec3 focusPoint = camPos + normalize(imagePlanePoint - camPos) * focusDist;
     vec3 rayDirection = normalize(focusPoint - rayOrigin);
 
     payload.color = vec3(0.0);
@@ -68,39 +71,39 @@ void main() {
     rand(payload.rngState);
 
     vec3 color = vec3(0.0);
-
+    
     if (bool(pushConstants.pushData.isRayTracing)) {
         traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, rayOrigin, 0.001, rayDirection, 10000.0, 0);
 
-        vec3 position = payload.position;
-        vec3 normal = payload.normal;
-        vec3 lighting = vec3(0.0);
+        vec3 lighting = vec3(1.0);
+        int lightCount = pointLights.length();
+        if (lightCount == 1)
+            lighting = vec3(1.0); // full brightness for dummy light only
+        
+        else if (lightCount > 1) {
+            
+            lighting = vec3(0.0);
+            for (int i = 1; i < lightCount; ++i) {
 
-        for (int i = 0; i < pointLights.length(); ++i) {
-            PointLight light = pointLights[i];
+                PointLight light = pointLights[i];
+                vec3 lightVec = light.position - payload.position;
+                float dist = length(lightVec);
+                vec3 lightDir = normalize(lightVec);
 
-            if (light.intensity <= 0.0)
-                continue;
+                shadowPayload.hit = false;
+                traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 2, 0, 2, payload.position, 0.01, lightDir, dist, 1);
+                if (shadowPayload.hit)
+                    continue;
 
-            vec3 lightVec = light.position - position;
-            float dist = length(lightVec);
-            vec3 lightDir = normalize(lightVec);
-
-            // Trace shadow ray only if light intensity > 0
-            shadowPayload.hit = false;
-            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 2, 0, 2, position, 0.01, lightDir, dist, 1);
-
-            if (!shadowPayload.hit) {
-                float attenuation = light.intensity / max(0.01, dist - light.radius + 0.01);
-                float NdotL = max(dot(normal, lightDir), 0.0);
-                lighting += NdotL * attenuation * light.color;
+                float NdotL = max(dot(payload.normal, lightDir), 0.0);
+                lighting += NdotL * max(0.01, dist) * light.color;
             }
         }
 
         color = payload.color * lighting;
     }
     else {
-        int maxDepth = 24;
+        int maxDepth = 12;
         for (int depth = 0; depth < maxDepth; ++depth) {
             traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 1, 0, 1, rayOrigin, 0.001, rayDirection, 10000.0, 0);
 

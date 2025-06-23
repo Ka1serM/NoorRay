@@ -7,7 +7,6 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-#extension GL_EXT_debug_printf : enable
 
 #include "../SharedStructs.h"
 #include "../Common.glsl"
@@ -69,14 +68,11 @@ float pdfDiffuse(vec3 N, vec3 L) {
     return NoL / PI;
 }
 
-// --- GGX distribution function used for specular PDF ---
-float distributionGGX(float NoH, float roughness) {
-    float a = roughness * roughness;
-    float a2 = max(a * a, 1e-5);  // Prevent extremely small denom
-
-    float denom = (NoH * NoH) * (a2 - 1.0) + 1.0;
-    float denom2 = denom * denom + 1e-7;  // Avoid div-by-zero
-    return a2 / (PI * denom2);
+// --- Evaluate Lambertian Diffuse BRDF ---
+vec3 evaluateDiffuseBRDF(vec3 albedo, float metallic)
+{
+    // Metals have no diffuse component, so scale by (1 - metallic)
+    return albedo / PI * (1.0 - metallic);
 }
 
 // --- Sample GGX half vector ---
@@ -98,6 +94,21 @@ vec3 sampleGGX(float roughness, vec3 N, inout uint rngState) {
     return normalize(Ht.x * T + Ht.y * B + Ht.z * N);
 }
 
+// --- GGX normal distribution function (NDF) ---
+float distributionGGX(vec3 N, vec3 H, float roughness)
+{
+    float a      = roughness * roughness;
+    float a2     = a * a;
+    float NdotH  = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+
+    float nom   = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / denom;
+}
+
 // --- Sample specular direction ---
 vec3 sampleSpecular(vec3 viewDir, vec3 N, float roughness, inout uint rngState) {
     vec3 H = sampleGGX(roughness, N, rngState);
@@ -111,42 +122,44 @@ vec3 sampleSpecular(vec3 viewDir, vec3 N, float roughness, inout uint rngState) 
     return sampledDir;
 }
 
-
 // --- PDF for specular direction ---
 float pdfSpecular(vec3 viewDir, vec3 N, float roughness, vec3 L) {
     vec3 H = normalize(viewDir + L);
     float NoH = max(dot(N, H), 1e-4);
     float VoH = max(dot(viewDir, H), 1e-4);
 
-    float D = distributionGGX(NoH, roughness);
+    float D = distributionGGX(N, H, roughness);
     return max((D * NoH) / (4.0 * VoH), 1e-6); // Clamp to avoid near-zero
 }
 
-
 // --- Fresnel Schlick approximation ---
-vec3 fresnelSchlick(float cosTheta, vec3 F0) {
-    return  F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+vec3 fresnelSchlick(float cosTheta, vec3 F0)
+{
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-
-// --- Geometry function: Schlick-GGX ---
-float geometrySchlickGGX(float NoV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    return NoV / (NoV * (1.0 - k) + k + 1e-6);
+// --- Schlick-GGX geometry function ---
+float geometrySchlickGGX(float NdotV, float roughness)
+{
+    float k = (roughness * roughness) / 2.0;
+    return NdotV / (NdotV * (1.0 - k) + k + 1e-6);
 }
 
-// --- Smith geometry function ---
-float geometrySmithGGX(vec3 N, vec3 V, vec3 L, float roughness) {
-    float NoV = max(dot(N, V), 0.0);
-    float NoL = max(dot(N, L), 0.0);
-    float ggx1 = geometrySchlickGGX(NoV, roughness);
-    float ggx2 = geometrySchlickGGX(NoL, roughness);
-    return ggx1 * ggx2;
+// --- Smith geometry term (combined for view and light) ---
+float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
+{
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+
+    float ggxV = geometrySchlickGGX(NdotV, roughness);
+    float ggxL = geometrySchlickGGX(NdotL, roughness);
+
+    return ggxV * ggxL;
 }
 
-// --- Evaluate specular BRDF (Cook-Torrance) ---
-vec3 evaluateSpecularBRDF(vec3 viewDir, vec3 N, vec3 albedo, float metallic, float roughness, vec3 L) {
+// --- Evaluate specular BRDF ---
+vec3 evaluateSpecularBRDF(vec3 viewDir, vec3 N, vec3 albedo, float metallic, float roughness, vec3 L)
+{
     vec3 H = normalize(viewDir + L);
 
     float NoV = max(dot(N, viewDir), 0.0);
@@ -154,14 +167,15 @@ vec3 evaluateSpecularBRDF(vec3 viewDir, vec3 N, vec3 albedo, float metallic, flo
     float NoH = max(dot(N, H), 0.0);
     float VoH = max(dot(viewDir, H), 0.0);
 
-    float D = distributionGGX(NoH, roughness);
-    float G = geometrySmithGGX(N, viewDir, L, roughness);
+    float D = distributionGGX(N, H, roughness);
+    float G = geometrySmith(N, viewDir, L, roughness);
 
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 F = fresnelSchlick(VoH, F0);
 
     vec3 numerator = F * D * G;
     float denominator = max(4.0 * NoV * NoL, 1e-6);
+
     return numerator / denominator;
 }
 
@@ -207,13 +221,13 @@ void main() {
     float metallic = material.metallic;
     if (material.metallicIndex != -1)
         metallic *= texture(textureSamplers[material.metallicIndex], interpolatedUV).r;
-    metallic = clamp(metallic, 0.0, 0.99);
+    metallic = clamp(metallic, 0.05, 0.99);
     
 
     float roughness = material.roughness;
     if (material.roughnessIndex != -1)
         roughness *= texture(textureSamplers[material.roughnessIndex], interpolatedUV).r;
-    roughness = clamp(roughness, 0.001, 0.999);
+    roughness = clamp(roughness, 0.05, 0.99);
 
     float specular = material.specular;
     if (material.specularIndex != -1)
@@ -252,7 +266,7 @@ void main() {
     vec3 viewDir = normalize(-gl_WorldRayDirectionEXT);
 
     if (dot(normal, viewDir) < 0.0)
-        normal = -normal;
+    normal = -normal;
 
     float NdotV = max(dot(normal, viewDir), 0.0);
 
@@ -260,12 +274,13 @@ void main() {
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
     // Average diffuse reflectance (energy)
-    float diffuseEnergy = (1.0 - metallic) * (1.0 - fresnelSchlick(NdotV, F0).r);
+    float fresnelAtNdotV = fresnelSchlick(NdotV, F0).r;
+    float diffuseEnergy = (1.0 - metallic) * (1.0 - fresnelAtNdotV);
 
     // Average specular reflectance (energy)
-    float specularEnergy = max(fresnelSchlick(NdotV, F0).r, 0.04);
+    float specularEnergy = max(fresnelAtNdotV, 0.04);
     specularEnergy *= max(1.0 - roughness * roughness, 0.05);
-    
+
     // Normalize weights to sum to 1
     float sumEnergy = diffuseEnergy + specularEnergy + 1e-6;
     float probDiffuse = diffuseEnergy / sumEnergy;
@@ -283,13 +298,8 @@ void main() {
     // PDFs
     float pdfDiffuseVal = max(pdfDiffuse(normal, sampledDir), 1e-6);
     float pdfSpecularVal = max(pdfSpecular(viewDir, normal, roughness, sampledDir), 1e-6);
-
-    // Fresnel for the half vector of sampledDir
-    float VoH = max(dot(viewDir, normalize(viewDir + sampledDir)), 0.0);
-    vec3 F = fresnelSchlick(VoH, F0);
-
-    // BRDF evaluation
-    vec3 diffuseBRDF = albedo / PI * (1.0 - metallic);
+    
+    vec3 diffuseBRDF = evaluateDiffuseBRDF(albedo, metallic);
     vec3 specularBRDF = evaluateSpecularBRDF(viewDir, normal, albedo, metallic, roughness, sampledDir) * specular;
 
     // Combined PDF

@@ -309,36 +309,95 @@ void MeshAsset::renderUi() {
 
         bool anyMaterialChanged = false;
 
-        for (size_t i = 0; i < materials.size(); ++i) {
+        const auto& textureNames = renderer.getTextureNames();
+
+        auto drawTextureCombo = [&](const char* label, int& texIndex, int materialIndex) {
+            int currentComboIndex = texIndex == -1 ? 0 : texIndex + 1;
+
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(label);
+
+            ImGui::TableNextColumn();
+            if (ImGui::BeginCombo((std::string("##") + label + std::to_string(materialIndex)).c_str(),
+                currentComboIndex == 0 ? "No texture selected" : textureNames[currentComboIndex - 1].c_str()))
+            {
+                // No texture option
+                bool isSelected = (currentComboIndex == 0);
+                if (ImGui::Selectable("No texture selected", isSelected)) {
+                    currentComboIndex = 0;
+                    texIndex = -1;
+                    anyMaterialChanged = true;
+                }
+                if (isSelected)
+                    ImGui::SetItemDefaultFocus();
+
+                // Texture options
+                for (int t = 0; t < static_cast<int>(textureNames.size()); ++t) {
+                    isSelected = currentComboIndex == t + 1;
+                    if (ImGui::Selectable(textureNames[t].c_str(), isSelected)) {
+                        currentComboIndex = t + 1;
+                        texIndex = t;
+                        anyMaterialChanged = true;
+                    }
+                    if (isSelected)
+                        ImGui::SetItemDefaultFocus();
+                }
+
+                ImGui::EndCombo();
+            }
+        };
+
+        for (int i = 0; i < (int)materials.size(); ++i) {
             Material& mat = materials[i];
             std::string label = "Material " + std::to_string(i);
 
             if (ImGui::TreeNode(label.c_str())) {
                 ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp);
 
-                ImGuiManager::colorEdit3Row("Albedo", mat.albedo, [&](glm::vec3 v) {
+                // Albedo texture + color
+                drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
+                ImGui::TableNextRow();
+                ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](glm::vec3 v) {
                     mat.albedo = v; anyMaterialChanged = true;
                 });
+                ImGui::TableNextRow();
 
+                // Specular texture + scalar
+                drawTextureCombo("Specular Texture", mat.specularIndex, i);
+                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](float v) {
                     mat.specular = v; anyMaterialChanged = true;
                 });
+                ImGui::TableNextRow();
 
+                // Metallic texture + scalar
+                drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
+                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](float v) {
                     mat.metallic = v; anyMaterialChanged = true;
                 });
+                ImGui::TableNextRow();
 
+                // Roughness texture + scalar
+                drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
+                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](float v) {
                     mat.roughness = v; anyMaterialChanged = true;
                 });
+                ImGui::TableNextRow();
+
+                drawTextureCombo("Normal Texture", mat.normalIndex, i);
+                ImGui::TableNextRow();
 
                 ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](float v) {
                     mat.ior = v; anyMaterialChanged = true;
                 });
+                ImGui::TableNextRow();
 
                 ImGuiManager::colorEdit3Row("Transmission", mat.transmission, [&](glm::vec3 v) {
                     mat.transmission = v; anyMaterialChanged = true;
                 });
+                ImGui::TableNextRow();
 
                 ImGuiManager::colorEdit3Row("Emission", mat.emission, [&](glm::vec3 v) {
                     mat.emission = v; anyMaterialChanged = true;
@@ -348,12 +407,14 @@ void MeshAsset::renderUi() {
                 ImGui::TreePop();
             }
         }
+
         if (anyMaterialChanged)
             updateMaterials();
     }
 }
 
 void MeshAsset::updateMaterials() {
+    //TODO
     // Recreate materialBuffer with updated materials
     materialBuffer = Buffer{renderer.context, Buffer::Type::AccelInput, sizeof(Material) * materials.size(), materials.data()};
     renderer.rebuildMeshBuffer(); //to update the stored buffer address on the mesh

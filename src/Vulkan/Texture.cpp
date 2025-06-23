@@ -3,6 +3,8 @@
 #include <vector>
 #include <stb_image.h>
 
+#include "Utils.h"
+
 Texture::Texture(Context& context, const std::string& hdrFilepath, vk::Format format)
 : image([&]() -> Image {
     int texWidth, texHeight, texChannels;
@@ -16,12 +18,14 @@ Texture::Texture(Context& context, const std::string& hdrFilepath, vk::Format fo
     return img;
 }())
 {
+    name = Utils::nameFromPath(hdrFilepath);
     createSampler(context);
 }
 
 Texture::Texture(Context& context, const void* rgbaData, int width, int height)
     : image(context, rgbaData, width, height)
 {
+    name = std::rand();
     createSampler(context);
 }
 
@@ -38,6 +42,7 @@ Texture::Texture(Context& context, const std::string& filepath)
     return img;
 }())
 {
+    name = Utils::nameFromPath(filepath);
     createSampler(context);
 }
 

@@ -27,15 +27,11 @@ hitAttributeEXT vec3 attribs;
 
 // Push constants
 layout(push_constant) uniform PushConstants {
-    int frame, isPathtracing, isMoving, _pad1;
-    vec3 position; int _pad2;
-    vec3 direction; int _pad3;
-    vec3 horizontal; int _pad4;
-    vec3 vertical; int _pad5;
+    PushData pushData;
+    CameraData camera;
 } pushConstants;
 
-// --- Helper: build tangent frame from normal ---
-void buildTangentFrame(vec3 N, out vec3 T, out vec3 B) {
+void buildCoordinateSystem(vec3 N, out vec3 T, out vec3 B) {
     if (abs(N.z) < 0.999) {
         T = normalize(cross(N, vec3(0.0, 0.0, 1.0)));
     } else {
@@ -57,7 +53,7 @@ vec3 sampleDiffuse(vec3 N, inout uint rngState) {
     float z = sqrt(1.0 - u1);
 
     vec3 T, B;
-    buildTangentFrame(N, T, B);
+    buildCoordinateSystem(N, T, B);
 
     return normalize(x * T + y * B + z * N);
 }
@@ -89,7 +85,7 @@ vec3 sampleGGX(float roughness, vec3 N, inout uint rngState) {
     vec3 Ht = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
 
     vec3 T, B;
-    buildTangentFrame(N, T, B);
+    buildCoordinateSystem(N, T, B);
 
     return normalize(Ht.x * T + Ht.y * B + Ht.z * N);
 }
@@ -216,7 +212,7 @@ void main() {
 
     vec3 albedo = material.albedo;
     if (material.albedoIndex != -1)
-    albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
+        albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
 
     float metallic = material.metallic;
     if (material.metallicIndex != -1)
@@ -258,6 +254,7 @@ void main() {
         else
             payload.nextDirection = refracted;
 
+        payload.color *= albedo;
         payload.throughput *= material.transmission;
         return;
     }
@@ -265,8 +262,8 @@ void main() {
     // diffuse + specular with MIS, lobe weights from average energy
     vec3 viewDir = normalize(-gl_WorldRayDirectionEXT);
 
-    if (dot(normal, viewDir) < 0.0)
-    normal = -normal;
+    if (dot(normal, viewDir) < 0.0) //two sided lighting
+        normal = -normal;
 
     float NdotV = max(dot(normal, viewDir), 0.0);
 

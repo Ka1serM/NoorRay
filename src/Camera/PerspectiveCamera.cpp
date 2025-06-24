@@ -49,8 +49,8 @@ void PerspectiveCamera::updateHorizontalVertical() {
     const glm::vec3 right = glm::normalize(glm::cross(direction, WORLD_UP));
     const glm::vec3 up = glm::normalize(glm::cross(right, direction));
 
-    cameraData.horizontal = right * sensorWidthMeters;
-    cameraData.vertical = up * sensorHeightMeters;
+    cameraData.horizontal = right * sensorWidthMeters * 0.5f; //half width in meters
+    cameraData.vertical = up * sensorHeightMeters * 0.5f; //half height in meters
 }
 
 

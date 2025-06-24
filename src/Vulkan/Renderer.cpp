@@ -10,7 +10,7 @@
 
 Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
 : inputImage(context, width, height, vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst), dirty(false), width(width), height(height), context(context)
-{    
+{
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.surface.get());
     swapchainInfo.setMinImageCount(3);
@@ -34,25 +34,25 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
 
     // Embed all shaders as constexpr unsigned char arrays
     static constexpr unsigned char RayGeneration[] = {
-        #embed "../shaders/RayGeneration.spv"
+#embed "../shaders/RayGeneration.spv"
     };
     static constexpr unsigned char RayTracingMiss[] = {
-        #embed "../shaders/RayTracing/Miss.spv"
+#embed "../shaders/RayTracing/Miss.spv"
     };
     static constexpr unsigned char PathTracingMiss[] = {
-        #embed "../shaders/PathTracing/Miss.spv"
+#embed "../shaders/PathTracing/Miss.spv"
     };
     static constexpr unsigned char ShadowRayMiss[] = {
-        #embed "../shaders/ShadowRay/Miss.spv"
+#embed "../shaders/ShadowRay/Miss.spv"
     };
     static constexpr unsigned char RayTracingClosestHit[] = {
-        #embed "../shaders/RayTracing/ClosestHit.spv"
+#embed "../shaders/RayTracing/ClosestHit.spv"
     };
     static constexpr unsigned char PathTracingClosestHit[] = {
-        #embed "../shaders/PathTracing/ClosestHit.spv"
+#embed "../shaders/PathTracing/ClosestHit.spv"
     };
     static constexpr unsigned char ShadowRayAnyHit[] = {
-        #embed "../shaders/ShadowRay/AnyHit.spv"
+#embed "../shaders/ShadowRay/AnyHit.spv"
     };
 
     // Shader bytecode array
@@ -121,11 +121,11 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
 
     // Descriptor Set Layout Bindings
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
-        {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-        {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-        {4, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR }
+            {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+            {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+            {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
+            {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
+            {4, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR }
     };
 
     // Descriptor Binding Flags for Bindless
@@ -157,7 +157,7 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     vk::PushConstantRange pushRange;
     pushRange.setOffset(0);
     pushRange.setSize(sizeof(PushConstants));
-    pushRange.setStageFlags(vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR);
+    pushRange.setStageFlags(vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setSetLayouts(descSetLayout.get());

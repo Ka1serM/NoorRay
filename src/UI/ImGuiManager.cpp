@@ -305,26 +305,22 @@ void ImGuiManager::tableRowLabel(const char* label) {
 void ImGuiManager::dragFloatRow(const char* label, float value, float speed, float min, float max, const std::function<void(float)>& setter) {
     tableRowLabel(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max, "%.3f", ImGuiSliderFlags_AlwaysClamp))
         setter(value);
-    }
 }
 
 void ImGuiManager::dragFloat3Row(const char* label, glm::vec3 value, float speed, const std::function<void(glm::vec3)>& setter) {
     tableRowLabel(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed)) {
+    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed))
         setter(value);
-    }
 }
 
 void ImGuiManager::colorEdit3Row(const char* label, glm::vec3 value, const std::function<void(glm::vec3)>& setter) {
     tableRowLabel(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    glm::vec3 temp = value;
-    if (ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp))) {
+    if (glm::vec3 temp = value; ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp)))
         setter(temp);
-    }
 }
 
 ImGuiManager::~ImGuiManager() {

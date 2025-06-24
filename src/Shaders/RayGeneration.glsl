@@ -29,37 +29,56 @@ void main() {
     ivec2 pixelCoord = ivec2(gl_LaunchIDEXT.xy);
     ivec2 screenSize = ivec2(gl_LaunchSizeEXT.xy);
 
+    // Initialize RNG state
     uvec2 seed = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.pushData.frame * 16777619));
-    vec2 jitter = (vec2(rand(seed.x), rand(seed.y)) - 0.5) * 1.5 * min(pushConstants.pushData.frame, 1.0);
+    uint rngState = seed.x;
 
+    // Jitter for anti-aliasing
+    vec2 jitter = (vec2(rand(rngState), rand(rngState)) - 0.5) * 1.5 * min(pushConstants.pushData.frame, 1.0);
+
+    // Compute normalized UV coordinates (with jitter)
     vec2 uv = (vec2(pixelCoord) + jitter) / vec2(screenSize);
-    uv.y = 1.0 - uv.y;
+    uv.y = 1.0 - uv.y;  // flip y
 
-    vec2 sensorOffset = uv * 2.0 - 1.0;  // [-1,1]
+    // Map UV to sensor offset in [-1, 1]
+    vec2 sensorOffset = uv * 2.0 - 1.0;
 
+    // Camera parameters from push constants
     vec3 camPos   = pushConstants.camera.position;
-    vec3 camDir   = pushConstants.camera.direction;
-    vec3 camRight = pushConstants.camera.horizontal;
-    vec3 camUp    = pushConstants.camera.vertical;
+    vec3 camDir   = normalize(pushConstants.camera.direction);
+    vec3 camRight = pushConstants.camera.horizontal; // half sensor width vector (meters)
+    vec3 camUp    = pushConstants.camera.vertical;   // half sensor height vector (meters)
 
-    float focalLength = pushConstants.camera.focalLength * 0.001; // [m]
-    float focusDist   = pushConstants.camera.focusDistance;
-    float aperture    = pushConstants.camera.aperture;
+    float focalLength = pushConstants.camera.focalLength * 0.001; // convert mm to meters
+    float focusDist = pushConstants.camera.focusDistance;         // meters
+    float aperture = pushConstants.camera.aperture;               // f-number
 
+    // Compute point on image plane at focalLength in front of camera
     vec3 imagePlaneCenter = camPos + camDir * focalLength;
+
+    // Compute image plane point by offsetting center with half sensor size vectors scaled by sensorOffset
     vec3 imagePlanePoint = imagePlaneCenter
     + camRight * sensorOffset.x
-    + camUp    * sensorOffset.y;
-    
-    // Lens sampling: offset ray origin based on lens sample
-    float apertureRadius = (focalLength / aperture) * 0.5; // [m]
-    vec2 lensSample = (vec2(rand(seed.x), rand(seed.y)) - 0.5) * 2.0 * apertureRadius;
-    vec3 rayOrigin = camPos + camRight * lensSample.x + camUp * lensSample.y;
+    + camUp * sensorOffset.y;
 
-    // Focus point and final ray direction
+    // Compute aperture radius (lens radius) in meters
+    float apertureRadius = (focalLength / aperture) * 0.5;
+
+    // Sample point on lens disk (uniform in [-apertureRadius, apertureRadius])
+    vec2 lensSample = (vec2(rand(rngState), rand(rngState)) - 0.5) * 2.0 * apertureRadius;
+
+    // Offset ray origin on lens plane using normalized directions of horizontal and vertical vectors
+    vec3 lensRight = normalize(camRight);
+    vec3 lensUp = normalize(camUp);
+    vec3 rayOrigin = camPos + lensRight * lensSample.x + lensUp * lensSample.y;
+
+    // Compute focus point along ray direction at focusDist
     vec3 focusPoint = camPos + normalize(imagePlanePoint - camPos) * focusDist;
+
+    // Compute final ray direction from offset origin to focus point
     vec3 rayDirection = normalize(focusPoint - rayOrigin);
 
+    // Initialize payload
     payload.color = vec3(0.0);
     payload.normal = vec3(0.0);
     payload.position = vec3(0.0);
@@ -67,7 +86,8 @@ void main() {
     payload.nextDirection = rayDirection;
     payload.done = false;
 
-    payload.rngState = seed.x;
+    payload.rngState = rngState;
+    // Advance RNG for next use
     rand(payload.rngState);
 
     vec3 color = vec3(0.0);

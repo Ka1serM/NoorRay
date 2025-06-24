@@ -22,10 +22,9 @@ Texture::Texture(Context& context, const std::string& hdrFilepath, vk::Format fo
     createSampler(context);
 }
 
-Texture::Texture(Context& context, const void* rgbaData, int width, int height)
-    : image(context, rgbaData, width, height)
+Texture::Texture(Context& context, const std::string& name, const void* rgbaData, int width, int height)
+    : image(context, rgbaData, width, height), name(name)
 {
-    name = std::rand();
     createSampler(context);
 }
 

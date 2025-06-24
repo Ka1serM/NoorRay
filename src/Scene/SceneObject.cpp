@@ -31,7 +31,7 @@ void SceneObject::setScale(const glm::vec3& scale) {
 
 void SceneObject::renderUi() {
 
-    // Name (read-only)
+    // Name
     ImGuiManager::tableRowLabel("Name");
     ImGui::TextUnformatted(name.c_str());
 
@@ -43,7 +43,7 @@ void SceneObject::renderUi() {
     });
 
     // Rotation
-    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.01f, [&](const glm::vec3 v) {
+    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const glm::vec3 v) {
         setRotationEuler(v);
     });
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(UniversalUmap.Rendering VERSION 0.1.0)
+project(VulkanToyPathtracer VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 23)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
@@ -49,12 +49,10 @@ file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
 file(GLOB_RECURSE SHADER_FILES src/Shaders/*)
 file(GLOB_RECURSE ASSET_FILES assets/*)
 
-add_executable(UniversalUmap.Rendering WIN32 ${SRC_FILES})
-# Or use SHARED to build as DLL
-#set_target_properties(UniversalUmap.Rendering PROPERTIES PREFIX "")
-set_target_properties(UniversalUmap.Rendering PROPERTIES PREFIX "")
+add_executable(VulkanToyPathtracer WIN32 ${SRC_FILES})
+set_target_properties(VulkanToyPathtracer PROPERTIES PREFIX "")
 
-target_link_libraries(UniversalUmap.Rendering PUBLIC
+target_link_libraries(VulkanToyPathtracer PUBLIC
         portable_file_dialogs
         glfw
         glm
@@ -62,7 +60,7 @@ target_link_libraries(UniversalUmap.Rendering PUBLIC
         Vulkan::Vulkan
 )
 
-target_include_directories(UniversalUmap.Rendering PUBLIC
+target_include_directories(VulkanToyPathtracer PUBLIC
         "$ENV{VULKAN_SDK}/Include"
         "${PROJECT_SOURCE_DIR}/external/tinyobjloader"
         "${PROJECT_SOURCE_DIR}/external/tinygltf"
@@ -73,13 +71,13 @@ target_include_directories(UniversalUmap.Rendering PUBLIC
 source_group("src/Shaders" FILES ${SHADER_FILES})
 source_group("Assets"      FILES ${ASSET_FILES})
 set_source_files_properties(${SHADER_FILES} ${ASSET_FILES} PROPERTIES HEADER_FILE_ONLY TRUE)
-target_sources(UniversalUmap.Rendering PRIVATE ${SHADER_FILES} ${ASSET_FILES})
+target_sources(VulkanToyPathtracer PRIVATE ${SHADER_FILES} ${ASSET_FILES})
 
 # ---------------------------------------------------------------------------
 # Static linking flags for Release builds
 # ---------------------------------------------------------------------------
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_link_options(UniversalUmap.Rendering PRIVATE
+    target_link_options(VulkanToyPathtracer PRIVATE
             -static-libgcc
             -static-libstdc++
             -Wl,-Bstatic

@@ -8,7 +8,7 @@
 #endif
 
 struct PushData {
-    int frame, isRayTracing, _pad0, _pad1;
+    int frame, isRayTracing, isMoving, hdriTexture;
 };
 
 struct CameraData {

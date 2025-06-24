@@ -15,6 +15,11 @@
 layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
 layout(set = 0, binding = 4) uniform sampler2D textureSamplers[];
 
+layout(push_constant) uniform PushConstants {
+    PushData pushData;
+    CameraData camera;
+} pushConstants;
+
 void main()
 {
     vec3 viewDir = normalize(gl_WorldRayDirectionEXT);
@@ -24,6 +29,6 @@ void main()
     uv.x = atan(viewDir.z, viewDir.x) / (2.0 * PI) + 0.5;
     uv.y = 1 - acos(clamp(viewDir.y, -1.0, 1.0)) / PI; //flip y
 
-    payload.color = texture(textureSamplers[0], uv).rgb * 5;
+    payload.color = texture(textureSamplers[pushConstants.pushData.hdriTexture], uv).rgb * 5;
     payload.done = true;
 }

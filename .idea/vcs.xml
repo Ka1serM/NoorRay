@@ -3,15 +3,6 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/.." vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl/external/benchmark" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl/external/catch2" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl/external/rtm" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl/external/rtm/external/benchmark" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl/external/rtm/external/catch2" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl/external/sjson-cpp" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/../CUE4Parse/CUE4Parse-Natives/ACL/external/acl/external/sjson-cpp/external/catch2" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/ImGuizmo" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/glfw" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/glm" vcs="Git" />

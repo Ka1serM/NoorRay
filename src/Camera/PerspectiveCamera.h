@@ -18,12 +18,13 @@ private:
 
     static constexpr glm::vec3 UP = glm::vec3(0, 1, 0);
 public:
-    PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance);
+    PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
 
     // Accessors for camera params
     float getFocalLength() const { return cameraData.focalLength; }
     float getAperture() const { return cameraData.aperture; }
     float getFocusDistance() const { return cameraData.focusDistance; }
+    float getBokehBias() const { return cameraData.bokehBias; }
     float getSensorWidth() const { return sensorWidth; }
     float getSensorHeight() const { return sensorHeight; }
     CameraData getCameraData() const { return cameraData; }
@@ -31,6 +32,7 @@ public:
     void setFocalLength(float val);
     void setAperture(float val);
     void setFocusDistance(float val);
+    void setBokehBias(float val);
     void setSensorSize(float width, float height);
 
     void update(InputTracker& inputTracker, float deltaTime);
@@ -38,7 +40,6 @@ public:
 
 private:
     void updateHorizontalVertical();
-    glm::vec3 calculateDirection() const;
     void updateCameraData();
 
     void setPosition(const glm::vec3& pos) override;

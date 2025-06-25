@@ -76,12 +76,7 @@ void Utils::loadObj(Renderer& renderer, const std::string& filepath, std::vector
 
         materials.push_back(material);
     }
-
-    // Clear existing geometry data
-    vertices.clear();
-    indices.clear();
-    faces.clear();
-
+    
     // Process shapes and faces
     for (const auto& shape : shapes) {
         size_t indexOffset = 0;
@@ -94,10 +89,7 @@ void Utils::loadObj(Renderer& renderer, const std::string& filepath, std::vector
             Face face{};
             int matIndex = shape.mesh.material_ids[f];
             face.materialIndex = (matIndex >= 0) ? matIndex : 0;
-
-            glm::vec3 faceCenter(0.0f);
-            glm::vec3 verts[3];
-
+            
             // Process vertices of the face
             for (unsigned int v = 0; v < fv; ++v) {
                 const tinyobj::index_t& idx = shape.mesh.indices[indexOffset + v];
@@ -108,53 +100,27 @@ void Utils::loadObj(Renderer& renderer, const std::string& filepath, std::vector
                     -attrib.vertices[3 * idx.vertex_index + 1],  // Flip Y-axis
                     attrib.vertices[3 * idx.vertex_index + 2]
                 );
-
-                verts[v] = vertex.position;
-                faceCenter += vertex.position;
-
+                
                 if (!attrib.normals.empty() && idx.normal_index >= 0) {
                     vertex.normal = glm::vec3(
                         attrib.normals[3 * idx.normal_index + 0],
                         -attrib.normals[3 * idx.normal_index + 1],
                         attrib.normals[3 * idx.normal_index + 2]
                     );
-                } else {
+                } else
                     vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-                }
 
                 if (!attrib.texcoords.empty() && idx.texcoord_index >= 0) {
                     vertex.uv = glm::vec2(
                         attrib.texcoords[2 * idx.texcoord_index + 0],
                         1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]
                     );
-                } else {
+                } else
                     vertex.uv = glm::vec2(0.0f);
-                }
 
                 vertices.push_back(vertex);
                 indices.push_back(static_cast<uint32_t>(indices.size()));
             }
-
-            faceCenter /= static_cast<float>(fv);
-
-            // Compute face normal (optional, could use vertex normals)
-            glm::vec3 edge1 = verts[1] - verts[0];
-            glm::vec3 edge2 = verts[2] - verts[0];
-            glm::vec3 faceNormal = glm::normalize(glm::cross(edge1, edge2));
-
-            // Spawn one point light at face center if emissive
-            if (face.materialIndex < static_cast<int>(materials.size())) {
-                const Material& mat = materials[face.materialIndex];
-                if (glm::length(mat.emission) > 1e-6f) {
-                    PointLight light{};
-                    light.position = faceCenter;
-                    light.radius = 1;
-                    light.color = mat.emission;
-                    light.intensity = 1;
-                    renderer.add(light);
-                }
-            }
-
             faces.push_back(face);
             indexOffset += fv;
         }

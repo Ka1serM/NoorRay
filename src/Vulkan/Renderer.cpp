@@ -34,58 +34,34 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
 
     // Embed all shaders as constexpr unsigned char arrays
     static constexpr unsigned char RayGeneration[] = {
-#embed "../shaders/RayGeneration.spv"
-    };
-    static constexpr unsigned char RayTracingMiss[] = {
-#embed "../shaders/RayTracing/Miss.spv"
+        #embed "../shaders/PathTracing/RayGeneration.spv"
     };
     static constexpr unsigned char PathTracingMiss[] = {
-#embed "../shaders/PathTracing/Miss.spv"
-    };
-    static constexpr unsigned char ShadowRayMiss[] = {
-#embed "../shaders/ShadowRay/Miss.spv"
-    };
-    static constexpr unsigned char RayTracingClosestHit[] = {
-#embed "../shaders/RayTracing/ClosestHit.spv"
+        #embed "../shaders/PathTracing/Miss.spv"
     };
     static constexpr unsigned char PathTracingClosestHit[] = {
-#embed "../shaders/PathTracing/ClosestHit.spv"
-    };
-    static constexpr unsigned char ShadowRayAnyHit[] = {
-#embed "../shaders/ShadowRay/AnyHit.spv"
+        #embed "../shaders/PathTracing/ClosestHit.spv"
     };
 
     // Shader bytecode array
     constexpr const unsigned char* shaders[] = {
         RayGeneration,
-        RayTracingMiss,
         PathTracingMiss,
-        ShadowRayMiss,
-        RayTracingClosestHit,
         PathTracingClosestHit,
-        ShadowRayAnyHit
     };
 
     // Shader sizes
     constexpr size_t shaderSizes[] = {
         sizeof(RayGeneration),
-        sizeof(RayTracingMiss),
         sizeof(PathTracingMiss),
-        sizeof(ShadowRayMiss),
-        sizeof(RayTracingClosestHit),
         sizeof(PathTracingClosestHit),
-        sizeof(ShadowRayAnyHit)
     };
 
     // Shader stages
     constexpr vk::ShaderStageFlagBits shaderStages[] = {
         vk::ShaderStageFlagBits::eRaygenKHR,
         vk::ShaderStageFlagBits::eMissKHR,
-        vk::ShaderStageFlagBits::eMissKHR,
-        vk::ShaderStageFlagBits::eMissKHR,
         vk::ShaderStageFlagBits::eClosestHitKHR,
-        vk::ShaderStageFlagBits::eClosestHitKHR,
-        vk::ShaderStageFlagBits::eAnyHitKHR
     };
 
     // Create shader modules, stages, and shader groups
@@ -103,7 +79,7 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         }));
 
         shaderStagesVector.push_back({{}, shaderStages[i], *shaderModules.back(), "main"});
-        
+
         if (shaderStages[i] == vk::ShaderStageFlagBits::eRaygenKHR) {
             shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             raygenCount++;
@@ -113,24 +89,20 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
         } else if (shaderStages[i] == vk::ShaderStageFlagBits::eClosestHitKHR) {
             shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
             hitCount++;
-        } else if (shaderStages[i] == vk::ShaderStageFlagBits::eAnyHitKHR) {
-            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR);
-            hitCount++; // treat as hit group for counting SBT size
         }
     }
 
     // Descriptor Set Layout Bindings
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
-            {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-            {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-            {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-            {3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR},
-            {4, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR }
+        {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
+        {2, vk::DescriptorType::eStorageBuffer, 1,  vk::ShaderStageFlagBits::eClosestHitKHR},
+        {3, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR}
     };
 
     // Descriptor Binding Flags for Bindless
     std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
-    bindingFlags[4] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
+    bindingFlags[3] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
 
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
     bindingFlagsInfo.setBindingFlags(bindingFlags);
@@ -154,22 +126,22 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     descriptorSet = std::move(context.device->allocateDescriptorSetsUnique(allocInfo).front());
 
     // Create Pipeline Layout
-    vk::PushConstantRange pushRange;
+    vk::PushConstantRange pushRange{};
     pushRange.setOffset(0);
     pushRange.setSize(sizeof(PushConstants));
     pushRange.setStageFlags(vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR);
 
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.setSetLayouts(descSetLayout.get());
     pipelineLayoutInfo.setPushConstantRanges(pushRange);
 
     pipelineLayout = context.device->createPipelineLayoutUnique(pipelineLayoutInfo);
 
     // Create Ray Tracing Pipeline
-    vk::RayTracingPipelineCreateInfoKHR rtPipelineInfo;
+    vk::RayTracingPipelineCreateInfoKHR rtPipelineInfo{};
     rtPipelineInfo.setStages(shaderStagesVector);
     rtPipelineInfo.setGroups(shaderGroups);
-    rtPipelineInfo.setMaxPipelineRayRecursionDepth(10);
+    rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
     rtPipelineInfo.setLayout(pipelineLayout.get());
 
     auto pipelineResult = context.device->createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
@@ -279,7 +251,7 @@ void Renderer::updateTextureDescriptors(const std::vector<Texture>& textures) {
 
     vk::WriteDescriptorSet write{};
     write.setDstSet(descriptorSet.get());
-    write.setDstBinding(4);
+    write.setDstBinding(3);
     write.setDescriptorType(vk::DescriptorType::eCombinedImageSampler);
     write.setDescriptorCount(static_cast<uint32_t>(textureImageInfos.size()));
     write.setImageInfo(textureImageInfos);
@@ -287,17 +259,17 @@ void Renderer::updateTextureDescriptors(const std::vector<Texture>& textures) {
     context.device->updateDescriptorSets(write, {});
 }
 
-void Renderer::render(uint32_t imageIndex, const PushConstants& pushConstants)
+void Renderer::render(const uint32_t imageIndex, const PushConstants& pushConstants)
 {
     const vk::CommandBuffer commandBuffer = getCommandBuffer(imageIndex);
     commandBuffer.begin(vk::CommandBufferBeginInfo());
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, pipeline.get());
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, pipelineLayout.get(), 0, descriptorSet.get(), {});
-    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR, 0, sizeof(PushConstants), &pushConstants);
+    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR, 0, sizeof(PushConstants), &pushConstants);
     commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, width, height, 1);
 }
 
-const vk::CommandBuffer& Renderer::getCommandBuffer(uint32_t imageIndex) const
+const vk::CommandBuffer& Renderer::getCommandBuffer(const uint32_t imageIndex) const
 {
     return commandBuffers[imageIndex].get();
 }
@@ -316,12 +288,6 @@ void Renderer::add(Texture&& element) {
     textures.push_back(std::move(element)); // move only
     updateTextureDescriptors(textures);
     textureNames.push_back(textures.back().getName());
-}
-
-void Renderer::add(const PointLight& element) {
-    pointLights.push_back(element);
-    updateStorageBuffer(3, pointLights, pointLightsBuffer);
-    markDirty();
 }
 
 std::shared_ptr<MeshAsset> Renderer::get(const std::string& name) const

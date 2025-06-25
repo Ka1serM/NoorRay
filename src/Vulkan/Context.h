@@ -26,7 +26,7 @@ public:
                                                                       void* pUserData);
 
     GLFWwindow* window;
-    vk::DynamicLoader dl;
+    vk::detail::DynamicLoader dl;
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;
     vk::UniqueSurfaceKHR surface;

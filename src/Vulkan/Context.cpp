@@ -17,9 +17,7 @@ Context::Context(int width, int height) {
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-
-    std::vector layers{"VK_LAYER_KHRONOS_validation"};
-
+    
     auto vkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
@@ -29,6 +27,7 @@ Context::Context(int width, int height) {
 
     vk::InstanceCreateInfo instanceInfo;
     instanceInfo.setPApplicationInfo(&appInfo);
+    std::vector layers{"VK_LAYER_KHRONOS_validation"};
     instanceInfo.setPEnabledLayerNames(layers);
     instanceInfo.setPEnabledExtensionNames(extensions);
     instance = createInstanceUnique(instanceInfo);

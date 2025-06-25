@@ -1,0 +1,50 @@
+name: VulkanToyPathtracer Release Builder
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Vulkan SDK (LunarG)
+        id: vulkan
+        uses: TWoolhouse/setup-vulkan-sdk@v1.1.0
+        with:
+          version: latest
+          arch: x64
+
+      - name: Download niXman MinGW GCC 15.1 Posix SEH UCRT
+        shell: pwsh
+        run: |
+          $url = "https://github.com/niXman/mingw-builds-binaries/releases/download/15.1.0-rt_v12-rev0/x86_64-15.1.0-release-posix-seh-ucrt-rt_v12-rev0.7z"
+          Invoke-WebRequest $url -OutFile mingw.7z
+          Expand-Archive -Path mingw.7z -DestinationPath C:/mingw
+
+      - name: Compile shaders
+        shell: cmd
+        run: |
+          set "VULKAN_SDK=${{ steps.vulkan.outputs.path }}"
+          cd src\shaders
+          call recompile.bat
+
+      - name: Configure and Build
+        run: |
+          cmake -S . -B build -G "MinGW Makefiles" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER=C:/mingw/mingw64/bin/gcc.exe ^
+            -DCMAKE_CXX_COMPILER=C:/mingw/mingw64/bin/g++.exe ^
+            -DCMAKE_CXX_STANDARD=23
+          cmake --build build --config Release
+
+      - name: Upload Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: VulkanToyPathtracer.exe
+          path: build/VulkanToyPathtracer.exe

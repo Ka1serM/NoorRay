@@ -12,8 +12,8 @@
 #include "../SharedStructs.h"
 #include "../Common.glsl"
 
-layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
-layout(set = 0, binding = 4) uniform sampler2D textureSamplers[];
+layout(location = 0) rayPayloadInEXT Payload payload;
+layout(set = 0, binding = 3) uniform sampler2D textureSamplers[];
 
 layout(push_constant) uniform PushConstants {
     PushData pushData;

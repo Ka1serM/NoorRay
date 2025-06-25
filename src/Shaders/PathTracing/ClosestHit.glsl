@@ -18,11 +18,10 @@ layout(buffer_reference, scalar) buffer FaceBuffer { Face data[]; };
 layout(buffer_reference, scalar) buffer MaterialBuffer { Material data[]; };
 
 layout(set = 0, binding = 2) buffer MeshAddressesBuffer { MeshAddresses instances[]; };
-layout(set = 0, binding = 3) buffer PointLights { PointLight pointLights[]; };
-layout(set = 0, binding = 4) uniform sampler2D textureSamplers[];
+layout(set = 0, binding = 3) uniform sampler2D textureSamplers[];
 
 // Ray payload and attributes
-layout(location = 0) rayPayloadInEXT PrimaryRayPayload payload;
+layout(location = 0) rayPayloadInEXT Payload payload;
 hitAttributeEXT vec3 attribs;
 
 // Push constants
@@ -32,11 +31,10 @@ layout(push_constant) uniform PushConstants {
 } pushConstants;
 
 void buildCoordinateSystem(vec3 N, out vec3 T, out vec3 B) {
-    if (abs(N.z) < 0.999) {
-        T = normalize(cross(N, vec3(0.0, 0.0, 1.0)));
-    } else {
-        T = normalize(cross(N, vec3(0.0, 1.0, 0.0)));
-    }
+    if (abs(N.z) < 0.999)
+    T = normalize(cross(N, vec3(0.0, 0.0, 1.0)));
+    else
+    T = normalize(cross(N, vec3(0.0, 1.0, 0.0)));
     B = cross(T, N);
 }
 
@@ -50,7 +48,7 @@ vec3 sampleDiffuse(vec3 N, inout uint rngState) {
 
     float x = r * cos(theta);
     float y = r * sin(theta);
-    float z = sqrt(1.0 - u1);
+    float z = sqrt(max(0.0, 1.0 - u1)); // clamp here to avoid sqrt of negative
 
     vec3 T, B;
     buildCoordinateSystem(N, T, B);
@@ -79,8 +77,10 @@ vec3 sampleGGX(float roughness, vec3 N, inout uint rngState) {
     float a = roughness * roughness;
 
     float phi = 2.0 * PI * u1;
-    float cosTheta = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
-    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+    float denom = 1.0 + (a * a - 1.0) * u2;
+    denom = max(denom, EPSILON); // avoid divide by zero
+    float cosTheta = sqrt(max(0.0, (1.0 - u2) / denom));
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
 
     vec3 Ht = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
 
@@ -100,6 +100,7 @@ float distributionGGX(vec3 N, vec3 H, float roughness)
 
     float nom   = a2;
     float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = max(denom, EPSILON);  // avoid divide by zero
     denom = PI * denom * denom;
 
     return nom / denom;
@@ -121,24 +122,27 @@ vec3 sampleSpecular(vec3 viewDir, vec3 N, float roughness, inout uint rngState) 
 // --- PDF for specular direction ---
 float pdfSpecular(vec3 viewDir, vec3 N, float roughness, vec3 L) {
     vec3 H = normalize(viewDir + L);
-    float NoH = max(dot(N, H), 1e-4);
-    float VoH = max(dot(viewDir, H), 1e-4);
+    float NoH = max(dot(N, H), EPSILON);
+    float VoH = max(dot(viewDir, H), EPSILON);
 
     float D = distributionGGX(N, H, roughness);
-    return max((D * NoH) / (4.0 * VoH), 1e-6); // Clamp to avoid near-zero
+    return max((D * NoH) / (4.0 * VoH), EPSILON); // Clamp to avoid near-zero or divide by zero
 }
 
 // --- Fresnel Schlick approximation ---
 vec3 fresnelSchlick(float cosTheta, vec3 F0)
 {
-    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+    // Clamp cosTheta to [0,1] to avoid negative or >1 values due to precision errors
+    cosTheta = clamp(cosTheta, 0.0, 1.0);
+    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
 // --- Schlick-GGX geometry function ---
 float geometrySchlickGGX(float NdotV, float roughness)
 {
+    NdotV = max(NdotV, EPSILON); // avoid division by zero
     float k = (roughness * roughness) / 2.0;
-    return NdotV / (NdotV * (1.0 - k) + k + 1e-6);
+    return NdotV / (NdotV * (1.0 - k) + k);
 }
 
 // --- Smith geometry term (combined for view and light) ---
@@ -170,7 +174,7 @@ vec3 evaluateSpecularBRDF(vec3 viewDir, vec3 N, vec3 albedo, float metallic, flo
     vec3 F = fresnelSchlick(VoH, F0);
 
     vec3 numerator = F * D * G;
-    float denominator = max(4.0 * NoV * NoL, 1e-6);
+    float denominator = max(4.0 * NoV * NoL, EPSILON);
 
     return numerator / denominator;
 }
@@ -256,6 +260,8 @@ void main() {
 
         payload.color *= albedo;
         payload.throughput *= material.transmission;
+        
+        payload.bounceType = BOUNCE_TYPE_TRANSMISSION;
         return;
     }
 
@@ -317,4 +323,6 @@ void main() {
 
     payload.throughput *= totalBRDF * NoL * misWeight / pdfCombined;
     payload.nextDirection = normalize(sampledDir);
+    
+    payload.bounceType = choseDiffuse ? BOUNCE_TYPE_DIFFUSE : BOUNCE_TYPE_SPECULAR;
 }

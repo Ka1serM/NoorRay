@@ -8,14 +8,14 @@
 #endif
 
 struct PushData {
-    int frame, isRayTracing, isMoving, hdriTexture;
+    int frame, isMoving, hdriTexture, _pad0;
 };
 
 struct CameraData {
     vec3 position; float aperture;
     vec3 direction; float focusDistance;
     vec3 horizontal; float focalLength;
-    vec3 vertical; int _pad0;
+    vec3 vertical; float bokehBias;
 };
 
 #ifdef __cplusplus //C++ only Struct
@@ -24,11 +24,6 @@ struct PushConstants {
     CameraData camera;
 };
 #endif
-
-struct PointLight {
-    vec3 position; float radius;
-    vec3 color; float intensity;
-};
 
 struct Vertex {
     vec3 position; int _pad0;
@@ -67,7 +62,7 @@ struct MeshAddresses {
     uint64_t materialAddress;
 };
 
-struct PrimaryRayPayload
+struct Payload
 {
     vec3 color;
     vec3 throughput;
@@ -76,10 +71,6 @@ struct PrimaryRayPayload
     uint hitIndex;
     vec3 nextDirection;
     uint rngState;
+    uint bounceType;
     bool done;
-};
-
-struct ShadowRayPayload
-{
-    bool hit;
 };

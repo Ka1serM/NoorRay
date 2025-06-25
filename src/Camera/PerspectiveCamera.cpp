@@ -10,6 +10,7 @@
 
 static constexpr glm::vec3 FRONT = glm::vec3(0, 0, 1);
 static constexpr glm::vec3 WORLD_UP = glm::vec3(0.0f, -1.0f, 0.0f);
+static constexpr glm::vec3 VULKAN_Z_PLUS = glm::vec3(0.0f, 0.0f, 1.0f);
 
 static std::shared_ptr<MeshAsset> cameraMesh = nullptr;
 
@@ -21,38 +22,30 @@ static std::shared_ptr<MeshAsset> getOrCreateCameraMesh(Renderer& renderer) {
     return cameraMesh;
 }
 
-PerspectiveCamera::PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance
-) : MeshInstance(renderer, name, getOrCreateCameraMesh(renderer), transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight) 
+PerspectiveCamera::PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) : MeshInstance(renderer, name, getOrCreateCameraMesh(renderer), transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
 {
     cameraData.focalLength = focalLength;
     cameraData.aperture = aperture;
     cameraData.focusDistance = focusDistance;
+    cameraData.bokehBias = bokehBias;
 
     updateCameraData();
     updateHorizontalVertical();
 }
 
-glm::vec3 PerspectiveCamera::calculateDirection() const {
-    return glm::normalize(getRotation() * glm::vec3(0.0f, 0.0f, 1.0f)); // Vulkan +Z
-}
-
 void PerspectiveCamera::updateCameraData() {
     cameraData.position = getPosition();
-    cameraData.direction = calculateDirection();
+    cameraData.direction = glm::normalize(getRotation() * VULKAN_Z_PLUS); // Vulkan +Z;
 }
 
 void PerspectiveCamera::updateHorizontalVertical() {
-    const float sensorHeightMeters = sensorHeight * 0.001f;
-    const float sensorWidthMeters = sensorHeightMeters * aspectRatio;
-
     const glm::vec3 direction = cameraData.direction;
     const glm::vec3 right = glm::normalize(glm::cross(direction, WORLD_UP));
     const glm::vec3 up = glm::normalize(glm::cross(right, direction));
 
-    cameraData.horizontal = right * sensorWidthMeters * 0.5f; //half width in meters
-    cameraData.vertical = up * sensorHeightMeters * 0.5f; //half height in meters
+    cameraData.horizontal = right *  sensorWidth * 0.001f; // Convert mm to meters
+    cameraData.vertical = up * sensorWidth / aspectRatio * 0.001f; // Convert mm to meters
 }
-
 
 void PerspectiveCamera::setFocalLength(const float val) {
     cameraData.focalLength = val;
@@ -67,6 +60,11 @@ void PerspectiveCamera::setAperture(const float val) {
 
 void PerspectiveCamera::setFocusDistance(const float val) {
     cameraData.focusDistance = val;
+    renderer.markDirty();
+}
+
+void PerspectiveCamera::setBokehBias(const float val) {
+    cameraData.bokehBias = val;
     renderer.markDirty();
 }
 
@@ -141,11 +139,7 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
 
     updateCameraData();
 
-    const bool changed =
-        !glm::all(glm::epsilonEqual(oldDirection, cameraData.direction, 0.001f)) ||
-        !glm::all(glm::epsilonEqual(oldPosition, getPosition(), 0.001f)) ||
-        wasDirty;
-
+    const bool changed = wasDirty || !glm::all(glm::epsilonEqual(oldDirection, cameraData.direction, 0.001f)) || !glm::all(glm::epsilonEqual(oldPosition, getPosition(), 0.001f));
     if (changed) {
         updateHorizontalVertical();
         renderer.markDirty();
@@ -162,12 +156,16 @@ void PerspectiveCamera::renderUi() {
         setFocalLength(v);
     });
 
-    ImGuiManager::dragFloatRow("Aperture", getAperture(), 0.01f, 0.1f, 16.0f, [&](const float v) {
+    ImGuiManager::dragFloatRow("Aperture", getAperture(), 0.01f, 0.0f, 16.0f, [&](const float v) {
         setAperture(v);
     });
 
     ImGuiManager::dragFloatRow("Focus Distance", getFocusDistance(), 0.01f, 0.01f, 1000.0f, [&](const float v) {
         setFocusDistance(v);
+    });
+
+    ImGuiManager::dragFloatRow("Bokeh Bias", getBokehBias(), 0.01f, 0.0f, 10.0f, [&](const float v) {
+        setBokehBias(v);
     });
 
     ImGuiManager::dragFloatRow("Sensor Width", getSensorWidth(), 0.1f, 1.0f, 100.0f, [&](const float v) {

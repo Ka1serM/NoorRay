@@ -27,9 +27,7 @@ public:
 
     vk::UniqueSwapchainKHR swapchain;
     std::vector<vk::Image> swapchainImages;
-
-    std::vector<PointLight> pointLights;
-    Buffer pointLightsBuffer;
+    
     std::vector<Texture> textures;
     std::vector<std::string> textureNames;
     Buffer texturesBuffer;
@@ -63,7 +61,6 @@ public:
     void rebuildMeshBuffer();
 
     void add(const std::shared_ptr<MeshAsset>& meshInstance);
-    std::string getTextureName(int id) const;
     bool remove(const SceneObject* obj);
         
     Renderer(Context& context, uint32_t width, uint32_t height);
@@ -75,7 +72,6 @@ public:
     const std::vector<vk::Image>& getSwapchainImages() const;
 
     void add(Texture&& element);
-    void add(const PointLight& element);
 
     std::shared_ptr<MeshAsset> get(const std::string& name) const;
     

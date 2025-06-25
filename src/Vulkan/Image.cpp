@@ -2,26 +2,45 @@
 #include <memory>
 #include "Image.h"
 
-Image::Image(Context& context, const void* floatData, int texWidth, int texHeight, vk::Format format)
+Image::Image(Context& context, const void* data, int width, int height, vk::Format format)
 {
     currentLayout = vk::ImageLayout::eUndefined;
 
-    // Determine pixel size based on format
     size_t pixelSize = 0;
+
     switch (format) {
-        case vk::Format::eR32G32B32A32Sfloat:
-            pixelSize = 4 * sizeof(float); // 4 floats per pixel
-            break;
+        case vk::Format::eR8Unorm:
+        case vk::Format::eR8Srgb:
+            pixelSize = 1; break;
+        case vk::Format::eR8G8Unorm:
+        case vk::Format::eR8G8Srgb:
+            pixelSize = 2; break;
+        case vk::Format::eR8G8B8Unorm:
+        case vk::Format::eR8G8B8Srgb:
+            pixelSize = 3; break;
+        case vk::Format::eB8G8R8A8Unorm:
+        case vk::Format::eR8G8B8A8Unorm:
+        case vk::Format::eR8G8B8A8Srgb:
+            pixelSize = 4; break;
+        case vk::Format::eR16Sfloat:
+            pixelSize = 2; break;
+        case vk::Format::eR16G16Sfloat:
+            pixelSize = 4; break;
         case vk::Format::eR16G16B16A16Sfloat:
-            pixelSize = 4 * 2; // 4 half-floats (2 bytes each)
-            break;
+            pixelSize = 8; break;
+        case vk::Format::eR32Sfloat:
+            pixelSize = 4; break;
+        case vk::Format::eR32G32Sfloat:
+            pixelSize = 8; break;
+        case vk::Format::eR32G32B32A32Sfloat:
+            pixelSize = 16; break;
         default:
-            throw std::runtime_error("Unsupported float format in Image constructor");
+            throw std::runtime_error("Unsupported vk::Format in Image constructor");
     }
 
-    vk::DeviceSize imageSize = texWidth * texHeight * pixelSize;
+    vk::DeviceSize imageSize = width * height * pixelSize;
 
-    // Create staging buffer
+    // Staging buffer
     vk::BufferCreateInfo bufferInfo{};
     bufferInfo.setSize(imageSize);
     bufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
@@ -35,17 +54,17 @@ Image::Image(Context& context, const void* floatData, int texWidth, int texHeigh
     allocInfo.setAllocationSize(memRequirements.size);
     allocInfo.setMemoryTypeIndex(memTypeIndex);
     vk::UniqueDeviceMemory stagingMemory = context.device->allocateMemoryUnique(allocInfo);
-
     context.device->bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
 
-    void* mappedData = context.device->mapMemory(*stagingMemory, 0, imageSize);
-    memcpy(mappedData, floatData, imageSize);
+    // Upload data
+    void* mapped = context.device->mapMemory(*stagingMemory, 0, imageSize);
+    memcpy(mapped, data, imageSize);
     context.device->unmapMemory(*stagingMemory);
 
-    // Create GPU image
-    vk::ImageCreateInfo imageInfo;
+    // Create image
+    vk::ImageCreateInfo imageInfo{};
     imageInfo.setImageType(vk::ImageType::e2D);
-    imageInfo.setExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
+    imageInfo.setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 });
     imageInfo.setMipLevels(1);
     imageInfo.setArrayLayers(1);
     imageInfo.setFormat(format);
@@ -54,40 +73,38 @@ Image::Image(Context& context, const void* floatData, int texWidth, int texHeigh
 
     image = context.device->createImageUnique(imageInfo);
 
-    vk::MemoryRequirements requirements = context.device->getImageMemoryRequirements(*image);
-    uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo memoryInfo{};
-    memoryInfo.setAllocationSize(requirements.size);
-    memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
-    memory = context.device->allocateMemoryUnique(memoryInfo);
-
+    vk::MemoryRequirements imgReqs = context.device->getImageMemoryRequirements(*image);
+    uint32_t imgMemType = context.findMemoryType(imgReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    vk::MemoryAllocateInfo imgAlloc{};
+    imgAlloc.setAllocationSize(imgReqs.size);
+    imgAlloc.setMemoryTypeIndex(imgMemType);
+    memory = context.device->allocateMemoryUnique(imgAlloc);
     context.device->bindImageMemory(*image, *memory, 0);
 
-    // Create image view
-    vk::ImageViewCreateInfo imageViewInfo{};
-    imageViewInfo.setImage(*image);
-    imageViewInfo.setViewType(vk::ImageViewType::e2D);
-    imageViewInfo.setFormat(format);
-    imageViewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
-    view = context.device->createImageViewUnique(imageViewInfo);
+    // Image view
+    vk::ImageViewCreateInfo viewInfo{};
+    viewInfo.setImage(*image);
+    viewInfo.setViewType(vk::ImageViewType::e2D);
+    viewInfo.setFormat(format);
+    viewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
+    view = context.device->createImageViewUnique(viewInfo);
 
-    // Copy buffer to image and transition layout
-    context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
-        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    // Copy & transition
+    context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
+        setImageLayout(cmd, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
-        vk::BufferImageCopy copyRegion{};
-        copyRegion.setBufferOffset(0);
-        copyRegion.setBufferRowLength(0);
-        copyRegion.setBufferImageHeight(0);
-        copyRegion.setImageSubresource({ vk::ImageAspectFlagBits::eColor, 0, 0, 1 });
-        copyRegion.setImageExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
+        vk::BufferImageCopy region{};
+        region.setBufferOffset(0);
+        region.setBufferRowLength(0);
+        region.setBufferImageHeight(0);
+        region.setImageSubresource({ vk::ImageAspectFlagBits::eColor, 0, 0, 1 });
+        region.setImageExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 });
 
-        commandBuffer.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, 1, &copyRegion);
+        cmd.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
 
-        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+        setImageLayout(cmd, image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
     });
 
-    // Final descriptor
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 }

@@ -5,43 +5,43 @@
 
 #include "Utils.h"
 
-Texture::Texture(Context& context, const std::string& hdrFilepath, vk::Format format)
-: image([&]() -> Image {
-    int texWidth, texHeight, texChannels;
-    float* rawPixels = stbi_loadf(hdrFilepath.c_str(), &texWidth, &texHeight, &texChannels, 4); // force 4 channels (RGBA)
-    if (!rawPixels)
-        throw std::runtime_error(std::string("Failed to load HDR texture from file: ") + hdrFilepath);
-
-    Image img(context, rawPixels, texWidth, texHeight, format);
-
-    stbi_image_free(rawPixels);
-    return img;
-}())
-{
-    name = Utils::nameFromPath(hdrFilepath);
-    createSampler(context);
-}
-
-Texture::Texture(Context& context, const std::string& name, const void* rgbaData, int width, int height)
-    : image(context, rgbaData, width, height), name(name)
-{
-    createSampler(context);
-}
-
 Texture::Texture(Context& context, const std::string& filepath)
-: image([&]() -> Image {
-    int texWidth, texHeight, texChannels;
-    stbi_uc* rawPixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    if (!rawPixels)
-        throw std::runtime_error(std::string("Failed to load texture from file: ") + filepath);
+    : image([&]() -> Image {
+        int texWidth, texHeight, texChannels;
 
-    Image img(context, rawPixels, texWidth, texHeight);
+        bool isHdr = stbi_is_hdr(filepath.c_str());
+        void* pixelData = nullptr;
+        vk::Format format;
 
-    stbi_image_free(rawPixels);
-    return img;
-}())
+        if (isHdr) {
+            float* rawPixels = stbi_loadf(filepath.c_str(), &texWidth, &texHeight, &texChannels, 4); // force 4 channels
+            if (!rawPixels)
+                throw std::runtime_error("Failed to load HDR texture: " + filepath);
+            pixelData = rawPixels;
+            format = vk::Format::eR32G32B32A32Sfloat;
+        } else {
+            stbi_uc* rawPixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, 4); // force 4 channels
+            if (!rawPixels)
+                throw std::runtime_error("Failed to load 8-bit texture: " + filepath);
+            pixelData = rawPixels;
+            format = vk::Format::eR8G8B8A8Unorm;
+        }
+
+        Image img(context, pixelData, texWidth, texHeight, format);
+
+        // Free image data
+        stbi_image_free(pixelData);
+
+        return img;
+    }())
 {
     name = Utils::nameFromPath(filepath);
+    createSampler(context);
+}
+
+Texture::Texture(Context& context, const std::string& name, const void* data, int width, int height, vk::Format format)
+    : image(context, data, width, height, format), name(name)
+{
     createSampler(context);
 }
 

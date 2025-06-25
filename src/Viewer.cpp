@@ -10,6 +10,7 @@
 #include "UI/ViewportPanel.h"
 #include <GLFW/glfw3native.h>
 #include "portable-file-dialogs.h"
+#include "stb_image.h"
 #include "Utils.h"
 #include "UI/EnvironmentPanel.h"
 
@@ -86,7 +87,6 @@ void Viewer::start() {
         
         PushConstants pushConstantData{};
         pushConstantData.push.frame = frame;
-        pushConstantData.push.isRayTracing = isRayTracing;
         pushConstantData.camera = renderer.getActiveCamera()->getCameraData();
 
         if (auto* environment = dynamic_cast<EnvironmentPanel*>(this->imGuiManager.getComponent("Environment")))
@@ -133,23 +133,29 @@ void Viewer::start() {
 }
 
 void Viewer::setupScene() {
-    // Default PointLight for empty buffer
-    PointLight pointLight{};
-    renderer.add(pointLight);
-        
     // Add HDRI texture
-    renderer.add(Texture(context, R"(C:\Users\Marcel\Documents\GitRepositories\UniversalUmap\UniversalUmap.Rendering\assets\Ultimate_Skies_4k_0036.HDR)", vk::Format::eR32G32B32A32Sfloat));
+    static constexpr unsigned char data[] = {
+        #embed "../assets/Ultimate_Skies_4k_0036.hdr"
+    };
+    int imgWidth, imgHeight, channels;
+    float* pixels = stbi_loadf_from_memory(data, static_cast<int>(sizeof(data)), &imgWidth, &imgHeight, &channels, 4);
+    if (!pixels)
+        throw std::runtime_error("Failed to load HDR texture from memory");
 
+    renderer.add(Texture(context, "HDRI Sky", pixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
+
+    stbi_image_free(pixels);
+    
     // White 1x1 texture
-    renderer.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1));
+    renderer.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
 
     // Black 1x1 texture
-    renderer.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1));
+    renderer.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
 
     // Gray 1x1 texture
-    renderer.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1));
+    renderer.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     
-    auto cam = std::make_unique<PerspectiveCamera>(renderer, "Main Camera", Transform{glm::vec3(0, -1.0f, 3.5f), glm::vec3(-180, 0, 180), glm::vec3(0)}, width / static_cast<float>(height), 36.0f, 24.0f, 30.0f, 16.0f, 3.0f);
+    auto cam = std::make_unique<PerspectiveCamera>(renderer, "Main Camera", Transform{glm::vec3(0, -1.0f, 3.5f), glm::vec3(-180, 0, 180), glm::vec3(0)}, width / static_cast<float>(height), 36.0f, 24.0f, 30.0f, 2.4f, 3.0f, 3.0f);
     renderer.add(std::move(cam));
 }
 
@@ -160,16 +166,7 @@ void Viewer::setupUI() {
     auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(renderer, inputTracker);
     auto viewportPanel = std::make_unique<ViewportPanel>(context, imGuiManager.getDescriptorPool(), hdrToLdrCompute.outputImage.view.get(), width, height);
     
-    debugPanel->setModeChangedCallback([&] {
-        isRayTracing = !isRayTracing;
-        renderer.markDirty();
-    });
-
     mainMenuBar->setCallback("File.Quit", [&] {
-             debugPanel->setModeChangedCallback([&] {
-            isRayTracing = !isRayTracing;
-            renderer.markDirty();
-        });
         glfwSetWindowShouldClose(context.window, GLFW_TRUE);
     });
 

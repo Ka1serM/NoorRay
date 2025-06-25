@@ -131,13 +131,13 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Renderer& renderer, const std
     std::vector<Face> faces;
     std::vector<Material> materials;
 
-    for (uint32_t lat = 0; lat <= latSeg; ++lat) {
-        float theta = float(M_PI) * lat / latSeg;
+    for (auto lat = 0; lat <= latSeg; ++lat) {
+        const float theta = static_cast<float>(M_PI) * lat / latSeg;
         float sinTheta = std::sin(theta);
         float cosTheta = std::cos(theta);
 
         for (uint32_t lon = 0; lon <= lonSeg; ++lon) {
-            float phi = 2.0f * float(M_PI) * lon / lonSeg;
+            const float phi = 2.0f * static_cast<float>(M_PI) * lon / lonSeg;
             float sinPhi = std::sin(phi);
             float cosPhi = std::cos(phi);
 

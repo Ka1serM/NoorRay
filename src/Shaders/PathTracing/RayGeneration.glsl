@@ -30,7 +30,7 @@ void main() {
     uint rngStateX = seed.x;
     uint rngStateY = seed.y;
 
-    // Jitter for anti-aliasing, only after first frame
+    // Jitter for anti-aliasing, only after first frame<
     vec2 jitter = (vec2(rand(rngStateX), rand(rngStateY)) - 0.5) * min(float(pushConstants.pushData.frame), 1.0);
 
     // Compute normalized UV coordinates (with jitter)

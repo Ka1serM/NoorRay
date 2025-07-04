@@ -1,52 +1,38 @@
 ﻿#pragma once
 
-#include <vector>
-#include <queue>
-#include <mutex>
-#include <atomic>
-
 #include "Vulkan/Context.h"
-#include "Vulkan/Image.h"
 #include "Camera/PerspectiveCamera.h"
-#include "Vulkan/HdrToLdrCompute.h"
+#include "Vulkan/Tonemapper.h"
 #include "UI/ImGuiManager.h"
 #include "Vulkan/Renderer.h"
-#include <Windows.h>
-
-struct MeshData {
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<Face> faces;
-};
 
 class Viewer {
 public:
     Viewer(int width, int height);
+    // Forbid copying and moving to prevent resource management bugs
     ~Viewer();
+    Viewer(const Viewer&) = delete;
+    Viewer& operator=(const Viewer&) = delete;
+    Viewer(Viewer&&) = delete;
+    Viewer& operator=(Viewer&&) = delete;
 
-    void start();
-    void stop();
+    static void cleanup();
 
-    void runOnMainThread(std::function<void()> task);
+    void run();
+
 private:
     void setupScene();
     void setupUI();
 
-    std::queue<std::function<void()>> mainThreadQueue;
-    std::mutex mainThreadQueueMutex;
-
-    std::atomic<bool> running{ false };
-    
+    int frame = 0;
     const int width;
     const int height;
-
-    Context context;
-    Renderer renderer;
     
+    Context context;
+    
+    Renderer renderer;
     InputTracker inputTracker;
-    HdrToLdrCompute hdrToLdrCompute;
-    ImGuiManager imGuiManager;
 
-    bool isRayTracing = false;
-    int frame = 0;
+    Tonemapper tonemapper;
+    ImGuiManager imGuiManager;
 };

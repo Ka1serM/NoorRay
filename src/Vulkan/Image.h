@@ -14,10 +14,11 @@ public:
 
     static vk::AccessFlags toAccessFlags(vk::ImageLayout layout);
 
-    vk::UniqueImage image;
-    vk::ImageCreateInfo info;
-    vk::UniqueImageView view;
-    vk::UniqueDeviceMemory memory;
     vk::DescriptorImageInfo descImageInfo;
     vk::ImageLayout currentLayout;
+
+    vk::UniqueImageView view;
+    vk::UniqueImage image;
+    vk::UniqueDeviceMemory memory;
+    vk::ImageCreateInfo info;
 };

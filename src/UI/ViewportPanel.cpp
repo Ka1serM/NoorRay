@@ -1,8 +1,9 @@
 ﻿#include "ViewportPanel.h"
 #include <imgui.h>
+#include <iostream>
 
 
-ViewportPanel::ViewportPanel(Context& context, const vk::DescriptorPool descriptorPool, const vk::ImageView imageView,uint32_t width, uint32_t height)
+ViewportPanel::ViewportPanel(Context& context, const vk::ImageView imageView,uint32_t width, uint32_t height)
 : width(width), height(height)
 {
     // Create Vulkan sampler
@@ -26,7 +27,7 @@ ViewportPanel::ViewportPanel(Context& context, const vk::DescriptorPool descript
 
     // Allocate descriptor set
     vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.descriptorPool = descriptorPool;
+    allocInfo.descriptorPool = context.descriptorPool.get();
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &descriptorSetLayout.get();
 
@@ -73,4 +74,9 @@ void ViewportPanel::renderUi() {
     ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get())), imageSize, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f));
 
     ImGui::End();
+}
+
+ViewportPanel::~ViewportPanel()
+{
+    std::cout << "Destroying ViewportPanel" << std::endl;
 }

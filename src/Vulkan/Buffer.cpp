@@ -1,7 +1,5 @@
 ﻿#include "Buffer.h"
 
-Buffer::Buffer() = default;
-
 Buffer::Buffer(Context& context, Type type, vk::DeviceSize size, const void* data, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memoryProps) {
 
     using Usage = vk::BufferUsageFlagBits;

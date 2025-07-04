@@ -9,16 +9,12 @@
 #include "Vulkan/Context.h"
 
 class ImGuiManager {
-private:
-    vk::UniqueDescriptorPool descriptorPool;
+    
+    vk::UniqueRenderPass renderPass;
     std::vector<vk::UniqueImageView> imageViews;
     std::vector<vk::UniqueFramebuffer> frameBuffers;
-    vk::UniqueRenderPass renderPass;
-
-    // GUI component system
     std::vector<std::unique_ptr<ImGuiComponent>> components;
 
-    void CreateDescriptorPool(Context& context);
     void CreateRenderPass(Context& context);
     void CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images, uint32_t width, uint32_t height);
     static void SetBlenderTheme();
@@ -27,15 +23,17 @@ private:
 public:
     ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height);
     ~ImGuiManager();
-
-    vk::DescriptorPool getDescriptorPool() const { return descriptorPool.get(); }
-
+    ImGuiManager(const ImGuiManager&) = delete;
+    ImGuiManager& operator=(const ImGuiManager&) = delete;
+    ImGuiManager(ImGuiManager&&) = delete;
+    ImGuiManager& operator=(ImGuiManager&&) = delete;
+    
     void renderUi() const;
 
     void Draw(vk::CommandBuffer commandBuffer, uint32_t imageIndex, uint32_t width, uint32_t height);
 
     // Component system
-    void addComponent(std::unique_ptr<ImGuiComponent> component);
+    void add(std::unique_ptr<ImGuiComponent> component);
     ImGuiComponent* getComponent(const std::string& name) const;
 
     // Utility

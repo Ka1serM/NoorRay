@@ -12,17 +12,7 @@ static constexpr glm::vec3 FRONT = glm::vec3(0, 0, 1);
 static constexpr glm::vec3 WORLD_UP = glm::vec3(0.0f, -1.0f, 0.0f);
 static constexpr glm::vec3 VULKAN_Z_PLUS = glm::vec3(0.0f, 0.0f, 1.0f);
 
-static std::shared_ptr<MeshAsset> cameraMesh = nullptr;
-
-static std::shared_ptr<MeshAsset> getOrCreateCameraMesh(Renderer& renderer) {
-    if (cameraMesh)
-        return cameraMesh;
-    cameraMesh = MeshAsset::CreatePlane(renderer, "Camera Mesh", {});
-    renderer.add(cameraMesh);
-    return cameraMesh;
-}
-
-PerspectiveCamera::PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) : MeshInstance(renderer, name, getOrCreateCameraMesh(renderer), transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
+PerspectiveCamera::PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) : MeshInstance(renderer, name, renderer.getCameraGizmoAsset(), transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
 {
     cameraData.focalLength = focalLength;
     cameraData.aperture = aperture;
@@ -109,7 +99,6 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
         glm::quat newRot = glm::normalize(pitchQuat * yawQuat * rot);
 
         setRotation(newRot);
-
 
         // --- Movement ---
         float speed = deltaTime;

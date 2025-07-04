@@ -118,7 +118,7 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     variableCountAllocInfo.setDescriptorCounts(MAX_TEXTURES);
 
     vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.setDescriptorPool(context.descPool.get());
+    allocInfo.setDescriptorPool(context.descriptorPool.get());
     allocInfo.setSetLayouts(descSetLayout.get());
     allocInfo.setDescriptorSetCount(1);
     allocInfo.setPNext(&variableCountAllocInfo);
@@ -191,6 +191,14 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     storageImageWrite.setImageInfo(storageImageInfo);
 
     context.device->updateDescriptorSets(storageImageWrite, {});
+
+    cameraGizmoAsset = MeshAsset::CreatePlane(*this, "CameraMesh", {});
+    add(cameraGizmoAsset);
+}
+
+Renderer::~Renderer()
+{
+    std::cout << "Destroying Renderer" << std::endl;
 }
 
 void Renderer::rebuildTLAS() {

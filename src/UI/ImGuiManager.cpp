@@ -1,7 +1,6 @@
 ﻿#include "ImGuiManager.h"
 
 #include "../Vulkan/Context.h"
-#include "../Globals.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -9,6 +8,7 @@
 #include <vulkan/vulkan.hpp>
 #include <vector>
 #include <functional>
+#include <iostream>
 
 #include "imgui_internal.h"
 #include "glm/gtc/type_ptr.inl"
@@ -26,14 +26,16 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     static constexpr unsigned char font[] = {
         #embed "../../assets/Inter-Regular.ttf"
     };
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), 24.0f);
+    ImFontConfig font_config;
+    font_config.FontDataOwnedByAtlas = false; // Tell ImGui it doesn't own the font data.
+    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), 24.0f, &font_config);
 
+    // Set Theme
     SetBlenderTheme();
 
     // Setup Platform backend
     ImGui_ImplGlfw_InitForVulkan(context.window, true);
 
-    CreateDescriptorPool(context);
     CreateRenderPass(context);
     CreateFrameBuffers(context, swapchainImages, width, height);
 
@@ -45,11 +47,11 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     init_info.QueueFamily = context.queueFamilyIndex;
     init_info.Queue = context.queue;
     init_info.PipelineCache = VK_NULL_HANDLE;
-    init_info.DescriptorPool = descriptorPool.get();
+    init_info.DescriptorPool = context.descriptorPool.get();
     init_info.RenderPass = renderPass.get();
     init_info.Subpass = 0;
     init_info.MinImageCount = 2;
-    init_info.ImageCount = 3; //TODO match pipeline
+    init_info.ImageCount = static_cast<uint32_t>(swapchainImages.size());
     init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     init_info.Allocator = nullptr;
     init_info.CheckVkResultFn = nullptr;
@@ -129,30 +131,6 @@ void ImGuiManager::SetBlenderTheme() {
     style.FramePadding = ImVec2(5, 3);
     style.ItemSpacing = ImVec2(6, 4);
     style.PopupBorderSize = 1.f;
-}
-
-void ImGuiManager::CreateDescriptorPool(Context& context) {
-    std::vector<vk::DescriptorPoolSize> poolSizes = {
-        { vk::DescriptorType::eSampler, 1000 },
-        { vk::DescriptorType::eCombinedImageSampler, 1000 },
-        { vk::DescriptorType::eSampledImage, 1000 },
-        { vk::DescriptorType::eStorageImage, 1000 },
-        { vk::DescriptorType::eUniformTexelBuffer, 1000 },
-        { vk::DescriptorType::eStorageTexelBuffer, 1000 },
-        { vk::DescriptorType::eUniformBuffer, 1000 },
-        { vk::DescriptorType::eStorageBuffer, 1000 },
-        { vk::DescriptorType::eUniformBufferDynamic, 1000 },
-        { vk::DescriptorType::eStorageBufferDynamic, 1000 },
-        { vk::DescriptorType::eInputAttachment, 1000 }
-    };
-
-    vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    poolInfo.maxSets = 1000; // Max number of descriptor sets allocated from this pool
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-
-    descriptorPool = context.device.get().createDescriptorPoolUnique(poolInfo);
 }
 
 void ImGuiManager::CreateRenderPass(Context& context) {
@@ -278,7 +256,7 @@ void ImGuiManager::renderUi() const
 
 }
 
-void ImGuiManager::addComponent(std::unique_ptr<ImGuiComponent> component) {
+void ImGuiManager::add(std::unique_ptr<ImGuiComponent> component) {
     components.push_back(std::move(component));
 }
 
@@ -324,8 +302,8 @@ void ImGuiManager::colorEdit3Row(const char* label, glm::vec3 value, const std::
 }
 
 ImGuiManager::~ImGuiManager() {
-    components.clear();
-    ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
+    ImGui_ImplVulkan_Shutdown(); // Shutdown backend
+    ImGui_ImplGlfw_Shutdown();   // Shutdown platform
+    ImGui::DestroyContext();     // Shutdown core context
+    std::cout << "Destroyed ImGuiManager" << std::endl;
 }

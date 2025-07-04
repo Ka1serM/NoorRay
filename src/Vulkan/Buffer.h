@@ -14,9 +14,15 @@ public:
         Storage,
         Custom
     };
-
-    Buffer();
+    Buffer() = default;
     Buffer(Context& context, Type type, vk::DeviceSize size, const void* data = nullptr, vk::BufferUsageFlags usage = {}, vk::MemoryPropertyFlags memoryProps = {});
+
+    //Rule of Five
+    ~Buffer() = default;
+    Buffer(const Buffer&) = delete;
+    Buffer& operator=(const Buffer&) = delete;
+    Buffer(Buffer&& other) noexcept = default;
+    Buffer& operator=(Buffer&& other) noexcept = default;
 
     vk::DeviceAddress getDeviceAddress() const { return deviceAddress; }
     const vk::DescriptorBufferInfo& getDescriptorInfo() const { return descBufferInfo; }
@@ -25,6 +31,6 @@ public:
 private:
     vk::UniqueBuffer buffer;
     vk::UniqueDeviceMemory memory;
-    vk::DescriptorBufferInfo descBufferInfo;
-    vk::DeviceAddress deviceAddress;
+    vk::DescriptorBufferInfo descBufferInfo{};
+    vk::DeviceAddress deviceAddress{};
 };

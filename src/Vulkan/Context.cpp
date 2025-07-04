@@ -128,19 +128,34 @@ Context::Context(int width, int height) {
     commandPool = device->createCommandPoolUnique(commandPoolInfo);
 
     // Create descriptor pool
-    std::vector<vk::DescriptorPoolSize> poolSizes{
-        {vk::DescriptorType::eAccelerationStructureKHR, 1},
-        {vk::DescriptorType::eStorageImage, 1},
-        {vk::DescriptorType::eStorageBuffer, 3 * MAX_MESHES}, //BINDLESS, Vertices + Indices + Faces = 3
-    {vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES}, //BINDLESS
+    std::vector<vk::DescriptorPoolSize> poolSizes = {
+        { vk::DescriptorType::eSampler, 64 },
+        { vk::DescriptorType::eCombinedImageSampler, 576 }, // 512 + 64
+        { vk::DescriptorType::eSampledImage, 64 },
+        { vk::DescriptorType::eStorageImage, 64 },
+        { vk::DescriptorType::eUniformTexelBuffer, 64 },
+        { vk::DescriptorType::eStorageTexelBuffer, 64 },
+        { vk::DescriptorType::eUniformBuffer, 128 },
+        { vk::DescriptorType::eStorageBuffer, 30128 }, // 3 * 10000 + 128 margin
+        { vk::DescriptorType::eUniformBufferDynamic, 64 },
+        { vk::DescriptorType::eStorageBufferDynamic, 64 },
+        { vk::DescriptorType::eInputAttachment, 8 },
+        { vk::DescriptorType::eAccelerationStructureKHR, 16 },
     };
 
+    // maxSets: sum of max possible sets
+    // Assume ImGui max ~200 sets + 10 for raytracing sets
+    uint32_t maxSets = 210;
 
-    vk::DescriptorPoolCreateInfo descPoolInfo;
-    descPoolInfo.setPoolSizes(poolSizes);
-    descPoolInfo.setMaxSets(1);
-    descPoolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind); //BINDLESS
-    descPool = device->createDescriptorPoolUnique(descPoolInfo);
+    vk::DescriptorPoolCreateInfo poolInfo{};
+    poolInfo.flags = 
+        vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | 
+        vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
+    poolInfo.maxSets = maxSets;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+
+    descriptorPool = device->createDescriptorPoolUnique(poolInfo);
 }
 
 bool Context::checkDeviceExtensionSupport(const std::vector<const char*>& requiredExtensions) const {
@@ -188,7 +203,7 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
 
 vk::UniqueDescriptorSet Context::allocateDescSet(vk::DescriptorSetLayout descSetLayout) {
     vk::DescriptorSetAllocateInfo descSetInfo;
-    descSetInfo.setDescriptorPool(descPool.get());
+    descSetInfo.setDescriptorPool(descriptorPool.get());
     descSetInfo.setSetLayouts(descSetLayout);
     return std::move(device->allocateDescriptorSetsUnique(descSetInfo).front());
 }
@@ -200,4 +215,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL Context::debugUtilsMessengerCallback(VkDebugUtils
 {
     std::cerr << pCallbackData->pMessage << std::endl;
     return VK_FALSE;
+}
+
+Context::~Context() {
+    std::cout << "Destroying Context..." << std::endl;
 }

@@ -6,13 +6,12 @@
 #include "GLFW/glfw3.h"
 #include "glm/gtx/rotate_vector.hpp"
 #include "UI/ImGuiManager.h"
-#include "Vulkan/Renderer.h"
 
 static constexpr glm::vec3 FRONT = glm::vec3(0, 0, 1);
 static constexpr glm::vec3 WORLD_UP = glm::vec3(0.0f, -1.0f, 0.0f);
 static constexpr glm::vec3 VULKAN_Z_PLUS = glm::vec3(0.0f, 0.0f, 1.0f);
 
-PerspectiveCamera::PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) : MeshInstance(renderer, name, renderer.getCameraGizmoAsset(), transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
+PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) : SceneObject(scene, name, transform), scene(scene), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
 {
     cameraData.focalLength = focalLength;
     cameraData.aperture = aperture;
@@ -40,34 +39,34 @@ void PerspectiveCamera::updateHorizontalVertical() {
 void PerspectiveCamera::setFocalLength(const float val) {
     cameraData.focalLength = val;
     updateHorizontalVertical();
-    renderer.markDirty();
+    scene.setAccumulationDirty();
 }
 
 void PerspectiveCamera::setAperture(const float val) {
     cameraData.aperture = val;
-    renderer.markDirty();
+    scene.setAccumulationDirty();
 }
 
 void PerspectiveCamera::setFocusDistance(const float val) {
     cameraData.focusDistance = val;
-    renderer.markDirty();
+    scene.setAccumulationDirty();
 }
 
 void PerspectiveCamera::setBokehBias(const float val) {
     cameraData.bokehBias = val;
-    renderer.markDirty();
+    scene.setAccumulationDirty();
 }
 
 void PerspectiveCamera::setSensorSize(const float width, const float height) {
     sensorWidth = width;
     sensorHeight = height;
     updateHorizontalVertical();
-    renderer.markDirty();
+    scene.setAccumulationDirty();
 }
 
 void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
     const bool rmbHeld = inputTracker.isMouseButtonHeld(GLFW_MOUSE_BUTTON_RIGHT);
-    const bool wasDirty = renderer.getDirty();
+    const bool wasDirty = scene.isAccumulationDirty();
 
     const glm::vec3 oldPosition = getPosition();
     const glm::vec3 oldDirection = cameraData.direction;
@@ -131,39 +130,49 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
     const bool changed = wasDirty || !glm::all(glm::epsilonEqual(oldDirection, cameraData.direction, 0.001f)) || !glm::all(glm::epsilonEqual(oldPosition, getPosition(), 0.001f));
     if (changed) {
         updateHorizontalVertical();
-        renderer.markDirty();
+        scene.setAccumulationDirty();
     }
 }
 
 
 void PerspectiveCamera::renderUi() {
-    MeshInstance::renderUi();
+    SceneObject::renderUi();
 
     ImGui::SeparatorText("Camera Lens");
 
+    bool anyChanged = false;
     ImGuiManager::dragFloatRow("Focal Length", getFocalLength(), 0.1f, 10.0f, 500.0f, [&](const float v) {
         setFocalLength(v);
+        anyChanged = true;
     });
 
     ImGuiManager::dragFloatRow("Aperture", getAperture(), 0.01f, 0.0f, 16.0f, [&](const float v) {
         setAperture(v);
+        anyChanged = true;
     });
 
     ImGuiManager::dragFloatRow("Focus Distance", getFocusDistance(), 0.01f, 0.01f, 1000.0f, [&](const float v) {
         setFocusDistance(v);
+        anyChanged = true;
     });
 
     ImGuiManager::dragFloatRow("Bokeh Bias", getBokehBias(), 0.01f, 0.0f, 10.0f, [&](const float v) {
         setBokehBias(v);
+        anyChanged = true;
     });
 
     ImGuiManager::dragFloatRow("Sensor Width", getSensorWidth(), 0.1f, 1.0f, 100.0f, [&](const float v) {
         setSensorSize(v, sensorHeight);
+        anyChanged = true;
     });
 
     ImGuiManager::dragFloatRow("Sensor Height", getSensorHeight(), 0.1f, 1.0f, 100.0f, [&](const float v) {
         setSensorSize(sensorWidth, v);
+        anyChanged = true;
     });
+
+    if (anyChanged)
+        scene.setAccumulationDirty();
 }
 
 //don't update the mesh instance transform, just the SceneObject transform

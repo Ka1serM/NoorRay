@@ -1,6 +1,5 @@
 ﻿#include "MeshAsset.h"
 #include "Utils.h"
-#include "Vulkan/Renderer.h"
 
 #include <vector>
 #include <string>
@@ -12,7 +11,7 @@
 #include "glm/gtc/type_ptr.inl"
 #include "UI/ImGuiManager.h"
 
-std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Renderer& renderer, const std::string& name, const Material& material) {
+std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string& name, const Material& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
@@ -74,14 +73,10 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Renderer& renderer, const std::
         vertexStart += 4;
     }
 
-    return std::make_shared<MeshAsset>(renderer, name,
-        std::move(vertices),
-        std::move(indices),
-        std::move(faces),
-        std::move(materials));
+    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
 }
 
-std::shared_ptr<MeshAsset> MeshAsset::CreatePlane(Renderer& renderer, const std::string& name, const Material& material) {
+std::shared_ptr<MeshAsset> MeshAsset::CreatePlane(Scene& scene, const std::string& name, const Material& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
     std::vector<Face> faces;
@@ -115,14 +110,10 @@ std::shared_ptr<MeshAsset> MeshAsset::CreatePlane(Renderer& renderer, const std:
         faces.push_back({0});
     }
 
-    return std::make_shared<MeshAsset>(renderer, name,
-        std::move(vertices),
-        std::move(indices),
-        std::move(faces),
-        std::move(materials));
+    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
 }
 
-std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Renderer& renderer, const std::string& name, const Material& material, uint32_t latSeg, uint32_t lonSeg) {
+std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::string& name, const Material& material, uint32_t latSeg, uint32_t lonSeg) {
     if (latSeg < 2 || lonSeg < 3)
         throw std::runtime_error("Sphere segments too low.");
 
@@ -178,14 +169,10 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Renderer& renderer, const std
         faces.push_back({0});
     }
 
-    return std::make_shared<MeshAsset>(renderer, name,
-        std::move(vertices),
-        std::move(indices),
-        std::move(faces),
-        std::move(materials));
+    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
 }
 
-std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Renderer& renderer, const std::string& name, const Material& material, uint32_t segments) {
+std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments) {
     if (segments < 3)
         throw std::runtime_error("Disk requires at least 3 segments");
 
@@ -229,39 +216,23 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Renderer& renderer, const std::
 
     materials.push_back(material);
 
-    return std::make_shared<MeshAsset>(renderer, name,
-        std::move(vertices),
-        std::move(indices),
-        std::move(faces),
-        std::move(materials));
+    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
 }
 
-std::shared_ptr<MeshAsset> MeshAsset::CreateFromObj(Renderer& renderer, const std::string& objFilePath)
+MeshAsset::MeshAsset(Scene& scene, const std::string& name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
+    : path(name), scene(scene), vertices(vertices), indices(indices), faces(faces), materials(materials)
 {
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<Face> faces;
-    std::vector<Material> materials;
-
-    Utils::loadObj(renderer, objFilePath, vertices, indices, faces, materials);
-
-    return std::make_shared<MeshAsset>(renderer, objFilePath, std::move(vertices), std::move(indices), std::move(faces), std::move(materials));
-}
-
-MeshAsset::MeshAsset(Renderer& renderer, const std::string& name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
-: renderer(renderer), path(name), materials(materials) {
-    
-    // Upload mesh data to GPU
-    vertexBuffer = Buffer{renderer.context, Buffer::Type::AccelInput, sizeof(Vertex) * vertices.size(), vertices.data()};
-    indexBuffer = Buffer{renderer.context, Buffer::Type::AccelInput, sizeof(uint32_t) * indices.size(), indices.data()};
-    faceBuffer = Buffer{renderer.context, Buffer::Type::AccelInput, sizeof(Face) * faces.size(), faces.data()};
-    materialBuffer = Buffer{renderer.context, Buffer::Type::AccelInput, sizeof(Material) * materials.size(), materials.data()};
+    // Upload mesh data to GPU from the new member variable copies
+    vertexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Vertex) * this->vertices.size(), this->vertices.data()};
+    indexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(uint32_t) * this->indices.size(), this->indices.data()};
+    faceBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Face) * this->faces.size(), this->faces.data()};
+    materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Material) * this->materials.size(), this->materials.data()};
 
     vk::AccelerationStructureGeometryTrianglesDataKHR triangleData{};
     triangleData.setVertexFormat(vk::Format::eR32G32B32Sfloat);
     triangleData.setVertexData(vertexBuffer.getDeviceAddress());
     triangleData.setVertexStride(sizeof(Vertex));
-    triangleData.setMaxVertex(static_cast<uint32_t>(vertices.size()));
+    triangleData.setMaxVertex(static_cast<uint32_t>(this->vertices.size()));
     triangleData.setIndexType(vk::IndexType::eUint32);
     triangleData.setIndexData(indexBuffer.getDeviceAddress());
 
@@ -271,11 +242,14 @@ MeshAsset::MeshAsset(Renderer& renderer, const std::string& name, const std::vec
     geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
 
     // Create bottom-level acceleration structure (BLAS)
-    blas.build(renderer.context, geometry, static_cast<uint32_t>(indices.size() / 3), vk::AccelerationStructureTypeKHR::eBottomLevel);
+    blasGpu.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
+    
+    // Build CPU-side acceleration structure from the new member variable copies
+    blasCpu.build(this->vertices, this->indices);
 }
 
 uint64_t MeshAsset::getBlasAddress() const {
-    return blas.buffer.getDeviceAddress();
+    return blasGpu.getBuffer().getDeviceAddress();
 }
 
 MeshAddresses MeshAsset::getBufferAddresses() const {
@@ -295,127 +269,112 @@ void MeshAsset::setMeshIndex(uint32_t newIndex) {
     index = newIndex;
 }
 
+
 void MeshAsset::renderUi() {
     ImGuiManager::tableRowLabel("Source");
 
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
     ImGui::PushItemWidth(-1);
-    ImGui::InputText("##meshPath", path.data(), path.size() + 1, ImGuiInputTextFlags_ReadOnly);
+    // Use path.c_str() which is the standard way to get a const char* from std::string for ImGui
+    ImGui::InputText("##meshPath", (char*)path.c_str(), path.size() + 1, ImGuiInputTextFlags_ReadOnly);
     ImGui::PopItemWidth();
     ImGui::PopStyleColor();
 
-    if (!materials.empty()) {
-        ImGuiManager::tableRowLabel("Materials");
+    if (materials.empty()) {
+        return;
+    }
+    
+    ImGuiManager::tableRowLabel("Materials");
 
-        bool anyMaterialChanged = false;
+    bool anyMaterialChanged = false;
+    
+    const auto textureNames = scene.getTextureNames();
 
-        const auto& textureNames = renderer.getTextureNames();
+    // Helper lambda for drawing texture selection combos.
+    auto drawTextureCombo = [&](const char* label, int& texIndex, int materialIndex) {
+        // The current index for the combo box. We add 1 because index 0 is our "No Texture" option.
+        int currentComboIndex = texIndex == -1 ? 0 : texIndex + 1;
 
-        auto drawTextureCombo = [&](const char* label, int& texIndex, int materialIndex) {
-            int currentComboIndex = texIndex == -1 ? 0 : texIndex + 1;
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(label);
 
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(label);
+        ImGui::TableNextColumn();
+        // Use a unique ID for each combo box.
+        const std::string comboId = "##" + std::string(label) + std::to_string(materialIndex);
+        const char* previewValue = (currentComboIndex == 0) ? "No texture selected" : textureNames[currentComboIndex - 1].c_str();
 
-            ImGui::TableNextColumn();
-            if (ImGui::BeginCombo((std::string("##") + label + std::to_string(materialIndex)).c_str(),
-                currentComboIndex == 0 ? "No texture selected" : textureNames[currentComboIndex - 1].c_str()))
-            {
-                // No texture option
-                bool isSelected = (currentComboIndex == 0);
-                if (ImGui::Selectable("No texture selected", isSelected)) {
-                    currentComboIndex = 0;
+        if (ImGui::BeginCombo(comboId.c_str(), previewValue))
+        {
+            // "No texture" option
+            if (ImGui::Selectable("No texture selected", currentComboIndex == 0)) {
+                if (texIndex != -1) { // Only mark as changed if it was different.
                     texIndex = -1;
                     anyMaterialChanged = true;
                 }
-                if (isSelected)
-                    ImGui::SetItemDefaultFocus();
+            }
 
-                // Texture options
-                for (int t = 0; t < static_cast<int>(textureNames.size()); ++t) {
-                    isSelected = currentComboIndex == t + 1;
-                    if (ImGui::Selectable(textureNames[t].c_str(), isSelected)) {
-                        currentComboIndex = t + 1;
+            // Loop through available textures.
+            for (int t = 0; t < static_cast<int>(textureNames.size()); ++t) {
+                if (ImGui::Selectable(textureNames[t].c_str(), texIndex == t)) {
+                    if (texIndex != t) { // Only mark as changed if it was different.
                         texIndex = t;
                         anyMaterialChanged = true;
                     }
-                    if (isSelected)
-                        ImGui::SetItemDefaultFocus();
                 }
-
-                ImGui::EndCombo();
             }
-        };
-
-        for (int i = 0; i < (int)materials.size(); ++i) {
-            Material& mat = materials[i];
-            std::string label = "Material " + std::to_string(i);
-
-            if (ImGui::TreeNode(label.c_str())) {
-                ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp);
-
-                // Albedo texture + color
-                drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
-                ImGui::TableNextRow();
-                ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](glm::vec3 v) {
-                    mat.albedo = v; anyMaterialChanged = true;
-                });
-                ImGui::TableNextRow();
-
-                // Specular texture + scalar
-                drawTextureCombo("Specular Texture", mat.specularIndex, i);
-                ImGui::TableNextRow();
-                ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](float v) {
-                    mat.specular = v; anyMaterialChanged = true;
-                });
-                ImGui::TableNextRow();
-
-                // Metallic texture + scalar
-                drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
-                ImGui::TableNextRow();
-                ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](float v) {
-                    mat.metallic = v; anyMaterialChanged = true;
-                });
-                ImGui::TableNextRow();
-
-                // Roughness texture + scalar
-                drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
-                ImGui::TableNextRow();
-                ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](float v) {
-                    mat.roughness = v; anyMaterialChanged = true;
-                });
-                ImGui::TableNextRow();
-
-                drawTextureCombo("Normal Texture", mat.normalIndex, i);
-                ImGui::TableNextRow();
-
-                ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](float v) {
-                    mat.ior = v; anyMaterialChanged = true;
-                });
-                ImGui::TableNextRow();
-
-                ImGuiManager::colorEdit3Row("Transmission", mat.transmission, [&](glm::vec3 v) {
-                    mat.transmission = v; anyMaterialChanged = true;
-                });
-                ImGui::TableNextRow();
-
-                ImGuiManager::colorEdit3Row("Emission", mat.emission, [&](glm::vec3 v) {
-                    mat.emission = v; anyMaterialChanged = true;
-                });
-
-                ImGui::EndTable();
-                ImGui::TreePop();
-            }
+            ImGui::EndCombo();
         }
+    };
 
-        if (anyMaterialChanged)
-            updateMaterials();
+    for (int i = 0; i < (int)materials.size(); ++i) {
+        Material& mat = materials[i];
+        std::string label = "Material " + std::to_string(i);
+
+        if (ImGui::TreeNode(label.c_str())) {
+            ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp);
+
+            drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
+            ImGui::TableNextRow();
+            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](glm::vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
+
+            ImGui::TableNextRow();
+            drawTextureCombo("Specular Texture", mat.specularIndex, i);
+            ImGui::TableNextRow();
+            ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](float v) { mat.specular = v; anyMaterialChanged = true; });
+
+            ImGui::TableNextRow();
+            drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
+            ImGui::TableNextRow();
+            ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](float v) { mat.metallic = v; anyMaterialChanged = true; });
+
+            ImGui::TableNextRow();
+            drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
+            ImGui::TableNextRow();
+            ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](float v) { mat.roughness = v; anyMaterialChanged = true; });
+            
+            ImGui::TableNextRow();
+            drawTextureCombo("Normal Texture", mat.normalIndex, i);
+            
+            ImGui::TableNextRow();
+            ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](float v) { mat.ior = v; anyMaterialChanged = true; });
+            
+            ImGui::TableNextRow();
+            ImGuiManager::colorEdit3Row("Transmission", mat.transmission, [&](glm::vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
+            
+            ImGui::TableNextRow();
+            ImGuiManager::colorEdit3Row("Emission", mat.emission, [&](glm::vec3 v) { mat.emission = v; anyMaterialChanged = true; });
+
+            ImGui::EndTable();
+            ImGui::TreePop();
+        }
     }
+
+    if (anyMaterialChanged)
+        updateMaterials();
 }
 
 void MeshAsset::updateMaterials() {
-    //TODO
-    // Recreate materialBuffer with updated materials
-    materialBuffer = Buffer{renderer.context, Buffer::Type::AccelInput, sizeof(Material) * materials.size(), materials.data()};
-    renderer.rebuildMeshBuffer(); //to update the stored buffer address on the mesh
+    // Recreate materialBuffer with updated materials from the CPU-side copy
+    materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Material) * materials.size(), materials.data()};
+    scene.setMeshesDirty(); // To update the stored buffer address on the mesh
 }

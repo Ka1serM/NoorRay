@@ -89,11 +89,16 @@ void MainMenuBar::renderFileMenu() {
 
         ImGui::Separator();
 
-        if (ImGui::BeginMenu("Import")) {
-            if (ImGui::MenuItem("Wavefront .obj")) {
-                if (callbacks.contains("File.Import"))
-                    callbacks["File.Import"]();
-            }
+        if (ImGui::BeginMenu("Import"))
+        {
+            if (ImGui::MenuItem("Wavefront .obj"))
+                if (callbacks.contains("File.Import.Obj"))
+                    callbacks["File.Import.Obj"]();
+            
+            if (ImGui::MenuItem("Chaos Camp .crtscene"))
+                if (callbacks.contains("File.Import.CrtScene"))
+                    callbacks["File.Import.CrtScene"]();
+            
             ImGui::EndMenu();
         }
         

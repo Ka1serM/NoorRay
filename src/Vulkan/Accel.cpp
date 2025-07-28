@@ -7,7 +7,7 @@ void Accel::build(Context& context, vk::AccelerationStructureGeometryKHR geometr
     buildGeometryInfo.setGeometries(geometry);
 
     // Get sizes required for AS buffers
-    vk::AccelerationStructureBuildSizesInfoKHR buildSizesInfo = context.device->getAccelerationStructureBuildSizesKHR(
+    vk::AccelerationStructureBuildSizesInfoKHR buildSizesInfo = context.getDevice().getAccelerationStructureBuildSizesKHR(
         vk::AccelerationStructureBuildTypeKHR::eDevice, buildGeometryInfo, primitiveCount
     );
 
@@ -20,7 +20,7 @@ void Accel::build(Context& context, vk::AccelerationStructureGeometryKHR geometr
     accelInfo.setBuffer(buffer.getBuffer());
     accelInfo.setSize(size);
     accelInfo.setType(type);
-    accel = context.device->createAccelerationStructureKHRUnique(accelInfo);
+    accel = context.getDevice().createAccelerationStructureKHRUnique(accelInfo);
 
     // Create scratch buffer
     Buffer scratchBuffer{context, Buffer::Type::Scratch, buildSizesInfo.buildScratchSize};

@@ -2,14 +2,14 @@
 #include <iostream>
 #include "Utils.h"
 
-Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, vk::ImageView inputImageView)
+Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage)
 : outputImage(context, width, height, vk::Format::eB8G8R8A8Unorm,vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
 {
     //Load shader
     static constexpr unsigned char code[] = {
         #embed "../shaders/Tonemapper.spv"
     };
-    shaderModule = context.device.get().createShaderModuleUnique({{}, sizeof(code), reinterpret_cast<const uint32_t*>(code)});
+    shaderModule = context.getDevice().createShaderModuleUnique({{}, sizeof(code), reinterpret_cast<const uint32_t*>(code)});
 
     // Descriptor set layout with 2 storage images
     std::vector<vk::DescriptorSetLayoutBinding> bindings = {
@@ -17,28 +17,28 @@ Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, vk::Im
         {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}
     };
 
-    descriptorSetLayout = context.device.get().createDescriptorSetLayoutUnique({{}, static_cast<uint32_t>(bindings.size()), bindings.data()});
+    descriptorSetLayout = context.getDevice().createDescriptorSetLayoutUnique({{}, static_cast<uint32_t>(bindings.size()), bindings.data()});
 
     // Pipeline layout (no push constants)
-    pipelineLayout = context.device.get().createPipelineLayoutUnique({{}, 1, &*descriptorSetLayout});
+    pipelineLayout = context.getDevice().createPipelineLayoutUnique({{}, 1, &*descriptorSetLayout});
 
     // Compute pipeline
     vk::PipelineShaderStageCreateInfo shaderStage({}, vk::ShaderStageFlagBits::eCompute, *shaderModule, "main");
 
-    pipeline = context.device.get().createComputePipelineUnique({}, {{}, shaderStage, *pipelineLayout}).value;
+    pipeline = context.getDevice().createComputePipelineUnique({}, {{}, shaderStage, *pipelineLayout}).value;
 
     // Descriptor pool
     std::vector<vk::DescriptorPoolSize> poolSizes = {{vk::DescriptorType::eStorageImage, 2}};
     
     // Allocate descriptor set (store as UniqueDescriptorSet)
-    vk::DescriptorSetAllocateInfo allocInfo(context.descriptorPool.get(), 1, &descriptorSetLayout.get());
-    auto descriptorSets = context.device.get().allocateDescriptorSetsUnique(allocInfo);
+    vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 1, &descriptorSetLayout.get());
+    auto descriptorSets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     descriptorSet = std::move(descriptorSets.front()); // descriptorSet is vk::UniqueDescriptorSet
 
     // Write descriptors
     std::vector<vk::DescriptorImageInfo> imageInfos = {
-        vk::DescriptorImageInfo({}, inputImageView, vk::ImageLayout::eGeneral),
-        vk::DescriptorImageInfo({}, outputImage.view.get(), vk::ImageLayout::eGeneral)
+        vk::DescriptorImageInfo({}, inputImage.getImageView(), vk::ImageLayout::eGeneral),
+        vk::DescriptorImageInfo({}, outputImage.getImageView(), vk::ImageLayout::eGeneral)
     };
 
     std::vector<vk::WriteDescriptorSet> writes = {
@@ -57,7 +57,7 @@ Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, vk::Im
         .setDescriptorCount(1)
     };
 
-    context.device.get().updateDescriptorSets(writes, {});
+    context.getDevice().updateDescriptorSets(writes, {});
 }
 
 Tonemapper::~Tonemapper()

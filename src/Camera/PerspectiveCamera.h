@@ -4,10 +4,13 @@
 #include "InputTracker.h"
 #include "glm/glm.hpp"
 #include "Scene/MeshInstance.h"
-#include "Scene/SceneObject.h"
 #include "Shaders/SharedStructs.h"
 
-class PerspectiveCamera : public MeshInstance {
+class Scene;
+
+class PerspectiveCamera : public SceneObject {
+
+    Scene& scene;
 
 private:
     float aspectRatio;
@@ -18,8 +21,8 @@ private:
 
     static constexpr glm::vec3 UP = glm::vec3(0, 1, 0);
 public:
-    PerspectiveCamera(Renderer& renderer, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
-
+    PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
+    
     // Accessors for camera params
     float getFocalLength() const { return cameraData.focalLength; }
     float getAperture() const { return cameraData.aperture; }

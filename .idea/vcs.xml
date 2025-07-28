@@ -7,9 +7,9 @@
     <mapping directory="$PROJECT_DIR$/external/glfw" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/glm" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/imgui" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/external/json" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/portable-file-dialogs" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/stb" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/external/tinygltf" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/external/tinyobjloader" vcs="Git" />
   </component>
 </project>

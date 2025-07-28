@@ -1,7 +1,6 @@
 ﻿#include "Context.h"
 #include <iostream>
 
-#include "Globals.h"
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 Context::Context(int width, int height) {
@@ -60,7 +59,7 @@ Context::Context(int width, int height) {
         bool supportPresent = physicalDevice.getSurfaceSupportKHR(i, surface.get());
 
         if (supportGraphics && supportCompute && supportPresent) {
-            queueFamilyIndex = i;
+            queueFamilyIndices.push_back(i);
             break;
         }
     }
@@ -69,7 +68,7 @@ Context::Context(int width, int height) {
     // Create device
     constexpr float queuePriority = 1.0f;
     vk::DeviceQueueCreateInfo queueCreateInfo;
-    queueCreateInfo.setQueueFamilyIndex(queueFamilyIndex);
+    queueCreateInfo.setQueueFamilyIndex(queueFamilyIndices.front());
     queueCreateInfo.setQueuePriorities(queuePriority);
 
     const std::vector deviceExtensions{
@@ -119,12 +118,12 @@ Context::Context(int width, int height) {
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
 
-    queue = device->getQueue(queueFamilyIndex, 0);
+    queue = device->getQueue(queueFamilyIndices.front(), 0);
 
     // Create command pool
     vk::CommandPoolCreateInfo commandPoolInfo;
     commandPoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-    commandPoolInfo.setQueueFamilyIndex(queueFamilyIndex);
+    commandPoolInfo.setQueueFamilyIndex(queueFamilyIndices.front());
     commandPool = device->createCommandPoolUnique(commandPoolInfo);
 
     // Create descriptor pool

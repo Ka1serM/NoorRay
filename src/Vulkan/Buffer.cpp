@@ -24,9 +24,9 @@ Buffer::Buffer(Context& context, Type type, vk::DeviceSize size, const void* dat
         }
     }
 
-    buffer = context.device->createBufferUnique({{}, size, usage});
+    buffer = context.getDevice().createBufferUnique({{}, size, usage});
 
-    const vk::MemoryRequirements requirements = context.device->getBufferMemoryRequirements(*buffer);
+    const vk::MemoryRequirements requirements = context.getDevice().getBufferMemoryRequirements(*buffer);
     const uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, memoryProps);
 
     constexpr vk::MemoryAllocateFlagsInfo flagsInfo{vk::MemoryAllocateFlagBits::eDeviceAddress};
@@ -35,19 +35,19 @@ Buffer::Buffer(Context& context, Type type, vk::DeviceSize size, const void* dat
     memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
     memoryInfo.setPNext(&flagsInfo);
 
-    memory = context.device->allocateMemoryUnique(memoryInfo);
-    context.device->bindBufferMemory(*buffer, *memory, 0);
+    memory = context.getDevice().allocateMemoryUnique(memoryInfo);
+    context.getDevice().bindBufferMemory(*buffer, *memory, 0);
 
     const vk::BufferDeviceAddressInfoKHR bufferDeviceAI{*buffer};
-    deviceAddress = context.device->getBufferAddressKHR(&bufferDeviceAI);
+    deviceAddress = context.getDevice().getBufferAddressKHR(&bufferDeviceAI);
 
     descBufferInfo.setBuffer(*buffer);
     descBufferInfo.setOffset(0);
     descBufferInfo.setRange(size);
 
     if (data) {
-        void* mapped = context.device->mapMemory(*memory, 0, size);
+        void* mapped = context.getDevice().mapMemory(*memory, 0, size);
         memcpy(mapped, data, size);
-        context.device->unmapMemory(*memory);
+        context.getDevice().unmapMemory(*memory);
     }
 }

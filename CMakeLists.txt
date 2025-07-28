@@ -4,7 +4,7 @@ set(CMAKE_CXX_STANDARD 23)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
 # ---------------------------------------------------------------------------
-# GLFW, GLM
+# GLFW, GLM, etc.
 # ---------------------------------------------------------------------------
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -12,6 +12,7 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/glfw)
 add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
+add_subdirectory(external/json)
 
 # ---------------------------------------------------------------------------
 # Dear ImGui (core + GLFW+Vulkan backend) + ImGuizmo
@@ -24,7 +25,6 @@ add_library(imgui STATIC
         # Vulkan + GLFW backends:
         external/imgui/backends/imgui_impl_vulkan.cpp
         external/imgui/backends/imgui_impl_glfw.cpp
-
         # ImGuizmo
         external/ImGuizmo/ImGuizmo.cpp
 )
@@ -58,13 +58,14 @@ target_link_libraries(VulkanToyPathtracer PUBLIC
         glm
         imgui
         Vulkan::Vulkan
+        nlohmann_json::nlohmann_json
 )
 
 target_include_directories(VulkanToyPathtracer PUBLIC
         "$ENV{VULKAN_SDK}/Include"
         "${PROJECT_SOURCE_DIR}/external/tinyobjloader"
-        "${PROJECT_SOURCE_DIR}/external/tinygltf"
         "${PROJECT_SOURCE_DIR}/external/stb"
+        "${PROJECT_SOURCE_DIR}/external/json/include"
         "${PROJECT_SOURCE_DIR}/src"
 )
 

@@ -4,6 +4,9 @@
 #include <string>
 
 class DebugPanel : public ImGuiComponent {
+private:
+    float fps = 0.0f;
+    
 public:
     DebugPanel();
 
@@ -14,7 +17,4 @@ public:
     void setFps(const float newFps) {
         fps = newFps;
     }
-    
-private:
-    float fps = 0.0f;
 };

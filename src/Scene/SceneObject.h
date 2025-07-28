@@ -2,21 +2,20 @@
 
 #include <string>
 
+#include "Scene.h"
 #include "../Mesh/Transform.h"
 #include "UI/ImGuiComponent.h"
 
 //forward declaration to avoid circular dependency
-class Renderer;
+class Scene;
 
 class SceneObject : public ImGuiComponent {
 
-protected:
-    Transform transform;
-    Renderer& renderer;
-
 public:
-
-    SceneObject(Renderer& renderer, std::string name, const Transform& transform);
+    Transform transform;
+    Scene& scene;
+    
+    SceneObject(Scene& scene, std::string name, const Transform& transform);
 
     std::string getType() const override { return "Scene Object"; }
 

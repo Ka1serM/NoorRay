@@ -34,20 +34,20 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     SetBlenderTheme();
 
     // Setup Platform backend
-    ImGui_ImplGlfw_InitForVulkan(context.window, true);
+    ImGui_ImplGlfw_InitForVulkan(context.getWindow(), true);
 
     CreateRenderPass(context);
     CreateFrameBuffers(context, swapchainImages, width, height);
 
     // Setup ImGui Vulkan backend
     ImGui_ImplVulkan_InitInfo init_info = {};
-    init_info.Instance = context.instance.get();
-    init_info.PhysicalDevice = context.physicalDevice;
-    init_info.Device = context.device.get();
-    init_info.QueueFamily = context.queueFamilyIndex;
-    init_info.Queue = context.queue;
+    init_info.Instance = context.getInstance();
+    init_info.PhysicalDevice = context.getPhysicalDevice();
+    init_info.Device = context.getDevice();
+    init_info.QueueFamily = context.getQueueFamilyIndices().front();
+    init_info.Queue = context.getQueue();
     init_info.PipelineCache = VK_NULL_HANDLE;
-    init_info.DescriptorPool = context.descriptorPool.get();
+    init_info.DescriptorPool = context.getDescriptorPool();
     init_info.RenderPass = renderPass.get();
     init_info.Subpass = 0;
     init_info.MinImageCount = 2;
@@ -169,7 +169,7 @@ void ImGuiManager::CreateRenderPass(Context& context) {
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
 
-    renderPass = context.device->createRenderPassUnique(renderPassInfo);
+    renderPass = context.getDevice().createRenderPassUnique(renderPassInfo);
 }
 
 void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images, uint32_t width, uint32_t height) {
@@ -182,7 +182,7 @@ void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Im
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
 
-        imageViews.push_back(context.device->createImageViewUnique(viewInfo));
+        imageViews.push_back(context.getDevice().createImageViewUnique(viewInfo));
 
         vk::FramebufferCreateInfo framebufferInfo{};
         framebufferInfo.renderPass = renderPass.get();
@@ -192,7 +192,7 @@ void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Im
         framebufferInfo.height = height;
         framebufferInfo.layers = 1;
 
-        frameBuffers.push_back(context.device->createFramebufferUnique(framebufferInfo));
+        frameBuffers.push_back(context.getDevice().createFramebufferUnique(framebufferInfo));
     }
 }
 

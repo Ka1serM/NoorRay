@@ -45,7 +45,7 @@ struct Material {
 
 #ifdef __cplusplus
     Material()
-    : albedo{1}, albedoIndex(-1),
+    : albedo{0.5f}, albedoIndex(-1),
       specular(0.5f), metallic(0), roughness(0.8f), ior(1.5f),
       transmission{0}, _pad1(0),
       emission{0}, _pad2(0),
@@ -73,4 +73,11 @@ struct Payload
     uint rngState;
     uint bounceType;
     bool done;
+};
+
+struct HitInfo {
+    float t;
+    int instanceIndex;
+    int primitiveIndex;
+    vec3 barycentrics;
 };

@@ -1,10 +1,10 @@
 ﻿#include "MeshInstance.h"
 #include <imgui.h>
 #include <utility>
-#include "../UI/ImGuiManager.h"
-#include "Vulkan/Renderer.h"
 
-MeshInstance::MeshInstance(Renderer& renderer, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf) : SceneObject(renderer, name, transf), meshAsset(std::move(asset)) {
+#include "../UI/ImGuiManager.h"
+
+MeshInstance::MeshInstance(Scene& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf) : SceneObject(scene, name, transf), meshAsset(std::move(asset)) {
 
     instanceData = vk::AccelerationStructureInstanceKHR{};
     instanceData.setTransform(transform.getVkTransformMatrix());
@@ -18,7 +18,7 @@ MeshInstance::MeshInstance(Renderer& renderer, const std::string& name, std::sha
 
 void MeshInstance::updateInstanceTransform() {
     instanceData.setTransform(transform.getVkTransformMatrix());
-    renderer.rebuildTLAS();
+    scene.setTlasDirty();
 }
 
 void MeshInstance::renderUi() {

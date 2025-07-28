@@ -7,8 +7,7 @@ class Scene;
 
 class OutlinerDetailsPanel : public ImGuiComponent {
 public:
-    // Constructor accepts a const reference
-    OutlinerDetailsPanel(Renderer& renderer, InputTracker& inputTracker);
+    OutlinerDetailsPanel(Scene& scene, InputTracker& inputTracker);
     void renderUi() override;
 
     std::string getType() const override { return "Outliner Details"; }
@@ -16,8 +15,7 @@ public:
     void setSelectedIndex(int index);
 
 private:
-    // Store the reference
-    Renderer& renderer;
+    Scene& scene;
     InputTracker& inputTracker;
     
     int selectedObjectIndex;

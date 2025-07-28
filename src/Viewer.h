@@ -2,24 +2,13 @@
 
 #include "Vulkan/Context.h"
 #include "Camera/PerspectiveCamera.h"
+#include "Cpu/CpuRaytracer.h"
 #include "Vulkan/Tonemapper.h"
 #include "UI/ImGuiManager.h"
+#include "Vulkan/GpuRaytracer.h"
 #include "Vulkan/Renderer.h"
 
 class Viewer {
-public:
-    Viewer(int width, int height);
-    // Forbid copying and moving to prevent resource management bugs
-    ~Viewer();
-    Viewer(const Viewer&) = delete;
-    Viewer& operator=(const Viewer&) = delete;
-    Viewer(Viewer&&) = delete;
-    Viewer& operator=(Viewer&&) = delete;
-
-    static void cleanup();
-
-    void run();
-
 private:
     void setupScene();
     void setupUI();
@@ -31,8 +20,20 @@ private:
     Context context;
     
     Renderer renderer;
+    Scene scene;
+    GpuRaytracer gpuRaytracer;
+    CpuRaytracer cpuRaytracer;
     InputTracker inputTracker;
 
-    Tonemapper tonemapper;
+    Tonemapper gpuImageTonemapper;
+    Tonemapper cpuImageTonemapper;
     ImGuiManager imGuiManager;
+    
+public:
+    Viewer(int width, int height);
+    ~Viewer();
+
+    static void cleanup();
+
+    void run();
 };

@@ -3,8 +3,8 @@
 #include <iostream>
 
 
-ViewportPanel::ViewportPanel(Context& context, const vk::ImageView imageView,uint32_t width, uint32_t height)
-: width(width), height(height)
+ViewportPanel::ViewportPanel(Context& context, const Image& inputImage,uint32_t width, uint32_t height, const std::string& title)
+: width(width), height(height), title(title)
 {
     // Create Vulkan sampler
     vk::SamplerCreateInfo samplerInfo{};
@@ -14,7 +14,7 @@ ViewportPanel::ViewportPanel(Context& context, const vk::ImageView imageView,uin
     samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
 
-    sampler = context.device->createSamplerUnique(samplerInfo);
+    sampler = context.getDevice().createSamplerUnique(samplerInfo);
 
     // Create descriptor set layout
     vk::DescriptorSetLayoutBinding binding{0,vk::DescriptorType::eCombinedImageSampler,1,vk::ShaderStageFlagBits::eFragment};
@@ -23,19 +23,19 @@ ViewportPanel::ViewportPanel(Context& context, const vk::ImageView imageView,uin
     layoutInfo.bindingCount = 1;
     layoutInfo.pBindings = &binding;
 
-    descriptorSetLayout = context.device->createDescriptorSetLayoutUnique(layoutInfo);
+    descriptorSetLayout = context.getDevice().createDescriptorSetLayoutUnique(layoutInfo);
 
     // Allocate descriptor set
     vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.descriptorPool = context.descriptorPool.get();
+    allocInfo.descriptorPool = context.getDescriptorPool();
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &descriptorSetLayout.get();
 
-    auto sets = context.device->allocateDescriptorSetsUnique(allocInfo);
+    auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
 
     // Update descriptor set with image info
-    vk::DescriptorImageInfo imageInfo{sampler.get(),imageView,vk::ImageLayout::eShaderReadOnlyOptimal};
+    vk::DescriptorImageInfo imageInfo{sampler.get(), inputImage.getImageView(),vk::ImageLayout::eShaderReadOnlyOptimal};
 
     vk::WriteDescriptorSet write{};
     write.dstSet = outputImageDescriptorSet.get();
@@ -44,11 +44,11 @@ ViewportPanel::ViewportPanel(Context& context, const vk::ImageView imageView,uin
     write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
     write.pImageInfo = &imageInfo;
 
-    context.device->updateDescriptorSets(write, nullptr);
+    context.getDevice().updateDescriptorSets(write, nullptr);
 }
 
 void ViewportPanel::renderUi() {
-    ImGui::Begin(getType().c_str());
+    ImGui::Begin(title.c_str());
 
     ImVec2 availSize = ImGui::GetContentRegionAvail();
     float aspectRatio = static_cast<float>(width) / static_cast<float>(height);

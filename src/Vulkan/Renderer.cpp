@@ -1,9 +1,8 @@
 ﻿#include "Renderer.h"
 #include <iostream>
-#include "Utils.h"
 
 Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
-: width(width), height(height), context(context)
+: context(context), width(width), height(height)
 {
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.getSurface());
@@ -12,7 +11,7 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     swapchainInfo.setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear);
     swapchainInfo.setImageExtent({width, height});
     swapchainInfo.setImageArrayLayers(1);
-    swapchainInfo.setImageUsage(vk::ImageUsageFlagBits::eTransferDst |vk::ImageUsageFlagBits::eColorAttachment);
+    swapchainInfo.setImageUsage(vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eColorAttachment);
     swapchainInfo.setPreTransform(vk::SurfaceTransformFlagBitsKHR::eIdentity);
     swapchainInfo.setPresentMode(vk::PresentModeKHR::eMailbox);
     swapchainInfo.setClipped(true);
@@ -25,6 +24,16 @@ Renderer::Renderer(Context& context, uint32_t width, uint32_t height)
     commandBufferInfo.setCommandPool(context.getCommandPool());
     commandBufferInfo.setCommandBufferCount(static_cast<uint32_t>(swapchainImages.size()));
     commandBuffers = context.getDevice().allocateCommandBuffersUnique(commandBufferInfo);
+
+    m_imageAcquiredSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    m_renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    m_inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        m_imageAcquiredSemaphores[i] = context.getDevice().createSemaphoreUnique({});
+        m_renderFinishedSemaphores[i] = context.getDevice().createSemaphoreUnique({});
+        m_inFlightFences[i] = context.getDevice().createFenceUnique({ vk::FenceCreateFlagBits::eSignaled });
+    }
 }
 
 Renderer::~Renderer()
@@ -35,4 +44,9 @@ Renderer::~Renderer()
 const vk::CommandBuffer& Renderer::getCommandBuffer(const uint32_t imageIndex) const
 {
     return commandBuffers[imageIndex].get();
+}
+
+void Renderer::advanceFrame() 
+{
+    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }

@@ -59,7 +59,7 @@ void Viewer::setupUI() {
                 auto meshAsset = std::make_shared<MeshAsset>(scene, selection[0], std::move(vertices), std::move(indices), std::move(faces), std::move(materials));
                 
                 this->scene.add(meshAsset);
-                auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->path) + " Instance", meshAsset, Transform{});
+                auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
                 int instanceIndex = this->scene.add(std::move(instance));
                 if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
                     outliner->setSelectedIndex(instanceIndex);
@@ -82,7 +82,7 @@ void Viewer::setupUI() {
             Utils::loadCrtScene(scene, selection[0], vertices, indices, faces, materials);
             auto meshAsset = std::make_shared<MeshAsset>(scene, selection[0], std::move(vertices), std::move(indices), std::move(faces), std::move(materials));
             this->scene.add(meshAsset);
-            auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->path) + " Instance", meshAsset, Transform{});
+            auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
             int instanceIndex = this->scene.add(std::move(instance));
             if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
                 outliner->setSelectedIndex(instanceIndex);
@@ -191,7 +191,7 @@ void Viewer::setupScene() {
 
     auto meshAsset = MeshAsset::CreateCube(this->scene, "Default Cube", Material{});
     this->scene.add(meshAsset);
-    auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->path) + " Instance", meshAsset, Transform{});
+    auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
     int instanceIndex = this->scene.add(std::move(instance));
     if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
         outliner->setSelectedIndex(instanceIndex);
@@ -202,24 +202,15 @@ void Viewer::run() {
     auto lastTime = clock::now();
     float timeAccumulator = 0.0f;
     int frameCounter = 0;
-    vk::UniqueSemaphore imageAcquiredSemaphore = context.getDevice().createSemaphoreUnique(vk::SemaphoreCreateInfo());
-
-    // --- Initial Synchronization ---
-    std::cout << "Performing initial scene synchronization..." << std::endl;
-    context.getDevice().waitIdle();
-    cpuRaytracer.updateFromScene();
-    gpuRaytracer.updateMeshes();
-    gpuRaytracer.updateTLAS();
-    gpuRaytracer.updateTextures();
-    scene.clearDirtyFlags();
-    std::cout << "Initial synchronization complete. Starting render loop." << std::endl;
     
     while (!glfwWindowShouldClose(context.getWindow())) {
+        vk::Fence inFlightFence = renderer.getCurrentInFlightFence();
+        (void)context.getDevice().waitForFences(inFlightFence, VK_TRUE, UINT64_MAX);
+        
         auto currentTime = clock::now();
         float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
         lastTime = currentTime;
 
-        // --- FPS Counter ---
         timeAccumulator += deltaTime;
         frameCounter++;
         if (timeAccumulator >= 1.0f) {
@@ -229,35 +220,30 @@ void Viewer::run() {
             frameCounter = 0;
         }
 
-        // --- Input and UI Phase ---
-        // Process all inputs and UI interactions.
         glfwPollEvents();
         imGuiManager.renderUi();
         inputTracker.update();
 
-        // --- Camera Update ---
         scene.getActiveCamera()->update(inputTracker, deltaTime);
 
-        // --- SYNCHRONIZATION PHASE ---
+        vk::Semaphore imageAcquiredSemaphore = renderer.getCurrentImageAcquiredSemaphore();
+        auto resultValue = context.getDevice().acquireNextImageKHR(renderer.getSwapChain(), UINT64_MAX, imageAcquiredSemaphore);
+        uint32_t imageIndex = resultValue.value;
         
-        // Check if any part of the scene has been modified.
+        context.getDevice().resetFences(inFlightFence);
+        
         if (scene.isTlasDirty() || scene.isMeshesDirty() || scene.isTexturesDirty()) {
             context.getDevice().waitIdle();
-            
             if (scene.isMeshesDirty())
                 gpuRaytracer.updateMeshes();
-            
             if (scene.isTexturesDirty())
                 gpuRaytracer.updateTextures();
-            
             if (scene.isTlasDirty()) {
                 gpuRaytracer.updateTLAS();
                 cpuRaytracer.updateFromScene();
             }
         }
         
-        // --- Accumulation Reset Logic ---
-        // If anything in the scene changed that affects the rendered image, reset the frame counter.
         if (scene.isAccumulationDirty())
             frame = 0;
         else
@@ -265,7 +251,8 @@ void Viewer::run() {
         
         scene.clearDirtyFlags();
         
-        // --- RENDER PHASE ---
+        vk::CommandBuffer commandBuffer = renderer.getCommandBuffer(imageIndex);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{});
 
         PushConstants pushConstantData{};
         pushConstantData.push.frame = frame;
@@ -273,45 +260,35 @@ void Viewer::run() {
         if (auto* environment = dynamic_cast<EnvironmentPanel*>(this->imGuiManager.getComponent("Environment")))
             pushConstantData.push.hdriTexture = environment->getHdriTexture();
 
-        uint32_t imageIndex = context.getDevice().acquireNextImageKHR(renderer.getSwapChain(), UINT64_MAX, *imageAcquiredSemaphore).value;
-        vk::CommandBuffer commandBuffer = renderer.getCommandBuffer(imageIndex);
-        commandBuffer.begin(vk::CommandBufferBeginInfo());
-
-        // Render using CPU and GPU raytracers
         gpuRaytracer.render(commandBuffer, pushConstantData);
         cpuRaytracer.render(commandBuffer, pushConstantData);
-
+        
         gpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
         cpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
-
+        
         Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
         imGuiManager.Draw(commandBuffer, imageIndex, width, height);
         Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR);
-
         commandBuffer.end();
 
-        // Submit command buffer and wait for the image to be acquired.
+        vk::Semaphore renderFinishedSemaphore = renderer.getCurrentRenderFinishedSemaphore();
         vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        context.getQueue().submit(vk::SubmitInfo()
+        vk::SubmitInfo submitInfo = vk::SubmitInfo()
             .setCommandBuffers(commandBuffer)
-            .setWaitSemaphores(*imageAcquiredSemaphore)
+            .setWaitSemaphores(imageAcquiredSemaphore)
             .setWaitDstStageMask(waitStage)
-        );
+            .setSignalSemaphores(renderFinishedSemaphore);
+        context.getQueue().submit(submitInfo, inFlightFence);
 
-        // --- Presentation ---
-        vk::PresentInfoKHR presentInfo{};
-        presentInfo.setPSwapchains(&renderer.getSwapChain());
-        presentInfo.setImageIndices(imageIndex);
-        
-        auto result = context.getQueue().presentKHR(presentInfo);
-        if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
-            throw std::runtime_error("Failed to present swap chain image.");
+        vk::PresentInfoKHR presentInfo = vk::PresentInfoKHR()
+            .setWaitSemaphores(renderFinishedSemaphore)
+            .setSwapchains(renderer.getSwapChain())
+            .setImageIndices(imageIndex);
+        context.getQueue().presentKHR(presentInfo);
 
-        // Wait for this frame's work to complete before starting the next loop.
-        context.getQueue().waitIdle();
+        renderer.advanceFrame();
     }
-    
-    // Final wait to ensure all resources can be safely destroyed.
+
     context.getDevice().waitIdle();
 }
 

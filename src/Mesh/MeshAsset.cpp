@@ -220,7 +220,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
 }
 
 MeshAsset::MeshAsset(Scene& scene, const std::string& name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
-    : path(name), scene(scene), vertices(vertices), indices(indices), faces(faces), materials(materials)
+    : scene(scene), path(name), vertices(vertices), indices(indices), faces(faces), materials(materials)
 {
     // Upload mesh data to GPU from the new member variable copies
     vertexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Vertex) * this->vertices.size(), this->vertices.data()};
@@ -243,8 +243,6 @@ MeshAsset::MeshAsset(Scene& scene, const std::string& name, const std::vector<Ve
 
     // Create bottom-level acceleration structure (BLAS)
     blasGpu.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
-    
-    // Build CPU-side acceleration structure from the new member variable copies
     blasCpu.build(this->vertices, this->indices);
 }
 
@@ -276,13 +274,12 @@ void MeshAsset::renderUi() {
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
     ImGui::PushItemWidth(-1);
     // Use path.c_str() which is the standard way to get a const char* from std::string for ImGui
-    ImGui::InputText("##meshPath", (char*)path.c_str(), path.size() + 1, ImGuiInputTextFlags_ReadOnly);
+    ImGui::InputText("##meshPath", const_cast<char*>(path.c_str()), path.size() + 1, ImGuiInputTextFlags_ReadOnly);
     ImGui::PopItemWidth();
     ImGui::PopStyleColor();
 
-    if (materials.empty()) {
+    if (materials.empty())
         return;
-    }
     
     ImGuiManager::tableRowLabel("Materials");
 
@@ -291,7 +288,7 @@ void MeshAsset::renderUi() {
     const auto textureNames = scene.getTextureNames();
 
     // Helper lambda for drawing texture selection combos.
-    auto drawTextureCombo = [&](const char* label, int& texIndex, int materialIndex) {
+    auto drawTextureCombo = [&](const char* label, int& texIndex, const int materialIndex) {
         // The current index for the combo box. We add 1 because index 0 is our "No Texture" option.
         int currentComboIndex = texIndex == -1 ? 0 : texIndex + 1;
 
@@ -301,12 +298,11 @@ void MeshAsset::renderUi() {
         ImGui::TableNextColumn();
         // Use a unique ID for each combo box.
         const std::string comboId = "##" + std::string(label) + std::to_string(materialIndex);
-        const char* previewValue = (currentComboIndex == 0) ? "No texture selected" : textureNames[currentComboIndex - 1].c_str();
-
+        
+        const char* previewValue = (currentComboIndex == 0) ? "No Texture" : textureNames[currentComboIndex - 1].c_str();
         if (ImGui::BeginCombo(comboId.c_str(), previewValue))
         {
-            // "No texture" option
-            if (ImGui::Selectable("No texture selected", currentComboIndex == 0)) {
+            if (ImGui::Selectable("No Texture", currentComboIndex == 0)) {
                 if (texIndex != -1) { // Only mark as changed if it was different.
                     texIndex = -1;
                     anyMaterialChanged = true;
@@ -326,7 +322,7 @@ void MeshAsset::renderUi() {
         }
     };
 
-    for (int i = 0; i < (int)materials.size(); ++i) {
+    for (auto i = 0; i < materials.size(); ++i) {
         Material& mat = materials[i];
         std::string label = "Material " + std::to_string(i);
 
@@ -335,46 +331,48 @@ void MeshAsset::renderUi() {
 
             drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](glm::vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const glm::vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
 
             ImGui::TableNextRow();
             drawTextureCombo("Specular Texture", mat.specularIndex, i);
             ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](float v) { mat.specular = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.specular = v; anyMaterialChanged = true; });
 
             ImGui::TableNextRow();
             drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
             ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](float v) { mat.metallic = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.metallic = v; anyMaterialChanged = true; });
 
             ImGui::TableNextRow();
             drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
             ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](float v) { mat.roughness = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.roughness = v; anyMaterialChanged = true; });
             
             ImGui::TableNextRow();
             drawTextureCombo("Normal Texture", mat.normalIndex, i);
             
             ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](float v) { mat.ior = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
             
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Transmission", mat.transmission, [&](glm::vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Transmission", mat.transmission, [&](const glm::vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
             
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Emission", mat.emission, [&](glm::vec3 v) { mat.emission = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Emission", mat.emission, [&](const glm::vec3 v) { mat.emission = v; anyMaterialChanged = true; });
 
             ImGui::EndTable();
             ImGui::TreePop();
         }
     }
 
-    if (anyMaterialChanged)
-        updateMaterials();
+    if (anyMaterialChanged) {
+        dirty = true;
+        scene.setMeshesDirty();
+    }
 }
 
 void MeshAsset::updateMaterials() {
     // Recreate materialBuffer with updated materials from the CPU-side copy
     materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Material) * materials.size(), materials.data()};
-    scene.setMeshesDirty(); // To update the stored buffer address on the mesh
+    dirty = false; // Reset dirty flag after updating
 }

@@ -236,7 +236,10 @@ void GpuRaytracer::updateMeshes()
     const auto& meshAssets = scene.getMeshAssets();
     meshAddresses.reserve(meshAssets.size());
     for (const auto& meshAsset : meshAssets)
+    {
+        meshAsset->updateMaterials();
         meshAddresses.push_back(meshAsset->getBufferAddresses());
+    }
     
     meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses) * meshAddresses.size(), meshAddresses.data()};
     vk::DescriptorBufferInfo bufferInfo = meshBuffer.getDescriptorInfo();

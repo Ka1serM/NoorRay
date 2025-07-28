@@ -93,7 +93,7 @@ std::shared_ptr<MeshAsset> Scene::getMeshAsset(const std::string& name) const {
     // Acquire a shared lock for read-only access.
     std::shared_lock lock(sceneMutex);
     for (const auto& meshAsset : meshAssets)
-        if (meshAsset->path == name)
+        if (meshAsset->getPath() == name)
             return meshAsset;
     return nullptr;
 }

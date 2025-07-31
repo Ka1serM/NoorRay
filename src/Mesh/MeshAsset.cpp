@@ -243,7 +243,7 @@ MeshAsset::MeshAsset(Scene& scene, const std::string& name, const std::vector<Ve
 
     // Create bottom-level acceleration structure (BLAS)
     blasGpu.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
-    blasCpu.build(this->vertices, this->indices);
+    blasCpu.build(scene.getContext(), this->vertices, this->indices);
 }
 
 uint64_t MeshAsset::getBlasAddress() const {
@@ -256,6 +256,7 @@ MeshAddresses MeshAsset::getBufferAddresses() const {
         indexBuffer.getDeviceAddress(),
         faceBuffer.getDeviceAddress(),
         materialBuffer.getDeviceAddress(),
+        blasCpu.getBufferAddress()
     };
 }
 

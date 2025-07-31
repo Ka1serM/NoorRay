@@ -20,8 +20,8 @@ Viewer::Viewer(const int width, const int height)
     : width(width),
       height(height),
       context(width, height),
-      scene(context),
       renderer(context, width, height),
+      scene(context),
       gpuRaytracer(context, scene, width /2, height /2),
       cpuRaytracer(context, scene, width /4, height /4),
       inputTracker(context.getWindow()),
@@ -39,7 +39,7 @@ void Viewer::setupUI() {
     auto environmentPanel = std::make_unique<EnvironmentPanel>(scene);
     auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene, inputTracker);
     auto gpuViewport = std::make_unique<ViewportPanel>(context, gpuImageTonemapper.getOutputImage(), width, height, "GPU Viewport");
-    auto cpuViewport = std::make_unique<ViewportPanel>(context, cpuImageTonemapper.getOutputImage(), width, height, " CPU Viewport");
+    //auto cpuViewport = std::make_unique<ViewportPanel>(context, cpuImageTonemapper.getOutputImage(), width, height, " CPU Viewport");
 
     mainMenuBar->setCallback("File.Quit", [&] {
         glfwSetWindowShouldClose(context.getWindow(), GLFW_TRUE);
@@ -159,7 +159,7 @@ void Viewer::setupUI() {
     imGuiManager.add(std::move(environmentPanel));
     imGuiManager.add(std::move(outlinerDetailsPanel));
     imGuiManager.add(std::move(gpuViewport));
-    imGuiManager.add(std::move(cpuViewport));
+    //imGuiManager.add(std::move(cpuViewport));
 }
 
 void Viewer::setupScene() {
@@ -204,9 +204,7 @@ void Viewer::run() {
     int frameCounter = 0;
     
     while (!glfwWindowShouldClose(context.getWindow())) {
-        vk::Fence inFlightFence = renderer.getCurrentInFlightFence();
-        (void)context.getDevice().waitForFences(inFlightFence, VK_TRUE, UINT64_MAX);
-        
+        // --- Handle timing and FPS ---
         auto currentTime = clock::now();
         float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
         lastTime = currentTime;
@@ -220,20 +218,17 @@ void Viewer::run() {
             frameCounter = 0;
         }
 
+        // --- Handle Input & UI ---
         glfwPollEvents();
         imGuiManager.renderUi();
         inputTracker.update();
-
+        
+        // --- Scene Updates ---
         scene.getActiveCamera()->update(inputTracker, deltaTime);
-
-        vk::Semaphore imageAcquiredSemaphore = renderer.getCurrentImageAcquiredSemaphore();
-        auto resultValue = context.getDevice().acquireNextImageKHR(renderer.getSwapChain(), UINT64_MAX, imageAcquiredSemaphore);
-        uint32_t imageIndex = resultValue.value;
         
-        context.getDevice().resetFences(inFlightFence);
-        
+        // Check for and handle scene resource updates
         if (scene.isTlasDirty() || scene.isMeshesDirty() || scene.isTexturesDirty()) {
-            context.getDevice().waitIdle();
+            context.getDevice().waitIdle(); // Wait for safety before major updates
             if (scene.isMeshesDirty())
                 gpuRaytracer.updateMeshes();
             if (scene.isTexturesDirty())
@@ -244,49 +239,31 @@ void Viewer::run() {
             }
         }
         
-        if (scene.isAccumulationDirty())
-            frame = 0;
-        else
-            frame++;
+        if (scene.isAccumulationDirty()) frame = 0;
+        else frame++;
         
         scene.clearDirtyFlags();
         
-        vk::CommandBuffer commandBuffer = renderer.getCommandBuffer(imageIndex);
-        commandBuffer.begin(vk::CommandBufferBeginInfo{});
+        // --- Rendering ---
+        if(vk::CommandBuffer commandBuffer = renderer.beginFrame()) {
+            
+            PushConstants pushConstantData{};
+            pushConstantData.push.frame = frame;
+            pushConstantData.camera = scene.getActiveCamera()->getCameraData();
+            if (auto* environment = dynamic_cast<EnvironmentPanel*>(this->imGuiManager.getComponent("Environment")))
+                pushConstantData.push.hdriTexture = environment->getHdriTexture();
 
-        PushConstants pushConstantData{};
-        pushConstantData.push.frame = frame;
-        pushConstantData.camera = scene.getActiveCamera()->getCameraData();
-        if (auto* environment = dynamic_cast<EnvironmentPanel*>(this->imGuiManager.getComponent("Environment")))
-            pushConstantData.push.hdriTexture = environment->getHdriTexture();
+            // Record all rendering commands
+            gpuRaytracer.render(commandBuffer, pushConstantData);
+            // cpuRaytracer.render(commandBuffer, pushConstantData);
+            gpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
+            //cpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
 
-        gpuRaytracer.render(commandBuffer, pushConstantData);
-        cpuRaytracer.render(commandBuffer, pushConstantData);
-        
-        gpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
-        cpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
-        
-        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
-        imGuiManager.Draw(commandBuffer, imageIndex, width, height);
-        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR);
-        commandBuffer.end();
+            imGuiManager.Draw(commandBuffer, renderer.getCurrentIndex(), width, height);
 
-        vk::Semaphore renderFinishedSemaphore = renderer.getCurrentRenderFinishedSemaphore();
-        vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        vk::SubmitInfo submitInfo = vk::SubmitInfo()
-            .setCommandBuffers(commandBuffer)
-            .setWaitSemaphores(imageAcquiredSemaphore)
-            .setWaitDstStageMask(waitStage)
-            .setSignalSemaphores(renderFinishedSemaphore);
-        context.getQueue().submit(submitInfo, inFlightFence);
-
-        vk::PresentInfoKHR presentInfo = vk::PresentInfoKHR()
-            .setWaitSemaphores(renderFinishedSemaphore)
-            .setSwapchains(renderer.getSwapChain())
-            .setImageIndices(imageIndex);
-        context.getQueue().presentKHR(presentInfo);
-
-        renderer.advanceFrame();
+            // End the frame (submit and present)
+            renderer.endFrame();
+        }
     }
 
     context.getDevice().waitIdle();

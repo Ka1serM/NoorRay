@@ -10,6 +10,7 @@ class Context {
 private:
     GLFWwindow* window;
     vk::detail::DynamicLoader dl;
+    bool rtxSupported = false; // Flag to indicate if Ray Tracing is supported
 
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;
@@ -21,22 +22,34 @@ private:
     vk::UniqueCommandPool commandPool;
     vk::UniqueDescriptorPool descriptorPool;
 
+    // Helper functions for setup
+    void pickPhysicalDevice();
+    void createInstance();
+    void createLogicalDevice();
+
+
 public:
     Context(int width, int height);
     ~Context();
 
+    // Helper functions
     bool checkDeviceExtensionSupport(const std::vector<const char*>& requiredExtensions) const;
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
     void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const;
     vk::UniqueDescriptorSet allocateDescSet(vk::DescriptorSetLayout descSetLayout);
+    vk::PresentModeKHR chooseSwapPresentMode() const;
+    vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const; // New helper function
 
-    static VKAPI_ATTR VkBool32 VKAPI_CALL debugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                                                                      VkDebugUtilsMessageTypeFlagsEXT messageTypes,
-                                                                      const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-                                                                      void* pUserData);
+    // Static callback with corrected C++ types
+    static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugUtilsMessengerCallback(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+        vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
+        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+        void* pUserData);
 
     // Getters
     GLFWwindow* getWindow() const { return window; }
+    bool isRtxSupported() const { return rtxSupported; } // Getter for the RTX support flag
     const vk::Instance& getInstance() const { return instance.get(); }
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }

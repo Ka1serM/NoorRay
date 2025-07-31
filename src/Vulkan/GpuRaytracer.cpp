@@ -191,11 +191,9 @@ void GpuRaytracer::updateTLAS()
         const auto& meshInstances = scene.getMeshInstances();
         instances.reserve(meshInstances.size());
         
-        for (const auto* meshInstance : meshInstances) {
-            if (meshInstance) {
-                instances.push_back(meshInstance->instanceData);
-            }
-        }
+        for (const auto* meshInstance : meshInstances)
+            if (meshInstance)
+                instances.push_back(meshInstance->getInstanceData());
     }
 
     if (instances.empty()) {

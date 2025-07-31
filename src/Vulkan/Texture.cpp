@@ -79,15 +79,8 @@ void Texture::createSampler(Context& context)
     samplerInfo.setAddressModeU(vk::SamplerAddressMode::eRepeat);
     samplerInfo.setAddressModeV(vk::SamplerAddressMode::eRepeat);
     samplerInfo.setAddressModeW(vk::SamplerAddressMode::eRepeat);
-    samplerInfo.setAnisotropyEnable(true);
-    samplerInfo.setMaxAnisotropy(16.0f); 
 
-    try {
-        sampler = context.getDevice().createSamplerUnique(samplerInfo);
-    } catch (const vk::SystemError& e) {
-        throw std::runtime_error("Failed to create Vulkan sampler: " + std::string(e.what()));
-    }
-    
+    sampler = context.getDevice().createSamplerUnique(samplerInfo);
     descriptorInfo.setImageView(image.getImageView());
     descriptorInfo.setSampler(*sampler);
     descriptorInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);

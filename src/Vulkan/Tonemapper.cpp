@@ -3,7 +3,7 @@
 #include "Utils.h"
 
 Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage)
-: outputImage(context, width, height, vk::Format::eB8G8R8A8Unorm,vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
+: outputImage(context, width, height, context.chooseSwapSurfaceFormat().format,  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
 {
     //Load shader
     static constexpr unsigned char code[] = {

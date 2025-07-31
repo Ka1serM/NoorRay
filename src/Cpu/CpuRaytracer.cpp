@@ -115,7 +115,7 @@ void CpuRaytracer::traceRayEXT_CPU(Payload& payload, float tMin, float tMax) {
 
     int current_instance_index = 0;
     for (const auto* instance : threadSafeInstances) {
-        const auto* asset = instance->meshAsset.get();
+        const MeshAsset& asset = instance->getMeshAsset();
         glm::mat4 world_to_object = glm::inverse(instance->getTransform().getMatrix());
         glm::vec4 local_origin_glm = world_to_object * glm::vec4(payload.position, 1.0f);
         glm::vec4 local_dir_glm = world_to_object * glm::vec4(payload.nextDirection, 0.0f);
@@ -130,7 +130,7 @@ void CpuRaytracer::traceRayEXT_CPU(Payload& payload, float tMin, float tMax) {
 
         float tMax_local = hitInfo.t / local_dir_length;
         HitInfo localHit;
-        if (asset->getBlasCpu().intersect(local_origin, local_dir, localHit, tMin, tMax_local)) {
+        if (asset.getBlasCpu().intersect(local_origin, local_dir, localHit, tMin, tMax_local)) {
             float world_t = localHit.t * local_dir_length;
             if (world_t < hitInfo.t) {
                 found_hit = true;
@@ -244,14 +244,13 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
         return;
     }
 
-    const auto& meshAsset = instance->meshAsset;
-
-    const auto& meshIndices = meshAsset->getIndices();
+    const MeshAsset& meshAsset = instance->getMeshAsset();
+    const auto& meshIndices = meshAsset.getIndices();
     uint32_t i0 = meshIndices[hit.primitiveIndex * 3 + 0];
     uint32_t i1 = meshIndices[hit.primitiveIndex * 3 + 1];
     uint32_t i2 = meshIndices[hit.primitiveIndex * 3 + 2];
 
-    const auto& meshVertices = meshAsset->getVertices();
+    const auto& meshVertices = meshAsset.getVertices();
     const Vertex& v0 = meshVertices[i0];
     const Vertex& v1 = meshVertices[i1];
     const Vertex& v2 = meshVertices[i2];
@@ -266,8 +265,8 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
     glm::vec3 worldPosition = glm::vec3(objectToWorld * glm::vec4(localPosition, 1.0f));
     glm::vec3 normal = glm::normalize(normalMatrix * localNormal);
 
-    const Face& face = meshAsset->getFaces()[hit.primitiveIndex];
-    Material material = meshAsset->getMaterials()[face.materialIndex];
+    const Face& face = meshAsset.getFaces()[hit.primitiveIndex];
+    Material material = meshAsset.getMaterials()[face.materialIndex];
     // Get texture list for sampling
     const auto& textures = scene.getTextures();
 

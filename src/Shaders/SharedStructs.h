@@ -7,6 +7,40 @@
     typedef glm::uint uint;
 #endif
 
+
+#define BVH_MAX_LEAF_SIZE 4
+
+struct AABB {
+    vec3 min;
+    vec3 max;
+
+#ifdef __cplusplus
+    AABB();
+    void expand(const glm::vec3& point);
+    void expand(const AABB& other);
+    float surfaceArea() const;
+    bool intersect(const glm::vec3& origin, const glm::vec3& direction, float tMin, float tMax) const;
+#endif
+};
+
+struct BVHNode {
+#ifdef __cplusplus
+    AABB bbox;
+#else
+    vec3 bbox_min;
+    vec3 bbox_max;
+#endif
+    int leftChild;
+    int rightChild;
+    int faceCount;
+    int faceIndices[BVH_MAX_LEAF_SIZE];
+
+#ifdef __cplusplus
+    bool isLeaf() const { return faceCount > 0; }
+#endif
+};
+
+
 struct PushData {
     int frame, isMoving, hdriTexture, _pad0;
 };
@@ -60,6 +94,7 @@ struct MeshAddresses {
     uint64_t indexAddress;
     uint64_t faceAddress;
     uint64_t materialAddress;
+    uint64_t blasAddress;
 };
 
 struct Payload

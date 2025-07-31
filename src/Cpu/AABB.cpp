@@ -1,6 +1,10 @@
-﻿#include "AABB.h"
+﻿#include "Shaders/SharedStructs.h"
 #include <algorithm>
 #include <limits>
+
+#include "glm/common.hpp"
+
+//Definition of AABB Struct is in Shaders/SharedStructs.h
 
 AABB::AABB() : min(std::numeric_limits<float>::max()), max(std::numeric_limits<float>::lowest()) {}
 

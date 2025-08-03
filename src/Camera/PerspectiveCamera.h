@@ -4,7 +4,7 @@
 #include "InputTracker.h"
 #include "glm/glm.hpp"
 #include "Scene/MeshInstance.h"
-#include "Shaders/SharedStructs.h"
+#include "../Shaders/PathTracing/SharedStructs.h"
 
 class Scene;
 
@@ -19,7 +19,7 @@ private:
 
     CameraData cameraData{};
 
-    static constexpr glm::vec3 UP = glm::vec3(0, 1, 0);
+    static constexpr vec3 UP = vec3(0, 1, 0);
 public:
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
     
@@ -44,9 +44,4 @@ public:
 private:
     void updateHorizontalVertical();
     void updateCameraData();
-
-    void setPosition(const glm::vec3& pos) override;
-    void setRotation(const glm::quat& rot) override;
-    void setRotationEuler(const glm::vec3& rot) override;
-    void setScale(const glm::vec3& scale) override;
 };

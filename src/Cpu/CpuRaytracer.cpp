@@ -37,9 +37,37 @@ void CpuRaytracer::updateFromScene() {
     threadSafeInstances = std::move(newInstances);
 }
 
+void CpuRaytracer::startAsyncRender(const PushConstants& pushConstants) {
+    if (renderInProgress.load()) return; // Already rendering
+
+    renderInProgress = true;
+    lastPushConstants = pushConstants;
+
+    renderFuture = std::async(std::launch::async, [this]() {
+        this->render({}, lastPushConstants); // CommandBuffer is unused
+        renderInProgress = false;
+    });
+}
+
+// Check if current async render is done
+bool CpuRaytracer::isRenderComplete() const {
+    return !renderInProgress.load();
+}
+
+// Wait until render completes (optional)
+void CpuRaytracer::waitForRender() {
+    if (renderFuture.valid())
+        renderFuture.wait();
+}
+
+// Uploads CPU buffer to GPU
+void CpuRaytracer::retrieveRenderResult() {
+    outputImage.update(context, colorBuffer.data(), colorBuffer.size() * sizeof(vec4));
+}
+
 void CpuRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstants& pushConstants) {
-    // Create a list of buckets to render. A glm::uvec4 stores {startX, startY, endX, endY}.
-    std::vector<glm::uvec4> buckets;
+    // Create a list of buckets to render. A uvec4 stores {startX, startY, endX, endY}.
+    std::vector<uvec4> buckets;
     for (uint32_t y = 0; y < height; y += BUCKET_SIZE) {
         for (uint32_t x = 0; x < width; x += BUCKET_SIZE) {
             buckets.emplace_back(x, y, std::min(x + BUCKET_SIZE, width), std::min(y + BUCKET_SIZE, height));
@@ -65,7 +93,7 @@ void CpuRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushCons
                 break;
 
             // Get the bucket dimensions.
-            const glm::uvec4& bucket = buckets[bucketIndex];
+            const uvec4& bucket = buckets[bucketIndex];
             const uint32_t startX = bucket.x;
             const uint32_t startY = bucket.y;
             const uint32_t endX   = bucket.z;
@@ -79,15 +107,15 @@ void CpuRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushCons
 
                     int i = (y * width + x);
 
-                    glm::vec3 newColor = payload.color;
+                    vec3 newColor = payload.color;
 
                     // Handle accumulation reset
                     if (pushConstants.push.frame == 0) {
-                         colorBuffer[i] = glm::vec4(newColor, 1.0f);
+                         colorBuffer[i] = vec4(newColor, 1.0f);
                     } else {
-                        glm::vec3 previousColor = glm::vec3(colorBuffer[i]);
-                        glm::vec3 accumulatedColor = (newColor + previousColor * float(pushConstants.push.frame)) / float(pushConstants.push.frame + 1);
-                        colorBuffer[i] = glm::vec4(accumulatedColor, 1.0f);
+                        vec3 previousColor = vec3(colorBuffer[i]);
+                        vec3 accumulatedColor = (newColor + previousColor * float(pushConstants.push.frame)) / float(pushConstants.push.frame + 1);
+                        colorBuffer[i] = vec4(accumulatedColor, 1.0f);
                     }
                 }
             }
@@ -103,7 +131,7 @@ void CpuRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushCons
         t.join();
 
     // After rendering, update the GPU image with the new CPU data.
-    outputImage.update(context, colorBuffer.data(), colorBuffer.size() * sizeof(glm::vec4));
+    outputImage.update(context, colorBuffer.data(), colorBuffer.size() * sizeof(vec4));
 }
 
 void CpuRaytracer::traceRayEXT_CPU(Payload& payload, float tMin, float tMax) {
@@ -116,12 +144,12 @@ void CpuRaytracer::traceRayEXT_CPU(Payload& payload, float tMin, float tMax) {
     int current_instance_index = 0;
     for (const auto* instance : threadSafeInstances) {
         const MeshAsset& asset = instance->getMeshAsset();
-        glm::mat4 world_to_object = glm::inverse(instance->getTransform().getMatrix());
-        glm::vec4 local_origin_glm = world_to_object * glm::vec4(payload.position, 1.0f);
-        glm::vec4 local_dir_glm = world_to_object * glm::vec4(payload.nextDirection, 0.0f);
-        glm::vec3 local_origin = glm::vec3(local_origin_glm);
-        glm::vec3 local_dir = glm::vec3(local_dir_glm);
-        float local_dir_length = glm::length(local_dir);
+        mat4 world_to_object = inverse(instance->getTransform().getMatrix());
+        vec4 local_origin_glm = world_to_object * vec4(payload.position, 1.0f);
+        vec4 local_dir_glm = world_to_object * vec4(payload.nextDirection, 0.0f);
+        vec3 local_origin = vec3(local_origin_glm);
+        vec3 local_dir = vec3(local_dir_glm);
+        float local_dir_length = length(local_dir);
 
         if (local_dir_length < EPSILON) {
             current_instance_index++;
@@ -150,49 +178,49 @@ void CpuRaytracer::traceRayEXT_CPU(Payload& payload, float tMin, float tMax) {
 }
 
 void CpuRaytracer::raygen(int x, int y, const PushConstants& pushConstants, Payload& payload) {
-    glm::ivec2 pixelCoord(x, y);
-    glm::ivec2 screenSize(width, height);
+    ivec2 pixelCoord(x, y);
+    ivec2 screenSize(width, height);
 
-    glm::uvec2 seed = ShadersCpu::pcg2d(glm::uvec2(pixelCoord) ^ glm::uvec2(pushConstants.push.frame * 16777619u));
+    uvec2 seed = ShadersCpu::pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.push.frame * 16777619u));
     uint32_t rngStateX = seed.x;
     uint32_t rngStateY = seed.y;
 
-    glm::vec2 jitter = (glm::vec2(ShadersCpu::rand(rngStateX), ShadersCpu::rand(rngStateY)) - 0.5f) * std::min(float(pushConstants.push.frame), 1.0f);
+    vec2 jitter = (vec2(ShadersCpu::rand(rngStateX), ShadersCpu::rand(rngStateY)) - 0.5f) * std::min(float(pushConstants.push.frame), 1.0f);
 
-    glm::vec2 uv = (glm::vec2(pixelCoord) + jitter) / glm::vec2(screenSize);
+    vec2 uv = (vec2(pixelCoord) + jitter) / vec2(screenSize);
     uv.y = 1.0f - uv.y;
 
-    glm::vec2 sensorOffset = uv - 0.5f;
+    vec2 sensorOffset = uv - 0.5f;
 
-    const glm::vec3 camPos = pushConstants.camera.position;
-    const glm::vec3 camDir = glm::normalize(pushConstants.camera.direction);
-    const glm::vec3 horizontal = pushConstants.camera.horizontal;
-    const glm::vec3 vertical = pushConstants.camera.vertical;
+    const vec3 camPos = pushConstants.camera.position;
+    const vec3 camDir = normalize(pushConstants.camera.direction);
+    const vec3 horizontal = pushConstants.camera.horizontal;
+    const vec3 vertical = pushConstants.camera.vertical;
 
     float focalLength = pushConstants.camera.focalLength * 0.001f;
-    glm::vec3 imagePlaneCenter = camPos + camDir * focalLength;
-    glm::vec3 imagePlanePoint = imagePlaneCenter + horizontal * sensorOffset.x + vertical * sensorOffset.y;
+    vec3 imagePlaneCenter = camPos + camDir * focalLength;
+    vec3 imagePlanePoint = imagePlaneCenter + horizontal * sensorOffset.x + vertical * sensorOffset.y;
 
-    glm::vec3 rayOrigin = camPos;
-    glm::vec3 rayDirection = glm::normalize(imagePlanePoint - rayOrigin);
+    vec3 rayOrigin = camPos;
+    vec3 rayDirection = normalize(imagePlanePoint - rayOrigin);
 
     if (pushConstants.camera.aperture > 0.0f) {
         float apertureRadius = (pushConstants.camera.focalLength / pushConstants.camera.aperture) * 0.5f * 0.001f;
-        glm::vec2 lensSample = ShadersCpu::roundBokeh(ShadersCpu::rand(rngStateX), ShadersCpu::rand(rngStateY), pushConstants.camera.bokehBias) * apertureRadius;
-        glm::vec3 lensU = glm::normalize(horizontal);
-        glm::vec3 lensV = glm::normalize(vertical);
-        glm::vec3 rayOriginDOF = camPos + lensU * lensSample.x + lensV * lensSample.y;
+        vec2 lensSample = ShadersCpu::roundBokeh(ShadersCpu::rand(rngStateX), ShadersCpu::rand(rngStateY), pushConstants.camera.bokehBias) * apertureRadius;
+        vec3 lensU = normalize(horizontal);
+        vec3 lensV = normalize(vertical);
+        vec3 rayOriginDOF = camPos + lensU * lensSample.x + lensV * lensSample.y;
         float focusDistance = pushConstants.camera.focusDistance;
-        glm::vec3 focusPoint = rayOrigin + rayDirection * focusDistance;
-        glm::vec3 rayDirectionDOF = glm::normalize(focusPoint - rayOriginDOF);
+        vec3 focusPoint = rayOrigin + rayDirection * focusDistance;
+        vec3 rayDirectionDOF = normalize(focusPoint - rayOriginDOF);
         rayOrigin = rayOriginDOF;
         rayDirection = rayDirectionDOF;
     }
 
-    payload.color = glm::vec3(0.0f);
-    payload.normal = glm::vec3(0.0f);
+    payload.color = vec3(0.0f);
+    payload.normal = vec3(0.0f);
     payload.position = rayOrigin;
-    payload.throughput = glm::vec3(1.0f);
+    payload.throughput = vec3(1.0f);
     payload.nextDirection = rayDirection;
     payload.done = false;
     payload.rngState = rngStateX;
@@ -206,7 +234,7 @@ void CpuRaytracer::raygen(int x, int y, const PushConstants& pushConstants, Payl
     int specularBounces = 0;
     int transmissionBounces = 0;
 
-    glm::vec3 color(0.0f);
+    vec3 color(0.0f);
     int totalDepth = 0;
 
     while (totalDepth < 24) {
@@ -255,15 +283,15 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
     const Vertex& v1 = meshVertices[i1];
     const Vertex& v2 = meshVertices[i2];
 
-    glm::vec3 localPosition = ShadersCpu::interpolateBarycentric(hit.barycentrics, v0.position, v1.position, v2.position);
-    glm::vec3 localNormal = glm::normalize(ShadersCpu::interpolateBarycentric(hit.barycentrics, v0.normal, v1.normal, v2.normal));
-    glm::vec2 interpolatedUV = ShadersCpu::interpolateBarycentric(hit.barycentrics, v0.uv, v1.uv, v2.uv);
+    vec3 localPosition = ShadersCpu::interpolateBarycentric(hit.barycentrics, v0.position, v1.position, v2.position);
+    vec3 localNormal = normalize(ShadersCpu::interpolateBarycentric(hit.barycentrics, v0.normal, v1.normal, v2.normal));
+    vec2 interpolatedUV = ShadersCpu::interpolateBarycentric(hit.barycentrics, v0.uv, v1.uv, v2.uv);
 
-    glm::mat4 objectToWorld = instance->getTransform().getMatrix();
-    glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(objectToWorld)));
+    mat4 objectToWorld = instance->getTransform().getMatrix();
+    mat3 normalMatrix = transpose(inverse(mat3(objectToWorld)));
 
-    glm::vec3 worldPosition = glm::vec3(objectToWorld * glm::vec4(localPosition, 1.0f));
-    glm::vec3 normal = glm::normalize(normalMatrix * localNormal);
+    vec3 worldPosition = vec3(objectToWorld * vec4(localPosition, 1.0f));
+    vec3 normal = normalize(normalMatrix * localNormal);
 
     const Face& face = meshAsset.getFaces()[hit.primitiveIndex];
     Material material = meshAsset.getMaterials()[face.materialIndex];
@@ -271,29 +299,29 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
     const auto& textures = scene.getTextures();
 
     // Sample textures based on material indices
-    glm::vec3 albedo = material.albedo;
+    vec3 albedo = material.albedo;
     if (material.albedoIndex  != -1) {
-        glm::vec3 textureColor = textures[material.albedoIndex].sample(interpolatedUV);
+        vec3 textureColor = textures[material.albedoIndex].sample(interpolatedUV);
         albedo *= textureColor; // Multiply base albedo with texture color
     }
 
-    float metallic = glm::clamp(material.metallic, 0.05f, 0.99f);
+    float metallic = clamp(material.metallic, 0.05f, 0.99f);
     if (material.metallicIndex != -1) {
-        glm::vec3 metallicTexture = textures[material.metallicIndex].sample(interpolatedUV);
+        vec3 metallicTexture = textures[material.metallicIndex].sample(interpolatedUV);
         metallic *= metallicTexture.r; // Use red channel for metallic value
-        metallic = glm::clamp(metallic, 0.05f, 0.99f);
+        metallic = clamp(metallic, 0.05f, 0.99f);
     }
 
-    float roughness = glm::clamp(material.roughness, 0.05f, 0.99f);
+    float roughness = clamp(material.roughness, 0.05f, 0.99f);
     if (material.roughnessIndex  != -1) {
-        glm::vec3 roughnessTexture = textures[material.roughnessIndex].sample(interpolatedUV);
+        vec3 roughnessTexture = textures[material.roughnessIndex].sample(interpolatedUV);
         roughness *= roughnessTexture.r; // Use red channel for roughness value
-        roughness = glm::clamp(roughness, 0.05f, 0.99f);
+        roughness = clamp(roughness, 0.05f, 0.99f);
     }
 
     float specular = material.specular * 2.0f;
     if (material.specularIndex  != -1) {
-        glm::vec3 specularTexture = textures[material.specularIndex].sample(interpolatedUV);
+        vec3 specularTexture = textures[material.specularIndex].sample(interpolatedUV);
         specular *= specularTexture.r; // Use red channel for specular value
     }
 
@@ -303,20 +331,20 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
 
     float transmissionFactor = (material.transmission.r + material.transmission.g + material.transmission.b) / 3.0f;
     if (transmissionFactor > 0.0f && ShadersCpu::rand(payload.rngState) < transmissionFactor) {
-        glm::vec3 I = glm::normalize(payload.nextDirection);
+        vec3 I = normalize(payload.nextDirection);
         float etaI = 1.0f;
         float etaT = material.ior;
 
-        if (glm::dot(I, normal) > 0.0f) {
+        if (dot(I, normal) > 0.0f) {
             normal = -normal;
             std::swap(etaI, etaT);
         }
 
         float eta = etaI / etaT;
-        glm::vec3 refracted = glm::refract(I, normal, eta);
+        vec3 refracted = refract(I, normal, eta);
 
-        if (glm::length(refracted) < EPSILON)
-            payload.nextDirection = glm::reflect(I, normal);
+        if (length(refracted) < EPSILON)
+            payload.nextDirection = reflect(I, normal);
         else
             payload.nextDirection = refracted;
 
@@ -326,14 +354,14 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
         return;
     }
 
-    glm::vec3 viewDir = glm::normalize(-payload.nextDirection);
+    vec3 viewDir = normalize(-payload.nextDirection);
 
-    if (glm::dot(normal, viewDir) < 0.0f) {
+    if (dot(normal, viewDir) < 0.0f) {
         normal = -normal;
     }
 
-    float NdotV = std::max(glm::dot(normal, viewDir), 0.0f);
-    glm::vec3 F0 = glm::mix(glm::vec3(0.04f), albedo, metallic);
+    float NdotV = std::max(dot(normal, viewDir), 0.0f);
+    vec3 F0 = mix(vec3(0.04f), albedo, metallic);
     float fresnelAtNdotV = ShadersCpu::fresnelSchlick(NdotV, F0).r;
     float diffuseEnergy = (1.0f - metallic) * (1.0f - fresnelAtNdotV);
     float specularEnergy = std::max(fresnelAtNdotV, 0.04f);
@@ -344,7 +372,7 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
 
     bool choseDiffuse = ShadersCpu::rand(payload.rngState) < probDiffuse;
 
-    glm::vec3 sampledDir;
+    vec3 sampledDir;
     if (choseDiffuse)
         sampledDir = ShadersCpu::sampleDiffuse(normal, payload.rngState);
     else
@@ -353,8 +381,8 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
     float pdfDiffuseVal = std::max(ShadersCpu::pdfDiffuse(normal, sampledDir), EPSILON);
     float pdfSpecularVal = std::max(ShadersCpu::pdfSpecular(viewDir, normal, roughness, sampledDir), EPSILON);
 
-    glm::vec3 diffuseBRDF = ShadersCpu::evaluateDiffuseBRDF(albedo, metallic);
-    glm::vec3 specularBRDF = ShadersCpu::evaluateSpecularBRDF(viewDir, normal, albedo, metallic, roughness, sampledDir) * specular;
+    vec3 diffuseBRDF = ShadersCpu::evaluateDiffuseBRDF(albedo, metallic);
+    vec3 specularBRDF = ShadersCpu::evaluateSpecularBRDF(viewDir, normal, albedo, metallic, roughness, sampledDir) * specular;
 
     float wDiffuse = probDiffuse * pdfDiffuseVal;
     float wSpecular = (1.0f - probDiffuse) * pdfSpecularVal;
@@ -366,15 +394,15 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
         misWeight = (wSpecular * wSpecular) / (wDiffuse * wDiffuse + wSpecular * wSpecular + EPSILON);
 
     float pdfCombined = probDiffuse * pdfDiffuseVal + (1.0f - probDiffuse) * pdfSpecularVal;
-    float NoL = std::max(glm::dot(normal, sampledDir), 0.0f);
-    glm::vec3 totalBRDF = diffuseBRDF + specularBRDF;
+    float NoL = std::max(dot(normal, sampledDir), 0.0f);
+    vec3 totalBRDF = diffuseBRDF + specularBRDF;
 
     payload.throughput *= totalBRDF * NoL * misWeight / pdfCombined;
-    payload.nextDirection = glm::normalize(sampledDir);
+    payload.nextDirection = normalize(sampledDir);
     payload.bounceType = choseDiffuse ? BOUNCE_TYPE_DIFFUSE : BOUNCE_TYPE_SPECULAR;
 }
 
 void CpuRaytracer::miss(Payload& payload) {
-    payload.color = glm::vec3(1.0f);
+    payload.color = vec3(1.0f);
     payload.done = true;
 }

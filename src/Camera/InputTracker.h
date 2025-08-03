@@ -1,34 +1,35 @@
 ﻿#pragma once
 
-#include <GLFW/glfw3.h>
+#include "SDL3/SDL_scancode.h"
+#include "SDL3/SDL_video.h"
+
+union SDL_Event;
 
 class InputTracker {
 public:
-    explicit InputTracker(GLFWwindow* window);
-
+    InputTracker(SDL_Window* window);
+    
     void update();
+    
+    bool isKeyPressed(SDL_Scancode scancode) const;
+    bool isKeyHeld(SDL_Scancode scancode) const;
+    bool isKeyReleased(SDL_Scancode scancode) const;
 
-    bool isKeyPressed(int key) const;
-    bool isKeyHeld(int key) const;
-    bool isKeyReleased(int key) const;
+    bool isMouseButtonPressed(Uint8 button) const;
+    bool isMouseButtonHeld(Uint8 button) const;
+    bool isMouseButtonReleased(Uint8 button) const;
 
-    bool isMouseButtonPressed(int button) const;
-    bool isMouseButtonHeld(int button) const;
-    bool isMouseButtonReleased(int button) const;
-
-    void getMousePosition(double& xpos, double& ypos) const;
-
-    void getMouseDelta(double& outDeltaX, double& outDeltaY) const;
+    void getMouseDelta(float& outDeltaX, float& outDeltaY) const;
 
 private:
-    GLFWwindow* window;
+    SDL_Window* window;
 
-    bool keyStates[GLFW_KEY_LAST + 1] = { false }; // Initializes all to false
-    bool prevKeyStates[GLFW_KEY_LAST + 1] = { false }; // Initializes all to false
+    Uint8 keyStates[SDL_SCANCODE_COUNT]{};
+    Uint8 prevKeyStates[SDL_SCANCODE_COUNT]{};
 
-    bool mouseButtonStates[GLFW_MOUSE_BUTTON_LAST + 1] = { false }; // Initializes all to false
-    bool prevMouseButtonStates[GLFW_MOUSE_BUTTON_LAST + 1] = { false }; // Initializes all to false
-
-    double deltaX, deltaY;
-    double lastX, lastY;
+    bool mouseButtonStates[16]{};
+    bool prevMouseButtonStates[16]{};
+    
+    float deltaX;
+    float deltaY;
 };

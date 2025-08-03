@@ -2,9 +2,8 @@
     #pragma once
     #include "glm/vec2.hpp"
     #include <glm/vec3.hpp>
-    typedef glm::vec2 vec2;
-    typedef glm::vec3 vec3;
-    typedef glm::uint uint;
+    #include <glm/mat4x4.hpp>
+    using namespace glm;
 #endif
 
 
@@ -12,14 +11,15 @@
 
 struct AABB {
     vec3 min;
+    float _pad0;
     vec3 max;
-
+    float _pad1;
 #ifdef __cplusplus
     AABB();
-    void expand(const glm::vec3& point);
+    void expand(const vec3& point);
     void expand(const AABB& other);
     float surfaceArea() const;
-    bool intersect(const glm::vec3& origin, const glm::vec3& direction, float tMin, float tMax) const;
+    bool intersect(const vec3& origin, const vec3& invDir, const ivec3& dirIsNeg, float& tNear, float& tFar) const;
 #endif
 };
 
@@ -27,12 +27,16 @@ struct BVHNode {
 #ifdef __cplusplus
     AABB bbox;
 #else
+    // GLSL side
     vec3 bbox_min;
+    float _pad0; // Add padding to align bbox_max
     vec3 bbox_max;
+    float _pad1; // Add padding to align leftChild
 #endif
     int leftChild;
     int rightChild;
     int faceCount;
+    int _pad2; // Add padding to align the array
     int faceIndices[BVH_MAX_LEAF_SIZE];
 
 #ifdef __cplusplus
@@ -115,4 +119,10 @@ struct HitInfo {
     int instanceIndex;
     int primitiveIndex;
     vec3 barycentrics;
+};
+
+struct ComputeInstance {
+    mat4 transform;
+    mat4 inverseTransform;
+    uint meshId, pad1, pad2, pad3; 
 };

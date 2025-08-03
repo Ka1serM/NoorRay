@@ -1,13 +1,15 @@
 ﻿#include "Buffer.h"
 
-Buffer::Buffer(Context& context, Type type, vk::DeviceSize size, const void* data, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memoryProps) {
+Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, const void* data, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memoryProps) {
 
     using Usage = vk::BufferUsageFlagBits;
     using Memory = vk::MemoryPropertyFlagBits;
 
     if (type != Type::Custom) {
         if (type == Type::AccelInput) {
-            usage = Usage::eAccelerationStructureBuildInputReadOnlyKHR | Usage::eStorageBuffer | Usage::eShaderDeviceAddress;
+            usage = Usage::eStorageBuffer | Usage::eShaderDeviceAddress;
+            if (context.isRtxSupported())
+                usage |= Usage::eAccelerationStructureBuildInputReadOnlyKHR;
             memoryProps = Memory::eHostVisible | Memory::eHostCoherent;
         } else if (type == Type::Scratch) {
             usage = Usage::eStorageBuffer | Usage::eShaderDeviceAddress;

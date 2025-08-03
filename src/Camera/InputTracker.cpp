@@ -1,75 +1,59 @@
 ﻿#include "InputTracker.h"
+#include <cstring>
 
-#include "imgui.h"
+#include "SDL3/SDL_keyboard.h"
+#include "SDL3/SDL_mouse.h"
 
-InputTracker::InputTracker(GLFWwindow* window) : window(window), deltaX(0.0), deltaY(0.0), lastX(0.0), lastY(0.0) {
-    glfwSetMouseButtonCallback(window, [](GLFWwindow* window, int button, int action, int mods) {
-        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-            if (action == GLFW_PRESS) {
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                ImGuiIO& io = ImGui::GetIO();
-                io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-            } else if (action == GLFW_RELEASE) {
-                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                ImGuiIO& io = ImGui::GetIO();
-                io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-            }
-        }
-    });
-
-}
+InputTracker::InputTracker(SDL_Window* window) : window(window), deltaX(0.0f), deltaY(0.0f) {}
 
 void InputTracker::update() {
-    // update key states
-    for (int key = 0; key <= GLFW_KEY_LAST; ++key) {
-        prevKeyStates[key] = keyStates[key];
-        keyStates[key] = glfwGetKey(window, key) == GLFW_PRESS;
-    }
+    // Copy the current key states to the previous state buffer
+    memcpy(prevKeyStates, keyStates, sizeof(keyStates));
+    
+    // FIX: Use the correct return type, const Uint8*
+    const bool* currentKeyStates = SDL_GetKeyboardState(nullptr);
+    for (int i = 0; i < SDL_SCANCODE_COUNT; ++i)
+        keyStates[i] = currentKeyStates[i];
 
-    //Update mouse button states
-    for (int button = GLFW_MOUSE_BUTTON_1; button <= GLFW_MOUSE_BUTTON_LAST; ++button) {
-        prevMouseButtonStates[button] = mouseButtonStates[button];
-        mouseButtonStates[button] = glfwGetMouseButton(window, button) == GLFW_PRESS;
-    }
+    // Copy the current mouse button states to the previous state buffer
+    memcpy(prevMouseButtonStates, mouseButtonStates, sizeof(mouseButtonStates));
+    
+    const Uint32 currentButtonMask = SDL_GetMouseState(nullptr, nullptr);
+    for (int i = 1; i < 16; ++i) // Button indexes are 1-based
+        mouseButtonStates[i] = (currentButtonMask & SDL_BUTTON_MASK(i));
 
-    //Update mouse position and calculate delta
-    double xpos, ypos;
-    glfwGetCursorPos(window, &xpos, &ypos);
-    deltaX = xpos - lastX;
-    deltaY = ypos - lastY;
-    lastX = xpos;
-    lastY = ypos;
+    // Get the relative mouse motion since the last poll
+    SDL_GetRelativeMouseState(&deltaX, &deltaY);
 }
 
-bool InputTracker::isKeyPressed(int key) const {
-    return keyStates[key] && !prevKeyStates[key];
+bool InputTracker::isKeyPressed(SDL_Scancode scancode) const {
+    return keyStates[scancode] && !prevKeyStates[scancode];
 }
 
-bool InputTracker::isKeyHeld(int key) const {
-    return keyStates[key];
+bool InputTracker::isKeyHeld(SDL_Scancode scancode) const {
+    return keyStates[scancode];
 }
 
-bool InputTracker::isKeyReleased(int key) const {
-    return !keyStates[key] && prevKeyStates[key];
+bool InputTracker::isKeyReleased(SDL_Scancode scancode) const {
+    return !keyStates[scancode] && prevKeyStates[scancode];
 }
 
-bool InputTracker::isMouseButtonPressed(int button) const {
+bool InputTracker::isMouseButtonPressed(Uint8 button) const {
+    if (button >= 16) return false;
     return mouseButtonStates[button] && !prevMouseButtonStates[button];
 }
 
-bool InputTracker::isMouseButtonHeld(int button) const {
+bool InputTracker::isMouseButtonHeld(Uint8 button) const {
+    if (button >= 16) return false;
     return mouseButtonStates[button];
 }
 
-bool InputTracker::isMouseButtonReleased(int button) const {
+bool InputTracker::isMouseButtonReleased(Uint8 button) const {
+    if (button >= 16) return false;
     return !mouseButtonStates[button] && prevMouseButtonStates[button];
 }
 
-void InputTracker::getMousePosition(double& xpos, double& ypos) const {
-    glfwGetCursorPos(window, &xpos, &ypos);
-}
-
-void InputTracker::getMouseDelta(double& outDeltaX, double& outDeltaY) const {
+void InputTracker::getMouseDelta(float& outDeltaX, float& outDeltaY) const {
     outDeltaX = deltaX;
     outDeltaY = deltaY;
 }

@@ -4,8 +4,12 @@
 
 
 ViewportPanel::ViewportPanel(Context& context, const Image& inputImage,uint32_t width, uint32_t height, const std::string& title)
-: width(width), height(height), title(title)
-{
+: width(width), height(height), title(title), displayImage(context, width, height, inputImage.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
+{    
+    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
+        displayImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
+    });
+
     // Create Vulkan sampler
     vk::SamplerCreateInfo samplerInfo{};
     samplerInfo.magFilter = vk::Filter::eLinear;
@@ -34,8 +38,8 @@ ViewportPanel::ViewportPanel(Context& context, const Image& inputImage,uint32_t 
     auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
 
-    // Update descriptor set with image info
-    vk::DescriptorImageInfo imageInfo{sampler.get(), inputImage.getImageView(),vk::ImageLayout::eShaderReadOnlyOptimal};
+    // Update descriptor set to point to our new displayImage
+    vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getImageView(),vk::ImageLayout::eShaderReadOnlyOptimal};
 
     vk::WriteDescriptorSet write{};
     write.dstSet = outputImageDescriptorSet.get();
@@ -45,6 +49,24 @@ ViewportPanel::ViewportPanel(Context& context, const Image& inputImage,uint32_t 
     write.pImageInfo = &imageInfo;
 
     context.getDevice().updateDescriptorSets(write, nullptr);
+}
+
+void ViewportPanel::recordCopy(vk::CommandBuffer cmd, Image& srcImage)
+{
+    // Transition layouts for the copy operation
+    srcImage.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
+    displayImage.setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
+
+    // Execute the copy from the tonemapped image to our display image
+    vk::ImageCopy copyRegion{};
+    copyRegion.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+    copyRegion.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+    copyRegion.extent = vk::Extent3D{width, height, 1};
+    cmd.copyImage(srcImage.getImage(), vk::ImageLayout::eTransferSrcOptimal, displayImage.getImage(), vk::ImageLayout::eTransferDstOptimal, copyRegion);
+
+    // Transition both images back to ShaderReadOnlyOptimal so they can be used as textures again
+    srcImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
+    displayImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 void ViewportPanel::renderUi() {

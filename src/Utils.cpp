@@ -1,7 +1,7 @@
 ﻿#include <fstream>
 #include <stdexcept>
 #include "Utils.h"
-#include "Shaders/SharedStructs.h"
+#include "Shaders/PathTracing/SharedStructs.h"
 #include "Vulkan/Texture.h"
 #include <nlohmann/json.hpp>
 

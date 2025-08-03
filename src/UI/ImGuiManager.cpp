@@ -1,24 +1,20 @@
 ﻿#include "ImGuiManager.h"
-
-#include "../Vulkan/Context.h"
+#include "UI/ImGuiComponent.h"
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_vulkan.h>
-#include <memory>
-#include <vulkan/vulkan.hpp>
-#include <vector>
-#include <functional>
 #include <iostream>
-
 #include "imgui_internal.h"
+#include "backends/imgui_impl_sdl3.h"
+#include "backends/imgui_impl_vulkan.h"
 #include "glm/gtc/type_ptr.inl"
+#include "Vulkan/Context.h"
+#include <array>
 
 ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height)
+    : context(context)
 {
-    // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -27,192 +23,171 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
         #embed "../../assets/Inter-Regular.ttf"
     };
     ImFontConfig font_config;
-    font_config.FontDataOwnedByAtlas = false; // Tell ImGui it doesn't own the font data.
+    font_config.FontDataOwnedByAtlas = false;
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), 24.0f, &font_config);
 
-    // Set Theme
     SetBlenderTheme();
 
-    // Setup Platform backend
-    ImGui_ImplGlfw_InitForVulkan(context.getWindow(), true);
+    ImGui_ImplSDL3_InitForVulkan(context.getWindow());
 
-    CreateRenderPass(context);
-    CreateFrameBuffers(context, swapchainImages, width, height);
+    CreateRenderPass();
+    CreateFrameBuffers(swapchainImages, width, height);
 
-    // Setup ImGui Vulkan backend
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.Instance = context.getInstance();
     init_info.PhysicalDevice = context.getPhysicalDevice();
     init_info.Device = context.getDevice();
     init_info.QueueFamily = context.getQueueFamilyIndices().front();
     init_info.Queue = context.getQueue();
-    init_info.PipelineCache = VK_NULL_HANDLE;
     init_info.DescriptorPool = context.getDescriptorPool();
     init_info.RenderPass = renderPass.get();
     init_info.Subpass = 0;
     init_info.MinImageCount = 2;
     init_info.ImageCount = static_cast<uint32_t>(swapchainImages.size());
     init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    init_info.Allocator = nullptr;
-    init_info.CheckVkResultFn = nullptr;
 
     ImGui_ImplVulkan_Init(&init_info);
 }
 
+ImGuiManager::~ImGuiManager() {
+    // Resources are cleaned up by vk::Unique... handles and ImGui shutdown functions.
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+    std::cout << "Destroyed ImGuiManager" << std::endl;
+}
+
+// --- MODIFIED: This is the more efficient way to handle resizing ---
+// We only recreate the resources that are dependent on the swapchain size.
+void ImGuiManager::recreateForSwapChain(const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height)
+{
+    // Clean up only the swapchain-dependent resources.
+    // The core ImGui Vulkan backend remains initialized.
+    cleanupSwapChainResources();
+
+    // Recreate the render pass and framebuffers for the new swapchain.
+    CreateRenderPass();
+    CreateFrameBuffers(swapchainImages, width, height);
+}
+
+void ImGuiManager::cleanupSwapChainResources() {
+    frameBuffers.clear();
+    imageViews.clear();
+    renderPass.reset(); // vk::UniqueRenderPass automatically handles destruction
+}
+
+void ImGuiManager::CreateRenderPass() {
+    vk::AttachmentDescription colorAttachment(
+        {}, // flags
+        context.chooseSwapSurfaceFormat().format,
+        vk::SampleCountFlagBits::e1,
+        vk::AttachmentLoadOp::eClear,
+        vk::AttachmentStoreOp::eStore,
+        vk::AttachmentLoadOp::eDontCare,
+        vk::AttachmentStoreOp::eDontCare,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::ePresentSrcKHR
+    );
+
+    vk::AttachmentReference colorAttachmentRef(0, vk::ImageLayout::eColorAttachmentOptimal);
+
+    vk::SubpassDescription subpass(
+        {}, vk::PipelineBindPoint::eGraphics,
+        0, nullptr, 1, &colorAttachmentRef
+    );
+
+    vk::SubpassDependency dependency(
+        VK_SUBPASS_EXTERNAL, 0,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        {}, vk::AccessFlagBits::eColorAttachmentWrite
+    );
+
+    vk::RenderPassCreateInfo renderPassInfo({}, 1, &colorAttachment, 1, &subpass, 1, &dependency);
+    renderPass = context.getDevice().createRenderPassUnique(renderPassInfo);
+}
+
+void ImGuiManager::CreateFrameBuffers(const std::vector<vk::Image>& images, uint32_t width, uint32_t height) {
+    imageViews.reserve(images.size());
+    frameBuffers.reserve(images.size());
+
+    for (const auto& image : images) {
+        vk::ImageViewCreateInfo viewInfo(
+            {}, image, vk::ImageViewType::e2D, context.chooseSwapSurfaceFormat().format,
+            {}, { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
+        );
+        imageViews.push_back(context.getDevice().createImageViewUnique(viewInfo));
+
+        std::array<vk::ImageView, 1> attachments = { imageViews.back().get() };
+        vk::FramebufferCreateInfo framebufferInfo(
+            {}, renderPass.get(), attachments, width, height, 1
+        );
+        frameBuffers.push_back(context.getDevice().createFramebufferUnique(framebufferInfo));
+    }
+}
+
 void ImGuiManager::SetBlenderTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
-    ImVec4* colors = style.Colors;
-
-    // Top Bar
-    colors[ImGuiCol_MenuBarBg] = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
-
-    // Window Backgrounds
-    colors[ImGuiCol_WindowBg]         = ImVec4(0.15f, 0.15f, 0.16f, 1.00f); // #262627
-    colors[ImGuiCol_ChildBg]          = ImVec4(0.13f, 0.13f, 0.14f, 1.00f);
-    colors[ImGuiCol_PopupBg]          = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
-
-    // Headers (like tree nodes, menu bar)
-    colors[ImGuiCol_Header]           = ImVec4(0.20f, 0.20f, 0.21f, 1.00f);
-    colors[ImGuiCol_HeaderHovered]    = ImVec4(0.30f, 0.30f, 0.31f, 1.00f);
-    colors[ImGuiCol_HeaderActive]     = ImVec4(0.25f, 0.25f, 0.26f, 1.00f);
-
-    // Buttons
-    colors[ImGuiCol_Button]           = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
-    colors[ImGuiCol_ButtonHovered]    = ImVec4(0.24f, 0.24f, 0.26f, 1.00f);
-    colors[ImGuiCol_ButtonActive]     = ImVec4(0.28f, 0.28f, 0.30f, 1.00f);
-
-    // Frame BG (input boxes, sliders, etc.)
-    colors[ImGuiCol_FrameBg]          = ImVec4(0.20f, 0.20f, 0.21f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered]   = ImVec4(0.30f, 0.30f, 0.31f, 1.00f);
-    colors[ImGuiCol_FrameBgActive]    = ImVec4(0.35f, 0.35f, 0.36f, 1.00f);
-
-    // Tabs
-    colors[ImGuiCol_Tab]              = ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
-    colors[ImGuiCol_TabHovered]       = ImVec4(0.22f, 0.22f, 0.24f, 1.00f);
-    colors[ImGuiCol_TabActive]        = ImVec4(0.19f, 0.19f, 0.21f, 1.00f);
-    colors[ImGuiCol_TabUnfocused]     = ImVec4(0.12f, 0.12f, 0.14f, 1.00f);
-    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
-
-    // Title
-    colors[ImGuiCol_TitleBg]          = ImVec4(0.13f, 0.13f, 0.14f, 1.00f);
-    colors[ImGuiCol_TitleBgActive]    = ImVec4(0.15f, 0.15f, 0.17f, 1.00f);
-    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
-
-    // Borders
-    colors[ImGuiCol_Border]           = ImVec4(0.10f, 0.10f, 0.10f, 0.40f);
-    colors[ImGuiCol_BorderShadow]     = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-
-    // Text
-    colors[ImGuiCol_Text]             = ImVec4(0.90f, 0.90f, 0.92f, 1.00f);
-    colors[ImGuiCol_TextDisabled]     = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
-
-    // Highlights
-    colors[ImGuiCol_CheckMark]        = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
-    colors[ImGuiCol_SliderGrab]       = ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.80f, 0.80f, 0.80f, 1.00f);
-    colors[ImGuiCol_ResizeGrip]       = ImVec4(0.65f, 0.65f, 0.65f, 0.60f);
-    colors[ImGuiCol_ResizeGripHovered]= ImVec4(0.75f, 0.75f, 0.75f, 0.80f);
-    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
-
-    // Scrollbar
-    colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.20f, 0.20f, 0.25f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.25f, 0.25f, 0.30f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.30f, 0.30f, 0.35f, 1.00f);
-
-    // Style tweaks — small border radius on tabs/windows
-    style.WindowRounding = 4.0f;       // subtle rounding on window corners
-    style.FrameRounding = 4.0f;        // rounding on buttons/input frames
+    style.WindowRounding = 4.0f;
+    style.FrameRounding = 4.0f;
     style.GrabRounding = 4.0f;
-    style.TabRounding = 4.0f;           // small rounded corners on tabs
+    style.TabRounding = 4.0f;
     style.PopupRounding = 4.0f;
     style.ScrollbarRounding = 4.0f;
     style.WindowPadding = ImVec2(8, 8);
     style.FramePadding = ImVec2(5, 3);
     style.ItemSpacing = ImVec2(6, 4);
     style.PopupBorderSize = 1.f;
-}
-
-void ImGuiManager::CreateRenderPass(Context& context) {
-    // Attachment Description
-    vk::AttachmentDescription colorAttachment{};
-    colorAttachment.format = context.chooseSwapSurfaceFormat().format;
-    colorAttachment.samples = vk::SampleCountFlagBits::e1;
-    // Use eClear if you want the UI to be drawn on a fresh background each frame.
-    colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
-    colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
-    colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
-
-    // Attachment Reference
-    vk::AttachmentReference colorAttachmentRef{};
-    colorAttachmentRef.attachment = 0;
-    colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
-
-    // Subpass Description
-    vk::SubpassDescription subpass{};
-    subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorAttachmentRef;
-
-    // Subpass Dependency
-    vk::SubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
     
-    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    dependency.srcAccessMask = {};
-    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-
-    vk::RenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
-
-    renderPass = context.getDevice().createRenderPassUnique(renderPassInfo);
-}
-
-void ImGuiManager::CreateFrameBuffers(Context& context, const std::vector<vk::Image>& images, uint32_t width, uint32_t height) {
-    for (const auto& image : images) {
-        vk::ImageViewCreateInfo viewInfo{};
-        viewInfo.image = image;
-        viewInfo.viewType = vk::ImageViewType::e2D;
-        viewInfo.format = context.chooseSwapSurfaceFormat().format;
-        viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        imageViews.push_back(context.getDevice().createImageViewUnique(viewInfo));
-
-        vk::FramebufferCreateInfo framebufferInfo{};
-        framebufferInfo.renderPass = renderPass.get();
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments = &imageViews.back().get();
-        framebufferInfo.width = width; //TODO
-        framebufferInfo.height = height;
-        framebufferInfo.layers = 1;
-
-        frameBuffers.push_back(context.getDevice().createFramebufferUnique(framebufferInfo));
-    }
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_MenuBarBg]           = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
+    colors[ImGuiCol_WindowBg]           = ImVec4(0.15f, 0.15f, 0.16f, 1.00f);
+    colors[ImGuiCol_ChildBg]            = ImVec4(0.13f, 0.13f, 0.14f, 1.00f);
+    colors[ImGuiCol_PopupBg]            = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
+    colors[ImGuiCol_Header]             = ImVec4(0.20f, 0.20f, 0.21f, 1.00f);
+    colors[ImGuiCol_HeaderHovered]      = ImVec4(0.30f, 0.30f, 0.31f, 1.00f);
+    colors[ImGuiCol_HeaderActive]       = ImVec4(0.25f, 0.25f, 0.26f, 1.00f);
+    colors[ImGuiCol_Button]             = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]      = ImVec4(0.24f, 0.24f, 0.26f, 1.00f);
+    colors[ImGuiCol_ButtonActive]       = ImVec4(0.28f, 0.28f, 0.30f, 1.00f);
+    colors[ImGuiCol_FrameBg]            = ImVec4(0.20f, 0.20f, 0.21f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered]     = ImVec4(0.30f, 0.30f, 0.31f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]      = ImVec4(0.35f, 0.35f, 0.36f, 1.00f);
+    colors[ImGuiCol_Tab]                = ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
+    colors[ImGuiCol_TabHovered]         = ImVec4(0.22f, 0.22f, 0.24f, 1.00f);
+    colors[ImGuiCol_TabActive]          = ImVec4(0.19f, 0.19f, 0.21f, 1.00f);
+    colors[ImGuiCol_TabUnfocused]       = ImVec4(0.12f, 0.12f, 0.14f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive]= ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
+    colors[ImGuiCol_TitleBg]            = ImVec4(0.13f, 0.13f, 0.14f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]      = ImVec4(0.15f, 0.15f, 0.17f, 1.00f);
+    colors[ImGuiCol_TitleBgCollapsed]   = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+    colors[ImGuiCol_Border]             = ImVec4(0.10f, 0.10f, 0.10f, 0.40f);
+    colors[ImGuiCol_BorderShadow]       = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_Text]               = ImVec4(0.90f, 0.90f, 0.92f, 1.00f);
+    colors[ImGuiCol_TextDisabled]       = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
+    colors[ImGuiCol_CheckMark]          = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
+    colors[ImGuiCol_SliderGrab]         = ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive]   = ImVec4(0.80f, 0.80f, 0.80f, 1.00f);
+    colors[ImGuiCol_ResizeGrip]         = ImVec4(0.65f, 0.65f, 0.65f, 0.60f);
+    colors[ImGuiCol_ResizeGripHovered]  = ImVec4(0.75f, 0.75f, 0.75f, 0.80f);
+    colors[ImGuiCol_ResizeGripActive]   = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg]        = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrab]      = ImVec4(0.20f, 0.20f, 0.25f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered]=ImVec4(0.25f, 0.25f, 0.30f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive]= ImVec4(0.30f, 0.30f, 0.35f, 1.00f);
 }
 
 void ImGuiManager::setupDockSpace() {
     auto* mainViewport = ImGui::GetMainViewport();
-    float menuBarSize = ImGui::GetFrameHeight(); // Height of menu bar
+    float menuBarSize = ImGui::GetFrameHeight();
     ImGui::SetNextWindowPos(ImVec2(mainViewport->Pos.x, mainViewport->Pos.y + menuBarSize));
     ImGui::SetNextWindowSize(ImVec2(mainViewport->Size.x, mainViewport->Size.y - menuBarSize));
     ImGui::SetNextWindowViewport(mainViewport->ID);
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
-                            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                            ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDecoration;
+                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                             ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDecoration;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
@@ -220,46 +195,40 @@ void ImGuiManager::setupDockSpace() {
 
     ImGui::Begin("DockSpaceHost", nullptr, flags);
     ImGui::PopStyleVar(3);
-
-    // Create the dockspace
-    ImGuiID dockspaceID = ImGui::GetID("MyDockSpace");
-    ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+    
+    ImGui::DockSpace(ImGui::GetID("MyDockSpace"), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
 }
 
-void ImGuiManager::Draw(const vk::CommandBuffer commandBuffer, uint32_t imageIndex, uint32_t width, uint32_t height)
+void ImGuiManager::Draw(const vk::CommandBuffer commandBuffer, const uint32_t imageIndex, const uint32_t width, const uint32_t height)
 {
-    constexpr VkClearValue clear_value = { { 0.0f, 0.0f, 0.0f, 1.0f } };
-    VkRenderPassBeginInfo rpInfo{};
-    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpInfo.renderPass = renderPass.get();
-    rpInfo.framebuffer = frameBuffers[imageIndex].get();
-    rpInfo.renderArea.extent.width = width;
-    rpInfo.renderArea.extent.height = height;
-    rpInfo.clearValueCount = 1;
-    rpInfo.pClearValues = &clear_value;
+    vk::ClearValue clearValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+    vk::RenderPassBeginInfo renderPassInfo(
+        renderPass.get(),
+        frameBuffers[imageIndex].get(),
+        vk::Rect2D({0, 0}, {width, height}),
+        clearValue
+    );
 
-    vkCmdBeginRenderPass(commandBuffer, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
-    vkCmdEndRenderPass(commandBuffer);
+    commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(commandBuffer));
+    commandBuffer.endRenderPass();
 }
 
-void ImGuiManager::renderUi() const
+void ImGuiManager::renderUi()
 {
     ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
-    //Setup dockspace
     setupDockSpace();
 
-    for (auto& component : components)
+    for (const auto& component : components) {
         component->renderUi();
+    }
 
-    // End dockspace
-    ImGui::End();
+    ImGui::End(); // End the DockSpace window
 
     ImGui::Render();
-
 }
 
 void ImGuiManager::add(std::unique_ptr<ImGuiComponent> component) {
@@ -268,11 +237,15 @@ void ImGuiManager::add(std::unique_ptr<ImGuiComponent> component) {
 
 ImGuiComponent* ImGuiManager::getComponent(const std::string& name) const
 {
-    for (auto& component : components)
-        if (component->getType() == name)
+    for (const auto& component : components) {
+        if (component->getType() == name) {
             return component.get();
+        }
+    }
     return nullptr;
 }
+
+// --- UI Helper Functions ---
 
 void ImGuiManager::tableRowLabel(const char* label) {
     if (ImGui::GetCurrentTable()) {
@@ -289,27 +262,23 @@ void ImGuiManager::tableRowLabel(const char* label) {
 void ImGuiManager::dragFloatRow(const char* label, float value, float speed, float min, float max, const std::function<void(float)>& setter) {
     tableRowLabel(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max, "%.3f", ImGuiSliderFlags_AlwaysClamp))
+    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
         setter(value);
+    }
 }
 
 void ImGuiManager::dragFloat3Row(const char* label, glm::vec3 value, float speed, const std::function<void(glm::vec3)>& setter) {
     tableRowLabel(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed))
+    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed)) {
         setter(value);
+    }
 }
 
 void ImGuiManager::colorEdit3Row(const char* label, glm::vec3 value, const std::function<void(glm::vec3)>& setter) {
     tableRowLabel(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (glm::vec3 temp = value; ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp)))
+    if (glm::vec3 temp = value; ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp))) {
         setter(temp);
-}
-
-ImGuiManager::~ImGuiManager() {
-    ImGui_ImplVulkan_Shutdown(); // Shutdown backend
-    ImGui_ImplGlfw_Shutdown();   // Shutdown platform
-    ImGui::DestroyContext();     // Shutdown core context
-    std::cout << "Destroyed ImGuiManager" << std::endl;
+    }
 }

@@ -1,49 +1,49 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.16)
 project(VulkanToyPathtracer VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 23)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
 # ---------------------------------------------------------------------------
-# GLFW, GLM, etc.
+# External Libraries
 # ---------------------------------------------------------------------------
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-add_subdirectory(external/glfw)
 add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
 add_subdirectory(external/json)
 
+# SDL3
+set(SDL_STATIC ON CACHE BOOL "Build SDL3 as a static library")
+add_subdirectory(external/SDL)
+
+# Vulkan
+find_package(Vulkan REQUIRED)
+
 # ---------------------------------------------------------------------------
-# Dear ImGui (core + GLFW+Vulkan backend) + ImGuizmo
+# Dear ImGui (core + Vulkan + SDL3 backend) + ImGuizmo
 # ---------------------------------------------------------------------------
 add_library(imgui STATIC
         external/imgui/imgui.cpp
         external/imgui/imgui_draw.cpp
         external/imgui/imgui_tables.cpp
         external/imgui/imgui_widgets.cpp
-        # Vulkan + GLFW backends:
         external/imgui/backends/imgui_impl_vulkan.cpp
-        external/imgui/backends/imgui_impl_glfw.cpp
-        # ImGuizmo
+        external/imgui/backends/imgui_impl_SDL3.cpp
         external/ImGuizmo/ImGuizmo.cpp
 )
+
 target_include_directories(imgui PUBLIC
         ${PROJECT_SOURCE_DIR}/external/imgui
-        ${PROJECT_SOURCE_DIR}/external/imgui/backends
         ${PROJECT_SOURCE_DIR}/external/ImGuizmo
 )
-target_compile_definitions(imgui PUBLIC
-        IMGUI_IMPL_VULKAN_BINDING
-        IMGUI_IMPL_OPENGL_LOADER_GLFW=0
+
+# FIX: Link to the official SDL3::SDL3 target. This provides both the
+# library for the linker and the include paths for the compiler.
+target_link_libraries(imgui PUBLIC
+        Vulkan::Vulkan
+        SDL3::SDL3
 )
 
-# Vulkan headers/libs:
-find_package(Vulkan REQUIRED)
-target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
-
 # ---------------------------------------------------------------------------
-# Main DLL/executable
+# Main Executable
 # ---------------------------------------------------------------------------
 file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
 file(GLOB_RECURSE SHADER_FILES src/Shaders/*)
@@ -52,21 +52,20 @@ file(GLOB_RECURSE ASSET_FILES assets/*)
 add_executable(VulkanToyPathtracer WIN32 ${SRC_FILES})
 set_target_properties(VulkanToyPathtracer PROPERTIES PREFIX "")
 
-target_link_libraries(VulkanToyPathtracer PUBLIC
+target_include_directories(VulkanToyPathtracer PRIVATE
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/external/tinyobjloader
+        ${PROJECT_SOURCE_DIR}/external/stb
+)
+
+# FIX: Link to the official SDL3::SDL3 target here as well.
+target_link_libraries(VulkanToyPathtracer PRIVATE
         portable_file_dialogs
-        glfw
         glm
         imgui
         Vulkan::Vulkan
         nlohmann_json::nlohmann_json
-)
-
-target_include_directories(VulkanToyPathtracer PUBLIC
-        "$ENV{VULKAN_SDK}/Include"
-        "${PROJECT_SOURCE_DIR}/external/tinyobjloader"
-        "${PROJECT_SOURCE_DIR}/external/stb"
-        "${PROJECT_SOURCE_DIR}/external/json/include"
-        "${PROJECT_SOURCE_DIR}/src"
+        SDL3::SDL3
 )
 
 source_group("src/Shaders" FILES ${SHADER_FILES})
@@ -75,9 +74,9 @@ set_source_files_properties(${SHADER_FILES} ${ASSET_FILES} PROPERTIES HEADER_FIL
 target_sources(VulkanToyPathtracer PRIVATE ${SHADER_FILES} ${ASSET_FILES})
 
 # ---------------------------------------------------------------------------
-# Static linking flags for Release builds
+# Static Linking for Release Builds
 # ---------------------------------------------------------------------------
-if (CMAKE_BUILD_TYPE STREQUAL "Release")
+if(MINGW AND CMAKE_BUILD_TYPE STREQUAL "Release")
     target_link_options(VulkanToyPathtracer PRIVATE
             -static-libgcc
             -static-libstdc++

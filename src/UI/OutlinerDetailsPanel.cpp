@@ -30,7 +30,7 @@ void OutlinerDetailsPanel::renderUi() {
         scene.getSceneObjects()[selectedObjectIndex]->renderUi();
 
         // Example: Remove selected object if Delete key is pressed
-        if (inputTracker.isKeyPressed(GLFW_KEY_DELETE)) {
+        if (inputTracker.isKeyPressed(SDL_SCANCODE_DELETE)) {
             SceneObject* objPtr = scene.getSceneObjects()[selectedObjectIndex].get();
             
             if (scene.remove(objPtr)) // Clear selection to avoid invalid index

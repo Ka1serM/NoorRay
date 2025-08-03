@@ -2,15 +2,15 @@
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
-#include <GLFW/glfw3.h>
 #include <vector>
 #include <functional>
 
+#include "SDL3/SDL_video.h"
+
 class Context {
 private:
-    GLFWwindow* window;
+    SDL_Window* window;
     vk::detail::DynamicLoader dl;
-    bool rtxSupported = false; // Flag to indicate if Ray Tracing is supported
 
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;
@@ -22,11 +22,11 @@ private:
     vk::UniqueCommandPool commandPool;
     vk::UniqueDescriptorPool descriptorPool;
 
-    // Helper functions for setup
-    void pickPhysicalDevice();
-    void createInstance();
-    void createLogicalDevice();
+    bool rtxSupported = false;
 
+    void createVulkanInstance();
+    void pickPhysicalDevice();
+    void createLogicalDevice();
 
 public:
     Context(int width, int height);
@@ -48,8 +48,7 @@ public:
         void* pUserData);
 
     // Getters
-    GLFWwindow* getWindow() const { return window; }
-    bool isRtxSupported() const { return rtxSupported; } // Getter for the RTX support flag
+    SDL_Window* getWindow() const { return window; }
     const vk::Instance& getInstance() const { return instance.get(); }
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }
@@ -58,4 +57,6 @@ public:
     const std::vector<uint32_t>& getQueueFamilyIndices() const { return queueFamilyIndices; }
     const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
+
+    bool isRtxSupported() const { return rtxSupported; }
 };

@@ -29,4 +29,5 @@ public:
     const vk::ImageView& getImageView() const { return view.get(); }
     const vk::Image& getImage() const { return image.get(); }
     const vk::ImageCreateInfo& getImageCreateInfo() const { return info; }
+    vk::Format getFormat() const { return info.format; }
 };

@@ -27,6 +27,7 @@ public:
     static void dragFloatRow(const char* label, float value, float speed, float min, float max, const std::function<void(float)>& setter);
     static void dragFloat3Row(const char* label, glm::vec3 value, float speed, const std::function<void(glm::vec3)>& setter);
     static void colorEdit3Row(const char* label, glm::vec3 value, const std::function<void(glm::vec3)>& setter);
+    static void colorEdit4Row(const char* label, glm::vec4 value, const std::function<void(glm::vec4)>& setter);
 
 private:
     void SetBlenderTheme();

@@ -77,16 +77,16 @@ struct Face {
 struct Material {
     vec3 albedo; int albedoIndex;
     float specular, metallic, roughness, ior;
-    vec3 transmission; int _pad1;
-    vec3 emission; int _pad2;
     int specularIndex, metallicIndex, roughnessIndex, normalIndex;
+    vec3 transmission; float transmissionStrength;
+    vec3 emission; float emissionStrength;
 
 #ifdef __cplusplus
     Material()
     : albedo{0.5f}, albedoIndex(-1),
       specular(0.5f), metallic(0), roughness(0.8f), ior(1.5f),
-      transmission{0}, _pad1(0),
-      emission{0}, _pad2(0),
+      transmission{1}, transmissionStrength(0),
+      emission{1}, emissionStrength(0),
       specularIndex(-1), metallicIndex(-1), roughnessIndex(-1), normalIndex(-1)
     {}
 #endif

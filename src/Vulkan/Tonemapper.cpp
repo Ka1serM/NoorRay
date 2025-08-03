@@ -21,7 +21,6 @@ Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const 
 
     descriptorSetLayout = context.getDevice().createDescriptorSetLayoutUnique({{}, static_cast<uint32_t>(bindings.size()), bindings.data()});
 
-    // Pipeline layout (no push constants)
     pipelineLayout = context.getDevice().createPipelineLayoutUnique({{}, 1, &*descriptorSetLayout});
 
     // Compute pipeline
@@ -67,7 +66,7 @@ Tonemapper::~Tonemapper()
     std::cout << "Destroying Tonemapper" << std::endl;
 }
 
-void Tonemapper::dispatch(vk::CommandBuffer commandBuffer) {
+void Tonemapper::dispatch(const vk::CommandBuffer commandBuffer) {
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0, descriptorSet.get(), {});

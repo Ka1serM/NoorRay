@@ -42,8 +42,8 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string
 
     for (int faceIdx = 0; faceIdx < 6; ++faceIdx) {
         vec3 normal = faceNormals[faceIdx];
-        vec3 tangent = glm::normalize(tangents[faceIdx]);
-        vec3 bitangent = glm::normalize(bitangents[faceIdx]);
+        vec3 tangent = normalize(tangents[faceIdx]);
+        vec3 bitangent = normalize(bitangents[faceIdx]);
 
         vec3 corners[4] = {
             normal * h + (-tangent - bitangent) * h,
@@ -339,7 +339,7 @@ void MeshAsset::renderUi() {
 
             drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const glm::vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
 
             ImGui::TableNextRow();
             drawTextureCombo("Specular Texture", mat.specularIndex, i);
@@ -363,10 +363,12 @@ void MeshAsset::renderUi() {
             ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
             
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Transmission", mat.transmission, [&](const glm::vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Transmission Color", mat.transmission, [&](const vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("Transmission Strength", mat.transmissionStrength, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmissionStrength = v; anyMaterialChanged = true; });
             
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Emission", mat.emission, [&](const glm::vec3 v) { mat.emission = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Emission Color", mat.emission, [&](const vec3 v) { mat.emission = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
 
             ImGui::EndTable();
             ImGui::TreePop();
@@ -379,8 +381,8 @@ void MeshAsset::renderUi() {
     }
 }
 
+//this gets called from the renderer when the scene material flag is dirty
 void MeshAsset::updateMaterials() {
-    // Recreate materialBuffer with updated materials from the CPU-side copy
     materialBuffer = Buffer{scene.getContext(), Buffer::Type::Storage, sizeof(Material) * materials.size(), materials.data()};
     dirty = false; // Reset dirty flag after updating
 }

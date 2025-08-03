@@ -82,6 +82,7 @@ void Viewer::run() {
 
     bool newFrameReady = false;
     bool isRunning = true;
+    bool isFullscreen = false;
 
     while (isRunning) {
         SDL_Event event{};
@@ -89,12 +90,23 @@ void Viewer::run() {
             ImGui_ImplSDL3_ProcessEvent(&event);
 
             switch (event.type) {
+            case SDL_EVENT_KEY_DOWN:
+                if (event.key.key == SDLK_F11) {
+                    isFullscreen = !isFullscreen;
+                    if (isFullscreen) {
+                        SDL_SetWindowFullscreenMode(context.getWindow(), NULL);
+                        SDL_SetWindowFullscreen(context.getWindow(), true);
+                    } else
+                        SDL_SetWindowFullscreen(context.getWindow(), false);
+                }
+                break;
                 case SDL_EVENT_QUIT:
                     isRunning = false;
                     break;
-                // Listen for window resize events to trigger swapchain recreation.
                 case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 case SDL_EVENT_WINDOW_RESIZED:
+                case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+                case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
                     framebufferResized = true;
                     break;
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -161,7 +173,6 @@ void Viewer::run() {
         try {
             commandBuffer = renderer.beginFrame();
         } catch (const vk::OutOfDateKHRError&) {
-            // Swapchain is out of date, flag for recreation on the next loop.
             framebufferResized = true;
             continue;
         }
@@ -181,7 +192,6 @@ void Viewer::run() {
             newFrameReady = false;
 
         } catch (const vk::OutOfDateKHRError&) {
-            // Swapchain became out of date during rendering, flag for recreation.
             framebufferResized = true;
         }
     }
@@ -283,7 +293,8 @@ void Viewer::setupUI() {
 
     mainMenuBar->setCallback("Add.RectLight", [this] {
         Material material{};
-        material.emission = vec3(10);
+        material.emission = vec3(1, 1, 1);
+        material.emissionStrength = 10.0f; // White light with intensity
         auto plane = MeshAsset::CreatePlane(this->scene, "RectLight", material);
         this->scene.add(plane);
         auto instance = std::make_unique<MeshInstance>(this->scene, "RectLight Instance", plane, Transform(vec3(0, 0, 0)));
@@ -294,7 +305,8 @@ void Viewer::setupUI() {
 
     mainMenuBar->setCallback("Add.SphereLight", [this] {
         Material material{};
-        material.emission = vec3(10);
+        material.emission = vec3(1, 1, 1);
+        material.emissionStrength = 10.0f; // White light with intensity
         auto sphere = MeshAsset::CreateSphere(this->scene, "SphereLight", material, 24, 48);
         this->scene.add(sphere);
         auto instance = std::make_unique<MeshInstance>(this->scene, "SphereLight Instance", sphere, Transform(vec3(0, 0, 0)));
@@ -305,7 +317,8 @@ void Viewer::setupUI() {
 
     mainMenuBar->setCallback("Add.DiskLight", [this] {
         Material material{};
-        material.emission = vec3(10);
+        material.emission = vec3(1, 1, 1);
+        material.emissionStrength = 10.0f; // White light with intensity
         auto disk = MeshAsset::CreateDisk(this->scene, "DiskLight", material, 48);
         this->scene.add(disk);
         auto instance = std::make_unique<MeshInstance>(this->scene, "DiskLight Instance", disk, Transform(vec3(0, 0, 0)));
@@ -322,10 +335,6 @@ void Viewer::setupUI() {
 }
 
 void Viewer::setupScene() {
-
-    scene.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-    scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-    scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     
     static constexpr unsigned char data[] = {
         #embed "../assets/Ultimate_Skies_4k_0036.hdr"
@@ -336,11 +345,15 @@ void Viewer::setupScene() {
         throw std::runtime_error("Failed to load HDR texture from memory");
 
     scene.add(Texture(context, "HDRI Sky", pixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
-
+    
     stbi_image_free(pixels);
 
-    // The camera's aspect ratio is based on the fixed viewport size, not the window size.
-    float aspectRatio = static_cast<float>(width / 2) / static_cast<float>(height / 2);
+    scene.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    
+
+    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
     auto cam = std::make_unique<PerspectiveCamera>(scene, "Main Camera", Transform{vec3(0, -1.0f, 3.5f), vec3(-180, 0, 180), vec3(0)}, aspectRatio, 36.0f, 24.0f, 30.0f, 2.4f, 3.0f, 3.0f);
     scene.add(std::move(cam));
 

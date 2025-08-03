@@ -19,6 +19,12 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
+    io.IniFilename = nullptr;
+    static constexpr char ini[] = {
+        #embed "../../assets/imgui.ini"
+    };
+    ImGui::LoadIniSettingsFromMemory(ini, sizeof(ini));
+
     static constexpr unsigned char font[] = {
         #embed "../../assets/Inter-Regular.ttf"
     };
@@ -279,6 +285,15 @@ void ImGuiManager::colorEdit3Row(const char* label, glm::vec3 value, const std::
     tableRowLabel(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (glm::vec3 temp = value; ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp))) {
+        setter(temp);
+    }
+}
+
+auto ImGuiManager::colorEdit4Row(const char* label, glm::vec4 value, const std::function<void(glm::vec4)>& setter) -> void
+{
+    tableRowLabel(label);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (glm::vec4 temp = value; ImGui::ColorEdit4((std::string("##") + label).c_str(), glm::value_ptr(temp))) {
         setter(temp);
     }
 }

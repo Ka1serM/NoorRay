@@ -9,7 +9,6 @@ public:
     ~Tonemapper();
 
     void dispatch(vk::CommandBuffer commandBuffer);
-    // Return a non-const reference to allow layout transitions on the image
     Image& getOutputImage() { return outputImage; }
 
 private:

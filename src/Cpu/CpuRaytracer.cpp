@@ -325,12 +325,11 @@ void CpuRaytracer::closesthit(const HitInfo& hit, Payload& payload)
         specular *= specularTexture.r; // Use red channel for specular value
     }
 
-    payload.color = material.emission;
+    payload.color = material.emission * material.emissionStrength;
     payload.position = worldPosition;
     payload.normal = normal;
 
-    float transmissionFactor = (material.transmission.r + material.transmission.g + material.transmission.b) / 3.0f;
-    if (transmissionFactor > 0.0f && ShadersCpu::rand(payload.rngState) < transmissionFactor) {
+    if (material.transmissionStrength > 0.0f && ShadersCpu::rand(payload.rngState) < material.transmissionStrength) {
         vec3 I = normalize(payload.nextDirection);
         float etaI = 1.0f;
         float etaT = material.ior;

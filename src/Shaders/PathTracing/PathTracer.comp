@@ -3,7 +3,6 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-#extension GL_EXT_ray_tracing: enable
 #extension GL_GOOGLE_include_directive: enable
 #extension GL_EXT_nonuniform_qualifier: enable
 #extension GL_EXT_buffer_reference: require
@@ -27,7 +26,6 @@ layout (push_constant) uniform PushConstants {
     CameraData camera;
 } pushConstants;
 
-// --- Software Intersection Logic ---
 #include "Intersection.glsl"
 
 void main() {
@@ -57,8 +55,7 @@ void main() {
         int diffuseBounces = 0, specularBounces = 0, transmissionBounces = 0;
         const int maxDiffuseBounces = 4, maxSpecularBounces = 6, maxTransmissionBounces = 12;
 
-        for (int totalDepth = 0; totalDepth < 24; ++totalDepth) {
-            // Software ray trace. It now uses the globally declared buffers via Bindings.glsl.
+        for (int totalDepth = 0; totalDepth < 12; ++totalDepth) {
             HitInfo hit = traceScene(rayOrigin, rayDirection);
 
             if (hit.instanceIndex == -1) {
@@ -84,15 +81,20 @@ void main() {
                 shadeClosestHit(worldPos, worldNrm, uv, rayDirection, material, payload);
             }
 
-            pathContribution += payload.throughput * payload.color;
-            if (payload.done) break;
-
+            // Clamp indirect light to prevent fireflies.
+            vec3 bounceContribution = payload.throughput * payload.color;
+            if (totalDepth > 0)
+                bounceContribution = clamp(bounceContribution, 0.0, 50.0);
+            pathContribution += bounceContribution;
+            
             switch (payload.bounceType) {
                 case BOUNCE_TYPE_DIFFUSE: if (++diffuseBounces > maxDiffuseBounces) payload.done = true; break;
                 case BOUNCE_TYPE_SPECULAR: if (++specularBounces > maxSpecularBounces) payload.done = true; break;
                 case BOUNCE_TYPE_TRANSMISSION: if (++transmissionBounces > maxTransmissionBounces) payload.done = true; break;
             }
-            if (payload.done) break;
+            
+            if (payload.done)
+                break;
 
             rayOrigin = payload.position;
             rayDirection = payload.nextDirection;

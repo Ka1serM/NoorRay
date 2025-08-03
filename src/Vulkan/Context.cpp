@@ -7,16 +7,21 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+#if !defined(NDEBUG)
+    constexpr bool g_EnableValidationLayers = true;
+#else
+constexpr bool g_EnableValidationLayers = false;
+#endif
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 Context::Context(const int width, const int height) {
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
         throw std::runtime_error("Failed to initialize SDL: " + std::string(SDL_GetError()));
-    
+
     if (SDL_Vulkan_LoadLibrary(nullptr) < 0)
         throw std::runtime_error("Failed to load Vulkan library via SDL: " + std::string(SDL_GetError()));
-    
+
     window = SDL_CreateWindow("Vulkan Toy Path Tracer by Marcel K.", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     if (!window)
         throw std::runtime_error("Failed to create SDL window: " + std::string(SDL_GetError()));
@@ -27,16 +32,19 @@ Context::Context(const int width, const int height) {
     createVulkanInstance();
     VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
-    vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
-    messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
-    messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
-    messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
-    messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
+    // --- MODIFICATION: Conditionally create the debug messenger ---
+    if (g_EnableValidationLayers) {
+        vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
+        messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
+        messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
+        messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
+        messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
+    }
 
     VkSurfaceKHR _surface;
     if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &_surface))
          throw std::runtime_error("Failed to create window surface with SDL: " + std::string(SDL_GetError()));
-    
+
     surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {instance.get()});
 
     pickPhysicalDevice();
@@ -63,7 +71,7 @@ Context::Context(const int width, const int height) {
         { vk::DescriptorType::eStorageBufferDynamic, 64 },
         { vk::DescriptorType::eInputAttachment, 8 },
     };
-    
+
     if(rtxSupported) {
         poolSizes.push_back({ vk::DescriptorType::eAccelerationStructureKHR, 16 });
     }
@@ -81,13 +89,21 @@ void Context::createVulkanInstance() {
     const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
     if (!sdlExtensions)
         throw std::runtime_error("Failed to get Vulkan instance extensions from SDL: " + std::string(SDL_GetError()));
-    
-    std::vector extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
-    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+    std::vector<const char*> extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
+    std::vector<const char*> layers;
+
+    // --- MODIFICATION: Conditionally add validation layers and debug extension ---
+    if (g_EnableValidationLayers) {
+        std::cout << "INFO: Validation layers are ENABLED." << std::endl;
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        layers.push_back("VK_LAYER_KHRONOS_validation");
+    } else {
+        std::cout << "INFO: Validation layers are DISABLED (Release Mode)." << std::endl;
+    }
 
     vk::ApplicationInfo appInfo("Vulkan Pathtracer", 1, "No Engine", 1, VK_API_VERSION_1_3);
-    std::vector layers = {"VK_LAYER_KHRONOS_validation"};
-
+    
     vk::InstanceCreateInfo instanceInfo;
     instanceInfo.setPApplicationInfo(&appInfo).setPEnabledLayerNames(layers).setPEnabledExtensionNames(extensions);
     instance = createInstanceUnique(instanceInfo);
@@ -117,9 +133,9 @@ void Context::pickPhysicalDevice() {
             }
         }
         score += vramSize / (1024 * 1024);
-        
-        std::cout << "  - " << properties.deviceName 
-                  << " (Type: " << vk::to_string(properties.deviceType) 
+
+        std::cout << "  - " << properties.deviceName
+                  << " (Type: " << vk::to_string(properties.deviceType)
                   << ", VRAM: " << (vramSize / (1024*1024)) << "MB"
                   << ", Score: " << score << ")" << std::endl;
 
@@ -130,7 +146,7 @@ void Context::pickPhysicalDevice() {
         physicalDevice = candidates.rbegin()->second;
     else
         throw std::runtime_error("Failed to find a suitable GPU!");
-    
+
     vk::PhysicalDeviceProperties props = physicalDevice.getProperties();
     std::cout << "\nPicked GPU: " << props.deviceName << std::endl;
 }
@@ -161,7 +177,7 @@ void Context::createLogicalDevice() {
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
     };
-    
+
     rtxSupported = checkDeviceExtensionSupport(rtxDeviceExtensions);
     if (rtxSupported) {
         std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
@@ -175,13 +191,13 @@ void Context::createLogicalDevice() {
     vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures{};
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
-    
+
     features2.features.samplerAnisotropy = VK_TRUE;
     features2.features.shaderInt64 = VK_TRUE;
-    
+
     swapchainMaintenance1Features.swapchainMaintenance1 = VK_TRUE;
     features2.pNext = &swapchainMaintenance1Features;
-    
+
     indexingFeatures.runtimeDescriptorArray = VK_TRUE;
     indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
     indexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
@@ -197,7 +213,7 @@ void Context::createLogicalDevice() {
         rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
         *pNextTail = &rayTracingPipelineFeatures;
         pNextTail = &rayTracingPipelineFeatures.pNext;
-        
+
         accelerationStructureFeatures.accelerationStructure = VK_TRUE;
         *pNextTail = &accelerationStructureFeatures;
     }

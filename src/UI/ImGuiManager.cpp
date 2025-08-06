@@ -216,7 +216,7 @@ void ImGuiManager::Draw(const vk::CommandBuffer commandBuffer, const uint32_t im
     );
 
     commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(commandBuffer));
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
     commandBuffer.endRenderPass();
 }
 

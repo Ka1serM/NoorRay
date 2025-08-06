@@ -47,10 +47,15 @@ public:
     uint32_t getHeight() const { return height; }
 
     virtual void updateTLAS() = 0; // Pure virtual since implementations differ
+    
     void updateTextures()
     {
         std::vector<vk::DescriptorImageInfo> textureImageInfos;
         const auto& textures = scene.getTextures();
+
+        if (textures.empty())
+            return;
+  
         textureImageInfos.reserve(textures.size());
         for (const auto& texture : textures)
         {
@@ -59,12 +64,21 @@ public:
             info.setImageView(texture.getImage().getImageView());
             info.setSampler(texture.getSampler());
             textureImageInfos.push_back(info);
-        }    
+        }
 
         uint32_t descriptorCount = static_cast<uint32_t>(textureImageInfos.size());
-        vk::WriteDescriptorSet write{descriptorSet.get(),3,0, descriptorCount, vk::DescriptorType::eCombinedImageSampler,textureImageInfos.data()};
+
+        const vk::WriteDescriptorSet write{
+            descriptorSet.get(),
+            3,
+            0,
+            descriptorCount,
+            vk::DescriptorType::eCombinedImageSampler,
+            textureImageInfos.data()
+        };
         context.getDevice().updateDescriptorSets(write, {});
     }
+
     void updateMeshes()
     {
         std::vector<MeshAddresses> meshAddresses;
@@ -75,16 +89,23 @@ public:
             meshAsset->updateMaterials();
             meshAddresses.push_back(meshAsset->getBufferAddresses());
         }
-    
-        meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses) * meshAddresses.size(), meshAddresses.data()};
+
+        if (meshAddresses.empty())
+            meshBuffer = Buffer();
+        else
+            meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses) * meshAddresses.size(), meshAddresses.data()};
+
         vk::DescriptorBufferInfo bufferInfo = meshBuffer.getDescriptorInfo();
+
         vk::WriteDescriptorSet write{};
         write.setDstSet(descriptorSet.get());
-        write.setDstBinding(2);
+        write.setDstBinding(2); // DstBinding 2 is for meshes
         write.setDescriptorType(vk::DescriptorType::eStorageBuffer);
-        write.setDescriptorCount(1);
-        write.setBufferInfo(bufferInfo);
+        write.setDescriptorCount(1); // Always 1 for a single buffer binding
+        write.setBufferInfo(bufferInfo); 
+
         context.getDevice().updateDescriptorSets(write, {});
     }
+
 };
 

@@ -1,5 +1,13 @@
 ﻿#include "Buffer.h"
 
+Buffer::Buffer() : buffer(nullptr), memory(nullptr)
+{
+    descBufferInfo.setBuffer(VK_NULL_HANDLE);
+    descBufferInfo.setOffset(0);
+    descBufferInfo.setRange(VK_WHOLE_SIZE);
+    deviceAddress = 0;
+}
+
 Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, const void* data, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memoryProps) {
 
     using Usage = vk::BufferUsageFlagBits;
@@ -25,7 +33,7 @@ Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, con
             memoryProps = Memory::eHostVisible | Memory::eHostCoherent | Memory::eDeviceLocal;
         }
     }
-
+    
     buffer = context.getDevice().createBufferUnique({{}, size, usage});
 
     const vk::MemoryRequirements requirements = context.getDevice().getBufferMemoryRequirements(*buffer);

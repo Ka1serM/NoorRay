@@ -19,7 +19,6 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
     shaderStageInfo.setPName("main");
 
     // Define the descriptor set layout bindings.
-    // The descriptorCount for the texture array is now the maximum size you'll ever need.
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
         {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute},
         {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute},
@@ -65,9 +64,8 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
 
     auto pipelineResult = context.getDevice().createComputePipelineUnique({}, computePipelineInfo);
     if (pipelineResult.result != vk::Result::eSuccess)
-    {
         throw std::runtime_error("failed to create compute pipeline.");
-    }
+
     pipeline = std::move(pipelineResult.value);
 
     // 6. Update descriptor set with the output image
@@ -83,6 +81,7 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
     storageImageWrite.setImageInfo(storageImageInfo);
     context.getDevice().updateDescriptorSets(storageImageWrite, {});
 }
+
 
 void ComputeRaytracer::updateTLAS()
 {
@@ -103,23 +102,21 @@ void ComputeRaytracer::updateTLAS()
         }
     }
 
-    if (instances.empty()) {
-        instancesBuffer = Buffer{}; // Reset buffer if scene is empty
-    } else {
-        // Create a storage buffer with all instance data
+    if (instances.empty())
+        instancesBuffer = Buffer();
+    else
         instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance) * instances.size(), instances.data()};
-    }
 
-    // Update the descriptor set to point to the new instance buffer at binding 0.
     vk::DescriptorBufferInfo bufferInfo = instancesBuffer.getDescriptorInfo();
     vk::WriteDescriptorSet write{};
     write.setDstSet(descriptorSet.get());
-    write.setDstBinding(0); // This now correctly targets binding 0
+    write.setDstBinding(0);
     write.setDescriptorType(vk::DescriptorType::eStorageBuffer);
     write.setDescriptorCount(1);
     write.setBufferInfo(bufferInfo);
     context.getDevice().updateDescriptorSets(write, {});
 }
+
 
 void ComputeRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstants& pushConstants)
 {

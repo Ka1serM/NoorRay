@@ -50,7 +50,7 @@ file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
 file(GLOB_RECURSE SHADER_FILES src/Shaders/*)
 file(GLOB_RECURSE ASSET_FILES assets/*)
 
-add_executable(VulkanToyPathtracer WIN32 ${SRC_FILES} resource.rc)
+add_executable(VulkanToyPathtracer ${SRC_FILES} resource.rc)
 set_target_properties(VulkanToyPathtracer PROPERTIES PREFIX "")
 
 target_include_directories(VulkanToyPathtracer PRIVATE
@@ -78,7 +78,7 @@ target_sources(VulkanToyPathtracer PRIVATE ${SHADER_FILES} ${ASSET_FILES})
 # ---------------------------------------------------------------------------
 # Static Linking for Release Builds (MinGW)
 # ---------------------------------------------------------------------------
-if(MINGW AND CMAKE_BUILD_TYPE STREQUAL "Release")
+if(MINGW)
     target_link_options(VulkanToyPathtracer PRIVATE
             -static-libgcc
             -static-libstdc++

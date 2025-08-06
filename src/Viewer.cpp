@@ -3,7 +3,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_mouse.h>
 #include "imgui.h"
 #include "UI/DebugPanel.h"
 #include "UI/MainMenuBar.h"
@@ -26,8 +25,7 @@ Viewer::Viewer(const int width, const int height)
       context(width, height),
       renderer(context, width, height),
       imGuiManager(context, renderer.getSwapchainImages(), width, height),
-      scene(context),
-      inputTracker(context.getWindow())
+      scene(context)
 {
     const int viewportWidth = width / 2;
     const int viewportHeight = height / 2;
@@ -84,11 +82,15 @@ void Viewer::run() {
     bool isRunning = true;
     bool isFullscreen = false;
 
+    auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("GPU Viewport"));
+    auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug"));
+    
     while (isRunning) {
+        
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
-
+            
             switch (event.type) {
             case SDL_EVENT_KEY_DOWN:
                 if (event.key.key == SDLK_F11) {
@@ -109,21 +111,11 @@ void Viewer::run() {
                 case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
                     framebufferResized = true;
                     break;
-                case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    if (event.button.button == SDL_BUTTON_RIGHT)
-                        SDL_SetWindowRelativeMouseMode(context.getWindow(), true);
-                    break;
-                case SDL_EVENT_MOUSE_BUTTON_UP:
-                    if (event.button.button == SDL_BUTTON_RIGHT)
-                        SDL_SetWindowRelativeMouseMode(context.getWindow(), false);
-                    break;
                 default:
                     break;
             }
         }
-
-        inputTracker.update();
-
+        
         // --- Time/FPS ---
         auto currentTime = clock::now();
         deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
@@ -131,7 +123,6 @@ void Viewer::run() {
         timeAccumulator += deltaTime;
         frameCounter++;
         if (timeAccumulator >= 1.0f) {
-            if (auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug")))
                 debugPanel->setFps(static_cast<float>(frameCounter) / timeAccumulator);
             timeAccumulator = 0.0f;
             frameCounter = 0;
@@ -147,7 +138,6 @@ void Viewer::run() {
 
         // --- UI and Scene ---
         imGuiManager.renderUi();
-        scene.getActiveCamera()->update(inputTracker, deltaTime);
 
         if (scene.isTlasDirty() || scene.isMeshesDirty() || scene.isTexturesDirty()) {
             context.getDevice().waitIdle();
@@ -178,13 +168,8 @@ void Viewer::run() {
         }
 
         try {
-            auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("GPU Viewport"));
-            if (!gpuViewport)
-                throw std::runtime_error("Could not find GPU Viewport panel!");
-
-            if (newFrameReady) {
+            if (newFrameReady)
                 gpuViewport->recordCopy(commandBuffer, gpuImageTonemapper->getOutputImage());
-            }
 
             imGuiManager.Draw(commandBuffer, renderer.getCurrentSwapchainImageIndex(), width, height);
 
@@ -207,9 +192,9 @@ void Viewer::setupUI() {
     auto mainMenuBar = std::make_unique<MainMenuBar>();
     auto debugPanel = std::make_unique<DebugPanel>();
     auto environmentPanel = std::make_unique<EnvironmentPanel>(scene);
-    auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene, inputTracker);
+    auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene);
     
-    auto gpuViewportUniquePtr = std::make_unique<ViewportPanel>(context, gpuImageTonemapper->getOutputImage(), width/2, height/2, "GPU Viewport");
+    auto gpuViewportUniquePtr = std::make_unique<ViewportPanel>(scene, gpuImageTonemapper->getOutputImage(), width/2, height/2, "GPU Viewport");
 
     mainMenuBar->setCallback("File.Quit", [&] {
         SDL_Event quitEvent;
@@ -232,8 +217,8 @@ void Viewer::setupUI() {
                 this->scene.add(meshAsset);
                 auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
                 int instanceIndex = this->scene.add(std::move(instance));
-                if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-                    outliner->setSelectedIndex(instanceIndex);
+                
+                    scene.setActiveObjectIndex(instanceIndex);
 
             } catch (const std::exception& e) {
                 std::cerr << "Import failed: " << e.what() << std::endl;
@@ -242,8 +227,8 @@ void Viewer::setupUI() {
     });
 
     mainMenuBar->setCallback("File.Import.CrtScene", [this] {
-    const auto selection = pfd::open_file("Import CrtScene", ".", { "CRT Scene Files", "*.crtscene", "All Files", "*" }).result();
-    if (!selection.empty()) {
+        const auto selection = pfd::open_file("Import CrtScene", ".", { "CRT Scene Files", "*.crtscene", "All Files", "*" }).result();
+        if (!selection.empty()) {
             
         try {
             std::vector<Vertex> vertices;
@@ -255,22 +240,39 @@ void Viewer::setupUI() {
             this->scene.add(meshAsset);
             auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
             int instanceIndex = this->scene.add(std::move(instance));
-            if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-                outliner->setSelectedIndex(instanceIndex);
+            
+                scene.setActiveObjectIndex(instanceIndex);
 
         } catch (const std::exception& e) {
             std::cerr << "Import failed: " << e.what() << std::endl;
         }
     }
-});
+    });
+    
+    mainMenuBar->setCallback("File.Import.Texture", [this] {
+      const auto selection = pfd::open_file(
+          "Import Texture",
+          ".",
+          {
+              "Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
+              "All Files", "*"
+          }).result();
+
+      if (!selection.empty()) {
+          try {
+              scene.add(Texture(context, selection[0]));
+          } catch (const std::exception& e) {
+              std::cerr << "Import failed: " << e.what() << std::endl;
+          }
+      }
+    });
 
     mainMenuBar->setCallback("Add.Cube", [this] {
         auto cube = MeshAsset::CreateCube(scene, "Cube", {});
         this->scene.add(cube);
         auto instance = std::make_unique<MeshInstance>(this->scene, "Cube Instance", cube, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.Plane", [this] {
@@ -278,8 +280,7 @@ void Viewer::setupUI() {
         this->scene.add(plane);
         auto instance = std::make_unique<MeshInstance>(this->scene, "Plane Instance", plane, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.Sphere", [this] {
@@ -287,8 +288,7 @@ void Viewer::setupUI() {
         this->scene.add(sphere);
         auto instance = std::make_unique<MeshInstance>(this->scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.RectLight", [this] {
@@ -299,8 +299,7 @@ void Viewer::setupUI() {
         this->scene.add(plane);
         auto instance = std::make_unique<MeshInstance>(this->scene, "RectLight Instance", plane, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.SphereLight", [this] {
@@ -311,8 +310,7 @@ void Viewer::setupUI() {
         this->scene.add(sphere);
         auto instance = std::make_unique<MeshInstance>(this->scene, "SphereLight Instance", sphere, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+        scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.DiskLight", [this] {
@@ -323,8 +321,7 @@ void Viewer::setupUI() {
         this->scene.add(disk);
         auto instance = std::make_unique<MeshInstance>(this->scene, "DiskLight Instance", disk, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+        scene.setActiveObjectIndex(instanceIndex);
     });
 
     imGuiManager.add(std::move(mainMenuBar));
@@ -348,19 +345,11 @@ void Viewer::setupScene() {
     
     stbi_image_free(pixels);
 
-    scene.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-    scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-    scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    //scene.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    //scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    //scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     
-
     float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-    auto cam = std::make_unique<PerspectiveCamera>(scene, "Main Camera", Transform{vec3(0, -1.0f, 3.5f), vec3(-180, 0, 180), vec3(0)}, aspectRatio, 36.0f, 24.0f, 30.0f, 2.4f, 3.0f, 3.0f);
+    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(0, 0, 5.0f), vec3(-180, 0, 180), vec3(0)}, aspectRatio, 36.0f, 24.0f, 30.0f, 0.0f, 10.0f, 2.0f);
     scene.add(std::move(cam));
-
-    auto meshAsset = MeshAsset::CreateCube(this->scene, "Default Cube", Material{});
-    this->scene.add(meshAsset);
-    auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
-    int instanceIndex = this->scene.add(std::move(instance));
-    if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-        outliner->setSelectedIndex(instanceIndex);
 }

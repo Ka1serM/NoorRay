@@ -1,11 +1,14 @@
 ﻿#include "ViewportPanel.h"
-#include <imgui.h>
 #include <iostream>
+#include "imgui.h"
+#include "Camera/PerspectiveCamera.h"
+#include "glm/gtc/type_ptr.hpp"
+#include "SDL3/SDL_mouse.h"
 
-
-ViewportPanel::ViewportPanel(Context& context, const Image& inputImage,uint32_t width, uint32_t height, const std::string& title)
-: width(width), height(height), title(title), displayImage(context, width, height, inputImage.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
-{    
+ViewportPanel::ViewportPanel(Scene& scene, const Image& inputImage,uint32_t width, uint32_t height, const std::string& title)
+: scene(scene), width(width), height(height), title(title), displayImage(scene.getContext(), width, height, inputImage.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
+{
+    Context& context = scene.getContext();
     context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
         displayImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
     });
@@ -38,7 +41,6 @@ ViewportPanel::ViewportPanel(Context& context, const Image& inputImage,uint32_t 
     auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
 
-    // Update descriptor set to point to our new displayImage
     vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getImageView(),vk::ImageLayout::eShaderReadOnlyOptimal};
 
     vk::WriteDescriptorSet write{};
@@ -51,7 +53,7 @@ ViewportPanel::ViewportPanel(Context& context, const Image& inputImage,uint32_t 
     context.getDevice().updateDescriptorSets(write, nullptr);
 }
 
-void ViewportPanel::recordCopy(vk::CommandBuffer cmd, Image& srcImage)
+void ViewportPanel::recordCopy(const vk::CommandBuffer cmd, Image& srcImage)
 {
     // Transition layouts for the copy operation
     srcImage.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
@@ -92,9 +94,60 @@ void ViewportPanel::renderUi() {
 
     ImVec2 cursorPos = ImGui::GetCursorPos();
     ImGui::SetCursorPos(ImVec2(cursorPos.x + padding.x, cursorPos.y + padding.y));
-
+    ImVec2 imagePos = ImGui::GetCursorScreenPos();
+    
     ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get())), imageSize, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f));
+    bool isImageHovered = ImGui::IsItemHovered();
 
+    auto* camera = scene.getActiveCamera();
+        
+    //SECTION RENDER GIZMO
+    if (auto activeObject = scene.getActiveObject())
+    {
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetRect(imagePos.x, imagePos.y, imageSize.x, imageSize.y);
+        ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+
+        if (isImageHovered) {
+            if (ImGui::IsKeyPressed(ImGuiKey_W))
+                currentOperation = ImGuizmo::TRANSLATE;
+            if (ImGui::IsKeyPressed(ImGuiKey_E))
+                currentOperation = ImGuizmo::ROTATE;
+            if (ImGui::IsKeyPressed(ImGuiKey_R))
+                currentOperation = ImGuizmo::SCALE;
+        }
+
+        const mat4& view = camera->getViewMatrix();
+        mat4 proj = camera->getProjectionMatrix();
+        
+        mat4 model = activeObject->getTransform().getMatrix();
+        static ImGuizmo::MODE currentMode = ImGuizmo::LOCAL;
+        ImGuizmo::Manipulate(value_ptr(view), value_ptr(proj), currentOperation, currentMode, value_ptr(model));
+        
+        if (ImGuizmo::IsUsing())
+            activeObject->setTransformMatrix(model);
+    }
+
+    //SECTION HANDLE INPUT
+    SDL_Window* sdlWindow = scene.getContext().getWindow();
+
+    if (isImageHovered && !ImGuizmo::IsOver() && ImGui::IsMouseDown(ImGuiMouseButton_Right) && !isCapturingMouse) {
+        SDL_GetMouseState(&oldX, &oldY);
+        isCapturingMouse = true;
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        SDL_SetWindowRelativeMouseMode(sdlWindow, true);
+    }
+
+    if (isCapturingMouse && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        isCapturingMouse = false;
+        SDL_SetWindowRelativeMouseMode(sdlWindow, false);
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+        SDL_WarpMouseInWindow(sdlWindow, oldX, oldY);
+    }
+
+    if (isCapturingMouse)
+        camera->update();
+    
     ImGui::End();
 }
 

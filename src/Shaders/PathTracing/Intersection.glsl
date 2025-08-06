@@ -5,16 +5,19 @@ bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3
     vec3 pvec = cross(rayDirection, e2);
     float det = dot(e1, pvec);
 
-    if (abs(det) < EPSILON) return false;
+    if (abs(det) < EPSILON)
+        return false;
 
     float invDet = 1.0 / det;
     vec3 tvec = rayOrigin - v0;
     float u = dot(tvec, pvec) * invDet;
-    if (u < 0.0 || u > 1.0) return false;
+    if (u < 0.0 || u > 1.0)
+        return false;
 
     vec3 qvec = cross(tvec, e1);
     float v = dot(rayDirection, qvec) * invDet;
-    if (v < 0.0 || u + v > 1.0) return false;
+    if (v < 0.0 || u + v > 1.0)
+        return false;
 
     float current_t = dot(e2, qvec) * invDet;
     if (current_t > EPSILON && current_t < t) {

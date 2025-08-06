@@ -5,6 +5,7 @@
 #include <vector>
 #include <functional>
 #include "glm/glm.hpp"
+#include "SDL3/SDL_events.h"
 #include "Vulkan/Context.h"
 
 class ImGuiComponent;

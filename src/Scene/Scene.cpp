@@ -8,8 +8,6 @@
 Scene::Scene(Context& context) : context(context) {
 }
 
-Scene::~Scene() = default;
-
 // Adds a generic SceneObject to the scene.
 int Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     std::unique_lock lock(sceneMutex);
@@ -57,12 +55,6 @@ bool Scene::remove(const SceneObject* obj) {
     // Check if the object is a mesh instance.
     const auto* meshInstance = dynamic_cast<const MeshInstance*>(obj);
     if (meshInstance) {
-        // If it's the last mesh instance, don't allow removal.
-        if ( meshInstances.size() <= 1) {
-            std::cerr << "Warning: Cannot remove the last mesh instance in the scene." << std::endl;
-            return false;
-        }
-
         const auto it = std::ranges::find(meshInstances, meshInstance);
         if (it != meshInstances.end())
             meshInstances.erase(it);

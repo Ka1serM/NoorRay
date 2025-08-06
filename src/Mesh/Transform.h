@@ -29,6 +29,7 @@ public:
     void setPosition(const glm::vec3& eulerDegrees);
     void setRotation(const glm::quat& eulerDegrees);
     void setScale(const glm::vec3& eulerDegrees);
+    void setFromMatrix(const glm::mat4& matrix);
 
     glm::vec3 getPosition() const;
     glm::quat getRotation() const;

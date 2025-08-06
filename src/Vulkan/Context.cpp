@@ -8,9 +8,9 @@
 #include <SDL3/SDL_vulkan.h>
 
 #if !defined(NDEBUG)
-    constexpr bool g_EnableValidationLayers = true;
+    constexpr bool EnableValidationLayers = true;
 #else
-constexpr bool g_EnableValidationLayers = false;
+constexpr bool EnableValidationLayers = false;
 #endif
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -32,8 +32,7 @@ Context::Context(const int width, const int height) {
     createVulkanInstance();
     VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
-    // --- MODIFICATION: Conditionally create the debug messenger ---
-    if (g_EnableValidationLayers) {
+    if (EnableValidationLayers) {
         vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
         messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
         messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
@@ -72,9 +71,8 @@ Context::Context(const int width, const int height) {
         { vk::DescriptorType::eInputAttachment, 8 },
     };
 
-    if(rtxSupported) {
+    if(rtxSupported)
         poolSizes.push_back({ vk::DescriptorType::eAccelerationStructureKHR, 16 });
-    }
 
     uint32_t maxSets = 210;
     vk::DescriptorPoolCreateInfo poolInfo{};
@@ -90,17 +88,15 @@ void Context::createVulkanInstance() {
     if (!sdlExtensions)
         throw std::runtime_error("Failed to get Vulkan instance extensions from SDL: " + std::string(SDL_GetError()));
 
-    std::vector<const char*> extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
+    std::vector extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
     std::vector<const char*> layers;
 
-    // --- MODIFICATION: Conditionally add validation layers and debug extension ---
-    if (g_EnableValidationLayers) {
+    if (EnableValidationLayers) {
         std::cout << "INFO: Validation layers are ENABLED." << std::endl;
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         layers.push_back("VK_LAYER_KHRONOS_validation");
-    } else {
+    } else
         std::cout << "INFO: Validation layers are DISABLED (Release Mode)." << std::endl;
-    }
 
     vk::ApplicationInfo appInfo("Vulkan Pathtracer", 1, "No Engine", 1, VK_API_VERSION_1_3);
     
@@ -155,8 +151,8 @@ void Context::createLogicalDevice() {
     std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
     for (uint32_t i = 0; i < queueFamilies.size(); i++) {
         const auto& flags = queueFamilies[i].queueFlags;
-        bool hasGraphics = bool(flags & vk::QueueFlagBits::eGraphics);
-        bool hasCompute = bool(flags & vk::QueueFlagBits::eCompute);
+        bool hasGraphics = static_cast<bool>(flags & vk::QueueFlagBits::eGraphics);
+        bool hasCompute = static_cast<bool>(flags & vk::QueueFlagBits::eCompute);
         bool hasPresent = physicalDevice.getSurfaceSupportKHR(i, surface.get());
 
         if (hasGraphics && hasCompute && hasPresent) {
@@ -164,17 +160,24 @@ void Context::createLogicalDevice() {
             break;
         }
     }
+
     if (queueFamilyIndices.empty())
         throw std::runtime_error("Could not find a suitable queue family!");
 
     std::vector deviceExtensions{
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
-        VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_MAINTENANCE3_EXTENSION_NAME,
-        VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+        VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE3_EXTENSION_NAME,
+        VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,  // Required for nullDescriptor
     };
+
     const std::vector rtxDeviceExtensions{
-        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
     };
 
@@ -182,45 +185,73 @@ void Context::createLogicalDevice() {
     if (rtxSupported) {
         std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
         deviceExtensions.insert(deviceExtensions.end(), rtxDeviceExtensions.begin(), rtxDeviceExtensions.end());
-    } else
+    } else {
         std::cout << "Ray tracing extensions are not supported. Proceeding without them." << std::endl;
+    }
 
+    // Feature structs
     vk::PhysicalDeviceFeatures2 features2{};
     vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchainMaintenance1Features{};
     vk::PhysicalDeviceDescriptorIndexingFeatures indexingFeatures{};
     vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures{};
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
+    vk::PhysicalDeviceRobustness2FeaturesEXT robustness2Features{}; // <-- Added
 
+    // Enable base features
     features2.features.samplerAnisotropy = VK_TRUE;
     features2.features.shaderInt64 = VK_TRUE;
 
+    // Enable Vulkan 1.3+ extension features
+    swapchainMaintenance1Features.sType = vk::StructureType::ePhysicalDeviceSwapchainMaintenance1FeaturesEXT;
     swapchainMaintenance1Features.swapchainMaintenance1 = VK_TRUE;
     features2.pNext = &swapchainMaintenance1Features;
 
+    indexingFeatures.sType = vk::StructureType::ePhysicalDeviceDescriptorIndexingFeatures;
     indexingFeatures.runtimeDescriptorArray = VK_TRUE;
     indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
     indexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     indexingFeatures.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
     indexingFeatures.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
+    indexingFeatures.descriptorBindingVariableDescriptorCount = VK_TRUE;
     swapchainMaintenance1Features.pNext = &indexingFeatures;
 
+    bufferDeviceAddressFeatures.sType = vk::StructureType::ePhysicalDeviceBufferDeviceAddressFeatures;
     bufferDeviceAddressFeatures.bufferDeviceAddress = VK_TRUE;
     indexingFeatures.pNext = &bufferDeviceAddressFeatures;
+
     void** pNextTail = &bufferDeviceAddressFeatures.pNext;
 
     if (rtxSupported) {
+        rayTracingPipelineFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
         rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
         *pNextTail = &rayTracingPipelineFeatures;
         pNextTail = &rayTracingPipelineFeatures.pNext;
 
+        accelerationStructureFeatures.sType = vk::StructureType::ePhysicalDeviceAccelerationStructureFeaturesKHR;
         accelerationStructureFeatures.accelerationStructure = VK_TRUE;
         *pNextTail = &accelerationStructureFeatures;
+        pNextTail = &accelerationStructureFeatures.pNext;
     }
 
+    // Enable null descriptors
+    robustness2Features.sType = vk::StructureType::ePhysicalDeviceRobustness2FeaturesEXT;
+    robustness2Features.nullDescriptor = VK_TRUE;
+    *pNextTail = &robustness2Features;
+    pNextTail = &robustness2Features.pNext;
+
+    // Queue setup
     constexpr float queuePriority = 1.0f;
     vk::DeviceQueueCreateInfo queueCreateInfo({}, queueFamilyIndices.front(), 1, &queuePriority);
-    vk::DeviceCreateInfo deviceCreateInfo({}, queueCreateInfo, {}, deviceExtensions, nullptr, &features2);
+
+    // Create device
+    vk::DeviceCreateInfo deviceCreateInfo{};
+    deviceCreateInfo.sType = vk::StructureType::eDeviceCreateInfo;
+    deviceCreateInfo.pNext = &features2;
+    deviceCreateInfo.queueCreateInfoCount = 1;
+    deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+    deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
     device = physicalDevice.createDeviceUnique(deviceCreateInfo);
 }

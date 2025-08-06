@@ -30,6 +30,16 @@ void SceneObject::setScale(const glm::vec3& scale) {
     scene.setAccumulationDirty();
 }
 
+void SceneObject::setTransform(const Transform& transf) {
+    transform = transf;
+    scene.setAccumulationDirty();
+}
+
+void SceneObject::setTransformMatrix(const glm::mat4& transf) {
+    transform.setFromMatrix(transf);
+    scene.setAccumulationDirty();
+}
+
 void SceneObject::renderUi() {
 
     // Name

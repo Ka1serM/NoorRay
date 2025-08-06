@@ -6,12 +6,14 @@
 #include "glm/gtx/rotate_vector.hpp"
 #include "SDL3/SDL_mouse.h"
 #include "UI/ImGuiManager.h"
+#include "Scene/Scene.h"
 
 static constexpr vec3 FRONT = vec3(0, 0, 1);
 static constexpr vec3 WORLD_UP = vec3(0.0f, -1.0f, 0.0f);
 static constexpr vec3 VULKAN_Z_PLUS = vec3(0.0f, 0.0f, 1.0f);
 
-PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) : SceneObject(scene, name, transform), scene(scene), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
+PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) 
+    : SceneObject(scene, name, transform), scene(scene), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
 {
     cameraData.focalLength = focalLength;
     cameraData.aperture = aperture;
@@ -20,6 +22,8 @@ PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Tran
 
     updateCameraData();
     updateHorizontalVertical();
+    updateViewMatrix();
+    updateProjectionMatrix();
 }
 
 void PerspectiveCamera::updateCameraData() {
@@ -32,13 +36,24 @@ void PerspectiveCamera::updateHorizontalVertical() {
     const vec3 right = normalize(cross(direction, WORLD_UP));
     const vec3 up = normalize(cross(right, direction));
 
-    cameraData.horizontal = right *  sensorWidth * 0.001f; // Convert mm to meters
+    cameraData.horizontal = right * sensorWidth * 0.001f; // Convert mm to meters
     cameraData.vertical = up * sensorWidth / aspectRatio * 0.001f; // Convert mm to meters
+}
+
+void PerspectiveCamera::updateViewMatrix() {
+    const vec3 target = getPosition() + cameraData.direction;
+    viewMatrix = lookAt(getPosition(), target, WORLD_UP);
+}
+
+void PerspectiveCamera::updateProjectionMatrix() {
+    const float fovY = 2.0f * atan(sensorHeight * 0.5f / cameraData.focalLength);
+    projectionMatrix = perspectiveZO(fovY, aspectRatio, 0.1f, 1000.0f);
 }
 
 void PerspectiveCamera::setFocalLength(const float val) {
     cameraData.focalLength = val;
     updateHorizontalVertical();
+    updateProjectionMatrix(); // Update projection matrix
     scene.setAccumulationDirty();
 }
 
@@ -61,71 +76,54 @@ void PerspectiveCamera::setSensorSize(const float width, const float height) {
     sensorWidth = width;
     sensorHeight = height;
     updateHorizontalVertical();
+    updateProjectionMatrix();
     scene.setAccumulationDirty();
 }
 
-void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
-    const bool rmbHeld = inputTracker.isMouseButtonHeld(SDL_BUTTON_RIGHT);
+void PerspectiveCamera::update() {
     const bool wasDirty = scene.isAccumulationDirty();
-
     const vec3 oldPosition = getPosition();
     const vec3 oldDirection = cameraData.direction;
 
-    if (rmbHeld) {
-        // --- Rotation ---
-        float dx, dy;
-        inputTracker.getMouseDelta(dx, dy);
+    float dx, dy = 0;
+    SDL_GetRelativeMouseState(&dx, &dy);
 
-        constexpr float sensitivity = 0.1f;
-        const float yaw = radians(-dx * sensitivity);
-        const float pitch = radians(-dy * sensitivity); // Invert pitch to match natural movement
+    constexpr float sensitivity = 0.1f;
+    const float yaw = radians(-dx * sensitivity);
+    const float pitch = radians(-dy * sensitivity);
 
-        quat rot = getRotation();
+    quat rot = getRotation();
+    vec3 forward = rot * FRONT;
+    vec3 right = normalize(cross(forward, WORLD_UP));
 
-        // Camera forward (local +Z)
-        vec3 forward = rot * FRONT;
+    quat yawQuat = angleAxis(yaw, WORLD_UP);
+    quat pitchQuat = angleAxis(pitch, right);
 
-        // Camera right axis (local X)
-        vec3 right = normalize(cross(forward, WORLD_UP));
+    quat newRot = normalize(pitchQuat * yawQuat * rot);
+    setRotation(newRot);
 
-        // Apply yaw around WORLD_UP (global up)
-        quat yawQuat = angleAxis(yaw, WORLD_UP);
+    // --- Movement ---
+    ImGuiIO& io = ImGui::GetIO();
+    float speed = io.DeltaTime;
+    if (ImGui::IsKeyDown(ImGuiKey_LeftShift))
+        speed *= 10.0f;
 
-        // Apply pitch around camera’s right axis (local right)
-        quat pitchQuat = angleAxis(pitch, right);
+    vec3 position = getPosition();
+    forward = newRot * vec3(0, 0, 1);
+    right = normalize(cross(forward, WORLD_UP));
+    vec3 upDir = WORLD_UP;
 
-        // Combine rotations: pitch * yaw * current rotation
-        quat newRot = normalize(pitchQuat * yawQuat * rot);
+    if (ImGui::IsKeyDown(ImGuiKey_W)) position += forward * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_S)) position -= forward * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_A)) position -= right * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_D)) position += right * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_E)) position += upDir * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_Q)) position -= upDir * speed;
 
-        setRotation(newRot);
-
-        // --- Movement ---
-        float speed = deltaTime;
-        if (inputTracker.isKeyHeld(SDL_SCANCODE_LSHIFT))
-            speed *= 10.0f;
-
-        vec3 position = getPosition();
-        forward = newRot * vec3(0, 0, 1);
-        right = normalize(cross(forward, WORLD_UP));
-        vec3 upDir = WORLD_UP;
-
-        if (inputTracker.isKeyHeld(SDL_SCANCODE_W))
-            position += forward * speed;
-        if (inputTracker.isKeyHeld(SDL_SCANCODE_S))
-            position -= forward * speed;
-        if (inputTracker.isKeyHeld(SDL_SCANCODE_A))
-            position -= right * speed;
-        if (inputTracker.isKeyHeld(SDL_SCANCODE_D))
-            position += right * speed;
-        if (inputTracker.isKeyHeld(SDL_SCANCODE_E))
-            position += upDir * speed;
-        if (inputTracker.isKeyHeld(SDL_SCANCODE_Q))
-            position -= upDir * speed;
-
-        setPosition(position);
-    }
+    setPosition(position);
 
     updateCameraData();
+    updateViewMatrix(); // Update view matrix after position/rotation changes
 
     const bool changed = wasDirty || !all(epsilonEqual(oldDirection, cameraData.direction, 0.001f)) || !all(epsilonEqual(oldPosition, getPosition(), 0.001f));
     if (changed) {
@@ -133,7 +131,6 @@ void PerspectiveCamera::update(InputTracker& inputTracker, float deltaTime) {
         scene.setAccumulationDirty();
     }
 }
-
 
 void PerspectiveCamera::renderUi() {
     SceneObject::renderUi();
@@ -170,7 +167,7 @@ void PerspectiveCamera::renderUi() {
         setSensorSize(sensorWidth, v);
         anyChanged = true;
     });
-
+    
     if (anyChanged)
         scene.setAccumulationDirty();
 }

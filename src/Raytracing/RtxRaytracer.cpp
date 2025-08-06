@@ -161,6 +161,7 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : Rayt
     context.getDevice().updateDescriptorSets(storageImageWrite, {});
 }
 
+
 void RtxRaytracer::updateTLAS()
 {
     std::vector<vk::AccelerationStructureInstanceKHR> instances;
@@ -175,11 +176,10 @@ void RtxRaytracer::updateTLAS()
                 instances.push_back(meshInstance->getInstanceData());
     }
 
-    if (instances.empty()) {
-        tlas = Accel{};
-        instancesBuffer = Buffer{};
-    } else {
-        instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
+        if (instances.empty())
+            instancesBuffer = Buffer();
+        else
+            instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
 
         vk::AccelerationStructureGeometryInstancesDataKHR instancesData;
         instancesData.setArrayOfPointers(false);
@@ -191,20 +191,19 @@ void RtxRaytracer::updateTLAS()
         instanceGeometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
 
         tlas.build(context, instanceGeometry, static_cast<uint32_t>(instances.size()), vk::AccelerationStructureTypeKHR::eTopLevel);
-    }
 
-    vk::WriteDescriptorSetAccelerationStructureKHR accelInfo{};
-    accelInfo.setAccelerationStructureCount(1);
-    accelInfo.setPAccelerationStructures(&tlas.getAccelerationStructure());
+        vk::WriteDescriptorSetAccelerationStructureKHR accelInfo{};
+        accelInfo.setAccelerationStructureCount(1);
+        accelInfo.setPAccelerationStructures(&tlas.getAccelerationStructure());
 
-    vk::WriteDescriptorSet accelWrite{};
-    accelWrite.setDstSet(descriptorSet.get());
-    accelWrite.setDstBinding(0);
-    accelWrite.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR);
-    accelWrite.setDescriptorCount(1);
-    accelWrite.setPNext(&accelInfo);
+        vk::WriteDescriptorSet accelWrite{};
+        accelWrite.setDstSet(descriptorSet.get());
+        accelWrite.setDstBinding(0);
+        accelWrite.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR);
+        accelWrite.setDescriptorCount(1);
+        accelWrite.setPNext(&accelInfo);
 
-    context.getDevice().updateDescriptorSets(accelWrite, {});
+        context.getDevice().updateDescriptorSets(accelWrite, {});
 }
 
 void RtxRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstants& pushConstants)

@@ -98,6 +98,10 @@ void MainMenuBar::renderFileMenu() {
             if (ImGui::MenuItem("Chaos Camp .crtscene"))
                 if (callbacks.contains("File.Import.CrtScene"))
                     callbacks["File.Import.CrtScene"]();
+
+            if (ImGui::MenuItem("Bitmap Texture"))
+                if (callbacks.contains("File.Import.Texture"))
+                    callbacks["File.Import.Texture"]();
             
             ImGui::EndMenu();
         }

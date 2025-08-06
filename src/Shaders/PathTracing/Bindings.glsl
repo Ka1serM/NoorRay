@@ -23,4 +23,4 @@ layout(buffer_reference, scalar) buffer FaceBuffer { Face data[]; };
 layout(buffer_reference, scalar) buffer MaterialBuffer { Material data[]; };
 layout(buffer_reference, scalar) buffer BVHBuffer { BVHNode data[]; };
 
-#endif // _BINDINGS_GLSL_
+#endif

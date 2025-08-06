@@ -12,7 +12,8 @@ public:
         Storage,
         Custom
     };
-    Buffer() = default;
+
+    Buffer();
     Buffer(const Context& context, Type type, vk::DeviceSize size, const void* data = nullptr, vk::BufferUsageFlags usage = {}, vk::MemoryPropertyFlags memoryProps = {});
 
     vk::DeviceAddress getDeviceAddress() const { return deviceAddress; }

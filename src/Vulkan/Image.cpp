@@ -100,14 +100,13 @@ Image::Image(Context& context, const void* data, int width, int height, vk::Form
 
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    std::cout << "DEBUG: Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << std::endl;
+    std::cout << "Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << std::endl;
 }
 
 Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight)
 {
-    if (texWidth <= 0 || texHeight <= 0) {
+    if (texWidth <= 0 || texHeight <= 0)
         throw std::runtime_error("Image constructor (rgbaData): Invalid dimensions (W=" + std::to_string(texWidth) + ", H=" + std::to_string(texHeight) + ")");
-    }
 
     currentLayout = vk::ImageLayout::eUndefined;
 
@@ -180,13 +179,12 @@ Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight
 
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    std::cout << "DEBUG: Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm" << std::endl;
+    std::cout << "Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm" << std::endl;
 }
 
 Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) {
-    if (width == 0 || height == 0) {
+    if (width == 0 || height == 0)
         throw std::runtime_error("Image constructor (blank): Invalid dimensions (W=" + std::to_string(width) + ", H=" + std::to_string(height) + ")");
-    }
 
     currentLayout = vk::ImageLayout::eUndefined;
 
@@ -225,7 +223,7 @@ Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format forma
         setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
     });
     currentLayout = vk::ImageLayout::eGeneral;
-    std::cout << "DEBUG: Image (blank) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << ", Usage=" << static_cast<uint32_t>(usage) << std::endl;
+    std::cout << " Image (blank) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << ", Usage=" << static_cast<uint32_t>(usage) << std::endl;
 }
 
 vk::AccessFlags Image::toAccessFlags(vk::ImageLayout layout) {

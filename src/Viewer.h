@@ -1,7 +1,6 @@
 ﻿#pragma once
 #include "UI/ImGuiManager.h"
 #include <memory>
-#include "Camera/InputTracker.h"
 #include "Scene/Scene.h"
 #include "Vulkan/Renderer.h"
 
@@ -29,7 +28,6 @@ private:
     Renderer renderer;
     ImGuiManager imGuiManager;
     Scene scene;
-    InputTracker inputTracker;
 
     std::unique_ptr<Raytracer> raytracer;
     std::unique_ptr<Tonemapper> gpuImageTonemapper;

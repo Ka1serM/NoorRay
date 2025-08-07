@@ -245,8 +245,6 @@ void Context::createLogicalDevice() {
     std::cout << "runtimeDescriptorArray: " << features12.runtimeDescriptorArray << std::endl;
     std::cout << "descriptorBindingPartiallyBound: " << features12.descriptorBindingPartiallyBound << std::endl;
     std::cout << "descriptorBindingSampledImageUpdateAfterBind: " << features12.descriptorBindingSampledImageUpdateAfterBind << std::endl;
-    std::cout << "descriptorBindingStorageBufferUpdateAfterBind: " << features12.descriptorBindingStorageBufferUpdateAfterBind << std::endl;
-    std::cout << "descriptorBindingUniformBufferUpdateAfterBind: " << features12.descriptorBindingUniformBufferUpdateAfterBind << std::endl;
     std::cout << "descriptorBindingVariableDescriptorCount: " << features12.descriptorBindingVariableDescriptorCount << std::endl;
 
     std::cout << "\n=== Ray Tracing Features ===" << std::endl;
@@ -262,8 +260,6 @@ void Context::createLogicalDevice() {
     features12.runtimeDescriptorArray = VK_TRUE;
     features12.descriptorBindingPartiallyBound = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-    features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
-    features12.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
     features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
 
     if (rtxSupported && rtFeatures.rayTracingPipeline && accelFeatures.accelerationStructure) {

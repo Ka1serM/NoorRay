@@ -8,7 +8,7 @@ Buffer::Buffer() {
 
 Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, const void* data, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memoryProps)
 {
-    // Auto-configure usage and memory flags for known types
+    // Auto configure usage and memory flags for known types
     if (type != Type::Custom) {
         switch (type) {
             case Type::AccelInput:

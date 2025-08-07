@@ -1,7 +1,6 @@
 ﻿#include "Context.h"
 #include <iostream>
 #include <set>
-#include <map>
 #include <algorithm>
 #include <stdexcept>
 #include <SDL3/SDL.h>
@@ -271,6 +270,7 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
+//TODO dont use, this cant work yet because Command Buffer goes out of scope
 void Context::oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func, vk::Fence fence) const {
     vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
     vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());

@@ -144,9 +144,12 @@ void RtxRaytracer::updateTLAS()
                 instances.push_back(meshInstance->getInstanceData());
 
         if (instances.empty())
-            instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR), {}};
+        {
+            auto emptyInstance = vk::AccelerationStructureInstanceKHR{};
+            instancesBuffer = {context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR), emptyInstance};
+        }
         else
-            instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
+            instancesBuffer = {context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
 
         vk::AccelerationStructureGeometryInstancesDataKHR instancesData;
         instancesData.setArrayOfPointers(false);

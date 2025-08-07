@@ -63,6 +63,7 @@ void main() {
             else {
                 const ComputeInstance inst = sceneInstances[hit.instanceIndex];
                 const MeshAddresses mesh = instances[inst.meshId];
+                
                 const Face face = FaceBuffer(mesh.faceAddress).data[hit.primitiveIndex];
                 const Material material = MaterialBuffer(mesh.materialAddress).data[face.materialIndex];
 

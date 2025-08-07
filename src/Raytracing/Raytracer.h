@@ -89,8 +89,7 @@ public:
         // Step 4: Allocate descriptor set with variable descriptor count
         vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
         variableCountAllocInfo.descriptorSetCount = 1;
-        uint32_t variableCount = MAX_TEXTURES;
-        variableCountAllocInfo.pDescriptorCounts = &variableCount;
+        variableCountAllocInfo.pDescriptorCounts = &MAX_TEXTURES;
 
         vk::DescriptorSetAllocateInfo allocInfo{};
         allocInfo.setDescriptorPool(context.getDescriptorPool());
@@ -162,7 +161,7 @@ public:
         std::vector<vk::DescriptorImageInfo> textureImageInfos;
         const auto& textures = scene.getTextures();
 
-        if (textures.empty())
+        if (textures.empty()) //TODO
             return;
   
         textureImageInfos.reserve(textures.size());
@@ -200,7 +199,10 @@ public:
         }
 
         if (meshAddresses.empty())
-            meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses), {}};
+        {
+            auto emptyMeshAddresses = MeshAddresses{};
+            meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses), &emptyMeshAddresses};
+        }
         else
             meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses) * meshAddresses.size(), meshAddresses.data()};
 

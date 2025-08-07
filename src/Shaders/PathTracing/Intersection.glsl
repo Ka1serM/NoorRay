@@ -90,6 +90,9 @@ HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection) {
     for (int i = 0; i < sceneInstances.length(); ++i) {
         ComputeInstance inst = sceneInstances[i];
 
+        if (inst.meshId >= uint(instances.length())) // Invalid instance
+            continue;
+
         vec3 localOrigin = (inst.inverseTransform * vec4(rayOrigin, 1.0)).xyz;
         vec3 localDir = (inst.inverseTransform * vec4(rayDirection, 0.0)).xyz;
 

@@ -77,7 +77,8 @@ void ComputeRaytracer::updateTLAS()
     if (instances.empty())
     {
         auto emptyInstance = ComputeInstance{};
-        emptyInstance.meshId = UINT32_MAX; // invalid instance        instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance), &emptyInstance};
+        emptyInstance.meshId = UINT32_MAX; // invalid instance
+        instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance), &emptyInstance};
     }
     else
         instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance) * instances.size(), instances.data()};

@@ -185,6 +185,7 @@ void Context::pickPhysicalDevice() {
 }
 
 void Context::createLogicalDevice() {
+    // Find a suitable queue family (graphics + compute + present)
     std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
     for (uint32_t i = 0; i < queueFamilies.size(); i++) {
         const auto& flags = queueFamilies[i].queueFlags;
@@ -201,63 +202,70 @@ void Context::createLogicalDevice() {
     if (queueFamilyIndices.empty())
         throw std::runtime_error("Could not find a suitable queue family!");
 
+    // Merge ray tracing extensions if supported
     if (rtxSupported) {
         std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
         RequiredDeviceExtensions.insert(RequiredDeviceExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
-    } else
+    } else {
         std::cout << "Ray tracing extensions are not supported. Proceeding without them." << std::endl;
-
-    // Feature structs
-    vk::PhysicalDeviceFeatures2 features2{};
-    vk::PhysicalDeviceDescriptorIndexingFeatures indexingFeatures{};
-    vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
-    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures{};
-    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
-
-    // Enable base features
-    features2.features.samplerAnisotropy = VK_TRUE;
-    features2.features.shaderInt64 = VK_TRUE;
-    
-    indexingFeatures.sType = vk::StructureType::ePhysicalDeviceDescriptorIndexingFeatures;
-    indexingFeatures.runtimeDescriptorArray = VK_TRUE;
-    indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
-    indexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-    indexingFeatures.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
-    indexingFeatures.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
-    indexingFeatures.descriptorBindingVariableDescriptorCount = VK_TRUE;
-    features2.pNext = &indexingFeatures;
-
-    bufferDeviceAddressFeatures.sType = vk::StructureType::ePhysicalDeviceBufferDeviceAddressFeatures;
-    bufferDeviceAddressFeatures.bufferDeviceAddress = VK_TRUE;
-    indexingFeatures.pNext = &bufferDeviceAddressFeatures;
-
-    void** pNextTail = &bufferDeviceAddressFeatures.pNext;
-
-    if (rtxSupported) {
-        rayTracingPipelineFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
-        rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
-        *pNextTail = &rayTracingPipelineFeatures;
-        pNextTail = &rayTracingPipelineFeatures.pNext;
-
-        accelerationStructureFeatures.sType = vk::StructureType::ePhysicalDeviceAccelerationStructureFeaturesKHR;
-        accelerationStructureFeatures.accelerationStructure = VK_TRUE;
-        *pNextTail = &accelerationStructureFeatures;
-        pNextTail = &accelerationStructureFeatures.pNext;
     }
 
-    // Queue setup
-    constexpr float queuePriority = 1.0f;
-    vk::DeviceQueueCreateInfo queueCreateInfo({}, queueFamilyIndices.front(), 1, &queuePriority);
+    vk::PhysicalDeviceFeatures2 features2{};
+    features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
+    features2.features.shaderInt64 = VK_TRUE;
+    features2.features.samplerAnisotropy = VK_TRUE;
 
-    // Create device
+    // Vulkan 1.2 feature struct
+    vk::PhysicalDeviceVulkan12Features features12{};
+    features12.sType = vk::StructureType::ePhysicalDeviceVulkan12Features;
+    features12.bufferDeviceAddress = VK_TRUE;
+    features12.descriptorIndexing = VK_TRUE;
+    features12.runtimeDescriptorArray = VK_TRUE;
+    features12.descriptorBindingPartiallyBound = VK_TRUE;
+    features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+    features12.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
+    features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+
+    // Optional ray tracing features
+    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
+    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelFeatures{};
+
+    if (rtxSupported) {
+        rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
+        rtFeatures.rayTracingPipeline = VK_TRUE;
+
+        accelFeatures.sType = vk::StructureType::ePhysicalDeviceAccelerationStructureFeaturesKHR;
+        accelFeatures.accelerationStructure = VK_TRUE;
+
+        // Chain them
+        features12.pNext = &rtFeatures;
+        rtFeatures.pNext = &accelFeatures;
+    }
+
+    // Chain Vulkan 1.2 features after core features2
+    features2.pNext = &features12;
+
+    // === Queue setup ===
+    constexpr float queuePriority = 1.0f;
+    vk::DeviceQueueCreateInfo queueCreateInfo{};
+    queueCreateInfo.queueFamilyIndex = queueFamilyIndices.front();
+    queueCreateInfo.queueCount = 1;
+    queueCreateInfo.pQueuePriorities = &queuePriority;
+
+    // === Device creation ===
     vk::DeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.sType = vk::StructureType::eDeviceCreateInfo;
-    deviceCreateInfo.pNext = &features2;
     deviceCreateInfo.queueCreateInfoCount = 1;
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
     deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(RequiredDeviceExtensions.size());
     deviceCreateInfo.ppEnabledExtensionNames = RequiredDeviceExtensions.data();
 
+    // Use feature chain via pNext
+    deviceCreateInfo.pNext = &features2;
+    deviceCreateInfo.pEnabledFeatures = nullptr;
+
+    // Create logical device
     device = physicalDevice.createDeviceUnique(deviceCreateInfo);
 }
 

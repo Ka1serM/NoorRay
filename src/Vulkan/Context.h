@@ -9,6 +9,23 @@
 
 class Context {
 private:
+    std::vector<const char*> RequiredDeviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+        VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE3_EXTENSION_NAME,
+        VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
+    };
+
+    std::vector<const char*> RayTracingExtensions = {
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+    };
+    
     SDL_Window* window;
     vk::detail::DynamicLoader dl;
 
@@ -28,12 +45,11 @@ private:
     void pickPhysicalDevice();
     void createLogicalDevice();
 
-public:
+public:    
     Context(int width, int height);
     ~Context();
 
     // Helper functions
-    bool checkDeviceExtensionSupport(const std::vector<const char*>& requiredExtensions) const;
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
     void oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func, vk::Fence fence) const;
     void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const;

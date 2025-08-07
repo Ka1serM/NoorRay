@@ -107,44 +107,82 @@ void Context::createVulkanInstance() {
 
 void Context::pickPhysicalDevice() {
     std::vector<vk::PhysicalDevice> devices = instance->enumeratePhysicalDevices();
-    if (devices.empty())
+    if (devices.empty()) {
         throw std::runtime_error("Failed to find GPUs with Vulkan support!");
-
-    std::multimap<int, vk::PhysicalDevice> candidates;
-
-    std::cout << "Available GPUs:" << std::endl;
-    for (const auto& device : devices) {
-        int score = 0;
-        vk::PhysicalDeviceProperties properties = device.getProperties();
-        vk::PhysicalDeviceMemoryProperties memProperties = device.getMemoryProperties();
-
-        if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
-            score += 100000;
-        }
-
-        uint64_t vramSize = 0;
-        for (uint32_t i = 0; i < memProperties.memoryHeapCount; i++) {
-            if (memProperties.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
-                vramSize += memProperties.memoryHeaps[i].size;
-            }
-        }
-        score += vramSize / (1024 * 1024);
-
-        std::cout << "  - " << properties.deviceName
-                  << " (Type: " << vk::to_string(properties.deviceType)
-                  << ", VRAM: " << (vramSize / (1024*1024)) << "MB"
-                  << ", Score: " << score << ")" << std::endl;
-
-        candidates.insert(std::make_pair(score, device));
     }
 
-    if (candidates.rbegin()->first > 0)
-        physicalDevice = candidates.rbegin()->second;
-    else
-        throw std::runtime_error("Failed to find a suitable GPU!");
+    std::cout << "Available GPUs:\n";
 
-    vk::PhysicalDeviceProperties props = physicalDevice.getProperties();
-    std::cout << "\nPicked GPU: " << props.deviceName << std::endl;
+    struct Candidate {
+        vk::PhysicalDevice device;
+        uint64_t vram = 0;
+    };
+
+    auto findBestDevice = [&](const std::vector<const char*>& requiredExts) -> std::optional<Candidate> {
+        std::optional<Candidate> bestDiscrete, bestFallback;
+
+        for (const auto& device : devices) {
+            const auto props = device.getProperties();
+            const auto memProps = device.getMemoryProperties();
+
+            // Check for extension support
+            std::set<std::string> missing(requiredExts.begin(), requiredExts.end());
+            for (const auto& ext : device.enumerateDeviceExtensionProperties())
+                missing.erase(ext.extensionName);
+
+            bool hasAllExtensions = missing.empty();
+
+            // VRAM calculation
+            uint64_t vramSize = 0;
+            for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i)
+                if (memProps.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal)
+                    vramSize += memProps.memoryHeaps[i].size;
+
+            std::cout << "  - " << props.deviceName
+                      << " (Type: " << vk::to_string(props.deviceType)
+                      << ", VRAM: " << (vramSize / (1024 * 1024)) << "MB"
+                      << ", Extensions OK: " << (hasAllExtensions ? "Yes" : "No") << ")"
+                      << std::endl;
+
+            if (!hasAllExtensions)
+                continue;
+
+            Candidate candidate{device, vramSize};
+
+            if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
+                if (!bestDiscrete || vramSize > bestDiscrete->vram)
+                    bestDiscrete = candidate;
+            } else {
+                if (!bestFallback || vramSize > bestFallback->vram)
+                    bestFallback = candidate;
+            }
+        }
+        
+        if (bestDiscrete)
+            return bestDiscrete;
+
+        return bestFallback;
+    };
+
+    // First: try with RTX + required extensions
+    std::vector<const char*> allExtensions = RequiredDeviceExtensions;
+    allExtensions.insert(allExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
+
+    auto best = findBestDevice(allExtensions);
+    rtxSupported = best.has_value();
+
+    // Fallback: required-only extensions
+    if (!best) {
+        best = findBestDevice(RequiredDeviceExtensions);
+        rtxSupported = false;
+    }
+
+    if (!best)
+        throw std::runtime_error("No suitable GPU found that supports required Vulkan extensions!");
+
+    physicalDevice = best->device;
+
+    std::cout << "\nPicked GPU: " << physicalDevice.getProperties().deviceName << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
 }
 
 void Context::createLogicalDevice() {
@@ -164,30 +202,11 @@ void Context::createLogicalDevice() {
     if (queueFamilyIndices.empty())
         throw std::runtime_error("Could not find a suitable queue family!");
 
-    std::vector deviceExtensions{
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
-        VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
-        VK_KHR_MAINTENANCE3_EXTENSION_NAME,
-        VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
-        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
-        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
-        VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,  // Required for nullDescriptor
-    };
-
-    const std::vector rtxDeviceExtensions{
-        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
-        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-    };
-
-    rtxSupported = checkDeviceExtensionSupport(rtxDeviceExtensions);
     if (rtxSupported) {
         std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
-        deviceExtensions.insert(deviceExtensions.end(), rtxDeviceExtensions.begin(), rtxDeviceExtensions.end());
-    } else {
+        RequiredDeviceExtensions.insert(RequiredDeviceExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
+    } else
         std::cout << "Ray tracing extensions are not supported. Proceeding without them." << std::endl;
-    }
 
     // Feature structs
     vk::PhysicalDeviceFeatures2 features2{};
@@ -250,19 +269,10 @@ void Context::createLogicalDevice() {
     deviceCreateInfo.pNext = &features2;
     deviceCreateInfo.queueCreateInfoCount = 1;
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
-    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-    deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
+    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(RequiredDeviceExtensions.size());
+    deviceCreateInfo.ppEnabledExtensionNames = RequiredDeviceExtensions.data();
 
     device = physicalDevice.createDeviceUnique(deviceCreateInfo);
-}
-
-bool Context::checkDeviceExtensionSupport(const std::vector<const char*>& requiredExtensions) const {
-    std::set<std::string> required(requiredExtensions.begin(), requiredExtensions.end());
-    std::vector<vk::ExtensionProperties> available = physicalDevice.enumerateDeviceExtensionProperties();
-    for (const auto& ext : available)
-        required.erase(ext.extensionName.data());
-    
-    return required.empty();
 }
 
 uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const {

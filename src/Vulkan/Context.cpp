@@ -210,22 +210,15 @@ void Context::createLogicalDevice() {
 
     // Feature structs
     vk::PhysicalDeviceFeatures2 features2{};
-    vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchainMaintenance1Features{};
     vk::PhysicalDeviceDescriptorIndexingFeatures indexingFeatures{};
     vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures{};
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
-    vk::PhysicalDeviceRobustness2FeaturesEXT robustness2Features{}; // <-- Added
 
     // Enable base features
     features2.features.samplerAnisotropy = VK_TRUE;
     features2.features.shaderInt64 = VK_TRUE;
-
-    // Enable Vulkan 1.3+ extension features
-    swapchainMaintenance1Features.sType = vk::StructureType::ePhysicalDeviceSwapchainMaintenance1FeaturesEXT;
-    swapchainMaintenance1Features.swapchainMaintenance1 = VK_TRUE;
-    features2.pNext = &swapchainMaintenance1Features;
-
+    
     indexingFeatures.sType = vk::StructureType::ePhysicalDeviceDescriptorIndexingFeatures;
     indexingFeatures.runtimeDescriptorArray = VK_TRUE;
     indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
@@ -233,7 +226,7 @@ void Context::createLogicalDevice() {
     indexingFeatures.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
     indexingFeatures.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
     indexingFeatures.descriptorBindingVariableDescriptorCount = VK_TRUE;
-    swapchainMaintenance1Features.pNext = &indexingFeatures;
+    features2.pNext = &indexingFeatures;
 
     bufferDeviceAddressFeatures.sType = vk::StructureType::ePhysicalDeviceBufferDeviceAddressFeatures;
     bufferDeviceAddressFeatures.bufferDeviceAddress = VK_TRUE;
@@ -252,12 +245,6 @@ void Context::createLogicalDevice() {
         *pNextTail = &accelerationStructureFeatures;
         pNextTail = &accelerationStructureFeatures.pNext;
     }
-
-    // Enable null descriptors
-    robustness2Features.sType = vk::StructureType::ePhysicalDeviceRobustness2FeaturesEXT;
-    robustness2Features.nullDescriptor = VK_TRUE;
-    *pNextTail = &robustness2Features;
-    pNextTail = &robustness2Features.pNext;
 
     // Queue setup
     constexpr float queuePriority = 1.0f;
@@ -297,9 +284,18 @@ void Context::oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& f
 }
 
 void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const {
+    vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
+    vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
+
+    commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    func(*commandBuffer);
+    commandBuffer->end();
+
     vk::UniqueFence fence = device->createFenceUnique({});
-    oneTimeSubmitAsync(func, fence.get());
-    (void)device->waitForFences(fence.get(), VK_TRUE, UINT64_MAX);
+    vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
+    queue.submit(submitInfo, *fence);
+
+    (void)device->waitForFences(*fence, VK_TRUE, UINT64_MAX);
 }
 
 vk::PresentModeKHR Context::chooseSwapPresentMode() const {

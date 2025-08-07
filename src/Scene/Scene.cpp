@@ -10,8 +10,6 @@ Scene::Scene(Context& context) : context(context) {
 
 // Adds a generic SceneObject to the scene.
 int Scene::add(std::unique_ptr<SceneObject> sceneObject) {
-    std::unique_lock lock(sceneMutex);
-
     if (auto* camera = dynamic_cast<PerspectiveCamera*>(sceneObject.get()))
         activeCamera = camera;
     
@@ -26,8 +24,6 @@ int Scene::add(std::unique_ptr<SceneObject> sceneObject) {
 
 // Adds a mesh asset to the scene.
 void Scene::add(const std::shared_ptr<MeshAsset>& meshAsset) {
-    // Acquire a unique lock to modify the scene's data structures safely.
-    std::unique_lock lock(sceneMutex);
     meshAsset->setMeshIndex(static_cast<uint32_t>(meshAssets.size()));
     meshAssets.push_back(meshAsset);
     setMeshesDirty();
@@ -35,7 +31,6 @@ void Scene::add(const std::shared_ptr<MeshAsset>& meshAsset) {
 
 // Adds a texture to the scene.
 void Scene::add(Texture&& texture) {
-    std::unique_lock lock(sceneMutex);
     textureNames.push_back(texture.getName());
     textures.push_back(std::move(texture));
     // Mark the textures as dirty.
@@ -44,8 +39,6 @@ void Scene::add(Texture&& texture) {
 
 // Removes a specific SceneObject from the scene.
 bool Scene::remove(const SceneObject* obj) {
-    std::unique_lock lock(sceneMutex);
-
     // Prevent the removal of the active camera.
     if (activeCamera == obj) {
         std::cerr << "Warning: Cannot remove the active camera." << std::endl;
@@ -82,8 +75,6 @@ void Scene::addMeshInstance(MeshInstance* instance) {
 
 // Retrieves a mesh asset by its name (path).
 std::shared_ptr<MeshAsset> Scene::getMeshAsset(const std::string& name) const {
-    // Acquire a shared lock for read-only access.
-    std::shared_lock lock(sceneMutex);
     for (const auto& meshAsset : meshAssets)
         if (meshAsset->getPath() == name)
             return meshAsset;
@@ -92,7 +83,5 @@ std::shared_ptr<MeshAsset> Scene::getMeshAsset(const std::string& name) const {
 
 // Retrieves the names of all loaded textures.
 std::vector<std::string> Scene::getTextureNames() const {
-    // Acquire a shared lock for read-only access.
-    std::shared_lock lock(sceneMutex);
     return textureNames;
 }

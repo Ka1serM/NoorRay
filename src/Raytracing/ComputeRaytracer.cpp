@@ -60,24 +60,22 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
 void ComputeRaytracer::updateTLAS()
 {
     std::vector<ComputeInstance> instances;
-    {
-        auto lock = scene.shared_lock();
-        const auto& meshInstances = scene.getMeshInstances();
-        instances.reserve(meshInstances.size());
 
-        for (const auto* meshInstance : meshInstances)
-        {
-            const mat4 transform = meshInstance->getTransform().getMatrix();
-            instances.push_back({
-                .transform = transform,
-                .inverseTransform = inverse(transform),
-                .meshId = meshInstance->getMeshAsset().getMeshIndex()
-            });
-        }
+    const auto& meshInstances = scene.getMeshInstances();
+    instances.reserve(meshInstances.size());
+
+    for (const auto* meshInstance : meshInstances)
+    {
+        const mat4 transform = meshInstance->getTransform().getMatrix();
+        instances.push_back({
+            .transform = transform,
+            .inverseTransform = inverse(transform),
+            .meshId = meshInstance->getMeshAsset().getMeshIndex()
+        });
     }
 
     if (instances.empty())
-        instancesBuffer = Buffer();
+        instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance), {}};
     else
         instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance) * instances.size(), instances.data()};
 

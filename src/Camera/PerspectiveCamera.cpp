@@ -44,9 +44,9 @@ mat4 PerspectiveCamera::getViewMatrix() const
     return lookAt(getPosition(), target, WORLD_UP);
 }
 
-mat4 PerspectiveCamera::getProjectionMatrix() const
-{
-    const float fovY = 2.0f * atan(sensorHeight * 0.5f / cameraData.focalLength);
+mat4 PerspectiveCamera::getProjectionMatrix() const {
+    float fovX = 2.0f * atan(sensorWidth * 0.5f / cameraData.focalLength);
+    float fovY = 2.0f * atan(tan(fovX * 0.5f) / aspectRatio);
     return perspectiveZO(fovY, aspectRatio, 0.1f, 1000.0f);
 }
 

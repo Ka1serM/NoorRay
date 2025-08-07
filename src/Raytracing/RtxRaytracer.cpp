@@ -136,19 +136,15 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : Rayt
 void RtxRaytracer::updateTLAS()
 {
     std::vector<vk::AccelerationStructureInstanceKHR> instances;
-    
-    {
-        auto lock = scene.shared_lock();
         const auto& meshInstances = scene.getMeshInstances();
         instances.reserve(meshInstances.size());
         
         for (const auto* meshInstance : meshInstances)
             if (meshInstance)
                 instances.push_back(meshInstance->getInstanceData());
-    }
 
         if (instances.empty())
-            instancesBuffer = Buffer();
+            instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR), {}};
         else
             instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
 

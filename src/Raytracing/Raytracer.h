@@ -200,7 +200,7 @@ public:
         }
 
         if (meshAddresses.empty())
-            meshBuffer = Buffer();
+            meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses), {}};
         else
             meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses) * meshAddresses.size(), meshAddresses.data()};
 

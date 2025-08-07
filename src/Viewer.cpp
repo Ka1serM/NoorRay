@@ -35,7 +35,7 @@ Viewer::Viewer(const int width, const int height)
     else
         raytracer = std::make_unique<ComputeRaytracer>(scene, viewportWidth, viewportHeight);
     
-    gpuImageTonemapper = std::make_unique<Tonemapper>(context, viewportWidth, viewportHeight, raytracer->getOutputImage());
+    gpuImageTonemapper = std::make_unique<Tonemapper>(context, viewportWidth, viewportHeight, raytracer->getOutputColor());
     
     setupScene();
     setupUI();
@@ -68,7 +68,7 @@ void Viewer::run() {
     float deltaTime = 0.0f;
 
     auto recordComputeWork = [&](const vk::CommandBuffer cmd) {
-        PushConstants pushConstantData{};
+        PushConstantsData pushConstantData{};
         pushConstantData.push.frame = frame;
         pushConstantData.camera = scene.getActiveCamera()->getCameraData();
         if (const auto* environment = dynamic_cast<EnvironmentPanel*>(imGuiManager.getComponent("Environment")))
@@ -193,8 +193,8 @@ void Viewer::setupUI() {
     auto debugPanel = std::make_unique<DebugPanel>();
     auto environmentPanel = std::make_unique<EnvironmentPanel>(scene);
     auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene);
-    
-    auto gpuViewportUniquePtr = std::make_unique<ViewportPanel>(scene, gpuImageTonemapper->getOutputImage(), width/2, height/2, "GPU Viewport");
+
+    auto gpuViewportUniquePtr = std::make_unique<ViewportPanel>(scene, gpuImageTonemapper->getOutputImage(), raytracer->getOutputCrypto(), width/2, height/2, "GPU Viewport");
 
     mainMenuBar->setCallback("File.Quit", [&] {
         SDL_Event quitEvent;
@@ -345,9 +345,8 @@ void Viewer::setupScene() {
     
     stbi_image_free(pixels);
 
-    //scene.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-    //scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-    //scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     
     float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
     auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(0, 0, 5.0f), vec3(-180, 0, 180), vec3(0)}, aspectRatio, 36.0f, 24.0f, 30.0f, 0.0f, 10.0f, 2.0f);

@@ -39,8 +39,7 @@ Image::Image(Context& context, const void* data, int width, int height, vk::Form
     vk::UniqueBuffer stagingBuffer = context.getDevice().createBufferUnique(bufferInfo);
 
     vk::MemoryRequirements memRequirements = context.getDevice().getBufferMemoryRequirements(*stagingBuffer);
-    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     vk::MemoryAllocateInfo allocInfo{};
     allocInfo.setAllocationSize(memRequirements.size);
     allocInfo.setMemoryTypeIndex(memTypeIndex);

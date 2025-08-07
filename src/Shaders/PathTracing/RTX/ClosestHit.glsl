@@ -35,11 +35,14 @@ void main() {
  const vec3 bary = calculateBarycentric(attribs);
  vec3 localPosition = interpolateBarycentric(bary, v0.position, v1.position, v2.position);
  vec3 localNormal = normalize(interpolateBarycentric(bary, v0.normal, v1.normal, v2.normal));
+ vec3 localTangent = normalize(interpolateBarycentric(bary, v0.tangent, v1.tangent, v2.tangent));
  vec2 interpolatedUV = interpolateBarycentric(bary, v0.uv, v1.uv, v2.uv);
 
  vec3 worldPosition = (gl_ObjectToWorldEXT * vec4(localPosition, 1.0)).xyz;
  mat3 normalMatrix = transpose(inverse(mat3(gl_ObjectToWorldEXT)));
  vec3 geometricNormalWorld = normalize(normalMatrix * localNormal);
-
- shadeClosestHit(worldPosition, geometricNormalWorld, interpolatedUV, gl_WorldRayDirectionEXT, material, payload);
+ vec3 tangentWorld = normalize(mat3(gl_ObjectToWorldEXT) * localTangent);
+ 
+  shadeClosestHit(worldPosition, geometricNormalWorld, tangentWorld, interpolatedUV, gl_WorldRayDirectionEXT, material, payload);
+  payload.objectIndex = gl_InstanceID;
 }

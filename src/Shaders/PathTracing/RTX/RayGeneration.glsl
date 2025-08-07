@@ -11,16 +11,12 @@
 #include "../SharedStructs.h"
 #include "../Common.glsl"
 #include "../PrimaryRayGen.glsl"
-
-// Bindings
-layout (set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
-layout (set = 0, binding = 1, rgba32f) uniform image2D outputImage;
+#include "../Bindings.glsl"
 
 // Push Constants
 layout (push_constant) uniform PushConstants {
-    PushData pushData;
-    CameraData camera;
-} pushConstants;
+    PushConstantsData pushConstants;
+};
 
 // Ray Payload
 layout (location = 0) rayPayloadEXT Payload payload;
@@ -31,7 +27,7 @@ void main() {
     const ivec2 pixelCoord = ivec2(gl_LaunchIDEXT.xy);
     const ivec2 screenSize = ivec2(gl_LaunchSizeEXT.xy);
 
-    uvec2 seed = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.pushData.frame * 16777619));
+    uvec2 seed = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.push.frame * 16777619));
     uint rngStateX = seed.x;
     uint rngStateY = seed.y;
 
@@ -48,6 +44,10 @@ void main() {
         payload.rngState = rngStateX;
         rand(payload.rngState); // Advance RNG for first hit
 
+        payload.albedo = vec3(0.0);
+        payload.normal = vec3(0.0);
+        payload.objectIndex = -1;
+
         vec3 pathContribution = vec3(0.0);
 
         // Path tracing loop
@@ -61,6 +61,11 @@ void main() {
             vec3 bounceContribution = payload.throughput * payload.color;
             if (totalDepth > 0)
                 bounceContribution = clamp(bounceContribution, 0.0, 50.0);
+            else { //save gbuffer on first hit
+                imageStore(outputAlbedo, ivec2(gl_LaunchIDEXT.xy), vec4(payload.albedo, 1.0));
+                imageStore(outputNormal, ivec2(gl_LaunchIDEXT.xy), vec4(payload.normal, 0.0));
+                imageStore(outputCrypto, ivec2(gl_LaunchIDEXT.xy), uvec4(payload.objectIndex, 0, 0, 0));
+            }
             pathContribution += bounceContribution;
             
             // Check bounce limits
@@ -85,7 +90,7 @@ void main() {
 
     // Accumulate and store final color
     vec3 finalColor = accumulatedColor / float(SAMPLES_PER_PIXEL);
-    vec3 previousColor = imageLoad(outputImage, pixelCoord).rgb;
-    finalColor = (finalColor + previousColor * float(pushConstants.pushData.frame)) / float(pushConstants.pushData.frame + 1);
-    imageStore(outputImage, pixelCoord, vec4(finalColor, 1.0));
+    vec3 previousColor = imageLoad(outputColor, pixelCoord).rgb;
+    finalColor = (finalColor + previousColor * float(pushConstants.push.frame)) / float(pushConstants.push.frame + 1);
+    imageStore(outputColor, pixelCoord, vec4(finalColor, 1.0));
 }

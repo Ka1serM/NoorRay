@@ -19,6 +19,7 @@ public:
     vk::DeviceAddress getDeviceAddress() const { return deviceAddress; }
     const vk::DescriptorBufferInfo& getDescriptorInfo() const { return descBufferInfo; }
     const vk::Buffer& getBuffer() const { return buffer.get(); }
+    const vk::DeviceMemory & getMemory() const { return memory.get(); }
 
 private:
     vk::UniqueBuffer buffer;

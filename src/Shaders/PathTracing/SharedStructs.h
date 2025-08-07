@@ -24,15 +24,7 @@ struct AABB {
 };
 
 struct BVHNode {
-#ifdef __cplusplus
     AABB bbox;
-#else
-    // GLSL side
-    vec3 bbox_min;
-    float _pad0; // Add padding to align bbox_max
-    vec3 bbox_max;
-    float _pad1; // Add padding to align leftChild
-#endif
     int leftChild;
     int rightChild;
     int faceCount;
@@ -56,12 +48,10 @@ struct CameraData {
     vec3 vertical; float bokehBias;
 };
 
-#ifdef __cplusplus //C++ only Struct
-struct PushConstants {
+struct PushConstantsData {
     PushData push;
     CameraData camera;
 };
-#endif
 
 struct Vertex {
     vec3 position; int _pad0;
@@ -103,15 +93,12 @@ struct MeshAddresses {
 
 struct Payload
 {
-    vec3 color;
-    vec3 throughput;
-    vec3 position;
-    vec3 normal;
-    uint hitIndex;
-    vec3 nextDirection;
-    uint rngState;
-    uint bounceType;
-    bool done;
+    vec3 albedo; int objectIndex;
+    vec3 normal; float roughness;
+    vec3 color; uint rngState;
+    vec3 throughput; bool done;
+    vec3 position; uint bounceType; 
+    vec3 nextDirection; int _pad0;
 };
 
 struct HitInfo {

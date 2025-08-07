@@ -34,8 +34,8 @@ public:
     float getSensorHeight() const { return sensorHeight; }
     CameraData getCameraData() const { return cameraData; }
 
-    mat4 getViewMatrix() const { return viewMatrix; }
-    mat4 getProjectionMatrix() const { return projectionMatrix; }
+    mat4 getViewMatrix() const;
+    mat4 getProjectionMatrix() const;
 
     void setFocalLength(float val);
     void setAperture(float val);
@@ -48,7 +48,5 @@ public:
 
 private:
     void updateHorizontalVertical();
-    void updateViewMatrix();
-    void updateProjectionMatrix();
     void updateCameraData();
 };

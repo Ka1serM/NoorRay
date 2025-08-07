@@ -7,7 +7,6 @@
 #include "Globals.h"
 #include "Utils.h"
 #include "Scene/MeshInstance.h"
-#include "Vulkan/Image.h"
 
 RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : Raytracer(scene, width, height)
 {
@@ -74,36 +73,19 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : Rayt
 
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
         {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR},
-        {3, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR}
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output color image
+        {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output albedo image
+        {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output normal image
+        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output crypto  image
+        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR}, // Mesh instances buffer
+        {6, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR}, // Textures
     };
 
-    std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
-    bindingFlags[3] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount;
-
-    vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
-    bindingFlagsInfo.setBindingFlags(bindingFlags);
-
-    vk::DescriptorSetLayoutCreateInfo descSetLayoutInfo{};
-    descSetLayoutInfo.setBindings(bindings);
-    descSetLayoutInfo.setPNext(&bindingFlagsInfo);
-    descSetLayout = context.getDevice().createDescriptorSetLayoutUnique(descSetLayoutInfo);
-
-    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
-    variableCountAllocInfo.setDescriptorCounts(MAX_TEXTURES);
-
-    vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.setDescriptorPool(context.getDescriptorPool());
-    allocInfo.setSetLayouts(descSetLayout.get());
-    allocInfo.setDescriptorSetCount(1);
-    allocInfo.setPNext(&variableCountAllocInfo);
-
-    descriptorSet = std::move(context.getDevice().allocateDescriptorSetsUnique(allocInfo).front());
+    createDescriptorSet(bindings);
 
     vk::PushConstantRange pushRange{};
     pushRange.setOffset(0);
-    pushRange.setSize(sizeof(PushConstants));
+    pushRange.setSize(sizeof(PushConstantsData));
     pushRange.setStageFlags(vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -146,19 +128,8 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : Rayt
     raygenRegion = vk::StridedDeviceAddressRegionKHR{raygenSBT.getDeviceAddress(), handleSizeAligned, raygenSize};
     missRegion = vk::StridedDeviceAddressRegionKHR{missSBT.getDeviceAddress(), handleSizeAligned, missSize};
     hitRegion = vk::StridedDeviceAddressRegionKHR{hitSBT.getDeviceAddress(), handleSizeAligned, hitSize};
-
-    vk::DescriptorImageInfo storageImageInfo{};
-    storageImageInfo.setImageView(outputImage.getImageView());
-    storageImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
-
-    vk::WriteDescriptorSet storageImageWrite{};
-    storageImageWrite.setDstSet(descriptorSet.get());
-    storageImageWrite.setDstBinding(1);
-    storageImageWrite.setDescriptorType(vk::DescriptorType::eStorageImage);
-    storageImageWrite.setDescriptorCount(1);
-    storageImageWrite.setImageInfo(storageImageInfo);
-
-    context.getDevice().updateDescriptorSets(storageImageWrite, {});
+    
+    bindOutputImages();
 }
 
 
@@ -206,10 +177,10 @@ void RtxRaytracer::updateTLAS()
         context.getDevice().updateDescriptorSets(accelWrite, {});
 }
 
-void RtxRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstants& pushConstants)
+void RtxRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstantsData& pushConstants)
 {
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, pipeline.get());
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, pipelineLayout.get(), 0, descriptorSet.get(), {});
-    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR, 0, sizeof(PushConstants), &pushConstants);
+    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR, 0, sizeof(PushConstantsData), &pushConstants);
     commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, width, height, 1);
 }

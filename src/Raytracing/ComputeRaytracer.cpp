@@ -20,36 +20,21 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
 
     // Define the descriptor set layout bindings.
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
-        {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute},
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute},
-        {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute},
-        {3, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute}
+        {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh instances buffer
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output color image
+        {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output albedo image
+        {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output normal image
+        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output crypto  image
+        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh buffer
+        {6, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute}, // Textures
     };
 
-    std::vector<vk::DescriptorBindingFlags> bindingFlags(bindings.size(), vk::DescriptorBindingFlags{});
-    bindingFlags[3] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
-
-    vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
-    bindingFlagsInfo.setBindingFlags(bindingFlags);
-
-    vk::DescriptorSetLayoutCreateInfo descSetLayoutInfo{};
-    descSetLayoutInfo.setBindings(bindings);
-    descSetLayoutInfo.setPNext(&bindingFlagsInfo);
-    // This flag is required for the entire set when using eUpdateAfterBind
-    descSetLayoutInfo.setFlags(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool); 
-
-    descSetLayout = context.getDevice().createDescriptorSetLayoutUnique(descSetLayoutInfo);
-    
-    vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.setDescriptorPool(context.getDescriptorPool());
-    allocInfo.setSetLayouts(descSetLayout.get());
-    allocInfo.setDescriptorSetCount(1);
-    descriptorSet = std::move(context.getDevice().allocateDescriptorSetsUnique(allocInfo).front());
+    createDescriptorSet(bindings);
 
     // 4. Create the pipeline layout
     vk::PushConstantRange pushRange{};
     pushRange.setOffset(0);
-    pushRange.setSize(sizeof(PushConstants));
+    pushRange.setSize(sizeof(PushConstantsData));
     pushRange.setStageFlags(vk::ShaderStageFlagBits::eCompute);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -67,19 +52,8 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
         throw std::runtime_error("failed to create compute pipeline.");
 
     pipeline = std::move(pipelineResult.value);
-
-    // 6. Update descriptor set with the output image
-    vk::DescriptorImageInfo storageImageInfo{};
-    storageImageInfo.setImageView(outputImage.getImageView());
-    storageImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
-
-    vk::WriteDescriptorSet storageImageWrite{};
-    storageImageWrite.setDstSet(descriptorSet.get());
-    storageImageWrite.setDstBinding(1);
-    storageImageWrite.setDescriptorType(vk::DescriptorType::eStorageImage);
-    storageImageWrite.setDescriptorCount(1);
-    storageImageWrite.setImageInfo(storageImageInfo);
-    context.getDevice().updateDescriptorSets(storageImageWrite, {});
+    
+    bindOutputImages();    
 }
 
 
@@ -118,11 +92,11 @@ void ComputeRaytracer::updateTLAS()
 }
 
 
-void ComputeRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstants& pushConstants)
+void ComputeRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstantsData& pushConstants)
 {
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.get());
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout.get(), 0, descriptorSet.get(), {});
-    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushConstants), &pushConstants);
+    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushConstantsData), &pushConstants);
 
     uint32_t groupCountX = (width + GROUP_SIZE - 1) / GROUP_SIZE;
     uint32_t groupCountY = (height + GROUP_SIZE - 1) / GROUP_SIZE;

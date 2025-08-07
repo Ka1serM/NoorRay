@@ -17,25 +17,21 @@ layout (local_size_x = 8, local_size_y = 8) in;
 #include "ShadeClosestHit.glsl"
 #include "ShadeMiss.glsl"
 
-// --- Stage-Specific Bindings ---
-layout (set = 0, binding = 1, rgba32f) uniform image2D outputImage;
-
 // --- Push Constants ---
 layout (push_constant) uniform PushConstants {
-    PushData pushData;
-    CameraData camera;
-} pushConstants;
+    PushConstantsData pushConstants;
+};
 
 #include "Intersection.glsl"
 
 void main() {
     const ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
-    const ivec2 screenSize = imageSize(outputImage);
+    const ivec2 screenSize = imageSize(outputNormal);
     if (pixelCoord.x >= screenSize.x || pixelCoord.y >= screenSize.y) return;
 
     const int SAMPLES_PER_PIXEL = 1;
 
-    uvec2 seed = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.pushData.frame * 16777619));
+    uvec2 seed = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.push.frame * 16777619));
     uint rngStateX = seed.x, rngStateY = seed.y;
 
     vec3 accumulatedColor = vec3(0.0);
@@ -49,6 +45,10 @@ void main() {
         payload.done = false;
         payload.rngState = rngStateX;
         rand(payload.rngState);
+        
+        payload.albedo = vec3(0.0);
+        payload.normal = vec3(0.0);
+        payload.objectIndex = -1;
 
         vec3 pathContribution = vec3(0.0);
 
@@ -58,9 +58,8 @@ void main() {
         for (int totalDepth = 0; totalDepth < 12; ++totalDepth) {
             HitInfo hit = traceScene(rayOrigin, rayDirection);
 
-            if (hit.instanceIndex == -1) {
-                shadeMiss(rayDirection, pushConstants.pushData, payload);
-            }
+            if (hit.instanceIndex == -1)
+                shadeMiss(rayDirection, pushConstants.push, payload);
             else {
                 const ComputeInstance inst = sceneInstances[hit.instanceIndex];
                 const MeshAddresses mesh = instances[inst.meshId];
@@ -72,19 +71,27 @@ void main() {
                 const Vertex v2 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 2]];
                 vec3 localPos = interpolateBarycentric(hit.barycentrics, v0.position, v1.position, v2.position);
                 vec3 localNrm = normalize(interpolateBarycentric(hit.barycentrics, v0.normal, v1.normal, v2.normal));
+                vec3 localTan = normalize(interpolateBarycentric(hit.barycentrics, v0.tangent, v1.tangent, v2.tangent));
                 vec2 uv = interpolateBarycentric(hit.barycentrics, v0.uv, v1.uv, v2.uv);
 
                 vec3 worldPos = (inst.transform * vec4(localPos, 1.0)).xyz;
                 vec3 worldNrm = normalize(transpose(inverse(mat3(inst.transform))) * localNrm);
+                vec3 worldTan = normalize(mat3(inst.transform) * localTan);
 
                 // Call shared hit logic.
-                shadeClosestHit(worldPos, worldNrm, uv, rayDirection, material, payload);
+                shadeClosestHit(worldPos, worldNrm, worldTan, uv, rayDirection, material, payload);
+                payload.objectIndex = hit.instanceIndex;
             }
 
             // Clamp indirect light to prevent fireflies.
             vec3 bounceContribution = payload.throughput * payload.color;
             if (totalDepth > 0)
                 bounceContribution = clamp(bounceContribution, 0.0, 50.0);
+            else { //save gbuffer on first hit
+                   imageStore(outputAlbedo, ivec2(pixelCoord.xy), vec4(payload.albedo, 1.0));
+                   imageStore(outputNormal, ivec2(pixelCoord.xy), vec4(payload.normal, 0.0));
+                   imageStore(outputCrypto, ivec2(pixelCoord.xy), uvec4(payload.objectIndex, 0, 0, 0));
+            }
             pathContribution += bounceContribution;
             
             switch (payload.bounceType) {
@@ -106,7 +113,7 @@ void main() {
     }
 
     vec3 finalColor = accumulatedColor / float(SAMPLES_PER_PIXEL);
-    vec3 previousColor = imageLoad(outputImage, pixelCoord).rgb;
-    finalColor = (finalColor + previousColor * float(pushConstants.pushData.frame)) / float(pushConstants.pushData.frame + 1);
-    imageStore(outputImage, pixelCoord, vec4(finalColor, 1.0));
+    vec3 previousColor = imageLoad(outputColor, pixelCoord).rgb;
+    finalColor = (finalColor + previousColor * float(pushConstants.push.frame)) / float(pushConstants.push.frame + 1);
+    imageStore(outputColor, pixelCoord, vec4(finalColor, 1.0));
 }

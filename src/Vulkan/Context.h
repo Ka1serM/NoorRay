@@ -35,10 +35,10 @@ public:
     // Helper functions
     bool checkDeviceExtensionSupport(const std::vector<const char*>& requiredExtensions) const;
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
+    void oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func, vk::Fence fence) const;
     void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const;
-    vk::UniqueDescriptorSet allocateDescSet(vk::DescriptorSetLayout descSetLayout);
     vk::PresentModeKHR chooseSwapPresentMode() const;
-    vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const; // New helper function
+    vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const;
 
     // Static callback with corrected C++ types
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugUtilsMessengerCallback(

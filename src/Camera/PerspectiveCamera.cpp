@@ -22,8 +22,6 @@ PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Tran
 
     updateCameraData();
     updateHorizontalVertical();
-    updateViewMatrix();
-    updateProjectionMatrix();
 }
 
 void PerspectiveCamera::updateCameraData() {
@@ -40,20 +38,21 @@ void PerspectiveCamera::updateHorizontalVertical() {
     cameraData.vertical = up * sensorWidth / aspectRatio * 0.001f; // Convert mm to meters
 }
 
-void PerspectiveCamera::updateViewMatrix() {
+mat4 PerspectiveCamera::getViewMatrix() const
+{
     const vec3 target = getPosition() + cameraData.direction;
-    viewMatrix = lookAt(getPosition(), target, WORLD_UP);
+    return lookAt(getPosition(), target, WORLD_UP);
 }
 
-void PerspectiveCamera::updateProjectionMatrix() {
+mat4 PerspectiveCamera::getProjectionMatrix() const
+{
     const float fovY = 2.0f * atan(sensorHeight * 0.5f / cameraData.focalLength);
-    projectionMatrix = perspectiveZO(fovY, aspectRatio, 0.1f, 1000.0f);
+    return perspectiveZO(fovY, aspectRatio, 0.1f, 1000.0f);
 }
 
 void PerspectiveCamera::setFocalLength(const float val) {
     cameraData.focalLength = val;
     updateHorizontalVertical();
-    updateProjectionMatrix(); // Update projection matrix
     scene.setAccumulationDirty();
 }
 
@@ -76,7 +75,6 @@ void PerspectiveCamera::setSensorSize(const float width, const float height) {
     sensorWidth = width;
     sensorHeight = height;
     updateHorizontalVertical();
-    updateProjectionMatrix();
     scene.setAccumulationDirty();
 }
 
@@ -123,7 +121,6 @@ void PerspectiveCamera::update() {
     setPosition(position);
 
     updateCameraData();
-    updateViewMatrix(); // Update view matrix after position/rotation changes
 
     const bool changed = wasDirty || !all(epsilonEqual(oldDirection, cameraData.direction, 0.001f)) || !all(epsilonEqual(oldPosition, getPosition(), 0.001f));
     if (changed) {

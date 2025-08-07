@@ -5,27 +5,28 @@
 #include "../UI/ImGuiComponent.h"
 #include <memory>
 #include <string>
-#include "imgui.h"
+#include "imgui.h" //needed here for ImGuizmo!
 #include "ImGuizmo.h"
 #include "Scene/Scene.h"
-
-struct ImVec2;
+#include "Vulkan/Buffer.h"
 
 class ViewportPanel : public ImGuiComponent {
 public:
-    ViewportPanel(Scene& scene, const Image& inputImage, uint32_t width, uint32_t height, const std::string& title);
 
     void renderUi() override;
-    ~ViewportPanel();
-    
+    void handlePicking(ImVec2 imageSize) const;
+    ~ViewportPanel() override;
+
+    ViewportPanel(Scene& scene, const Image& outputColor, Image& outputCrypto, uint32_t width, uint32_t height, const std::string& title);
     void recordCopy(vk::CommandBuffer cmd, Image& srcImage);
-    void handleInput(bool isImageHovered);
 
     std::string getType() const override { return title; }
 
 
 private:
     Scene& scene;
+    Image& outputCrypto;
+    
     uint32_t width;
     uint32_t height;
     std::string title;
@@ -36,7 +37,11 @@ private:
     
     Image displayImage;
 
+    Buffer pickingBuffer; // Staging buffer for picking
+    void* pickingBufferMappedPtr = nullptr;
+
     bool isCapturingMouse = false;
     float oldX = 0.f, oldY = 0.f;
     ImGuizmo::OPERATION currentOperation = ImGuizmo::TRANSLATE;
+    ImGuizmo::MODE currentMode = ImGuizmo::LOCAL;
 };

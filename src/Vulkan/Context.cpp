@@ -274,20 +274,22 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
-void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const {
+void Context::oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func, vk::Fence fence) const {
     vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
     vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
+
     commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     func(*commandBuffer);
     commandBuffer->end();
+
     vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
-    queue.submit(submitInfo);
-    queue.waitIdle();
+    queue.submit(submitInfo, fence);
 }
 
-vk::UniqueDescriptorSet Context::allocateDescSet(vk::DescriptorSetLayout descSetLayout) {
-    vk::DescriptorSetAllocateInfo allocInfo(descriptorPool.get(), descSetLayout);
-    return std::move(device->allocateDescriptorSetsUnique(allocInfo).front());
+void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const {
+    vk::UniqueFence fence = device->createFenceUnique({});
+    oneTimeSubmitAsync(func, fence.get());
+    (void)device->waitForFences(fence.get(), VK_TRUE, UINT64_MAX);
 }
 
 vk::PresentModeKHR Context::chooseSwapPresentMode() const {
@@ -318,7 +320,7 @@ vk::SurfaceFormatKHR Context::chooseSwapSurfaceFormat() const {
         if (availableFormat.format == vk::Format::eR8G8B8A8Unorm && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
             return availableFormat;
 
-    return availableFormats[0];
+    throw std::runtime_error("No suitable swap surface format found! Expected eR8G8B8A8Unorm with SrgbNonlinear color space.");
 }
 
 VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(

@@ -57,7 +57,7 @@ void traverseBVH(vec3 rayOrigin, vec3 rayDirection, BVHBuffer bvh, VertexBuffer 
     while (stackPtr > 0) {
         BVHNode node = bvh.data[stack[--stackPtr]];
 
-        if (!intersectAABB(rayOrigin, invDir, node.bbox_min, node.bbox_max, hit.t))
+        if (!intersectAABB(rayOrigin, invDir, node.bbox.min, node.bbox.max, hit.t))
             continue;
 
         if (node.faceCount > 0) { // Leaf node

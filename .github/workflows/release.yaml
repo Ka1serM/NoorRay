@@ -13,6 +13,14 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Cache CMake Files
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles
+          key: cmake-cache-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
@@ -52,7 +60,6 @@ jobs:
             -DVulkan_INCLUDE_DIR="${env:VULKAN_SDK}\Include" `
             -DVulkan_LIBRARY="${env:VULKAN_SDK}\Lib\vulkan-1.lib"
           cmake --build build --config Release
-
 
       - name: Upload Executable
         uses: actions/upload-artifact@v4

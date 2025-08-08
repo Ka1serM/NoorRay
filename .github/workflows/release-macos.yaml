@@ -1,0 +1,55 @@
+name: VulkanToyPathtracer Release Builder (macOS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: true
+          cache: true
+          stripdown: true
+
+      - name: Verify Vulkan SDK Environment
+        run: |
+          echo "VULKAN_SDK = $VULKAN_SDK"
+          echo "PATH = $PATH"
+
+      - name: Compile shaders
+        run: |
+          source $VULKAN_SDK/setup-env.sh
+          cd src/shaders
+          chmod +x recompile.sh
+          ./recompile.sh
+
+      - name: Install Build Dependencies
+        run: brew install cmake ninja
+
+      - name: Configure and Build
+        run: |
+          # Source the SDK's environment script so CMake can find Vulkan
+          source $VULKAN_SDK/setup-env.sh
+          
+          # Configure using the native Apple Clang compiler and Ninja generator
+          cmake -S . -B build -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_CXX_STANDARD=23
+
+          # Build the project
+          cmake --build build --config Release
+
+      - name: Upload macOS Application
+        uses: actions/upload-artifact@v4
+        with:
+          name: VulkanToyPathtracer-macOS
+          path: build/VulkanToyPathtracer.app

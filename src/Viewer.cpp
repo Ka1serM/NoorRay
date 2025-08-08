@@ -1,11 +1,9 @@
 #include "Viewer.h"
-
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
-
+#include <SDL3/SDL.h>
 #include "imgui.h"
-#include "imgui_impl_vulkan.h"
 #include "UI/DebugPanel.h"
 #include "UI/MainMenuBar.h"
 #include "UI/OutlinerDetailsPanel.h"
@@ -14,38 +12,196 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include "Utils.h"
+#include "backends/imgui_impl_sdl3.h"
+#include "Camera/PerspectiveCamera.h"
+#include "Raytracing/Computeraytracer.h"
+#include "Raytracing/Rtxraytracer.h"
 #include "UI/EnvironmentPanel.h"
+#include "Vulkan/Tonemapper.h"
 
 Viewer::Viewer(const int width, const int height)
     : width(width),
       height(height),
       context(width, height),
-      scene(context),
       renderer(context, width, height),
-      gpuRaytracer(context, scene, width /2, height /2),
-      cpuRaytracer(context, scene, width /4, height /4),
-      inputTracker(context.getWindow()),
-      gpuImageTonemapper(context, width /2, height /2, gpuRaytracer.getOutputImage()),
-      cpuImageTonemapper(context, width /4, height /4, cpuRaytracer.getOutputImage()),
-      imGuiManager(context, renderer.getSwapchainImages(), width, height)
+      imGuiManager(context, renderer.getSwapchainImages(), width, height),
+      scene(context)
 {
+    const int viewportWidth = width / 2;
+    const int viewportHeight = height / 2;
+
+    if (context.isRtxSupported())
+        raytracer = std::make_unique<RtxRaytracer>(scene, viewportWidth, viewportHeight);
+    else
+        raytracer = std::make_unique<ComputeRaytracer>(scene, viewportWidth, viewportHeight);
+    
+    gpuImageTonemapper = std::make_unique<Tonemapper>(context, viewportWidth, viewportHeight, raytracer->getOutputColor());
+    
     setupScene();
     setupUI();
+}
+
+void Viewer::recreateSwapChain() {
+    // Get the new window size in pixels.
+    SDL_GetWindowSizeInPixels(context.getWindow(), &width, &height);
+
+    // If the window is minimized, pause execution until it is restored.
+    while (width == 0 || height == 0) {
+        SDL_GetWindowSizeInPixels(context.getWindow(), &width, &height);
+        SDL_WaitEvent(nullptr);
+    }
+
+    context.getDevice().waitIdle();
+    
+    renderer.recreateSwapChain(width, height);
+    imGuiManager.recreateForSwapChain(renderer.getSwapchainImages(), width, height);
+
+    std::cout << "Recreated swapchain to " << width << "x" << height << std::endl;
+}
+
+
+void Viewer::run() {
+    using clock = std::chrono::high_resolution_clock;
+    auto lastTime = clock::now();
+    float timeAccumulator = 0.0f;
+    int frameCounter = 0;
+    float deltaTime = 0.0f;
+
+    auto recordComputeWork = [&](const vk::CommandBuffer cmd) {
+        PushConstantsData pushConstantData{};
+        pushConstantData.push.frame = frame;
+        pushConstantData.camera = scene.getActiveCamera()->getCameraData();
+        if (const auto* environment = dynamic_cast<EnvironmentPanel*>(imGuiManager.getComponent("Environment")))
+            pushConstantData.push.hdriTexture = environment->getHdriTexture();
+
+        raytracer->render(cmd, pushConstantData);
+        gpuImageTonemapper->dispatch(cmd);
+    };
+
+    bool newFrameReady = false;
+    bool isRunning = true;
+    bool isFullscreen = false;
+
+    auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("GPU Viewport"));
+    auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug"));
+    
+    while (isRunning) {
+        
+        SDL_Event event{};
+        while (SDL_PollEvent(&event)) {
+            ImGui_ImplSDL3_ProcessEvent(&event);
+            
+            switch (event.type) {
+            case SDL_EVENT_KEY_DOWN:
+                if (event.key.key == SDLK_F11) {
+                    isFullscreen = !isFullscreen;
+                    if (isFullscreen) {
+                        SDL_SetWindowFullscreenMode(context.getWindow(), NULL);
+                        SDL_SetWindowFullscreen(context.getWindow(), true);
+                    } else
+                        SDL_SetWindowFullscreen(context.getWindow(), false);
+                }
+                break;
+                case SDL_EVENT_QUIT:
+                    isRunning = false;
+                    break;
+                case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                case SDL_EVENT_WINDOW_RESIZED:
+                case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+                case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+                    framebufferResized = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+        
+        // --- Time/FPS ---
+        auto currentTime = clock::now();
+        deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+        lastTime = currentTime;
+        timeAccumulator += deltaTime;
+        frameCounter++;
+        if (timeAccumulator >= 1.0f) {
+                debugPanel->setFps(static_cast<float>(frameCounter) / timeAccumulator);
+            timeAccumulator = 0.0f;
+            frameCounter = 0;
+        }
+        
+        // --- Resize Handling ---
+        // If a resize event occurred, recreate the swapchain and skip this frame.
+        if (framebufferResized) {
+            recreateSwapChain();
+            framebufferResized = false;
+            continue;
+        }
+
+        // --- UI and Scene ---
+        imGuiManager.renderUi();
+
+        if (scene.isTlasDirty() || scene.isMeshesDirty() || scene.isTexturesDirty()) {
+            context.getDevice().waitIdle();
+            if (scene.isMeshesDirty()) raytracer->updateMeshes();
+            if (scene.isTexturesDirty()) raytracer->updateTextures();
+            if (scene.isTlasDirty()) raytracer->updateTLAS();
+        }
+
+        if (scene.isAccumulationDirty())
+            frame = 0;
+        else
+            frame++;
+
+        scene.clearDirtyFlags();
+
+        if (renderer.isComputeWorkFinished() && !newFrameReady) {
+            newFrameReady = true;
+            renderer.submitCompute(recordComputeWork);
+        }
+
+        // --- Begin Frame / Record / Draw ---
+        vk::CommandBuffer commandBuffer;
+        try {
+            commandBuffer = renderer.beginFrame();
+        } catch (const vk::OutOfDateKHRError&) {
+            framebufferResized = true;
+            continue;
+        }
+
+        try {
+            if (newFrameReady)
+                gpuViewport->recordCopy(commandBuffer, gpuImageTonemapper->getOutputImage());
+
+            imGuiManager.Draw(commandBuffer, renderer.getCurrentSwapchainImageIndex(), width, height);
+
+            renderer.endFrame(newFrameReady);
+            newFrameReady = false;
+
+        } catch (const vk::OutOfDateKHRError&) {
+            framebufferResized = true;
+        }
+    }
+
+    context.getDevice().waitIdle();
+}
+
+Viewer::~Viewer() {
+    std::cout << "Destroying Viewer...." << std::endl;
 }
 
 void Viewer::setupUI() {
     auto mainMenuBar = std::make_unique<MainMenuBar>();
     auto debugPanel = std::make_unique<DebugPanel>();
     auto environmentPanel = std::make_unique<EnvironmentPanel>(scene);
-    auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene, inputTracker);
-    auto gpuViewport = std::make_unique<ViewportPanel>(context, gpuImageTonemapper.getOutputImage(), width, height, "GPU Viewport");
-    auto cpuViewport = std::make_unique<ViewportPanel>(context, cpuImageTonemapper.getOutputImage(), width, height, " CPU Viewport");
+    auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene);
+
+    auto gpuViewportUniquePtr = std::make_unique<ViewportPanel>(scene, gpuImageTonemapper->getOutputImage(), raytracer->getOutputCrypto(), width/2, height/2, "GPU Viewport");
 
     mainMenuBar->setCallback("File.Quit", [&] {
-        glfwSetWindowShouldClose(context.getWindow(), GLFW_TRUE);
+        SDL_Event quitEvent;
+        quitEvent.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&quitEvent);
     });
 
-    // Import callback
     mainMenuBar->setCallback("File.Import.Obj", [this] {
         const auto selection = pfd::open_file("Import OBJ Model", ".", { "OBJ Files", "*.obj", "All Files", "*" }).result();
         if (!selection.empty()) {
@@ -61,8 +217,8 @@ void Viewer::setupUI() {
                 this->scene.add(meshAsset);
                 auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
                 int instanceIndex = this->scene.add(std::move(instance));
-                if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-                    outliner->setSelectedIndex(instanceIndex);
+                
+                    scene.setActiveObjectIndex(instanceIndex);
 
             } catch (const std::exception& e) {
                 std::cerr << "Import failed: " << e.what() << std::endl;
@@ -71,8 +227,8 @@ void Viewer::setupUI() {
     });
 
     mainMenuBar->setCallback("File.Import.CrtScene", [this] {
-    const auto selection = pfd::open_file("Import CrtScene", ".", { "CRT Scene Files", "*.crtscene", "All Files", "*" }).result();
-    if (!selection.empty()) {
+        const auto selection = pfd::open_file("Import CrtScene", ".", { "CRT Scene Files", "*.crtscene", "All Files", "*" }).result();
+        if (!selection.empty()) {
             
         try {
             std::vector<Vertex> vertices;
@@ -84,96 +240,99 @@ void Viewer::setupUI() {
             this->scene.add(meshAsset);
             auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
             int instanceIndex = this->scene.add(std::move(instance));
-            if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-                outliner->setSelectedIndex(instanceIndex);
+            
+                scene.setActiveObjectIndex(instanceIndex);
 
         } catch (const std::exception& e) {
             std::cerr << "Import failed: " << e.what() << std::endl;
         }
     }
-});
+    });
+    
+    mainMenuBar->setCallback("File.Import.Texture", [this] {
+      const auto selection = pfd::open_file(
+          "Import Texture",
+          ".",
+          {
+              "Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
+              "All Files", "*"
+          }).result();
 
-    // Add primitives callbacks
+      if (!selection.empty()) {
+          try {
+              scene.add(Texture(context, selection[0]));
+          } catch (const std::exception& e) {
+              std::cerr << "Import failed: " << e.what() << std::endl;
+          }
+      }
+    });
+
     mainMenuBar->setCallback("Add.Cube", [this] {
         auto cube = MeshAsset::CreateCube(scene, "Cube", {});
         this->scene.add(cube);
-        auto instance = std::make_unique<MeshInstance>(this->scene, "Cube Instance", cube, Transform(glm::vec3(0, 0, 0)));
+        auto instance = std::make_unique<MeshInstance>(this->scene, "Cube Instance", cube, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.Plane", [this] {
         auto plane = MeshAsset::CreatePlane(this->scene, "Plane", {});
         this->scene.add(plane);
-        auto instance = std::make_unique<MeshInstance>(this->scene, "Plane Instance", plane, Transform(glm::vec3(0, 0, 0)));
+        auto instance = std::make_unique<MeshInstance>(this->scene, "Plane Instance", plane, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.Sphere", [this] {
         auto sphere = MeshAsset::CreateSphere(this->scene, "Sphere", {}, 24, 48);
         this->scene.add(sphere);
-        auto instance = std::make_unique<MeshInstance>(this->scene, "Sphere Instance", sphere, Transform(glm::vec3(0, 0, 0)));
+        auto instance = std::make_unique<MeshInstance>(this->scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.RectLight", [this] {
         Material material{};
-        material.emission = glm::vec3(10);
+        material.emission = vec3(1, 1, 1);
+        material.emissionStrength = 10.0f; // White light with intensity
         auto plane = MeshAsset::CreatePlane(this->scene, "RectLight", material);
         this->scene.add(plane);
-        auto instance = std::make_unique<MeshInstance>(this->scene, "RectLight Instance", plane, Transform(glm::vec3(0, 0, 0)));
+        auto instance = std::make_unique<MeshInstance>(this->scene, "RectLight Instance", plane, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+            scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.SphereLight", [this] {
         Material material{};
-        material.emission = glm::vec3(10);
+        material.emission = vec3(1, 1, 1);
+        material.emissionStrength = 10.0f; // White light with intensity
         auto sphere = MeshAsset::CreateSphere(this->scene, "SphereLight", material, 24, 48);
         this->scene.add(sphere);
-        auto instance = std::make_unique<MeshInstance>(this->scene, "SphereLight Instance", sphere, Transform(glm::vec3(0, 0, 0)));
+        auto instance = std::make_unique<MeshInstance>(this->scene, "SphereLight Instance", sphere, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+        scene.setActiveObjectIndex(instanceIndex);
     });
 
     mainMenuBar->setCallback("Add.DiskLight", [this] {
         Material material{};
-        material.emission = glm::vec3(10);
+        material.emission = vec3(1, 1, 1);
+        material.emissionStrength = 10.0f; // White light with intensity
         auto disk = MeshAsset::CreateDisk(this->scene, "DiskLight", material, 48);
         this->scene.add(disk);
-        auto instance = std::make_unique<MeshInstance>(this->scene, "DiskLight Instance", disk, Transform(glm::vec3(0, 0, 0)));
+        auto instance = std::make_unique<MeshInstance>(this->scene, "DiskLight Instance", disk, Transform(vec3(0, 0, 0)));
         int instanceIndex = this->scene.add(std::move(instance));
-        if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-            outliner->setSelectedIndex(instanceIndex);
+        scene.setActiveObjectIndex(instanceIndex);
     });
 
     imGuiManager.add(std::move(mainMenuBar));
     imGuiManager.add(std::move(debugPanel));
     imGuiManager.add(std::move(environmentPanel));
     imGuiManager.add(std::move(outlinerDetailsPanel));
-    imGuiManager.add(std::move(gpuViewport));
-    imGuiManager.add(std::move(cpuViewport));
+    imGuiManager.add(std::move(gpuViewportUniquePtr));
 }
 
 void Viewer::setupScene() {
-
-    // Gray 1x1 texture
-    scene.add(Texture(context, "Gray", (const uint8_t[]){127, 127, 127, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-
-    // White 1x1 texture
-    scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
-
-    // Black 1x1 texture
-    scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     
-    // Add HDRI texture
     static constexpr unsigned char data[] = {
         #embed "../assets/Ultimate_Skies_4k_0036.hdr"
     };
@@ -183,122 +342,13 @@ void Viewer::setupScene() {
         throw std::runtime_error("Failed to load HDR texture from memory");
 
     scene.add(Texture(context, "HDRI Sky", pixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
-
+    
     stbi_image_free(pixels);
 
-    auto cam = std::make_unique<PerspectiveCamera>(scene, "Main Camera", Transform{glm::vec3(0, -1.0f, 3.5f), glm::vec3(-180, 0, 180), glm::vec3(0)}, width / static_cast<float>(height), 36.0f, 24.0f, 30.0f, 2.4f, 3.0f, 3.0f);
-    scene.add(std::move(cam));
-
-    auto meshAsset = MeshAsset::CreateCube(this->scene, "Default Cube", Material{});
-    this->scene.add(meshAsset);
-    auto instance = std::make_unique<MeshInstance>(this->scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
-    int instanceIndex = this->scene.add(std::move(instance));
-    if (auto* outliner = dynamic_cast<OutlinerDetailsPanel*>(this->imGuiManager.getComponent("Outliner Details")))
-        outliner->setSelectedIndex(instanceIndex);
-}
-
-void Viewer::run() {
-    using clock = std::chrono::high_resolution_clock;
-    auto lastTime = clock::now();
-    float timeAccumulator = 0.0f;
-    int frameCounter = 0;
+    scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     
-    while (!glfwWindowShouldClose(context.getWindow())) {
-        vk::Fence inFlightFence = renderer.getCurrentInFlightFence();
-        (void)context.getDevice().waitForFences(inFlightFence, VK_TRUE, UINT64_MAX);
-        
-        auto currentTime = clock::now();
-        float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
-        lastTime = currentTime;
-
-        timeAccumulator += deltaTime;
-        frameCounter++;
-        if (timeAccumulator >= 1.0f) {
-            if (auto* debugPanelPtr = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug")))
-                debugPanelPtr->setFps(static_cast<float>(frameCounter) / timeAccumulator);
-            timeAccumulator = 0.0f;
-            frameCounter = 0;
-        }
-
-        glfwPollEvents();
-        imGuiManager.renderUi();
-        inputTracker.update();
-
-        scene.getActiveCamera()->update(inputTracker, deltaTime);
-
-        vk::Semaphore imageAcquiredSemaphore = renderer.getCurrentImageAcquiredSemaphore();
-        auto resultValue = context.getDevice().acquireNextImageKHR(renderer.getSwapChain(), UINT64_MAX, imageAcquiredSemaphore);
-        uint32_t imageIndex = resultValue.value;
-        
-        context.getDevice().resetFences(inFlightFence);
-        
-        if (scene.isTlasDirty() || scene.isMeshesDirty() || scene.isTexturesDirty()) {
-            context.getDevice().waitIdle();
-            if (scene.isMeshesDirty())
-                gpuRaytracer.updateMeshes();
-            if (scene.isTexturesDirty())
-                gpuRaytracer.updateTextures();
-            if (scene.isTlasDirty()) {
-                gpuRaytracer.updateTLAS();
-                cpuRaytracer.updateFromScene();
-            }
-        }
-        
-        if (scene.isAccumulationDirty())
-            frame = 0;
-        else
-            frame++;
-        
-        scene.clearDirtyFlags();
-        
-        vk::CommandBuffer commandBuffer = renderer.getCommandBuffer(imageIndex);
-        commandBuffer.begin(vk::CommandBufferBeginInfo{});
-
-        PushConstants pushConstantData{};
-        pushConstantData.push.frame = frame;
-        pushConstantData.camera = scene.getActiveCamera()->getCameraData();
-        if (auto* environment = dynamic_cast<EnvironmentPanel*>(this->imGuiManager.getComponent("Environment")))
-            pushConstantData.push.hdriTexture = environment->getHdriTexture();
-
-        gpuRaytracer.render(commandBuffer, pushConstantData);
-        cpuRaytracer.render(commandBuffer, pushConstantData);
-        
-        gpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
-        cpuImageTonemapper.dispatch(commandBuffer, (width + 15) / 16, (height + 15) / 16, 1);
-        
-        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal);
-        imGuiManager.Draw(commandBuffer, imageIndex, width, height);
-        Image::setImageLayout(commandBuffer, renderer.getSwapchainImages()[imageIndex], vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR);
-        commandBuffer.end();
-
-        vk::Semaphore renderFinishedSemaphore = renderer.getCurrentRenderFinishedSemaphore();
-        vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        vk::SubmitInfo submitInfo = vk::SubmitInfo()
-            .setCommandBuffers(commandBuffer)
-            .setWaitSemaphores(imageAcquiredSemaphore)
-            .setWaitDstStageMask(waitStage)
-            .setSignalSemaphores(renderFinishedSemaphore);
-        context.getQueue().submit(submitInfo, inFlightFence);
-
-        vk::PresentInfoKHR presentInfo = vk::PresentInfoKHR()
-            .setWaitSemaphores(renderFinishedSemaphore)
-            .setSwapchains(renderer.getSwapChain())
-            .setImageIndices(imageIndex);
-        context.getQueue().presentKHR(presentInfo);
-
-        renderer.advanceFrame();
-    }
-
-    context.getDevice().waitIdle();
-}
-
-
-Viewer::~Viewer()
-{
-    std::cout << "Destroying Viewer...." << std::endl;
-}
-
-void Viewer::cleanup()
-{
-    glfwTerminate();
+    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(0, 0, 5.0f), vec3(-180, 0, 180), vec3(0)}, aspectRatio, 36.0f, 24.0f, 30.0f, 0.0f, 10.0f, 2.0f);
+    scene.add(std::move(cam));
 }

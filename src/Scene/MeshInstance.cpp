@@ -28,26 +28,38 @@ void MeshInstance::renderUi() {
     meshAsset->renderUi();
 }
 
-void MeshInstance::setPosition(const glm::vec3& pos)
+void MeshInstance::setPosition(const vec3& pos)
 {
     SceneObject::setPosition(pos);
     updateInstanceTransform();
 }
 
-void MeshInstance::setRotation(const glm::quat& rot)
+void MeshInstance::setRotation(const quat& rot)
 {
     SceneObject::setRotation(rot);
     updateInstanceTransform();
 }
 
-void MeshInstance::setRotationEuler(const glm::vec3& rot)
+void MeshInstance::setRotationEuler(const vec3& rot)
 {
     SceneObject::setRotationEuler(rot);
     updateInstanceTransform();
 }
 
-void MeshInstance::setScale(const glm::vec3& scale)
+void MeshInstance::setScale(const vec3& scale)
 {
     SceneObject::setScale(scale);
+    updateInstanceTransform();
+}
+
+void MeshInstance::setTransform(const Transform& transf)
+{
+    SceneObject::setTransform(transf);
+    updateInstanceTransform();
+}
+
+void MeshInstance::setTransformMatrix(const mat4& transf)
+{
+    SceneObject::setTransformMatrix(transf);
     updateInstanceTransform();
 }

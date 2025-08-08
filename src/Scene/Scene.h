@@ -20,9 +20,7 @@ class Buffer;
 class Scene {
 public:
     Scene(Context& context);
-    ~Scene();
 
-    // Locking functions remain the same
     std::shared_lock<std::shared_mutex> shared_lock() const {
         return std::shared_lock(sceneMutex);
     }
@@ -31,15 +29,23 @@ public:
         return std::unique_lock(sceneMutex);
     }
 
-    // Public API for adding/removing objects remains the same
     int add(std::unique_ptr<SceneObject> sceneObject);
     void add(const std::shared_ptr<MeshAsset>& meshAsset);
     void add(Texture&& texture);
     bool remove(const SceneObject* obj);
 
-    // Getters remain the same
     PerspectiveCamera* getActiveCamera() const { return activeCamera; }
     const std::vector<std::unique_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
+    
+    SceneObject* getActiveObject() const {
+        if (activeObjectIndex >= 0 && activeObjectIndex < static_cast<int>(sceneObjects.size()))
+            return sceneObjects[activeObjectIndex].get();
+        return nullptr;
+    }
+
+    void setActiveObjectIndex(const int index) { activeObjectIndex = index; }
+    int getActiveObjectIndex() const { return activeObjectIndex; }
+    
     const std::vector<MeshInstance*>& getMeshInstances() const { return meshInstances; }
     std::shared_ptr<MeshAsset> getMeshAsset(const std::string& name) const;
     const std::vector<std::shared_ptr<MeshAsset>>& getMeshAssets() const { return meshAssets; }
@@ -47,8 +53,6 @@ public:
     const std::vector<Texture>& getTextures() const { return textures; }
     Context& getContext() const { return context; }
 
-    // --- SIMPLIFIED: Dirty Flag Management ---
-    // Using simple atomic booleans for each flag.
     void setTlasDirty() { 
         tlasDirty.store(true, std::memory_order_relaxed);
         accumulationDirty.store(true, std::memory_order_relaxed);
@@ -115,6 +119,8 @@ private:
     std::vector<std::unique_ptr<SceneObject>> sceneObjects;
     std::vector<MeshInstance*> meshInstances;
     PerspectiveCamera* activeCamera = nullptr;
+
+    int activeObjectIndex = -1;
 
     std::atomic<bool> tlasDirty{false};
     std::atomic<bool> meshesDirty{false};

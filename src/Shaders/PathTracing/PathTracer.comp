@@ -1,0 +1,120 @@
+#version 460
+#pragma shader_stage(compute)
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+#extension GL_GOOGLE_include_directive: enable
+#extension GL_EXT_nonuniform_qualifier: enable
+#extension GL_EXT_buffer_reference: require
+#extension GL_EXT_scalar_block_layout: enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int64: require
+
+// --- Include All Modules ---
+#include "SharedStructs.h"
+#include "Bindings.glsl"       
+#include "Common.glsl"
+#include "PrimaryRayGen.glsl"
+#include "ShadeClosestHit.glsl"
+#include "ShadeMiss.glsl"
+
+// --- Push Constants ---
+layout (push_constant) uniform PushConstants {
+    PushConstantsData pushConstants;
+};
+
+#include "Intersection.glsl"
+
+void main() {
+    const ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 screenSize = imageSize(outputNormal);
+    if (pixelCoord.x >= screenSize.x || pixelCoord.y >= screenSize.y) return;
+
+    const int SAMPLES_PER_PIXEL = 1;
+
+    uvec2 seed = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.push.frame * 16777619));
+    uint rngStateX = seed.x, rngStateY = seed.y;
+
+    vec3 accumulatedColor = vec3(0.0);
+
+    for (int i = 0; i < SAMPLES_PER_PIXEL; ++i) {
+        vec3 rayOrigin, rayDirection;
+        generatePrimaryRay(pixelCoord, screenSize, pushConstants.camera, rngStateX, rngStateY, rayOrigin, rayDirection);
+
+        Payload payload;
+        payload.throughput = vec3(1.0);
+        payload.done = false;
+        payload.rngState = rngStateX;
+        rand(payload.rngState);
+        
+        payload.albedo = vec3(0.0);
+        payload.normal = vec3(0.0);
+        payload.objectIndex = -1;
+
+        vec3 pathContribution = vec3(0.0);
+
+        int diffuseBounces = 0, specularBounces = 0, transmissionBounces = 0;
+        const int maxDiffuseBounces = 4, maxSpecularBounces = 6, maxTransmissionBounces = 12;
+
+        for (int totalDepth = 0; totalDepth < 12; ++totalDepth) {
+            HitInfo hit = traceScene(rayOrigin, rayDirection);
+
+            if (hit.instanceIndex == -1)
+                shadeMiss(rayDirection, pushConstants.push, payload);
+            else {
+                const ComputeInstance inst = sceneInstances[hit.instanceIndex];
+                const MeshAddresses mesh = instances[inst.meshId];
+                
+                const Face face = FaceBuffer(mesh.faceAddress).data[hit.primitiveIndex];
+                const Material material = MaterialBuffer(mesh.materialAddress).data[face.materialIndex];
+
+                const Vertex v0 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 0]];
+                const Vertex v1 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 1]];
+                const Vertex v2 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 2]];
+                vec3 localPos = interpolateBarycentric(hit.barycentrics, v0.position, v1.position, v2.position);
+                vec3 localNrm = normalize(interpolateBarycentric(hit.barycentrics, v0.normal, v1.normal, v2.normal));
+                vec3 localTan = normalize(interpolateBarycentric(hit.barycentrics, v0.tangent, v1.tangent, v2.tangent));
+                vec2 uv = interpolateBarycentric(hit.barycentrics, v0.uv, v1.uv, v2.uv);
+
+                vec3 worldPos = (inst.transform * vec4(localPos, 1.0)).xyz;
+                vec3 worldNrm = normalize(transpose(inverse(mat3(inst.transform))) * localNrm);
+                vec3 worldTan = normalize(mat3(inst.transform) * localTan);
+
+                // Call shared hit logic.
+                shadeClosestHit(worldPos, worldNrm, worldTan, uv, rayDirection, material, payload);
+                payload.objectIndex = hit.instanceIndex;
+            }
+
+            // Clamp indirect light to prevent fireflies.
+            vec3 bounceContribution = payload.throughput * payload.color;
+            if (totalDepth > 0)
+                bounceContribution = clamp(bounceContribution, 0.0, 50.0);
+            else { //save gbuffer on first hit
+                   imageStore(outputAlbedo, ivec2(pixelCoord.xy), vec4(payload.albedo, 1.0));
+                   imageStore(outputNormal, ivec2(pixelCoord.xy), vec4(payload.normal, 0.0));
+                   imageStore(outputCrypto, ivec2(pixelCoord.xy), uvec4(payload.objectIndex, 0, 0, 0));
+            }
+            pathContribution += bounceContribution;
+            
+            switch (payload.bounceType) {
+                case BOUNCE_TYPE_DIFFUSE: if (++diffuseBounces > maxDiffuseBounces) payload.done = true; break;
+                case BOUNCE_TYPE_SPECULAR: if (++specularBounces > maxSpecularBounces) payload.done = true; break;
+                case BOUNCE_TYPE_TRANSMISSION: if (++transmissionBounces > maxTransmissionBounces) payload.done = true; break;
+            }
+            
+            if (payload.done)
+                break;
+
+            rayOrigin = payload.position;
+            rayDirection = payload.nextDirection;
+        }
+
+        rngStateX = payload.rngState;
+        rand(rngStateX);
+        accumulatedColor += pathContribution;
+    }
+
+    vec3 finalColor = accumulatedColor / float(SAMPLES_PER_PIXEL);
+    vec3 previousColor = imageLoad(outputColor, pixelCoord).rgb;
+    finalColor = (finalColor + previousColor * float(pushConstants.push.frame)) / float(pushConstants.push.frame + 1);
+    imageStore(outputColor, pixelCoord, vec4(finalColor, 1.0));
+}

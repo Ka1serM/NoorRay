@@ -6,5 +6,5 @@ class ImGuiComponent {
 public:
     virtual ~ImGuiComponent() = default;
     virtual void renderUi() {}
-    virtual std::string getType() const { return "ImGuiComponent"; }
+    virtual  std::string getType() const { return "ImGuiComponent"; }
 };

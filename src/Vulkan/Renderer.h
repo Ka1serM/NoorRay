@@ -1,35 +1,52 @@
 ﻿#pragma once
 #include "Context.h"
-#include <vector>
 #include <vulkan/vulkan.hpp>
+#include <functional>
+#include <vector>
 
 class Renderer {
 public:
     Renderer(Context& context, uint32_t width, uint32_t height);
-    ~Renderer(); 
-    
-    void advanceFrame();
-    
-    // Getters for the current frame's sync objects
-    vk::Semaphore getCurrentImageAcquiredSemaphore() const { return m_imageAcquiredSemaphores[m_currentFrame].get(); }
-    vk::Semaphore getCurrentRenderFinishedSemaphore() const { return m_renderFinishedSemaphores[m_currentFrame].get(); }
-    vk::Fence getCurrentInFlightFence() const { return m_inFlightFences[m_currentFrame].get(); }
-    
-    const vk::SwapchainKHR& getSwapChain() const { return swapchain.get(); }
+    ~Renderer();
+
+    vk::CommandBuffer beginFrame();
+    void endFrame(bool waitForCompute);
+
+    // --- MODIFIED: Public method for resizing ---
+    void recreateSwapChain(uint32_t width, uint32_t height);
+
+    // --- MODIFIED: Public Getters ---
     const std::vector<vk::Image>& getSwapchainImages() const { return swapchainImages; }
-    const vk::CommandBuffer& getCommandBuffer(uint32_t imageIndex) const;
+    uint32_t getCurrentSwapchainImageIndex() const { return m_imageIndex; }
+    
+    // --- Compute Methods (unchanged) ---
+    bool isComputeWorkFinished();
+    void submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands);
+    void waitForComputeIdle() const;
 
 private:
+    // --- ADDED: Helper methods for swapchain management ---
+    void createSwapChain();
+    void cleanupSwapChain();
+
     Context& context;
     uint32_t width, height;
 
+    // --- Swapchain resources ---
     vk::UniqueSwapchainKHR swapchain;
     std::vector<vk::Image> swapchainImages;
-    std::vector<vk::UniqueCommandBuffer> commandBuffers;
+    std::vector<vk::UniqueSemaphore> renderFinishedSemaphores; // Depends on swapchain image count
+
+    // --- Frame resources (unchanged) ---
+    std::vector<vk::UniqueCommandBuffer> frameCommandBuffers;
+    std::vector<vk::UniqueSemaphore> imageAcquiredSemaphores;
+    std::vector<vk::UniqueFence> frameFences;
+
+    // --- Compute resources (unchanged) ---
+    vk::UniqueCommandBuffer computeCommandBuffer;
+    vk::UniqueFence computeFence;
+    vk::UniqueSemaphore computeFinishedSemaphore;
     
-    static const int MAX_FRAMES_IN_FLIGHT = 2;
-    std::vector<vk::UniqueSemaphore> m_imageAcquiredSemaphores;
-    std::vector<vk::UniqueSemaphore> m_renderFinishedSemaphores;
-    std::vector<vk::UniqueFence> m_inFlightFences;
     uint32_t m_currentFrame = 0;
+    uint32_t m_imageIndex = 0;
 };

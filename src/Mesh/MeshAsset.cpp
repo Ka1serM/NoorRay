@@ -42,8 +42,8 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string
 
     for (int faceIdx = 0; faceIdx < 6; ++faceIdx) {
         vec3 normal = faceNormals[faceIdx];
-        vec3 tangent = glm::normalize(tangents[faceIdx]);
-        vec3 bitangent = glm::normalize(bitangents[faceIdx]);
+        vec3 tangent = normalize(tangents[faceIdx]);
+        vec3 bitangent = normalize(bitangents[faceIdx]);
 
         vec3 corners[4] = {
             normal * h + (-tangent - bitangent) * h,
@@ -137,9 +137,9 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::stri
             float z = sinPhi * sinTheta;
 
             vec3 pos = {x * 0.5f, y * 0.5f, z * 0.5f};
-            vec3 normal = glm::normalize(pos);
+            vec3 normal = normalize(pos);
 
-            vec3 tangent = glm::normalize(vec3{-sinPhi, 0.0f, cosPhi});
+            vec3 tangent = normalize(vec3{-sinPhi, 0.0f, cosPhi});
 
             vec2 uv = {lon / float(lonSeg), lat / float(latSeg)};
 
@@ -222,32 +222,39 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
 MeshAsset::MeshAsset(Scene& scene, const std::string& name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
     : scene(scene), path(name), vertices(vertices), indices(indices), faces(faces), materials(materials)
 {
+
     // Upload mesh data to GPU from the new member variable copies
-    vertexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Vertex) * this->vertices.size(), this->vertices.data()};
-    indexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(uint32_t) * this->indices.size(), this->indices.data()};
-    faceBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Face) * this->faces.size(), this->faces.data()};
-    materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Material) * this->materials.size(), this->materials.data()};
+    vertexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Vertex) * this->vertices.size(), this->vertices.data()};
+    indexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(uint32_t) * this->indices.size(), this->indices.data()};
+    faceBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Face) * this->faces.size(), this->faces.data()};
+    materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Material) * this->materials.size(), this->materials.data()};
 
-    vk::AccelerationStructureGeometryTrianglesDataKHR triangleData{};
-    triangleData.setVertexFormat(vk::Format::eR32G32B32Sfloat);
-    triangleData.setVertexData(vertexBuffer.getDeviceAddress());
-    triangleData.setVertexStride(sizeof(Vertex));
-    triangleData.setMaxVertex(static_cast<uint32_t>(this->vertices.size()));
-    triangleData.setIndexType(vk::IndexType::eUint32);
-    triangleData.setIndexData(indexBuffer.getDeviceAddress());
+    if (scene.getContext().isRtxSupported()) {
+        vk::AccelerationStructureGeometryTrianglesDataKHR triangleData{};
+        triangleData.setVertexFormat(vk::Format::eR32G32B32Sfloat);
+        triangleData.setVertexData(vertexBuffer.getDeviceAddress());
+        triangleData.setVertexStride(sizeof(Vertex));
+        triangleData.setMaxVertex(static_cast<uint32_t>(this->vertices.size()));
+        triangleData.setIndexType(vk::IndexType::eUint32);
+        triangleData.setIndexData(indexBuffer.getDeviceAddress());
 
-    vk::AccelerationStructureGeometryKHR geometry{};
-    geometry.setGeometryType(vk::GeometryTypeKHR::eTriangles);
-    geometry.setGeometry({triangleData});
-    geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+        vk::AccelerationStructureGeometryKHR geometry{};
+        geometry.setGeometryType(vk::GeometryTypeKHR::eTriangles);
+        geometry.setGeometry({triangleData});
+        geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
 
-    // Create bottom-level acceleration structure (BLAS)
-    blasGpu.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
-    blasCpu.build(this->vertices, this->indices);
+        // Create bottom-level acceleration structure (BLAS) on the GPU
+        blasGpu.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
+    }
+    else
+        blasCpu.build(scene.getContext(), this->vertices, this->indices);
 }
 
 uint64_t MeshAsset::getBlasAddress() const {
-    return blasGpu.getBuffer().getDeviceAddress();
+    // Only return a valid GPU BLAS address if RTX is supported
+    if (scene.getContext().isRtxSupported())
+        return blasGpu.getBuffer().getDeviceAddress();
+    return 0;
 }
 
 MeshAddresses MeshAsset::getBufferAddresses() const {
@@ -256,6 +263,7 @@ MeshAddresses MeshAsset::getBufferAddresses() const {
         indexBuffer.getDeviceAddress(),
         faceBuffer.getDeviceAddress(),
         materialBuffer.getDeviceAddress(),
+        blasCpu.getBufferAddress()
     };
 }
 
@@ -331,7 +339,7 @@ void MeshAsset::renderUi() {
 
             drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const glm::vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
 
             ImGui::TableNextRow();
             drawTextureCombo("Specular Texture", mat.specularIndex, i);
@@ -355,10 +363,12 @@ void MeshAsset::renderUi() {
             ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
             
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Transmission", mat.transmission, [&](const glm::vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Transmission Color", mat.transmission, [&](const vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("Transmission Strength", mat.transmissionStrength, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmissionStrength = v; anyMaterialChanged = true; });
             
             ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Emission", mat.emission, [&](const glm::vec3 v) { mat.emission = v; anyMaterialChanged = true; });
+            ImGuiManager::colorEdit3Row("Emission Color", mat.emission, [&](const vec3 v) { mat.emission = v; anyMaterialChanged = true; });
+            ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
 
             ImGui::EndTable();
             ImGui::TreePop();
@@ -371,8 +381,8 @@ void MeshAsset::renderUi() {
     }
 }
 
+//this gets called from the renderer when the scene material flag is dirty
 void MeshAsset::updateMaterials() {
-    // Recreate materialBuffer with updated materials from the CPU-side copy
-    materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(Material) * materials.size(), materials.data()};
+    materialBuffer = Buffer{scene.getContext(), Buffer::Type::Storage, sizeof(Material) * materials.size(), materials.data()};
     dirty = false; // Reset dirty flag after updating
 }

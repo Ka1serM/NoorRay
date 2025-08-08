@@ -1,10 +1,9 @@
 ﻿#pragma once
 
 #include <string>
-#include "InputTracker.h"
 #include "glm/glm.hpp"
 #include "Scene/MeshInstance.h"
-#include "Shaders/SharedStructs.h"
+#include "../Shaders/PathTracing/SharedStructs.h"
 
 class Scene;
 
@@ -19,7 +18,10 @@ private:
 
     CameraData cameraData{};
 
-    static constexpr glm::vec3 UP = glm::vec3(0, 1, 0);
+    mat4 viewMatrix;
+    mat4 projectionMatrix;
+
+    static constexpr vec3 UP = vec3(0, 1, 0);
 public:
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
     
@@ -32,21 +34,19 @@ public:
     float getSensorHeight() const { return sensorHeight; }
     CameraData getCameraData() const { return cameraData; }
 
+    mat4 getViewMatrix() const;
+    mat4 getProjectionMatrix() const;
+
     void setFocalLength(float val);
     void setAperture(float val);
     void setFocusDistance(float val);
     void setBokehBias(float val);
     void setSensorSize(float width, float height);
 
-    void update(InputTracker& inputTracker, float deltaTime);
+    void update();
     void renderUi() override;
 
 private:
     void updateHorizontalVertical();
     void updateCameraData();
-
-    void setPosition(const glm::vec3& pos) override;
-    void setRotation(const glm::quat& rot) override;
-    void setRotationEuler(const glm::vec3& rot) override;
-    void setScale(const glm::vec3& scale) override;
 };

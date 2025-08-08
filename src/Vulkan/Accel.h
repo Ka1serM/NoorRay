@@ -5,7 +5,6 @@
 #include <vulkan/vulkan.hpp>
 
 class Accel {
-private:
     Buffer buffer;
     vk::UniqueAccelerationStructureKHR accel;
     vk::WriteDescriptorSetAccelerationStructureKHR descAccelInfo{};

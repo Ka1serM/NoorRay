@@ -16,6 +16,30 @@ glm::mat4 Transform::getMatrix() const {
     return mat;
 }
 
+void Transform::setFromMatrix(const glm::mat4& mat) {
+    // Extract translation (position)
+    position = glm::vec3(mat[3]);
+
+    // Extract scale
+    // Basis vectors are the first 3 columns of the matrix
+    glm::vec3 col0 = glm::vec3(mat[0]);
+    glm::vec3 col1 = glm::vec3(mat[1]);
+    glm::vec3 col2 = glm::vec3(mat[2]);
+
+    scale.x = glm::length(col0);
+    scale.y = glm::length(col1);
+    scale.z = glm::length(col2);
+
+    // Remove scale from rotation matrix
+    glm::mat3 rotationMat;
+    if (scale.x != 0) rotationMat[0] = col0 / scale.x; else rotationMat[0] = col0;
+    if (scale.y != 0) rotationMat[1] = col1 / scale.y; else rotationMat[1] = col1;
+    if (scale.z != 0) rotationMat[2] = col2 / scale.z; else rotationMat[2] = col2;
+
+    // Convert rotation matrix to quaternion
+    rotation = glm::quat_cast(rotationMat);
+}
+
 vk::TransformMatrixKHR Transform::getVkTransformMatrix() const {
     glm::mat4 mat = getMatrix();
     vk::TransformMatrixKHR vkTransform{};

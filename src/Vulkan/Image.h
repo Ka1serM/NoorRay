@@ -20,7 +20,7 @@ public:
 
     void setImageLayout(const vk::CommandBuffer& commandBuffer, vk::ImageLayout newLayout);
     static void setImageLayout(const vk::CommandBuffer& commandBuffer, const vk::Image& image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout);
-    void update(Context& context, const void* data, size_t dataSize);
+    void update(const Context& context, const void* data, size_t dataSize);
 
     static vk::AccessFlags toAccessFlags(vk::ImageLayout layout);
 
@@ -29,4 +29,5 @@ public:
     const vk::ImageView& getImageView() const { return view.get(); }
     const vk::Image& getImage() const { return image.get(); }
     const vk::ImageCreateInfo& getImageCreateInfo() const { return info; }
+    vk::Format getFormat() const { return info.format; }
 };

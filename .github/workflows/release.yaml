@@ -1,4 +1,4 @@
-name: VulkanToyPathtracer Release Builder
+name: Release Builder
 
 on:
   workflow_dispatch:
@@ -8,11 +8,39 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # Checkout with submodules
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      # Cache CMake build files
+      - name: Cache CMake Files
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles
+          key: cmake-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      # Cache MinGW directory
+      - name: Cache MinGW
+        id: cache-mingw
+        uses: actions/cache@v4
+        with:
+          path: C:\mingw
+          key: mingw-${{ runner.os }}-15.1.0
+
+      # Download and extract MinGW only if not cached
+      - name: Download MinGW
+        if: steps.cache-mingw.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/niXman/mingw-builds-binaries/releases/download/15.1.0-rt_v12-rev0/x86_64-15.1.0-release-win32-seh-msvcrt-rt_v12-rev0.7z"
+          Invoke-WebRequest -Uri $url -OutFile mingw.7z
+          7z x mingw.7z -oC:\mingw -y
+
+      # Install Vulkan SDK with built-in caching
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
@@ -20,41 +48,29 @@ jobs:
           cache: true
           stripdown: true
 
-      - name: Verify Vulkan SDK Environment
-        shell: pwsh
-        run: |
-          echo "VULKAN_SDK = $env:VULKAN_SDK"
-          echo "PATH = $env:PATH"
-
+      # Compile shaders
       - name: Compile shaders
         shell: pwsh
         run: |
-          echo "VULKAN_SDK is $env:VULKAN_SDK"
+          echo "Using Vulkan SDK at $env:VULKAN_SDK"
           $env:PATH = "$env:VULKAN_SDK\Bin;$env:PATH"
           Set-Location src/shaders
           ./recompile.bat
 
-      - name: Download niXman MinGW GCC 15.1
-        shell: pwsh
-        run: |
-          $url = "https://github.com/niXman/mingw-builds-binaries/releases/download/15.1.0-rt_v12-rev0/x86_64-15.1.0-release-win32-seh-msvcrt-rt_v12-rev0.7z"
-          Invoke-WebRequest -Uri $url -OutFile mingw.7z
-          7z x mingw.7z -oC:\mingw -y
-
+      # Configure and build with CMake and Ninja
       - name: Configure and Build
         shell: pwsh
         run: |
-          cmake -S . -B build -G "MinGW Makefiles" `
+          cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=C:/mingw/mingw64/bin/gcc.exe `
             -DCMAKE_CXX_COMPILER=C:/mingw/mingw64/bin/g++.exe `
             -DCMAKE_CXX_STANDARD=23 `
             -DVulkan_INCLUDE_DIR="${env:VULKAN_SDK}\Include" `
             -DVulkan_LIBRARY="${env:VULKAN_SDK}\Lib\vulkan-1.lib"
-
           cmake --build build --config Release
 
-
+      # Upload the built executable as artifact
       - name: Upload Executable
         uses: actions/upload-artifact@v4
         with:

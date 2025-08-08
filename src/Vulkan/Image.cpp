@@ -39,8 +39,7 @@ Image::Image(Context& context, const void* data, int width, int height, vk::Form
     vk::UniqueBuffer stagingBuffer = context.getDevice().createBufferUnique(bufferInfo);
 
     vk::MemoryRequirements memRequirements = context.getDevice().getBufferMemoryRequirements(*stagingBuffer);
-    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
     vk::MemoryAllocateInfo allocInfo{};
     allocInfo.setAllocationSize(memRequirements.size);
     allocInfo.setMemoryTypeIndex(memTypeIndex);
@@ -100,14 +99,13 @@ Image::Image(Context& context, const void* data, int width, int height, vk::Form
 
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    std::cout << "DEBUG: Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << std::endl;
+    std::cout << "Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << std::endl;
 }
 
 Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight)
 {
-    if (texWidth <= 0 || texHeight <= 0) {
+    if (texWidth <= 0 || texHeight <= 0)
         throw std::runtime_error("Image constructor (rgbaData): Invalid dimensions (W=" + std::to_string(texWidth) + ", H=" + std::to_string(texHeight) + ")");
-    }
 
     currentLayout = vk::ImageLayout::eUndefined;
 
@@ -163,7 +161,7 @@ Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight
     imageViewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
     view = context.getDevice().createImageViewUnique(imageViewInfo);
 
-    context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
+    context.oneTimeSubmit([&](const vk::CommandBuffer commandBuffer) {
         setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
         vk::BufferImageCopy copyRegion{};
@@ -180,13 +178,12 @@ Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight
 
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    std::cout << "DEBUG: Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm" << std::endl;
+    std::cout << "Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm" << std::endl;
 }
 
 Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) {
-    if (width == 0 || height == 0) {
+    if (width == 0 || height == 0)
         throw std::runtime_error("Image constructor (blank): Invalid dimensions (W=" + std::to_string(width) + ", H=" + std::to_string(height) + ")");
-    }
 
     currentLayout = vk::ImageLayout::eUndefined;
 
@@ -221,14 +218,14 @@ Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format forma
     descImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
     descImageInfo.setSampler(nullptr);
 
-    context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
+    context.oneTimeSubmit([&](const vk::CommandBuffer commandBuffer) {
         setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
     });
     currentLayout = vk::ImageLayout::eGeneral;
-    std::cout << "DEBUG: Image (blank) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << ", Usage=" << static_cast<uint32_t>(usage) << std::endl;
+    std::cout << " Image (blank) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << ", Usage=" << static_cast<uint32_t>(usage) << std::endl;
 }
 
-vk::AccessFlags Image::toAccessFlags(vk::ImageLayout layout) {
+vk::AccessFlags Image::toAccessFlags(const vk::ImageLayout layout) {
     switch (layout) {
         case vk::ImageLayout::eUndefined:               return {};
         case vk::ImageLayout::eGeneral:                 return vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite;
@@ -261,7 +258,7 @@ void Image::setImageLayout(const vk::CommandBuffer& commandBuffer, const vk::Ima
     commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,{}, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
-void Image::update(Context& context, const void* data, size_t dataSize) {
+void Image::update(const Context& context, const void* data, size_t dataSize) {
     if (!data || dataSize == 0) {
         std::cerr << "Warning: Attempted to update image with null data or zero size." << std::endl;
         return;
@@ -285,7 +282,7 @@ void Image::update(Context& context, const void* data, size_t dataSize) {
     std::memcpy(mapped, data, dataSize);
     context.getDevice().unmapMemory(*stagingMemory);
 
-    context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
+    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
         setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
         
         vk::BufferImageCopy region{};

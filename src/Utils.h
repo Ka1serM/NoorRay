@@ -4,7 +4,7 @@
 #include <string>
 
 #include "Scene/Scene.h"
-#include "Shaders/SharedStructs.h"
+#include "Shaders/PathTracing/SharedStructs.h"
 #include "Vulkan/Renderer.h"
 
 class Utils {

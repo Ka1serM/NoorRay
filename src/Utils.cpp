@@ -1,7 +1,7 @@
 ﻿#include <fstream>
 #include <stdexcept>
 #include "Utils.h"
-#include "Shaders/SharedStructs.h"
+#include "Shaders/PathTracing/SharedStructs.h"
 #include "Vulkan/Texture.h"
 #include <nlohmann/json.hpp>
 
@@ -10,11 +10,11 @@
 
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <iostream>
-
 #include "tiny_obj_loader.h"
 #include "Scene/Scene.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
 void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces, std::vector<Material>& materials)
 {
     std::ifstream f(filepath);
@@ -35,24 +35,32 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
                 Material material{};
                 
                 if (mat_data.contains("albedo"))
-                    material.albedo = glm::make_vec3(mat_data["albedo"].get<std::vector<float>>().data());
+                    material.albedo = make_vec3(mat_data["albedo"].get<std::vector<float>>().data());
                 else
-                    material.albedo = glm::vec3(0.7f, 0.7f, 0.7f); // Default gray
+                    material.albedo = vec3(0.7f, 0.7f, 0.7f); // Default gray
                 
                 material.specular = mat_data.value("specular", 0.0f);
                 material.metallic = mat_data.value("metallic", 0.0f);
                 material.roughness = mat_data.value("roughness", 1.0f);
                 material.ior = mat_data.value("ior", 1.0f);
                 
-                if (mat_data.contains("transmission"))
-                    material.transmission = glm::make_vec3(mat_data["transmission"].get<std::vector<float>>().data());
-                else
-                    material.transmission = glm::vec3(0.0f, 0.0f, 0.0f);
+                if (mat_data.contains("transmission")) {
+                    auto transmission_data = mat_data["transmission"].get<std::vector<float>>();
+                    vec4 transmission(0.0f);
+                    for (size_t i = 0; i < transmission_data.size() && i < 3; ++i)
+                        transmission[i] = transmission_data[i];
+                    material.transmission = transmission;
+                } else
+                    material.transmission = vec4(0.0f);
 
-                if (mat_data.contains("emission"))
-                    material.emission = glm::make_vec3(mat_data["emission"].get<std::vector<float>>().data());
-                else
-                    material.emission = glm::vec3(0.0f, 0.0f, 0.0f);
+                if (mat_data.contains("emission")) {
+                    auto emission_data = mat_data["emission"].get<std::vector<float>>();
+                    vec4 emission(0.0f);
+                    for (size_t i = 0; i < emission_data.size() && i < 3; ++i)
+                        emission[i] = emission_data[i];
+                    material.emission = emission;
+                } else
+                    material.emission = vec4(0.0f);
                 
                 materials.push_back(material);
             }
@@ -82,15 +90,15 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
                         
                         Vertex v;
                         // Flip Y-axis to be consistent with the OBJ loader
-                        v.position = glm::vec3(verts_array[i], -verts_array[i + 1], verts_array[i + 2]);
-                        v.normal = glm::vec3(0.0f, 1.0f, 0.0f); // Default normal
-                        v.uv = glm::vec2(0.0f); // Default UV
+                        v.position = vec3(verts_array[i], -verts_array[i + 1], verts_array[i + 2]);
+                        v.normal = vec3(0.0f, 1.0f, 0.0f); // Default normal
+                        v.uv = vec2(0.0f); // Default UV
                         vertices.push_back(v);
                     }
                 }
 
                 // Parse normals if available
-                std::vector<glm::vec3> objNormals;
+                std::vector<vec3> objNormals;
                 if (obj_data.contains("normals")) {
                     const auto& normals_array = obj_data["normals"].get<std::vector<float>>();
                     for (size_t i = 0; i < normals_array.size(); i += 3) {
@@ -98,19 +106,19 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
                         if (i + 2 >= normals_array.size()) break;
                         
                         // Flip Y-axis for normals too
-                        objNormals.push_back(glm::vec3(normals_array[i], -normals_array[i + 1], normals_array[i + 2]));
+                        objNormals.push_back(vec3(normals_array[i], -normals_array[i + 1], normals_array[i + 2]));
                     }
                 }
 
                 // Parse UVs if available
-                std::vector<glm::vec2> objUVs;
+                std::vector<vec2> objUVs;
                 if (obj_data.contains("uvs")) {
                     const auto& uvs_array = obj_data["uvs"].get<std::vector<float>>();
                     for (size_t i = 0; i < uvs_array.size(); i += 2) {
                         // Check bounds
                         if (i + 1 >= uvs_array.size()) break;
                         
-                        objUVs.push_back(glm::vec2(uvs_array[i], 1.0f - uvs_array[i + 1])); // Flip V coordinate
+                        objUVs.push_back(vec2(uvs_array[i], 1.0f - uvs_array[i + 1])); // Flip V coordinate
                     }
                 }
 
@@ -158,9 +166,9 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
                             
                         } else {
                             // Calculate face normal if no normals provided
-                            glm::vec3 edge1 = v1.position - v0.position;
-                            glm::vec3 edge2 = v2.position - v0.position;
-                            glm::vec3 normal = glm::normalize(glm::cross(edge1, edge2));
+                            vec3 edge1 = v1.position - v0.position;
+                            vec3 edge2 = v2.position - v0.position;
+                            vec3 normal = normalize(cross(edge1, edge2));
                             
                             v0.normal = normal;
                             v1.normal = normal;
@@ -210,19 +218,18 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
     materials.clear();
     for (const auto& mat : mats) {
         Material material{};
-        material.albedo       = glm::vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
+        material.albedo       = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
         material.specular     = mat.specular[0];
         material.metallic     = mat.metallic;
         material.roughness    = mat.roughness;
         material.ior          = mat.ior;
-        material.transmission = glm::vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
-        material.emission     = glm::vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
 
-        material.albedoIndex = -1;
-        material.specularIndex = -1;
-        material.roughnessIndex = -1;
-        material.normalIndex = -1;
+        material.transmission = vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
+        material.transmissionStrength = material.transmission != vec3(0.0f) ? 1.0f : 0.0f;
 
+        material.emission = vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
+        material.emissionStrength = material.emission != vec3(0.0f) ? 1.0f : 0.0f;
+        
         // Load textures if present
         if (!mat.diffuse_texname.empty()) {
             std::string texturePath = objDir + "/" + mat.diffuse_texname;
@@ -281,28 +288,28 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
                 const tinyobj::index_t& idx = shape.mesh.indices[indexOffset + v];
 
                 Vertex vertex{};
-                vertex.position = glm::vec3(
+                vertex.position = vec3(
                     attrib.vertices[3 * idx.vertex_index + 0],
                     -attrib.vertices[3 * idx.vertex_index + 1],  // Flip Y-axis
                     attrib.vertices[3 * idx.vertex_index + 2]
                 );
                 
                 if (!attrib.normals.empty() && idx.normal_index >= 0) {
-                    vertex.normal = glm::vec3(
+                    vertex.normal = vec3(
                         attrib.normals[3 * idx.normal_index + 0],
                         -attrib.normals[3 * idx.normal_index + 1],
                         attrib.normals[3 * idx.normal_index + 2]
                     );
                 } else
-                    vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                    vertex.normal = vec3(0.0f, 1.0f, 0.0f);
 
                 if (!attrib.texcoords.empty() && idx.texcoord_index >= 0) {
-                    vertex.uv = glm::vec2(
+                    vertex.uv = vec2(
                         attrib.texcoords[2 * idx.texcoord_index + 0],
                         1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]
                     );
                 } else
-                    vertex.uv = glm::vec2(0.0f);
+                    vertex.uv = vec2(0.0f);
 
                 vertices.push_back(vertex);
                 indices.push_back(static_cast<uint32_t>(indices.size()));

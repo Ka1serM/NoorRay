@@ -47,4 +47,7 @@ public:
     virtual void setRotation(const glm::quat& rot);
     virtual void setRotationEuler(const glm::vec3& rot);
     virtual void setScale(const glm::vec3& scale);
+
+    virtual void setTransform(const Transform& transf);
+    virtual void setTransformMatrix(const glm::mat4& transf);
 };

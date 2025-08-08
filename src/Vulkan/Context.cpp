@@ -25,10 +25,14 @@ Context::Context(const int width, const int height) {
     if (!window)
         throw std::runtime_error("Failed to create SDL window: " + std::string(SDL_GetError()));
 
-    auto vkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+    if (!vkGetInstanceProcAddr)
+        throw std::runtime_error("Failed to get vkGetInstanceProcAddr: " + std::string(SDL_GetError()));
+
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
     createVulkanInstance();
+
     VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
     if (EnableValidationLayers) {

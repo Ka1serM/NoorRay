@@ -25,7 +25,6 @@ class Context {
     };
     
     SDL_Window* window;
-    vk::detail::DynamicLoader dl;
 
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;

@@ -1,17 +1,38 @@
-name: VulkanToyPathtracer Release Builder (macOS)
+name: Release Builder (macOS)
 
 on:
   workflow_dispatch:
-
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
+      - name: Change XCode Version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest
+    
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Cache CMake Files
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles
+          key: cmake-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Set Xcode 16.4 (with macOS 15.5 SDK)
+        run: |
+          echo "Using Xcode version:"
+          xcodebuild -version
+          export MACOSX_DEPLOYMENT_TARGET=15.5
+          export SDKROOT=$(xcodebuild -sdk macosx15.5 -version Path)
+          echo "SDKROOT is set to $SDKROOT"
+        shell: bash
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -20,32 +41,38 @@ jobs:
           cache: true
           stripdown: true
 
-      - name: Verify Vulkan SDK Environment
+      - name: Print full Vulkan SDK folder structure (files + folders)
         run: |
-          echo "VULKAN_SDK = $VULKAN_SDK"
-          echo "PATH = $PATH"
+          echo "VULKAN_SDK is at: $VULKAN_SDK"
+          find "$VULKAN_SDK"
 
       - name: Compile shaders
         run: |
-          source $VULKAN_SDK/setup-env.sh
+          export PATH="$VULKAN_SDK/macOS/bin:$PATH"
           cd src/shaders
           chmod +x recompile.sh
           ./recompile.sh
 
-      - name: Install Build Dependencies
-        run: brew install cmake ninja
-
-      - name: Configure and Build
+      - name: Install llvm@20
         run: |
-          # Source the SDK's environment script so CMake can find Vulkan
-          source $VULKAN_SDK/setup-env.sh
-          
-          # Configure using the native Apple Clang compiler and Ninja generator
-          cmake -S . -B build -G "Ninja" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_CXX_STANDARD=23
+          brew update
+          brew install llvm@20
 
-          # Build the project
+      - name: Configure and Build with llvm@20 Clang
+        run: |
+          export LLVM_PREFIX=$(brew --prefix llvm@20)
+          export MACOSX_DEPLOYMENT_TARGET=15.5
+          export SDKROOT=$(xcodebuild -sdk macosx15.5 -version Path)
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=23 \
+            -DCMAKE_C_COMPILER=$LLVM_PREFIX/bin/clang \
+            -DCMAKE_CXX_COMPILER=$LLVM_PREFIX/bin/clang++ \
+            -DCMAKE_C_FLAGS="-std=c2x" \
+            -DCMAKE_CXX_FLAGS="-std=c++23" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
+            -DCMAKE_OSX_SYSROOT=$SDKROOT
+
           cmake --build build --config Release
 
       - name: Upload macOS Application

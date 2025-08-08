@@ -6,7 +6,7 @@
 #include <memory>
 #include <cmath>
 #include <stdexcept>
-
+#include <numbers>
 #include "imgui.h"
 #include "glm/gtc/type_ptr.inl"
 #include "UI/ImGuiManager.h"
@@ -123,12 +123,12 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::stri
     std::vector<Material> materials;
 
     for (auto lat = 0; lat <= latSeg; ++lat) {
-        const float theta = static_cast<float>(M_PI) * lat / latSeg;
+        float theta = std::numbers::pi_v<float> * lat / latSeg;
         float sinTheta = std::sin(theta);
         float cosTheta = std::cos(theta);
 
         for (uint32_t lon = 0; lon <= lonSeg; ++lon) {
-            const float phi = 2.0f * static_cast<float>(M_PI) * lon / lonSeg;
+            const float phi = 2.0f * std::numbers::pi_v<float> * lon / lonSeg;
             float sinPhi = std::sin(phi);
             float cosPhi = std::cos(phi);
 
@@ -141,7 +141,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::stri
 
             vec3 tangent = normalize(vec3{-sinPhi, 0.0f, cosPhi});
 
-            vec2 uv = {lon / float(lonSeg), lat / float(latSeg)};
+            vec2 uv = {lon / static_cast<float>(lonSeg), lat / static_cast<float>(latSeg)};
 
             vertices.push_back(Vertex{
                 pos, 0,
@@ -192,7 +192,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
     }); // center vertex with tangent along +X
 
     for (uint32_t i = 0; i <= segments; ++i) {
-        float angle = float(i) / segments * 2.0f * float(M_PI);
+        float angle = static_cast<float>(i) / segments * 2.0f * std::numbers::pi_v<float>;
         float x = std::cos(angle) * radius;
         float z = std::sin(angle) * radius;
 

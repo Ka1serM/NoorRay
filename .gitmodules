@@ -21,14 +21,16 @@
 
 [submodule "external/portable-file-dialogs"]
 	path = external/portable-file-dialogs
-	url = https://github.com/samhocevar/portable-file-dialogs
-	
+	url = https://github.com/Ka1serM/portable-file-dialogs
+
 [submodule "external/ImGuizmo"]
 	path = external/ImGuizmo
 	url = https://github.com/CedricGuillemet/ImGuizmo
+
 [submodule "external/json"]
 	path = external/json
 	url = https://github.com/nlohmann/json.git
+
 [submodule "external/SDL"]
 	path = external/SDL
 	url = https://github.com/libsdl-org/SDL.git

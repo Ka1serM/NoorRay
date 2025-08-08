@@ -1,4 +1,4 @@
-name: VulkanToyPathtracer Release Builder (macOS)
+name: Release Builder (macOS)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
 
       - name: Compile shaders
         run: |
-          source $VULKAN_SDK/setup-env.sh
+          export PATH="$VULKAN_SDK/macOS/bin:$PATH"
           cd src/shaders
           chmod +x recompile.sh
           ./recompile.sh

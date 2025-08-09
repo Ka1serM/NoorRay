@@ -332,19 +332,29 @@ void Viewer::setupUI() {
 }
 
 void Viewer::setupScene() {
-    
-    static constexpr unsigned char data[] = {
-        #embed "../assets/Ultimate_Skies_4k_0036.hdr"
-    };
+
     int imgWidth, imgHeight, channels;
+    /*
+     static constexpr unsigned char data[] = {
+        #embed "../assets/LDR_RGBA_0.png"
+    };
     float* pixels = stbi_loadf_from_memory(data, static_cast<int>(sizeof(data)), &imgWidth, &imgHeight, &channels, 4);
     if (!pixels)
-        throw std::runtime_error("Failed to load HDR texture from memory");
-
-    scene.add(Texture(context, "HDRI Sky", pixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
-    
+        throw std::runtime_error("Failed to load Blue Noise texture from memory");
+    scene.add(Texture(context, "Blue Noise", pixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
     stbi_image_free(pixels);
+    */
+    
+    static constexpr unsigned char hdriData[] = {
+        #embed "../assets/Ultimate_Skies_4k_0036.hdr"
+    };
+    float* hdriPixels = stbi_loadf_from_memory(hdriData, static_cast<int>(sizeof(hdriData)), &imgWidth, &imgHeight, &channels, 4);
+    if (!hdriPixels)
+        throw std::runtime_error("Failed to load HDR texture from memory");
+    scene.add(Texture(context, "HDRI Sky", hdriPixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
+    stbi_image_free(hdriPixels);
 
+    
     scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     

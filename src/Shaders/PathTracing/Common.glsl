@@ -29,7 +29,6 @@ uint pcg(inout uint state) {
     return (word >> 22u) ^ word;
 }
 
-// MISSING FUNCTION (FIX)
 uvec2 pcg2d(uvec2 v) {
     v = v * 1664525u + 1013904223u;
     v.x += v.y * 1664525u;
@@ -63,12 +62,12 @@ vec2 concentricSampleDisk(float u1, float u2) {
     return r * vec2(cos(theta), sin(theta));
 }
 
-// MISSING FUNCTION (FIX)
 vec2 roundBokeh(float u1, float u2, float edgeBias) {
     vec2 diskSample = concentricSampleDisk(u1, u2);
     float r = length(diskSample);
     float newR = pow(r, 1.0 / max(edgeBias, EPSILON)); // Avoid division by zero
-    if (r > 0.0) return diskSample * (newR / r);
+    if (r > 0.0)
+        return diskSample * (newR / r);
     return vec2(0.0);
 }
 
@@ -117,8 +116,7 @@ float distributionGGX(vec3 N, vec3 H, float roughness) {
 }
 
 float geometrySchlickGGX(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0; // k for Schlick-GGX
+    float k = (roughness * roughness) / 2.0;
     return NdotV / (NdotV * (1.0 - k) + k);
 }
 

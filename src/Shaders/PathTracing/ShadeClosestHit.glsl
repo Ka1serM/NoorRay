@@ -11,47 +11,9 @@ inout Payload payload
 ) {
     // --- Initialize ---
     vec3 normal = interpolatedNormal;
+
     payload.position = worldPosition;
     payload.color = material.emission * material.emissionStrength;
-
-    // --- Normal Mapping ---
-    if (material.normalIndex != -1) {
-        vec3 tangentNormal = texture(textureSamplers[material.normalIndex], interpolatedUV).xyz;
-        tangentNormal = normalize(tangentNormal * 2.0 - 1.0); // [0,1] → [-1,1]
-
-        vec3 T = normalize(interpolatedTangent);
-        vec3 B = normalize(cross(normal, T));
-        vec3 N = normalize(normal);
-        mat3 TBN = mat3(T, B, N);
-
-        normal = normalize(TBN * tangentNormal); // World-space normal
-    }
-    payload.normal = normal;
-
-    // --- Albedo ---
-    vec3 albedo = material.albedo;
-    if (material.albedoIndex != -1)
-    albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
-    
-    payload.albedo = albedo;
-
-    // --- Metallic ---
-    float metallic = material.metallic;
-    if (material.metallicIndex != -1)
-    metallic *= texture(textureSamplers[material.metallicIndex], interpolatedUV).r;
-    metallic = clamp(metallic, 0.0, 1.0);
-
-    // --- Roughness ---
-    float roughness = material.roughness;
-    if (material.roughnessIndex != -1)
-    roughness *= texture(textureSamplers[material.roughnessIndex], interpolatedUV).r;
-    roughness = clamp(roughness, 0.05, 0.99);
-
-    // --- Specular ---
-    float specular = material.specular;
-    if (material.specularIndex != -1)
-    specular *= texture(textureSamplers[material.specularIndex], interpolatedUV).r;
-    specular *= 2.0;
     
     // --- Transmission (Glass, Water) ---
     if (material.transmissionStrength > 0.0 && rand(payload.rngState) < material.transmissionStrength) {
@@ -85,11 +47,49 @@ inout Payload payload
         return;
     }
 
-    // --- Opaque PBR Lighting ---
+    // --- Normal Mapping ---
+    if (material.normalIndex != -1) {
+        vec3 tangentNormal = texture(textureSamplers[material.normalIndex], interpolatedUV).xyz;
+        tangentNormal = normalize(tangentNormal * 2.0 - 1.0); // [0,1] → [-1,1]
+
+        vec3 T = normalize(interpolatedTangent);
+        vec3 B = normalize(cross(normal, T));
+        vec3 N = normalize(normal);
+        mat3 TBN = mat3(T, B, N);
+
+        normal = normalize(TBN * tangentNormal); // World-space normal
+    }
+    payload.normal = normal;
+    
+    // two sided materials
     vec3 viewDir = normalize(-worldRayDirection);
     if (dot(normal, viewDir) < 0.0)
-    normal = -normal;
+        normal = -normal;
+    
+    // --- Albedo ---
+    vec3 albedo = material.albedo;
+    if (material.albedoIndex != -1)
+    albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
+    payload.albedo = albedo;
 
+    // --- Metallic ---
+    float metallic = material.metallic;
+    if (material.metallicIndex != -1)
+    metallic *= texture(textureSamplers[material.metallicIndex], interpolatedUV).r;
+    metallic = clamp(metallic, 0.0, 1.0);
+
+    // --- Roughness ---
+    float roughness = material.roughness;
+    if (material.roughnessIndex != -1)
+    roughness *= texture(textureSamplers[material.roughnessIndex], interpolatedUV).r;
+    roughness = clamp(roughness, 0.05, 0.99);
+
+    // --- Specular ---
+    float specular = material.specular;
+    if (material.specularIndex != -1)
+    specular *= texture(textureSamplers[material.specularIndex], interpolatedUV).r;
+    specular *= 2.0;
+        
     float NdotV = max(dot(normal, viewDir), 0.0);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 Fs = fresnelSchlick(NdotV, F0);

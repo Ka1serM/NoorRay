@@ -66,9 +66,8 @@ void Renderer::createSwapChain() {
 
     // Determine the number of images in the swapchain
     uint32_t imageCount = surfaceCapabilities.minImageCount + 1;
-    if (surfaceCapabilities.maxImageCount > 0 && imageCount > surfaceCapabilities.maxImageCount) {
+    if (surfaceCapabilities.maxImageCount > 0 && imageCount > surfaceCapabilities.maxImageCount)
         imageCount = surfaceCapabilities.maxImageCount;
-    }
 
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.getSurface());

@@ -4,7 +4,7 @@
 #include "Scene/Scene.h"
 #include "Vulkan/Renderer.h"
 
-class Raytracer;
+class GpuRaytracer;
 class Tonemapper;
 
 class Viewer
@@ -29,7 +29,7 @@ private:
     ImGuiManager imGuiManager;
     Scene scene;
 
-    std::unique_ptr<Raytracer> raytracer;
+    std::unique_ptr<GpuRaytracer> raytracer;
     std::unique_ptr<Tonemapper> gpuImageTonemapper;
     
     int frame = 0;

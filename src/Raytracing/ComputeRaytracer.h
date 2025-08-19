@@ -1,8 +1,8 @@
 ﻿#pragma once
 
-#include "Raytracer.h"
+#include "GpuRaytracer.h"
 
-class ComputeRaytracer : public Raytracer {
+class ComputeRaytracer : public GpuRaytracer {
 public:
     
     void render(const vk::CommandBuffer& commandBuffer, const PushConstantsData& pushConstants) override;

@@ -1,9 +1,9 @@
 ﻿#pragma once
 
-#include "Raytracer.h"
+#include "GpuRaytracer.h"
 #include "Vulkan/Accel.h"
 
-class RtxRaytracer : public Raytracer {
+class RtxRaytracer : public GpuRaytracer {
     Accel tlas;
     Buffer raygenSBT;
     Buffer missSBT;

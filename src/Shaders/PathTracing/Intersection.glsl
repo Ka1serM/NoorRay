@@ -1,3 +1,5 @@
+#include "../Common.glsl" 
+
 // Intersects a ray with a single triangle using the Möller-Trumbore algorithm.
 bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3 v2, inout float t, out vec3 bary) {
     vec3 e1 = v1 - v0;
@@ -50,7 +52,7 @@ bool intersectAABB(vec3 rayOrigin, vec3 invDir, vec3 bbox_min, vec3 bbox_max, in
 // Traverses a single BVH to find the closest hit triangle for a mesh.
 void traverseBVH(vec3 rayOrigin, vec3 rayDirection, BVHBuffer bvh, VertexBuffer vertexBuf, IndexBuffer indexBuf, inout HitInfo hit) {
     vec3 invDir = 1.0 / rayDirection;
-    int stack[32];
+    int stack[128];
     int stackPtr = 1;
     stack[0] = 0; // Start with the root node
 
@@ -83,7 +85,7 @@ void traverseBVH(vec3 rayOrigin, vec3 rayDirection, BVHBuffer bvh, VertexBuffer 
 // Traces a ray through all instances in the scene.
 HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection) {
     HitInfo hit;
-    hit.t = 10000.0;
+    hit.t = INF;
     hit.instanceIndex = -1;
     hit.primitiveIndex = -1;
 

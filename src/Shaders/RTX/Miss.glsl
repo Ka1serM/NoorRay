@@ -10,7 +10,7 @@
 
 #include "../SharedStructs.h"
 #include "../Common.glsl"
-#include "../ShadeMiss.glsl"
+#include "../Pathtracing/ShadeMiss.glsl"
 
 // Payload and Bindings
 layout(location = 0) rayPayloadInEXT Payload payload;

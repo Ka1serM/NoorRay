@@ -7,8 +7,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "glm/gtx/norm.hpp"
 
-#define BVH_MAX_DEPTH 28
-#define BVH_MAX_LEAF_SIZE 4  // Reduced from default to improve GPU cache efficiency
+#define BVH_MAX_DEPTH 128
 
 // Surface Area Heuristic constants
 #define SAH_TRAVERSAL_COST 1.0f

@@ -20,7 +20,6 @@ layout(set = 0, binding = 5) buffer MeshAddressesBuffer { MeshAddresses instance
 // Binding 3: Global Texture Sampler Array
 layout(set = 0, binding = 6) uniform sampler2D textureSamplers[];
 
-
 // --- Buffer Reference Type Definitions ---
 layout(buffer_reference, scalar) buffer VertexBuffer { Vertex data[]; };
 layout(buffer_reference, scalar) buffer IndexBuffer { uint data[]; };

@@ -8,16 +8,16 @@
 #include "Utils.h"
 #include "Scene/MeshInstance.h"
 
-RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : Raytracer(scene, width, height)
+RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : GpuRaytracer(scene, width, height)
 {
     static constexpr unsigned char RayGeneration[] = {
-        #embed "../shaders/PathTracing/RayGeneration.spv"
+        #embed "../Shaders/RTX/RayGeneration.spv"
     };
     static constexpr unsigned char PathTracingMiss[] = {
-        #embed "../shaders/PathTracing/Miss.spv"
+        #embed "../Shaders/RTX/Miss.spv"
     };
     static constexpr unsigned char PathTracingClosestHit[] = {
-        #embed "../shaders/PathTracing/ClosestHit.spv"
+        #embed "../Shaders/RTX/ClosestHit.spv"
     };
 
     constexpr const unsigned char* shaders[] = {

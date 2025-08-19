@@ -74,5 +74,5 @@ jobs:
       - name: Upload Executable
         uses: actions/upload-artifact@v4
         with:
-          name: VulkanToyPathtracer.exe
-          path: build/VulkanToyPathtracer.exe
+          name: NoorRay.exe
+          path: build/NoorRay.exe

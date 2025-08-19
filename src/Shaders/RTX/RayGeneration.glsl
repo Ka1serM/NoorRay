@@ -10,7 +10,7 @@
 
 #include "../SharedStructs.h"
 #include "../Common.glsl"
-#include "../PrimaryRayGen.glsl"
+#include "../Pathtracing/PrimaryRayGen.glsl"
 #include "../Bindings.glsl"
 
 // Push Constants

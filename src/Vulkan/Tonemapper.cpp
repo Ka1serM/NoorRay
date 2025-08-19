@@ -9,7 +9,7 @@ Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const 
 {
     //Load shader
     static constexpr unsigned char code[] = {
-        #embed "../shaders/Tonemapper.spv"
+        #embed "../Shaders/Tonemapping/Tonemapper.spv"
     };
     shaderModule = context.getDevice().createShaderModuleUnique({{}, sizeof(code), reinterpret_cast<const uint32_t*>(code)});
 

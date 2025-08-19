@@ -1,7 +1,8 @@
-﻿#include <fstream>
+﻿#include <cmath>
+#include <fstream>
 #include <stdexcept>
 #include "Utils.h"
-#include "Shaders/PathTracing/SharedStructs.h"
+#include "Shaders/SharedStructs.h"
 #include "Vulkan/Texture.h"
 #include <nlohmann/json.hpp>
 
@@ -68,7 +69,7 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
         
         // Create default material if no materials found
         if (materials.empty())
-            materials.emplace_back(Material{});
+            materials.emplace_back();
 
         // 4. Parse Objects (Meshes)
         if (data.contains("objects")) {
@@ -88,7 +89,7 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
                         // Check bounds to prevent crashes
                         if (i + 2 >= verts_array.size()) break;
                         
-                        Vertex v;
+                        Vertex v{};
                         // Flip Y-axis to be consistent with the OBJ loader
                         v.position = vec3(verts_array[i], -verts_array[i + 1], verts_array[i + 2]);
                         v.normal = vec3(0.0f, 1.0f, 0.0f); // Default normal
@@ -270,19 +271,22 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
         materials.push_back(material);
     }
     
-    // Process shapes and faces
+        // Process shapes and faces
     for (const auto& shape : shapes) {
         size_t indexOffset = 0;
 
-        for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); ++f) {
-            const unsigned int fv = shape.mesh.num_face_vertices[f];
+        for (size_t faceIndex = 0; faceIndex < shape.mesh.num_face_vertices.size(); ++faceIndex) {
+            const unsigned int fv = shape.mesh.num_face_vertices[faceIndex];
             if (fv != 3)
                 throw std::runtime_error("Only triangles are supported.");
 
             Face face{};
-            int matIndex = shape.mesh.material_ids[f];
+            int matIndex = shape.mesh.material_ids[faceIndex];
             face.materialIndex = (matIndex >= 0) ? matIndex : 0;
-            
+
+            // Temporary indices for the current triangle
+            uint32_t triIndices[3];
+
             // Process vertices of the face
             for (unsigned int v = 0; v < fv; ++v) {
                 const tinyobj::index_t& idx = shape.mesh.indices[indexOffset + v];
@@ -293,11 +297,11 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
                     -attrib.vertices[3 * idx.vertex_index + 1],  // Flip Y-axis
                     attrib.vertices[3 * idx.vertex_index + 2]
                 );
-                
+
                 if (!attrib.normals.empty() && idx.normal_index >= 0) {
                     vertex.normal = vec3(
                         attrib.normals[3 * idx.normal_index + 0],
-                        -attrib.normals[3 * idx.normal_index + 1],
+                        -attrib.normals[3 * idx.normal_index + 1], // Flip Y-axis
                         attrib.normals[3 * idx.normal_index + 2]
                     );
                 } else
@@ -312,12 +316,41 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
                     vertex.uv = vec2(0.0f);
 
                 vertices.push_back(vertex);
-                indices.push_back(static_cast<uint32_t>(indices.size()));
+                triIndices[v] = static_cast<uint32_t>(vertices.size() - 1);
+                indices.push_back(triIndices[v]);
             }
+
             faces.push_back(face);
             indexOffset += fv;
+
+            // Compute tangents for the current triangle
+            Vertex& v0 = vertices[triIndices[0]];
+            Vertex& v1 = vertices[triIndices[1]];
+            Vertex& v2 = vertices[triIndices[2]];
+
+            vec3 edge1 = v1.position - v0.position;
+            vec3 edge2 = v2.position - v0.position;
+            vec2 deltaUV1 = v1.uv - v0.uv;
+            vec2 deltaUV2 = v2.uv - v0.uv;
+
+            float f = deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y;
+            if (std::fabs(f) < 1e-8f)
+                f = 1.0f; // Avoid division by zero
+            else
+                f = 1.0f / f;
+
+            vec3 tangent = f * (deltaUV2.y * edge1 - deltaUV1.y * edge2);
+
+            v0.tangent += tangent;
+            v1.tangent += tangent;
+            v2.tangent += tangent;
         }
-    }
+}
+
+// Normalize tangents after all triangles are processed
+for (auto& v : vertices) {
+    v.tangent = normalize(v.tangent);
+}
 }
 
 std::string Utils::nameFromPath(const std::string& path) {

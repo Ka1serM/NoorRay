@@ -73,10 +73,10 @@ struct Material {
 
 #ifdef __cplusplus
     Material()
-    : albedo{0.5f}, albedoIndex(-1),
-      specular(0.5f), metallic(0), roughness(0.8f), ior(1.5f),
-      transmission{1}, transmissionStrength(0),
-      emission{1}, emissionStrength(0),
+    : albedo{1}, albedoIndex(-1),
+      specular(0.5f), metallic(0), roughness(0), ior(1.5f),
+      transmission(1), transmissionStrength(0),
+      emission(1), emissionStrength(0),
       specularIndex(-1), metallicIndex(-1), roughnessIndex(-1), normalIndex(-1)
     {}
 #endif

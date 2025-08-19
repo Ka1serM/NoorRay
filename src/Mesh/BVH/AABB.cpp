@@ -1,4 +1,4 @@
-﻿#include "../../Shaders/PathTracing/SharedStructs.h"
+﻿#include "../../Shaders/SharedStructs.h"
 #include <algorithm>
 #include <limits>
 

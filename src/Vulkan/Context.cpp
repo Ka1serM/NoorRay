@@ -21,7 +21,7 @@ Context::Context(const int width, const int height) {
     if (SDL_Vulkan_LoadLibrary(nullptr) < 0)
         throw std::runtime_error("Failed to load Vulkan library via SDL: " + std::string(SDL_GetError()));
 
-    window = SDL_CreateWindow("Vulkan Toy Path Tracer by Marcel K.", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    window = SDL_CreateWindow("NoorRay by Marcel K.", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     if (!window)
         throw std::runtime_error("Failed to create SDL window: " + std::string(SDL_GetError()));
 

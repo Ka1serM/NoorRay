@@ -2,7 +2,7 @@
 
 #include <vector>
 #include <glm/glm.hpp>
-#include "../../Shaders/PathTracing/SharedStructs.h"
+#include "Shaders/SharedStructs.h"
 #include "Vulkan/Buffer.h"
 
 class BVH

@@ -9,25 +9,23 @@ layout (local_size_x = 8, local_size_y = 8) in;
 #extension GL_EXT_scalar_block_layout: enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64: require
 
-// --- Include All Modules ---
-#include "SharedStructs.h"
-#include "Bindings.glsl"       
-#include "Common.glsl"
-#include "PrimaryRayGen.glsl"
-#include "ShadeClosestHit.glsl"
-#include "ShadeMiss.glsl"
+#include "../SharedStructs.h"
+#include "../Bindings.glsl"  
+#include "../Common.glsl"
+#include "../Pathtracing/PrimaryRayGen.glsl"
+#include "../Pathtracing/ShadeClosestHit.glsl"
+#include "../Pathtracing/ShadeMiss.glsl"
+#include "../Pathtracing/Intersection.glsl"
 
-// --- Push Constants ---
 layout (push_constant) uniform PushConstants {
     PushConstantsData pushConstants;
 };
 
-#include "Intersection.glsl"
-
 void main() {
     const ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
     const ivec2 screenSize = imageSize(outputNormal);
-    if (pixelCoord.x >= screenSize.x || pixelCoord.y >= screenSize.y) return;
+    if (pixelCoord.x >= screenSize.x || pixelCoord.y >= screenSize.y)
+        return;
 
     const int SAMPLES_PER_PIXEL = 1;
 

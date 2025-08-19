@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(VulkanToyPathtracer VERSION 0.1.0)
+project(NoorRay VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
@@ -92,16 +92,16 @@ endif()
 # ---------------------------------------------------------------------------
 # Executable target
 # ---------------------------------------------------------------------------
-add_executable(VulkanToyPathtracer WIN32 ${SRC_FILES})
-set_target_properties(VulkanToyPathtracer PROPERTIES PREFIX "")
+add_executable(NoorRay WIN32 ${SRC_FILES})
+set_target_properties(NoorRay PROPERTIES PREFIX "")
 
-target_include_directories(VulkanToyPathtracer PRIVATE
+target_include_directories(NoorRay PRIVATE
         ${PROJECT_SOURCE_DIR}/src
         ${PROJECT_SOURCE_DIR}/external/tinyobjloader
         ${PROJECT_SOURCE_DIR}/external/stb
 )
 
-target_link_libraries(VulkanToyPathtracer PRIVATE
+target_link_libraries(NoorRay PRIVATE
         portable_file_dialogs
         glm
         imgui
@@ -110,15 +110,15 @@ target_link_libraries(VulkanToyPathtracer PRIVATE
         SDL3::SDL3-static
 )
 
-target_compile_definitions(VulkanToyPathtracer PRIVATE SDL_MAIN_HANDLED)
+target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)
 
 # ---------------------------------------------------------------------------
 # Platform specific linking and settings
 # ---------------------------------------------------------------------------
 if(APPLE)
-    target_link_libraries(VulkanToyPathtracer PRIVATE MoltenVK)
+    target_link_libraries(NoorRay PRIVATE MoltenVK)
 
-    target_link_libraries(VulkanToyPathtracer PRIVATE
+    target_link_libraries(NoorRay PRIVATE
             "-framework Metal"
             "-framework CoreVideo"
             "-framework Cocoa"
@@ -127,33 +127,11 @@ if(APPLE)
             "-framework IOSurface"
     )
 
-    set_target_properties(VulkanToyPathtracer PROPERTIES MACOSX_BUNDLE TRUE)
-
-    # Minimal Info.plist inside app bundle
-    set(APP_BUNDLE_DIR "${CMAKE_BINARY_DIR}/VulkanToyPathtracer.app")
-    set(INFO_PLIST_CONTENT "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
-<plist version=\"1.0\">
-<dict>
-    <key>CFBundleName</key>
-    <string>VulkanToyPathtracer</string>
-    <key>CFBundleExecutable</key>
-    <string>VulkanToyPathtracer</string>
-    <key>CFBundleIdentifier</key>
-    <string>dev.marcelk.VulkanToyPathtracer</string>
-    <key>CFBundleVersion</key>
-    <string>${PROJECT_VERSION}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-</dict>
-</plist>")
-    file(WRITE "${APP_BUNDLE_DIR}/Contents/Info.plist" "${INFO_PLIST_CONTENT}")
+    set_target_properties(NoorRay PROPERTIES MACOSX_BUNDLE TRUE)
 endif()
 
 if(MINGW)
-    target_link_options(VulkanToyPathtracer PRIVATE
+    target_link_options(NoorRay PRIVATE
             -static-libgcc
             -static-libstdc++
             -static

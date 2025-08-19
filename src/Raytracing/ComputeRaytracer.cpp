@@ -5,10 +5,10 @@
 #include "Scene/MeshInstance.h"
 
 ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height)
-    : Raytracer(scene, width, height)
+    : GpuRaytracer(scene, width, height)
 {
     static constexpr unsigned char ComputeShader[] = {
-        #embed "../shaders/PathTracing/PathTracer.spv"
+        #embed "../Shaders/Compute/PathTracer.spv"
     };
 
     vk::UniqueShaderModule computeShaderModule = context.getDevice().createShaderModuleUnique({{}, sizeof(ComputeShader), reinterpret_cast<const uint32_t*>(ComputeShader)});

@@ -1,4 +1,4 @@
-#include "Bindings.glsl"
+#include "../Bindings.glsl"
 
 void shadeMiss(in vec3 worldRayDirection, in PushData pushData, inout Payload payload) {
     vec3 viewDir = normalize(worldRayDirection);

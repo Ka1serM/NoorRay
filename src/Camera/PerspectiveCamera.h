@@ -3,7 +3,7 @@
 #include <string>
 #include "glm/glm.hpp"
 #include "Scene/MeshInstance.h"
-#include "../Shaders/PathTracing/SharedStructs.h"
+#include "../Shaders/SharedStructs.h"
 
 class Scene;
 

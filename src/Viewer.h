@@ -11,6 +11,7 @@ class Viewer
 {
 public:
     Viewer(int width, int height);
+    void recreateSwapChain();
     ~Viewer();
     void run();
 
@@ -18,8 +19,7 @@ private:
     void setupUI();
     void setupScene();
     
-    void recreateSwapChain();
-    bool framebufferResized = false;
+    bool resized = false;
 
     int width;
     int height;

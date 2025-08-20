@@ -42,32 +42,26 @@ Viewer::Viewer(const int width, const int height)
 }
 
 void Viewer::recreateSwapChain() {
-    // Get the new window size in pixels.
     SDL_GetWindowSizeInPixels(context.getWindow(), &width, &height);
-
-    // If the window is minimized, pause execution until it is restored.
-    while (width == 0 || height == 0) {
-        SDL_GetWindowSizeInPixels(context.getWindow(), &width, &height);
-        SDL_WaitEvent(nullptr);
-    }
-
-    context.getDevice().waitIdle();
-    
     renderer.recreateSwapChain(width, height);
     imGuiManager.recreateForSwapChain(renderer.getSwapchainImages(), width, height);
-
-    std::cout << "Recreated swapchain to " << width << "x" << height << std::endl;
 }
 
-
-void Viewer::run() {
+void Viewer::run()
+{
     using clock = std::chrono::high_resolution_clock;
     auto lastTime = clock::now();
     float timeAccumulator = 0.0f;
     int frameCounter = 0;
-    float deltaTime = 0.0f;
+    
+    auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug"));
+    auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("GPU Viewport"));
 
-    auto recordComputeWork = [&](const vk::CommandBuffer cmd) {
+    bool isRunning = true;
+    bool isFullscreen = false;
+    bool framebufferResized = false;
+
+    auto recordComputeCommands = [&](const vk::CommandBuffer cmd) {
         PushConstantsData pushConstantData{};
         pushConstantData.push.frame = frame;
         pushConstantData.camera = scene.getActiveCamera()->getCameraData();
@@ -77,16 +71,8 @@ void Viewer::run() {
         raytracer->render(cmd, pushConstantData);
         gpuImageTonemapper->dispatch(cmd);
     };
-
-    bool newFrameReady = false;
-    bool isRunning = true;
-    bool isFullscreen = false;
-
-    auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("GPU Viewport"));
-    auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug"));
     
     while (isRunning) {
-        
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
@@ -95,89 +81,80 @@ void Viewer::run() {
             case SDL_EVENT_KEY_DOWN:
                 if (event.key.key == SDLK_F11) {
                     isFullscreen = !isFullscreen;
-                    if (isFullscreen) {
-                        SDL_SetWindowFullscreenMode(context.getWindow(), NULL);
-                        SDL_SetWindowFullscreen(context.getWindow(), true);
-                    } else
-                        SDL_SetWindowFullscreen(context.getWindow(), false);
+                    SDL_SetWindowFullscreen(context.getWindow(), isFullscreen);
                 }
                 break;
-                case SDL_EVENT_QUIT:
-                    isRunning = false;
-                    break;
-                case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                case SDL_EVENT_WINDOW_RESIZED:
-                case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
-                case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-                    framebufferResized = true;
-                    break;
-                default:
-                    break;
+            case SDL_EVENT_QUIT:
+                isRunning = false;
+                break;
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+            case SDL_EVENT_WINDOW_RESIZED:
+            case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+            case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+                framebufferResized = true;
+                break;
+            default:
+                break;
             }
         }
         
-        // --- Time/FPS ---
         auto currentTime = clock::now();
-        deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+        float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
         lastTime = currentTime;
         timeAccumulator += deltaTime;
         frameCounter++;
         if (timeAccumulator >= 1.0f) {
-                debugPanel->setFps(static_cast<float>(frameCounter) / timeAccumulator);
+            debugPanel->setFps(static_cast<float>(frameCounter) / timeAccumulator);
             timeAccumulator = 0.0f;
             frameCounter = 0;
         }
-        
-        // --- Resize Handling ---
-        // If a resize event occurred, recreate the swapchain and skip this frame.
+
         if (framebufferResized) {
             recreateSwapChain();
             framebufferResized = false;
+        }
+
+        //skip frame
+        if (width == 0 || height == 0)
             continue;
-        }
-
-        // --- UI and Scene ---
-        imGuiManager.renderUi();
-
-        if (scene.isTlasDirty() || scene.isMeshesDirty() || scene.isTexturesDirty()) {
-            context.getDevice().waitIdle();
-            if (scene.isMeshesDirty()) raytracer->updateMeshes();
-            if (scene.isTexturesDirty()) raytracer->updateTextures();
-            if (scene.isTlasDirty()) raytracer->updateTLAS();
-        }
-
-        if (scene.isAccumulationDirty())
-            frame = 0;
-        else
-            frame++;
-
-        scene.clearDirtyFlags();
-
-        if (renderer.isComputeWorkFinished() && !newFrameReady) {
-            newFrameReady = true;
-            renderer.submitCompute(recordComputeWork);
-        }
-
-        // --- Begin Frame / Record / Draw ---
-        vk::CommandBuffer commandBuffer;
-        try {
-            commandBuffer = renderer.beginFrame();
-        } catch (const vk::OutOfDateKHRError&) {
-            framebufferResized = true;
-            continue;
-        }
 
         try {
-            if (newFrameReady)
-                gpuViewport->recordCopy(commandBuffer, gpuImageTonemapper->getOutputImage());
+            imGuiManager.renderUi();
 
+            if (scene.isTlasDirty() || scene.isMeshesDirty() || scene.isTexturesDirty()) {
+                renderer.waitForComputeIdle();
+                if (scene.isMeshesDirty())   raytracer->updateMeshes();
+                if (scene.isTexturesDirty()) raytracer->updateTextures();
+                if (scene.isTlasDirty())     raytracer->updateTLAS();
+            }
+
+            if (scene.isAccumulationDirty()) frame = 0;
+            else frame++;
+            scene.clearDirtyFlags();
+
+            bool computeWasSubmitted = false;
+            if (renderer.isComputeWorkFinished()) {
+                renderer.submitCompute(recordComputeCommands);
+                computeWasSubmitted = true;
+            }
+
+            vk::CommandBuffer commandBuffer = renderer.beginFrame();
+            if (!commandBuffer) {
+                framebufferResized = true;
+                continue;
+            }
+
+            gpuViewport->recordCopy(commandBuffer, gpuImageTonemapper->getOutputImage());
             imGuiManager.Draw(commandBuffer, renderer.getCurrentSwapchainImageIndex(), width, height);
 
-            renderer.endFrame(newFrameReady);
-            newFrameReady = false;
+            if (renderer.endFrame(computeWasSubmitted))
+                framebufferResized = true;
 
         } catch (const vk::OutOfDateKHRError&) {
             framebufferResized = true;
+        } catch (const std::exception& e) {
+            std::cerr << "An exception occurred in the main loop: " << e.what() << std::endl;
+            isRunning = false;
         }
     }
 

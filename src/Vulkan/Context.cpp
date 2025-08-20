@@ -48,7 +48,7 @@ Context::Context(const int width, const int height) {
          throw std::runtime_error("Failed to create window surface with SDL: " + std::string(SDL_GetError()));
 
     surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {instance.get()});
-
+    
     pickPhysicalDevice();
     createLogicalDevice();
     VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
@@ -75,7 +75,7 @@ Context::Context(const int width, const int height) {
     };
 
     if(rtxSupported)
-        poolSizes.push_back({ vk::DescriptorType::eAccelerationStructureKHR, 16 });
+        poolSizes.emplace_back( vk::DescriptorType::eAccelerationStructureKHR, 16 );
 
     uint32_t maxSets = 210;
     vk::DescriptorPoolCreateInfo poolInfo{};
@@ -93,18 +93,24 @@ void Context::createVulkanInstance() {
 
     std::vector extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
     std::vector<const char*> layers;
-
     if (EnableValidationLayers) {
         std::cout << "INFO: Validation layers are ENABLED." << std::endl;
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         layers.push_back("VK_LAYER_KHRONOS_validation");
-    } else
+    } else {
         std::cout << "INFO: Validation layers are DISABLED (Release Mode)." << std::endl;
+    }
 
     vk::ApplicationInfo appInfo("Vulkan Pathtracer", 1, "No Engine", 1, VK_API_VERSION_1_3);
-    
+
     vk::InstanceCreateInfo instanceInfo;
     instanceInfo.setPApplicationInfo(&appInfo).setPEnabledLayerNames(layers).setPEnabledExtensionNames(extensions);
+
+#ifdef __APPLE__
+    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    instanceInfo.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+#endif
+
     instance = createInstanceUnique(instanceInfo);
 }
 
@@ -128,14 +134,12 @@ void Context::pickPhysicalDevice() {
             const auto props = device.getProperties();
             const auto memProps = device.getMemoryProperties();
 
-            // Check for extension support
             std::set<std::string> missing(requiredExts.begin(), requiredExts.end());
             for (const auto& ext : device.enumerateDeviceExtensionProperties())
                 missing.erase(ext.extensionName);
 
             bool hasAllExtensions = missing.empty();
 
-            // VRAM calculation
             uint64_t vramSize = 0;
             for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i)
                 if (memProps.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal)
@@ -170,11 +174,9 @@ void Context::pickPhysicalDevice() {
     std::vector<const char*> allExtensions = RequiredDeviceExtensions;
     allExtensions.insert(allExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
 
-    // Try picking best device with RTX + required extensions
     auto best = findBestDevice(allExtensions);
     rtxSupported = best.has_value();
 
-    // Fallback: try picking best device with only required extensions
     if (!best) {
         best = findBestDevice(RequiredDeviceExtensions);
         rtxSupported = false;
@@ -190,7 +192,6 @@ void Context::pickPhysicalDevice() {
 }
 
 void Context::createLogicalDevice() {
-    // Find a suitable queue family (graphics + compute + present)
     std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
     for (uint32_t i = 0; i < queueFamilies.size(); i++) {
         const auto& flags = queueFamilies[i].queueFlags;
@@ -207,7 +208,6 @@ void Context::createLogicalDevice() {
     if (queueFamilyIndices.empty())
         throw std::runtime_error("Could not find a suitable queue family!");
 
-    // Merge ray tracing extensions if supported
     if (rtxSupported) {
         std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
         RequiredDeviceExtensions.insert(RequiredDeviceExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
@@ -215,7 +215,6 @@ void Context::createLogicalDevice() {
         std::cout << "Ray tracing extensions are not supported. Proceeding without them." << std::endl;
     }
 
-    // Prepare feature structs for querying
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
     rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
 
@@ -225,7 +224,6 @@ void Context::createLogicalDevice() {
     vk::PhysicalDeviceVulkan12Features features12{};
     features12.sType = vk::StructureType::ePhysicalDeviceVulkan12Features;
 
-    // Chain ray tracing features after Vulkan12 features
     features12.pNext = &rtFeatures;
     rtFeatures.pNext = &accelFeatures;
 
@@ -233,12 +231,10 @@ void Context::createLogicalDevice() {
     features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
     features2.pNext = &features12;
 
-    // Query features, including extended structs
     physicalDevice.getFeatures2(&features2);
 
     auto& coreFeatures = features2.features;
 
-    // Print queried features
     std::cout << "=== Core Features ===" << std::endl;
     std::cout << "shaderInt64: " << coreFeatures.shaderInt64 << std::endl;
     std::cout << "samplerAnisotropy: " << coreFeatures.samplerAnisotropy << std::endl;
@@ -255,7 +251,6 @@ void Context::createLogicalDevice() {
     std::cout << "rayTracingPipeline: " << rtFeatures.rayTracingPipeline << std::endl;
     std::cout << "accelerationStructure: " << accelFeatures.accelerationStructure << std::endl;
 
-    // Enable only supported features
     coreFeatures.shaderInt64 = VK_TRUE;
     coreFeatures.samplerAnisotropy = VK_TRUE;
 
@@ -270,25 +265,21 @@ void Context::createLogicalDevice() {
         rtFeatures.rayTracingPipeline = VK_TRUE;
         accelFeatures.accelerationStructure = VK_TRUE;
     } else {
-        // Disable ray tracing features if not fully supported
         rtFeatures.rayTracingPipeline = VK_FALSE;
         accelFeatures.accelerationStructure = VK_FALSE;
         std::cout << "Warning: Ray tracing features requested but not fully supported, disabling them." << std::endl;
     }
 
-    // Chain again for device creation
     features12.pNext = &rtFeatures;
     rtFeatures.pNext = &accelFeatures;
     features2.pNext = &features12;
 
-    // Setup queue create info
     constexpr float queuePriority = 1.0f;
     vk::DeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.queueFamilyIndex = queueFamilyIndices.front();
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
-    // Device create info
     vk::DeviceCreateInfo deviceCreateInfo{};
     deviceCreateInfo.sType = vk::StructureType::eDeviceCreateInfo;
     deviceCreateInfo.queueCreateInfoCount = 1;
@@ -296,14 +287,11 @@ void Context::createLogicalDevice() {
     deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(RequiredDeviceExtensions.size());
     deviceCreateInfo.ppEnabledExtensionNames = RequiredDeviceExtensions.data();
 
-    // Use feature chain via pNext, no pEnabledFeatures since we use features2
     deviceCreateInfo.pNext = &features2;
     deviceCreateInfo.pEnabledFeatures = nullptr;
 
-    // Create logical device
     device = physicalDevice.createDeviceUnique(deviceCreateInfo);
 }
-
 
 uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const {
     const vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
@@ -314,7 +302,6 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
-//TODO dont use, this cant work yet because Command Buffer goes out of scope
 void Context::oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func, vk::Fence fence) const {
     vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
     vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());

@@ -2,6 +2,7 @@
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_beta.h>
 #include <vector>
 #include <functional>
 
@@ -15,7 +16,11 @@ class Context {
         VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+#ifdef __APPLE__
+        VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+#endif
     };
+
 
     std::vector<const char*> RayTracingExtensions = {
         VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,

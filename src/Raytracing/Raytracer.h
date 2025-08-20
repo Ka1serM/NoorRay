@@ -2,7 +2,6 @@
 
 #include <iostream>
 
-#include "Mesh/MeshAsset.h"
 #include "Vulkan/Image.h"
 #include "Scene/Scene.h"
 #include "../Shaders/SharedStructs.h"

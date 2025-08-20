@@ -335,42 +335,43 @@ void MeshAsset::renderUi() {
         std::string label = "Material " + std::to_string(i);
 
         if (ImGui::TreeNode(label.c_str())) {
-            ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp);
+            if (ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp))
+            {
+                drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
+                ImGui::TableNextRow();
+                ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
 
-            drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
-            ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
+                ImGui::TableNextRow();
+                drawTextureCombo("Specular Texture", mat.specularIndex, i);
+                ImGui::TableNextRow();
+                ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.specular = v; anyMaterialChanged = true; });
 
-            ImGui::TableNextRow();
-            drawTextureCombo("Specular Texture", mat.specularIndex, i);
-            ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.specular = v; anyMaterialChanged = true; });
+                ImGui::TableNextRow();
+                drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
+                ImGui::TableNextRow();
+                ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.metallic = v; anyMaterialChanged = true; });
 
-            ImGui::TableNextRow();
-            drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
-            ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.metallic = v; anyMaterialChanged = true; });
+                ImGui::TableNextRow();
+                drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
+                ImGui::TableNextRow();
+                ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.roughness = v; anyMaterialChanged = true; });
+                
+                ImGui::TableNextRow();
+                drawTextureCombo("Normal Texture", mat.normalIndex, i);
+                
+                ImGui::TableNextRow();
+                ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
+                
+                ImGui::TableNextRow();
+                ImGuiManager::colorEdit3Row("Transmission Color", mat.transmission, [&](const vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
+                ImGuiManager::dragFloatRow("Transmission Strength", mat.transmissionStrength, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmissionStrength = v; anyMaterialChanged = true; });
+                
+                ImGui::TableNextRow();
+                ImGuiManager::colorEdit3Row("Emission Color", mat.emission, [&](const vec3 v) { mat.emission = v; anyMaterialChanged = true; });
+                ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
 
-            ImGui::TableNextRow();
-            drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
-            ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.roughness = v; anyMaterialChanged = true; });
-            
-            ImGui::TableNextRow();
-            drawTextureCombo("Normal Texture", mat.normalIndex, i);
-            
-            ImGui::TableNextRow();
-            ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
-            
-            ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Transmission Color", mat.transmission, [&](const vec3 v) { mat.transmission = v; anyMaterialChanged = true; });
-            ImGuiManager::dragFloatRow("Transmission Strength", mat.transmissionStrength, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmissionStrength = v; anyMaterialChanged = true; });
-            
-            ImGui::TableNextRow();
-            ImGuiManager::colorEdit3Row("Emission Color", mat.emission, [&](const vec3 v) { mat.emission = v; anyMaterialChanged = true; });
-            ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
-
-            ImGui::EndTable();
+                ImGui::EndTable();
+            }
             ImGui::TreePop();
         }
     }

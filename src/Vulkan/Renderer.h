@@ -1,6 +1,5 @@
 ﻿#pragma once
 #include "Context.h"
-#include <vulkan/vulkan.hpp>
 #include <functional>
 #include <vector>
 
@@ -9,44 +8,51 @@ public:
     Renderer(Context& context, uint32_t width, uint32_t height);
     ~Renderer();
 
+    void recreateSwapChain(uint32_t newWidth, uint32_t newHeight);
+
+    // Returns null on swapchain failure, indicating a recreate is needed.
     vk::CommandBuffer beginFrame();
-    void endFrame(bool waitForCompute);
-
-    // --- MODIFIED: Public method for resizing ---
-    void recreateSwapChain(uint32_t width, uint32_t height);
-
-    // --- MODIFIED: Public Getters ---
-    const std::vector<vk::Image>& getSwapchainImages() const { return swapchainImages; }
-    uint32_t getCurrentSwapchainImageIndex() const { return m_imageIndex; }
     
-    // --- Compute Methods (unchanged) ---
-    bool isComputeWorkFinished();
+    // Returns true if swapchain needs recreation.
+    bool endFrame(bool waitForCompute);
+
+    // --- Compute ---
     void submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands);
+    bool isComputeWorkFinished();
     void waitForComputeIdle() const;
 
+    // --- Getters ---
+    vk::SwapchainKHR getSwapchain() const { return swapchain.get(); }
+    const std::vector<vk::Image>& getSwapchainImages() const { return swapchainImages; }
+    uint32_t getCurrentSwapchainImageIndex() const { return m_imageIndex; }
+
 private:
-    // --- ADDED: Helper methods for swapchain management ---
     void createSwapChain();
-    void cleanupSwapChain();
 
     Context& context;
     uint32_t width, height;
 
-    // --- Swapchain resources ---
     vk::UniqueSwapchainKHR swapchain;
     std::vector<vk::Image> swapchainImages;
-    std::vector<vk::UniqueSemaphore> renderFinishedSemaphores; // Depends on swapchain image count
+    
+    // --- Per-frame-in-flight resources ---
+    struct FrameData {
+        vk::UniqueCommandBuffer commandBuffer;
+        vk::UniqueSemaphore imageAcquiredSemaphore;
+        // renderFinishedSemaphore is REMOVED from here.
+        vk::UniqueFence inFlightFence;
+    };
+    std::vector<FrameData> frames;
+    uint32_t m_currentFrame = 0;
+    uint32_t m_imageIndex = 0;
 
-    // --- Frame resources (unchanged) ---
-    std::vector<vk::UniqueCommandBuffer> frameCommandBuffers;
-    std::vector<vk::UniqueSemaphore> imageAcquiredSemaphores;
-    std::vector<vk::UniqueFence> frameFences;
+    // --- Per-swapchain-image resources ---
+    std::vector<vk::UniqueSemaphore> renderFinishedSemaphores;
+    std::vector<vk::Fence> imagesInFlightFences;
 
-    // --- Compute resources (unchanged) ---
+    // --- Asynchronous Compute Resources ---
     vk::UniqueCommandBuffer computeCommandBuffer;
     vk::UniqueFence computeFence;
     vk::UniqueSemaphore computeFinishedSemaphore;
-    
-    uint32_t m_currentFrame = 0;
-    uint32_t m_imageIndex = 0;
+    bool computeSubmitted = false;
 };

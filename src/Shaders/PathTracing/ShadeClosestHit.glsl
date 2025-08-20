@@ -39,29 +39,32 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 float fresnelDielectric(float cosThetaI, float etaI, float etaT) {
     cosThetaI = clamp(cosThetaI, -1.0, 1.0);
 
-    //!entering
+    // Swap on entering
     if (!(cosThetaI > 0.0)) {
-        float temp = etaI;
+        float tmp = etaI;
         etaI = etaT;
-        etaT = temp;
+        etaT = tmp;
         cosThetaI = -cosThetaI;
     }
 
-    float sinThetaI = sqrt(max(0.0, 1.0 - cosThetaI * cosThetaI));
-    float sinThetaT = etaI / etaT * sinThetaI;
+    // Compute sin^2 θt directly
+    float eta = etaI / etaT;
+    float sin2ThetaT = eta * eta * max(0.0, 1.0 - cosThetaI * cosThetaI);
 
-    // Total Internal Reflection
-    if (sinThetaT >= 1.0) {
+    // Total internal reflection
+    if (sin2ThetaT >= 1.0)
         return 1.0;
-    }
 
-    float cosThetaT = sqrt(max(0.0, 1.0 - sinThetaT * sinThetaT));
-    float Rs = ((etaT * cosThetaI) - (etaI * cosThetaT)) / ((etaT * cosThetaI) + (etaI * cosThetaT));
-    float Rp = ((etaI * cosThetaI) - (etaT * cosThetaT)) / ((etaI * cosThetaI) + (etaT * cosThetaT));
+    float cosThetaT = sqrt(1.0 - sin2ThetaT);
 
-    return (Rs * Rs + Rp * Rp) / 2.0;
+    // Fresnel terms
+    float A = etaT * cosThetaI;
+    float B = etaI * cosThetaT;
+    float Rs = (A - B) / (A + B);
+    float Rp = (A * cosThetaT - B * cosThetaI) / (A * cosThetaT + B * cosThetaI);
+
+    return 0.5 * (Rs * Rs + Rp * Rp);
 }
-
 
 // --- SAMPLING FUNCTIONS ---
 

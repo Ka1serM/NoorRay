@@ -56,6 +56,27 @@ ViewportPanel::ViewportPanel(Scene& scene, const Image& outputColor, Image& outp
     write.pImageInfo = &imageInfo;
 
     context.getDevice().updateDescriptorSets(write, nullptr);
+
+
+    // ImGuizmo Style
+    ImGuizmo::Style& style = ImGuizmo::GetStyle();
+    style.HatchedAxisLineThickness   = 0;
+        
+    // --- Colors similar to Blender ---
+    style.Colors[ImGuizmo::DIRECTION_X]       = ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // X = red
+    style.Colors[ImGuizmo::DIRECTION_Y]       = ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // Y = green
+    style.Colors[ImGuizmo::DIRECTION_Z]       = ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // Z = blue
+    style.Colors[ImGuizmo::PLANE_X]= ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // plane fill
+    style.Colors[ImGuizmo::PLANE_Y]= ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // plane fill
+    style.Colors[ImGuizmo::PLANE_Z]= ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // plane fill
+
+    // Blender also fades inactive axes → make selection highlight bright
+    style.Colors[ImGuizmo::SELECTION]         = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); // yellow highlight
+    style.Colors[ImGuizmo::INACTIVE]          = ImVec4(0.4f, 0.4f, 0.4f, 0.6f); // gray inactive
+    
+    // Rotation circles usually more saturated
+    style.Colors[ImGuizmo::ROTATION_USING_BORDER] = ImVec4(1.0f, 0.8f, 0.2f, 1.0f); // golden ring
+    style.Colors[ImGuizmo::ROTATION_USING_FILL]   = ImVec4(1.0f, 0.8f, 0.2f, 0.3f); // subtle fill
 }
 
 void ViewportPanel::recordCopy(const vk::CommandBuffer cmd, Image& srcImage) {
@@ -76,12 +97,11 @@ void ViewportPanel::recordCopy(const vk::CommandBuffer cmd, Image& srcImage) {
 void ViewportPanel::renderUi() {
     ImGui::Begin(title.c_str());
 
-    ImVec2 availSize = ImGui::GetContentRegionAvail();
     float aspectRatio = static_cast<float>(width) / height;
-    float availAspectRatio = availSize.x / availSize.y;
 
     ImVec2 imageSize;
-    if (availAspectRatio > aspectRatio) {
+    ImVec2 availSize = ImGui::GetContentRegionAvail();
+    if (availSize.x / availSize.y > aspectRatio) {
         imageSize.y = availSize.y;
         imageSize.x = imageSize.y * aspectRatio;
     } else {
@@ -98,13 +118,26 @@ void ViewportPanel::renderUi() {
     ImGui::SetCursorPos({cursorPos.x + padding.x, cursorPos.y + padding.y});
     ImVec2 imagePos = ImGui::GetCursorScreenPos();
 
-    ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get())), imageSize);
-
+    ImGui::Image(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get()), imageSize);
     bool isImageHovered = ImGui::IsItemHovered();
-    auto* camera = scene.getActiveCamera();
 
+    auto* camera = scene.getActiveCamera();
+    
     // --- Gizmo Section ---
     if (auto activeObject = scene.getActiveObject()) {
+        
+        ImGuizmo::Style& style = ImGuizmo::GetStyle();
+        
+        // Clamp scale so it doesn't explode on tiny windows
+        float scale = std::max(imageSize.x /  1080.0f, 0.5f);
+        style.TranslationLineThickness   = 4.0f * scale;
+        style.TranslationLineArrowSize   = 6.0f * scale;
+        style.RotationLineThickness      = 6.0f * scale;
+        style.RotationOuterLineThickness = 2.0f * scale;
+        style.ScaleLineThickness         = 4.0f * scale;
+        style.ScaleLineCircleSize        = 8.0f * scale;
+        style.CenterCircleSize           = 5.0f * scale;
+        
         ImGuizmo::BeginFrame();
         ImGuizmo::SetRect(imagePos.x, imagePos.y, imageSize.x, imageSize.y);
         ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
@@ -117,9 +150,9 @@ void ViewportPanel::renderUi() {
 
         const mat4& view = camera->getViewMatrix();
         mat4 proj = camera->getProjectionMatrix();
-        mat4 model = activeObject->getTransform().getMatrix();
 
-        ImGuizmo::Manipulate(value_ptr(view), value_ptr(proj), currentOperation, currentMode, value_ptr(model));
+        mat4 model = activeObject->getTransform().getMatrix();
+        ImGuizmo::Manipulate(value_ptr(view),value_ptr(proj), currentOperation, currentMode, value_ptr(model));
 
         if (ImGuizmo::IsUsing())
             activeObject->setTransformMatrix(model);
@@ -128,7 +161,7 @@ void ViewportPanel::renderUi() {
     // --- Mouse Control Section ---
     SDL_Window* sdlWindow = scene.getContext().getWindow();
 
-    if (isImageHovered && !ImGuizmo::IsOver() && ImGui::IsMouseDown(ImGuiMouseButton_Right) && !isCapturingMouse) {
+    if (isImageHovered && !ImGuizmo::IsUsing() && ImGui::IsMouseDown(ImGuiMouseButton_Right) && !isCapturingMouse) {
         SDL_GetMouseState(&oldX, &oldY);
         isCapturingMouse = true;
         ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;

@@ -23,22 +23,25 @@ void OutlinerDetailsPanel::renderUi() {
     ImGui::End();
 
     ImGui::Begin("Details");
-    ImGui::BeginTable("ObjectDetails", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV);
-    ImGui::TableSetupColumn("Label");
-    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+    
+    if (ImGui::BeginTable("ObjectDetails", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
+    {
+        ImGui::TableSetupColumn("Label");
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
-    // Use the scene's active object for rendering details
-    SceneObject* activeObject = scene.getActiveObject();
-    if (activeObject) {
-        activeObject->renderUi();
+        // Use the scene's active object for rendering details
+        SceneObject* activeObject = scene.getActiveObject();
+        if (activeObject) {
+            activeObject->renderUi();
 
-        if (hovered && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-            if (scene.remove(activeObject))
-                scene.setActiveObjectIndex(-1);
+            if (hovered && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+                if (scene.remove(activeObject))
+                    scene.setActiveObjectIndex(-1);
+            }
+        } else {
+            ImGui::TextUnformatted("No Object Selected.");
         }
-    } else {
-        ImGui::TextUnformatted("No Object Selected.");
+        ImGui::EndTable();
     }
-    ImGui::EndTable();
     ImGui::End();
 }

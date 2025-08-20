@@ -2,6 +2,7 @@ name: Release Builder (macOS)
 
 on:
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-15
@@ -29,7 +30,7 @@ jobs:
         run: |
           echo "Using Xcode version:"
           xcodebuild -version
-          export MACOSX_DEPLOYMENT_TARGET=15.5
+          export MACOSX_DEPLOYMENT_TARGET=11.0
           export SDKROOT=$(xcodebuild -sdk macosx15.5 -version Path)
           echo "SDKROOT is set to $SDKROOT"
         shell: bash
@@ -61,7 +62,7 @@ jobs:
       - name: Configure and Build with llvm@20 Clang
         run: |
           export LLVM_PREFIX=$(brew --prefix llvm@20)
-          export MACOSX_DEPLOYMENT_TARGET=15.5
+          export MACOSX_DEPLOYMENT_TARGET=11.0
           export SDKROOT=$(xcodebuild -sdk macosx15.5 -version Path)
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -75,8 +76,31 @@ jobs:
 
           cmake --build build --config Release
 
+      - name: Simulate User Launch and Capture Logs
+        run: |          
+          APP_PATH="build/NoorRay.app"
+          STDOUT_LOG="stdout.log"
+          STDERR_LOG="stderr.log"
+
+          if ! open -W --stdout "$STDOUT_LOG" --stderr "$STDERR_LOG" "$APP_PATH"; then
+            echo "::error::Application crashed or exited with an error."
+            cat "$STDOUT_LOG"
+            cat "$STDERR_LOG"
+            exit 1
+          else
+            echo "Application ran and closed successfully."
+            cat "$STDOUT_LOG"
+            cat "$STDERR_LOG"
+          fi
+        shell: bash
+
+      - name: Prepare Artifact for Upload
+        run: |
+          mkdir staging
+          mv build/NoorRay.app staging/NoorRay.app
+
       - name: Upload macOS Application
         uses: actions/upload-artifact@v4
         with:
           name: NoorRay-macOS
-          path: build/NoorRay.app
+          path: staging/

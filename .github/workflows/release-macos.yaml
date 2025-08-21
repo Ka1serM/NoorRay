@@ -96,8 +96,8 @@ jobs:
 
       - name: Prepare Artifact for Upload
         run: |
-          mkdir staging
-          mv build/NoorRay.app staging/NoorRay.app
+          mkdir -p staging/NoorRay
+          mv build/NoorRay.app staging/NoorRay/NoorRay.app
 
       - name: Upload macOS Application
         uses: actions/upload-artifact@v4

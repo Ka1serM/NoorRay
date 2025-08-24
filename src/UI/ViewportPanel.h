@@ -17,19 +17,16 @@ public:
     void handlePicking(ImVec2 imageSize) const;
     ~ViewportPanel() override;
 
-    ViewportPanel(Scene& scene, const Image& outputColor, Image& outputCrypto, uint32_t width, uint32_t height, const std::string& title);
+    ViewportPanel(std::string name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, uint32_t width, uint32_t height);
     void recordCopy(vk::CommandBuffer cmd, Image& srcImage);
 
-    std::string getType() const override { return title; }
-
-
 private:
+    Context& context;
     Scene& scene;
     Image& outputCrypto;
     
     uint32_t width;
     uint32_t height;
-    std::string title;
 
     vk::UniqueSampler sampler;
     vk::UniqueDescriptorSetLayout descriptorSetLayout;

@@ -1,6 +1,8 @@
 ﻿#include "PerspectiveCamera.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE  // Vulkan [0,1] clip space
+#define GLM_FORCE_RIGHT_HANDED       // Vulkan-style RH system
 #include <imgui.h>
 #include <cmath>
 #include "glm/gtx/rotate_vector.hpp"
@@ -47,7 +49,7 @@ mat4 PerspectiveCamera::getViewMatrix() const
 mat4 PerspectiveCamera::getProjectionMatrix() const {
     float fovX = 2.0f * atan(sensorWidth * 0.5f / cameraData.focalLength);
     float fovY = 2.0f * atan(tan(fovX * 0.5f) / aspectRatio);
-    return perspectiveZO(fovY, aspectRatio, 0.1f, 1000.0f);
+    return perspective(fovY, aspectRatio, 0.1f, 1000.0f);
 }
 
 void PerspectiveCamera::setFocalLength(const float val) {

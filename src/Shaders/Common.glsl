@@ -6,9 +6,11 @@ const float EPSILON = 0.0001;
 const float INF = 1.0e30;
 
 // --- Bounce Types ---
-const uint BOUNCE_TYPE_DIFFUSE = 0;
-const uint BOUNCE_TYPE_SPECULAR = 1;
-const uint BOUNCE_TYPE_TRANSMISSION = 2;
+const uint RAY_TERMINATED   = 1u << 0; // bit 0
+const uint RAY_SKIP         = 1u << 1; // bit 1
+const uint BOUNCE_DIFFUSE   = 1u << 2; // bit 2
+const uint BOUNCE_SPECULAR  = 1u << 3; // bit 3
+const uint BOUNCE_TRANSMIT  = 1u << 4; // bit 4
 
 // --- Barycentric Helpers ---
 vec3 calculateBarycentric(vec3 attribs) {

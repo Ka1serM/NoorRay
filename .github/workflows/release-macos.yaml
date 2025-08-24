@@ -12,7 +12,7 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest
-    
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -26,12 +26,12 @@ jobs:
             build/CMakeFiles
           key: cmake-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
-      - name: Set Xcode 16.4 (with macOS 15.5 SDK)
+      - name: Set Xcode environment
         run: |
           echo "Using Xcode version:"
           xcodebuild -version
           export MACOSX_DEPLOYMENT_TARGET=11.0
-          export SDKROOT=$(xcodebuild -sdk macosx15.5 -version Path)
+          export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
           echo "SDKROOT is set to $SDKROOT"
         shell: bash
 
@@ -42,46 +42,47 @@ jobs:
           cache: true
           stripdown: true
 
-      - name: Print full Vulkan SDK folder structure (files + folders)
+      - name: Print full Vulkan SDK folder structure
         run: |
           echo "VULKAN_SDK is at: $VULKAN_SDK"
           find "$VULKAN_SDK"
-
       - name: Compile shaders
         run: |
           export PATH="$VULKAN_SDK/macOS/bin:$PATH"
           cd src/shaders
           chmod +x recompile.sh
           ./recompile.sh
-
       - name: Install llvm@20
         run: |
           brew update
           brew install llvm@20
-
       - name: Configure and Build with llvm@20 Clang
         run: |
+          # Use correct LLVM keg path
           export LLVM_PREFIX=$(brew --prefix llvm@20)
+          export PATH="$LLVM_PREFIX/bin:$PATH"
+          # Optional: LLVM include/lib flags if needed
+          export LDFLAGS="-L$LLVM_PREFIX/lib"
+          export CPPFLAGS="-I$LLVM_PREFIX/include"
+          # Clear old CMake cache to avoid wrong compiler paths
+          rm -rf build
           export MACOSX_DEPLOYMENT_TARGET=11.0
-          export SDKROOT=$(xcodebuild -sdk macosx15.5 -version Path)
+          export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=23 \
-            -DCMAKE_C_COMPILER=$LLVM_PREFIX/bin/clang \
-            -DCMAKE_CXX_COMPILER=$LLVM_PREFIX/bin/clang++ \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_C_FLAGS="-std=c2x" \
             -DCMAKE_CXX_FLAGS="-std=c++23" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
             -DCMAKE_OSX_SYSROOT=$SDKROOT
-
           cmake --build build --config Release
-
       - name: Simulate User Launch and Capture Logs
-        run: |          
+        run: |
           APP_PATH="build/NoorRay.app"
           STDOUT_LOG="stdout.log"
           STDERR_LOG="stderr.log"
-
           if ! open -W --stdout "$STDOUT_LOG" --stderr "$STDERR_LOG" "$APP_PATH"; then
             echo "::error::Application crashed or exited with an error."
             cat "$STDOUT_LOG"
@@ -94,11 +95,35 @@ jobs:
           fi
         shell: bash
 
+      - name: Launch app in background
+        run: |
+          APP_PATH="build/NoorRay.app"
+          open "$APP_PATH"
+          echo "App launched in background"
+      - name: Wait for app to start
+        run: sleep 5
+
+      - name: Capture screenshot
+        run: |
+          SCREENSHOT_PATH="NoorRay-screenshot.png"
+          screencapture -x "$SCREENSHOT_PATH"
+          echo "Screenshot saved to $SCREENSHOT_PATH"
+      - name: Kill background app
+        run: |
+          APP_NAME="NoorRay"
+          pkill -f "$APP_NAME" || true
+          echo "Background app closed"
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoorRay-screenshot
+          path: NoorRay-screenshot.png
+
       - name: Prepare Artifact for Upload
         run: |
           mkdir -p staging/NoorRay
           mv build/NoorRay.app staging/NoorRay/NoorRay.app
-
       - name: Upload macOS Application
         uses: actions/upload-artifact@v4
         with:

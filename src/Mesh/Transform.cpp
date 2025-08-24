@@ -10,8 +10,9 @@ Transform::Transform(const glm::vec3 position, const glm::quat rotation, const g
 Transform::Transform(const glm::vec3 position, const glm::vec3 rotationDegrees, const glm::vec3 scale) : position(position), scale(scale), rotation(glm::quat(radians(rotationDegrees))) {}
 
 glm::mat4 Transform::getMatrix() const {
-    glm::mat4 mat = translate(glm::mat4(1.0f), position);
-    mat *= toMat4(rotation);
+    glm::mat4 mat(1.0f);
+    mat = glm::translate(mat, position);
+    mat *= glm::toMat4(rotation);
     mat = glm::scale(mat, scale);
     return mat;
 }

@@ -1,7 +1,7 @@
 ﻿#include "DebugPanel.h"
 #include <imgui.h>
 
-DebugPanel::DebugPanel() {}
+DebugPanel::DebugPanel(std::string name) : ImGuiComponent(std::move(name)) {}
 
 void DebugPanel::renderUi() {
     ImGui::Begin(getType().c_str());

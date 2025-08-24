@@ -2,7 +2,7 @@
 
 void shadeMiss(in vec3 worldRayDirection, in EnvironmentData environmentData, inout Payload payload) {
     vec3 envColor = environmentData.color * environmentData.intensity;
-    
+
     if (environmentData.textureIndex != -1) {
         float radRotation = radians(environmentData.rotation);
         float s = sin(radRotation);
@@ -20,7 +20,13 @@ void shadeMiss(in vec3 worldRayDirection, in EnvironmentData environmentData, in
 
     payload.attenuation = vec3(1.0);
     payload.emission = envColor;
-    
-    payload.alpha = int(!(payload.depth == 0 && environmentData.visible == 0));
-    payload.done = true;
+    payload.albedo = envColor;
+    payload.normal = vec3(0.0);
+
+    // Replace alpha logic: skip ray if depth == 0 and environment is invisible
+    if (payload.depth == 0 && environmentData.visible == 0)
+        payload.flags |= RAY_SKIP;
+
+    // Miss always terminates the ray
+    payload.flags |= RAY_TERMINATED;
 }

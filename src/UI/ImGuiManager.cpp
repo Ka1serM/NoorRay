@@ -270,22 +270,15 @@ void ImGuiManager::renderUi()
     ImGui::Render();
 }
 
-void ImGuiManager::add(std::unique_ptr<ImGuiComponent> component) {
-    components.push_back(std::move(component));
-}
-
 ImGuiComponent* ImGuiManager::getComponent(const std::string& name) const
 {
-    for (const auto& component : components) {
-        if (component->getType() == name) {
+    for (const auto& component : components)
+        if (component->getName() == name) 
             return component.get();
-        }
-    }
     return nullptr;
 }
 
 // --- UI Helper Functions ---
-
 void ImGuiManager::tableRowLabel(const char* label) {
     if (ImGui::GetCurrentTable()) {
         ImGui::TableNextRow();

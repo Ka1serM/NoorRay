@@ -303,19 +303,8 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
-void Context::oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func, vk::Fence fence) const {
-    vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
-
-    commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    func(*commandBuffer);
-    commandBuffer->end();
-
-    vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
-    queue.submit(submitInfo, fence);
-}
-
-void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const {
+void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) {
+    
     vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
     vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
 

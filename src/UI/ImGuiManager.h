@@ -20,7 +20,13 @@ public:
     void renderUi();
     void Draw(vk::CommandBuffer commandBuffer, uint32_t imageIndex, uint32_t width, uint32_t height);
 
-    void add(std::unique_ptr<ImGuiComponent> component);
+    // Create and add a component of type T with constructor arguments Args
+    template<typename T, typename... Args>
+    void addComponent(Args&&... args) {
+        static_assert(std::is_base_of_v<ImGuiComponent, T>, "T must derive from ImGuiComponent");
+        components.emplace_back(std::make_unique<T>(std::forward<Args>(args)...));
+    }
+    
     ImGuiComponent* getComponent(const std::string& name) const;
 
     // UI Helpers

@@ -71,33 +71,35 @@ void generatePrimaryRay(in ivec2 pixelCoord, in ivec2 screenSize, in CameraData 
 
 void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
     if (pixelCoord.x >= screenSize.x || pixelCoord.y >= screenSize.y)
-    return;
+        return;
 
     #ifdef USE_COMPUTE
-        Payload payload; // global in compute
+        Payload payload;
     #endif
 
-    const int SAMPLES_PER_PIXEL = 1;
     uint rngState = pcg2d(uvec2(pixelCoord) ^ uvec2(pushConstants.push.frame * 16777619)).x;
 
     vec3 accumulatedColor = vec3(0.0);
     bool primaryOpaqueHit = false;
-
-    for (int i = 0; i < SAMPLES_PER_PIXEL; ++i) {
+    
+    for (int i = 0; i < pushConstants.push.samples; ++i) {
         vec3 rayOrigin, rayDirection;
         generatePrimaryRay(pixelCoord, screenSize, pushConstants.camera, rngState, rngState, rayOrigin, rayDirection);
 
         vec3 throughput = vec3(1.0);
-
         bool foundPrimaryHit = false;
 
-        for (int bounce = 0; bounce < 12; ++bounce) {
+        int diffuseCount = 0;
+        int specularCount = 0;
+        int transmissionCount = 0;
+
+        int maxBounces = max(pushConstants.push.diffuseBounces, max(pushConstants.push.specularBounces, pushConstants.push.transmissionBounces));
+        for (int bounce = 0; bounce < maxBounces; ++bounce) {
             payload.rngState = rngState;
             payload.emission = vec3(0.0);
             payload.attenuation = vec3(1.0);
             payload.depth = bounce;
-            payload.done = false;
-            payload.alpha = 1;
+            payload.flags = 0u;       // clear all flags at start
             payload.objectIndex = -1;
 
             #ifdef USE_COMPUTE
@@ -105,66 +107,61 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
             #else
                 traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, rayOrigin, 0.00001, rayDirection, 10000.0, 0);
             #endif
-            
-            //Primary Ray
+
+            // Count bounces by type
+            if ((payload.flags & BOUNCE_DIFFUSE) != 0u) diffuseCount++;
+            if ((payload.flags & BOUNCE_SPECULAR) != 0u) specularCount++;
+            if ((payload.flags & BOUNCE_TRANSMIT) != 0u) transmissionCount++;
+
+            // Terminate if type limit exceeded
+            if (diffuseCount > pushConstants.push.diffuseBounces || specularCount > pushConstants.push.specularBounces || transmissionCount > pushConstants.push.transmissionBounces)
+                payload.flags |= RAY_TERMINATED;
+
+            // --- Primary Ray / first bounce ---
             if (bounce == 0) {
-                // Store G-buffers for the first hit (primary ray)
                 imageStore(outputAlbedo, pixelCoord, vec4(payload.albedo, 1.0));
                 imageStore(outputNormal, pixelCoord, vec4(payload.normal, 0.0));
                 imageStore(outputCrypto, pixelCoord, uvec4(payload.objectIndex, 0, 0, 0));
-                
-                // Skip fully transparent primary hits
-                if (payload.alpha == 0) {
+
+                if ((payload.flags & RAY_SKIP) != 0u) {
                     rayOrigin = payload.position;
-                    if (!payload.done)
-                        --bounce; // stay on primary bounce
+                    if ((payload.flags & RAY_TERMINATED) == 0u)
+                    --bounce;
                     continue;
                 }
 
-                // First non-transparent primary hit
-                if (payload.alpha == 1 && !foundPrimaryHit) {
+                if ((payload.flags & RAY_SKIP) == 0u) {
                     primaryOpaqueHit = true;
                     foundPrimaryHit = true;
                 }
             }
-            
-            // Accumulate emission
-            accumulatedColor += throughput * payload.emission;
 
-            // Update throughput
+            accumulatedColor += throughput * payload.emission;
             throughput *= payload.attenuation;
 
-            // Prepare next bounce
             rayOrigin = payload.position;
             rayDirection = payload.nextDirection;
             rngState = payload.rngState;
 
-            // If hit the environment, payload.done is true here
-            if (payload.done)
+            if ((payload.flags & RAY_TERMINATED) != 0u)
                 break;
         }
 
         rand(rngState); // decorrelate RNG
     }
 
-    vec3 newColor = accumulatedColor / float(SAMPLES_PER_PIXEL);
+    vec3 newColor = accumulatedColor / float(pushConstants.push.samples);
     float newAlpha = float(primaryOpaqueHit);
 
-
-    // 1. Premultiply the current frame's color before blending.
     vec3 newColorPremult = newColor * newAlpha;
-
-    // 2. Load the previous frame's data (which is already premultiplied).
     vec4 prevData = imageLoad(outputColor, pixelCoord);
     vec3 prevColorPremult = prevData.rgb;
     float prevAlpha = prevData.a;
     float frameF = float(pushConstants.push.frame);
 
-    // 3. Average the premultiplied colors and the alphas.
     vec3 finalColorPremult = (prevColorPremult * frameF + newColorPremult) / (frameF + 1.0);
     float finalAlpha = (prevAlpha * frameF + newAlpha) / (frameF + 1.0);
 
-    // 4. Store the final premultiplied result.
     imageStore(outputColor, pixelCoord, vec4(finalColorPremult, finalAlpha));
 }
 

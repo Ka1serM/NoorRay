@@ -1,7 +1,7 @@
 ﻿#pragma once
-#include "Context.h"
-#include <functional>
+#include "Vulkan/Context.h"
 #include <vector>
+#include <functional>
 
 class Renderer {
 public:
@@ -9,20 +9,18 @@ public:
     ~Renderer();
 
     void recreateSwapChain(uint32_t newWidth, uint32_t newHeight);
-
-    // Returns null on swapchain failure, indicating a recreate is needed.
     vk::CommandBuffer beginFrame();
-    
-    // Returns true if swapchain needs recreation.
     bool endFrame(bool waitForCompute);
 
-    // --- Compute ---
-    void submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands);
+    // --- Compute Methods ---
     bool isComputeWorkFinished();
+    void submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands);
     void waitForComputeIdle() const;
 
+    // --- Synchronization ---
+    vk::Fence getGraphicsWorkFence() const { return graphicsWorkFence.get(); }
+
     // --- Getters ---
-    vk::SwapchainKHR getSwapchain() const { return swapchain.get(); }
     const std::vector<vk::Image>& getSwapchainImages() const { return swapchainImages; }
     uint32_t getCurrentSwapchainImageIndex() const { return m_imageIndex; }
 
@@ -31,22 +29,20 @@ private:
 
     Context& context;
     uint32_t width, height;
-
-    vk::UniqueSwapchainKHR swapchain;
-    std::vector<vk::Image> swapchainImages;
-    
-    // --- Per-frame-in-flight resources ---
-    struct FrameData {
-        vk::UniqueCommandBuffer commandBuffer;
-        vk::UniqueSemaphore imageAcquiredSemaphore;
-        // renderFinishedSemaphore is REMOVED from here.
-        vk::UniqueFence inFlightFence;
-    };
-    std::vector<FrameData> frames;
     uint32_t m_currentFrame = 0;
     uint32_t m_imageIndex = 0;
 
-    // --- Per-swapchain-image resources ---
+    // --- Swapchain ---
+    vk::UniqueSwapchainKHR swapchain;
+    std::vector<vk::Image> swapchainImages;
+
+    // --- Per-frame Graphics Resources ---
+    struct Frame {
+        vk::UniqueCommandBuffer commandBuffer;
+        vk::UniqueSemaphore imageAcquiredSemaphore;
+        vk::UniqueFence inFlightFence;
+    };
+    std::vector<Frame> frames;
     std::vector<vk::UniqueSemaphore> renderFinishedSemaphores;
     std::vector<vk::Fence> imagesInFlightFences;
 
@@ -55,4 +51,7 @@ private:
     vk::UniqueFence computeFence;
     vk::UniqueSemaphore computeFinishedSemaphore;
     bool computeSubmitted = false;
+
+    // --- Dedicated fence for one-off graphics/transfer work (e.g., saving images) ---
+    vk::UniqueFence graphicsWorkFence;
 };

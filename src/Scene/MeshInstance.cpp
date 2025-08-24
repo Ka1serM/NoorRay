@@ -24,9 +24,18 @@ void MeshInstance::updateInstanceTransform() {
 void MeshInstance::renderUi() {
     SceneObject::renderUi();
 
-    ImGui::SeparatorText("Mesh Asset");
-    meshAsset->renderUi();
+    ImGui::TableNextRow();
+    ImGuiManager::tableRowLabel("Mesh Asset");
+
+    ImGui::TableNextColumn();
+    if (meshAsset)
+        meshAsset->renderUi();  // render mesh details inside the value column
+    else
+        ImGui::TextUnformatted("No Mesh Assigned.");
+
+    ImGui::TableNextRow();  
 }
+
 
 void MeshInstance::setPosition(const vec3& pos)
 {

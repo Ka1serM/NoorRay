@@ -8,8 +8,8 @@ private:
     float fps = 0.0f;
     
 public:
-    DebugPanel();
-
+    DebugPanel(std::string name);
+    
     void renderUi() override;
 
     std::string getType() const override { return "Debug"; }

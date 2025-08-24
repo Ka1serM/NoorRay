@@ -1,7 +1,7 @@
-﻿#include "Viewer.h"
+﻿#include "NoorRay.h"
 
 int main() {
-    Viewer viewer(1920, 1080);
+    NoorRay viewer(1280, 720, 1066, 800);
     viewer.run();
     return 0;
 }

@@ -258,7 +258,7 @@ void Image::setImageLayout(const vk::CommandBuffer& commandBuffer, const vk::Ima
     commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,{}, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
-void Image::update(const Context& context, const void* data, size_t dataSize) {
+void Image::update(Context& context, const void* data, size_t dataSize) {
     if (!data || dataSize == 0) {
         std::cerr << "Warning: Attempted to update image with null data or zero size." << std::endl;
         return;

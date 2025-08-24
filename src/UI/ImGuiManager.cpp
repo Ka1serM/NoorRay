@@ -19,18 +19,24 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    io.IniFilename = nullptr;
+
+#ifdef NDEBUG // Release mode: embed ini into binary
+    io.IniFilename = nullptr;  // don't use external file
     static constexpr char ini[] = {
         #embed "../../assets/imgui.ini"
     };
     ImGui::LoadIniSettingsFromMemory(ini, sizeof(ini));
+#else
+    // Debug mode: use external file for easy tweaking
+    io.IniFilename = "imgui.ini";  // ImGui will load and save this file
+#endif
 
     static constexpr unsigned char font[] = {
         #embed "../../assets/Inter-Regular.ttf"
     };
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), 24.0f, &font_config);
+    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), 18.0f, &font_config);
 
     SetBlenderTheme();
 
@@ -136,23 +142,23 @@ void ImGuiManager::SetBlenderTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
 
     // Rounded corners everywhere
-    style.WindowRounding    = 8.0f;
-    style.ChildRounding     = 8.0f;
-    style.PopupRounding     = 8.0f;
-    style.FrameRounding     = 8.0f;
-    style.GrabRounding      = 8.0f;
-    style.TabRounding       = 8.0f;
-    style.ScrollbarRounding = 8.0f;
+    style.WindowRounding    = 6.0f;
+    style.ChildRounding     = 6.0f;
+    style.PopupRounding     = 6.0f;
+    style.FrameRounding     = 6.0f;
+    style.GrabRounding      = 6.0f;
+    style.TabRounding       = 6.0f;
+    style.ScrollbarRounding = 6.0f;
 
     style.FrameBorderSize   = 1.0f;
     style.PopupBorderSize   = 1.0f;
-    style.ScrollbarSize     = 18.0f;
+    style.ScrollbarSize     = 12.0f;
     style.GrabMinSize       = 12.0f;
 
     //  Slightly bigger feel
     style.WindowPadding     = ImVec2(12, 12);
-    style.FramePadding      = ImVec2(8, 5);
-    style.ItemSpacing       = ImVec2(8, 6);
+    style.FramePadding      = ImVec2(6, 4);
+    style.ItemSpacing       = ImVec2(6, 4);
     style.ItemInnerSpacing  = ImVec2(6, 4);
     
     ImVec4* colors = style.Colors;
@@ -270,22 +276,15 @@ void ImGuiManager::renderUi()
     ImGui::Render();
 }
 
-void ImGuiManager::add(std::unique_ptr<ImGuiComponent> component) {
-    components.push_back(std::move(component));
-}
-
 ImGuiComponent* ImGuiManager::getComponent(const std::string& name) const
 {
-    for (const auto& component : components) {
-        if (component->getType() == name) {
+    for (const auto& component : components)
+        if (component->getName() == name) 
             return component.get();
-        }
-    }
     return nullptr;
 }
 
 // --- UI Helper Functions ---
-
 void ImGuiManager::tableRowLabel(const char* label) {
     if (ImGui::GetCurrentTable()) {
         ImGui::TableNextRow();

@@ -112,26 +112,32 @@ HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection) {
 
     for (int i = 0; i < instances.length(); ++i) {
         ComputeInstance inst = instances[i];
-        
         if (inst.meshId == 0xFFFFFFFF)
             continue;
 
+        // Transform ray into local space
         vec3 localOrigin = (inst.inverseTransform * vec4(rayOrigin, 1.0)).xyz;
-        vec3 localDir = normalize((inst.inverseTransform * vec4(rayDirection, 0.0)).xyz);
+        vec3 localDir    = normalize((inst.inverseTransform * vec4(rayDirection, 0.0)).xyz);
 
         HitInfo localHit;
-        localHit.t = bestHit.t;
+        localHit.t = bestHit.t;   // limit traversal to current best
         localHit.primitiveIndex = -1;
 
         MeshAddresses mesh = meshes[inst.meshId];
-                
         traverseBVH(localOrigin, localDir, mesh, localHit);
 
         if (localHit.primitiveIndex != -1) {
-            bestHit.t = localHit.t;
-            bestHit.barycentrics = localHit.barycentrics;
-            bestHit.primitiveIndex = localHit.primitiveIndex;
-            bestHit.instanceIndex = i;
+            // Convert hit point back to world space to get correct distance
+            vec3 localPos  = localOrigin + localDir * localHit.t;
+            vec3 worldPos  = (inst.transform * vec4(localPos, 1.0)).xyz;
+            float worldT   = length(worldPos - rayOrigin);
+
+            if (worldT < bestHit.t) {
+                bestHit.t = worldT;
+                bestHit.barycentrics = localHit.barycentrics;
+                bestHit.primitiveIndex = localHit.primitiveIndex;
+                bestHit.instanceIndex = i;
+            }
         }
     }
     return bestHit;

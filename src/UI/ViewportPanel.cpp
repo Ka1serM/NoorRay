@@ -7,17 +7,16 @@
 #include "Camera/PerspectiveCamera.h"
 #include "Scene/MeshInstance.h"
 
-ViewportPanel::ViewportPanel(Scene& scene, const Image& outputColor, Image& outputCrypto, uint32_t width, uint32_t height, const std::string& title)
-    : scene(scene), outputCrypto(outputCrypto), width(width), height(height), title(title),
-    displayImage(scene.getContext(), width, height, outputColor.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
-    pickingBuffer(scene.getContext(), Buffer::Type::Custom, sizeof(uint32_t), nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
+ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, const uint32_t width, const uint32_t height)
+    : ImGuiComponent(name), context(context), scene(scene), outputCrypto(outputCrypto), width(width), height(height),
+      displayImage(context, width, height, outputColor.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
+      pickingBuffer(context, Buffer::Type::Custom, sizeof(uint32_t), nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
 {
-    const Context& context = scene.getContext();
-
     pickingBufferMappedPtr = context.getDevice().mapMemory(pickingBuffer.getMemory(), 0, sizeof(int));
 
     // Transition image layout
-    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
+    context.oneTimeSubmit([&](const vk::CommandBuffer cmd)
+    {
         displayImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
     });
 
@@ -47,7 +46,7 @@ ViewportPanel::ViewportPanel(Scene& scene, const Image& outputColor, Image& outp
     auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
 
-    vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getImageView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getImageView(), vk::ImageLayout::eShaderReadOnlyOptimal};
 
     vk::WriteDescriptorSet write{};
     write.dstSet = outputImageDescriptorSet.get();
@@ -61,23 +60,23 @@ ViewportPanel::ViewportPanel(Scene& scene, const Image& outputColor, Image& outp
 
     // ImGuizmo Style
     ImGuizmo::Style& style = ImGuizmo::GetStyle();
-    style.HatchedAxisLineThickness   = 0;
-        
-    // --- Colors similar to Blender ---
-    style.Colors[ImGuizmo::DIRECTION_X]       = ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // X = red
-    style.Colors[ImGuizmo::DIRECTION_Y]       = ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // Y = green
-    style.Colors[ImGuizmo::DIRECTION_Z]       = ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // Z = blue
-    style.Colors[ImGuizmo::PLANE_X]= ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // plane fill
-    style.Colors[ImGuizmo::PLANE_Y]= ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // plane fill
-    style.Colors[ImGuizmo::PLANE_Z]= ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // plane fill
+    style.HatchedAxisLineThickness = 0;
+
+    // Colors similar to Blender
+    style.Colors[ImGuizmo::DIRECTION_X] = ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // X = red
+    style.Colors[ImGuizmo::DIRECTION_Y] = ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // Y = green
+    style.Colors[ImGuizmo::DIRECTION_Z] = ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // Z = blue
+    style.Colors[ImGuizmo::PLANE_X] = ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // plane fill
+    style.Colors[ImGuizmo::PLANE_Y] = ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // plane fill
+    style.Colors[ImGuizmo::PLANE_Z] = ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // plane fill
 
     // Blender also fades inactive axes → make selection highlight bright
-    style.Colors[ImGuizmo::SELECTION]         = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); // yellow highlight
-    style.Colors[ImGuizmo::INACTIVE]          = ImVec4(0.4f, 0.4f, 0.4f, 0.6f); // gray inactive
-    
+    style.Colors[ImGuizmo::SELECTION] = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); // yellow highlight
+    style.Colors[ImGuizmo::INACTIVE] = ImVec4(0.4f, 0.4f, 0.4f, 0.6f); // gray inactive
+
     // Rotation circles usually more saturated
     style.Colors[ImGuizmo::ROTATION_USING_BORDER] = ImVec4(1.0f, 0.8f, 0.2f, 1.0f); // golden ring
-    style.Colors[ImGuizmo::ROTATION_USING_FILL]   = ImVec4(1.0f, 0.8f, 0.2f, 0.3f); // subtle fill
+    style.Colors[ImGuizmo::ROTATION_USING_FILL] = ImVec4(1.0f, 0.8f, 0.2f, 0.3f); // subtle fill
 }
 
 void ViewportPanel::recordCopy(const vk::CommandBuffer cmd, Image& srcImage) {
@@ -96,7 +95,7 @@ void ViewportPanel::recordCopy(const vk::CommandBuffer cmd, Image& srcImage) {
 }
 
 void ViewportPanel::renderUi() {
-    ImGui::Begin(title.c_str());
+    ImGui::Begin(name.c_str());
 
     float aspectRatio = static_cast<float>(width) / height;
 
@@ -119,12 +118,41 @@ void ViewportPanel::renderUi() {
     ImGui::SetCursorPos({cursorPos.x + padding.x, cursorPos.y + padding.y});
     ImVec2 imagePos = ImGui::GetCursorScreenPos();
 
+    // Draw checkerboard background
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    float tileSize = 10.0f; // checker size
+    ImU32 col1 = IM_COL32(50, 50, 50, 255);
+
+    float x0 = imagePos.x;
+    float y0 = imagePos.y;
+    float x1 = imagePos.x + imageSize.x;
+    float y1 = imagePos.y + imageSize.y;
+
+    int numX = static_cast<int>(imageSize.x / tileSize) + 1;
+    int numY = static_cast<int>(imageSize.y / tileSize) + 1;
+
+    for (int y = 0; y < numY; y++) {
+        for (int x = 0; x < numX; x++) {
+            if ((x + y) % 2 != 0)
+                continue;
+
+            ImVec2 topLeft = { x0 + x * tileSize, y0 + y * tileSize };
+            ImVec2 bottomRight = { topLeft.x + tileSize, topLeft.y + tileSize };
+
+            // Clip the square to the image bounds
+            if (bottomRight.x > x1) bottomRight.x = x1;
+            if (bottomRight.y > y1) bottomRight.y = y1;
+
+            drawList->AddRectFilled(topLeft, bottomRight, col1);
+        }
+    }   
+
     ImGui::Image(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get()), imageSize);
     bool isImageHovered = ImGui::IsItemHovered();
 
     auto* camera = scene.getActiveCamera();
     
-    // --- Gizmo Section ---
+    // Gizmo Section
     if (auto activeObject = scene.getActiveObject()) {
         
         ImGuizmo::Style& style = ImGuizmo::GetStyle();
@@ -159,8 +187,8 @@ void ViewportPanel::renderUi() {
             activeObject->setTransformMatrix(model);
     }
 
-    // --- Mouse Control Section ---
-    SDL_Window* sdlWindow = scene.getContext().getWindow();
+    // Mouse Control Section
+    SDL_Window* sdlWindow = context.getWindow();
 
     if (isImageHovered && !ImGuizmo::IsUsing() && ImGui::IsMouseDown(ImGuiMouseButton_Right) && !isCapturingMouse) {
         SDL_GetMouseState(&oldX, &oldY);
@@ -180,7 +208,7 @@ void ViewportPanel::renderUi() {
     if (isCapturingMouse)
         camera->update();
 
-    // --- Picking Section ---
+    // Picking Section
     if (isImageHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver())
         handlePicking(imageSize);
 
@@ -194,7 +222,7 @@ void ViewportPanel::handlePicking(const ImVec2 imageSize) const
     const float pixelX = static_cast<uint32_t>(std::clamp((mousePos.x - windowPos.x) / imageSize.x, 0.f, 1.f) * width);
     const float pixelY =  static_cast<uint32_t>(std::clamp((mousePos.y - windowPos.y) / imageSize.y, 0.f, 1.f) * height);
     
-    scene.getContext().oneTimeSubmit([&](const vk::CommandBuffer cmd) {
+    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
         outputCrypto.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
 
         //Copy 1x1 pixel from image to buffer
@@ -230,7 +258,7 @@ void ViewportPanel::handlePicking(const ImVec2 imageSize) const
 
 ViewportPanel::~ViewportPanel() {
     if (pickingBufferMappedPtr)
-        scene.getContext().getDevice().unmapMemory(pickingBuffer.getMemory());
+        context.getDevice().unmapMemory(pickingBuffer.getMemory());
 
     std::cout << "Destroying ViewportPanel" << std::endl;
 }

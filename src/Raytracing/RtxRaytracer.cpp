@@ -73,7 +73,7 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : GpuR
 
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
         {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output color image
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output emission image
         {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output albedo image
         {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output normal image
         {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output crypto  image
@@ -146,10 +146,10 @@ void RtxRaytracer::updateTLAS()
         if (instances.empty())
         {
             auto emptyInstance = vk::AccelerationStructureInstanceKHR{};
-            instancesBuffer = {context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR), emptyInstance};
+            instancesBuffer = Buffer(context, Buffer::Type::AccelInput,sizeof(vk::AccelerationStructureInstanceKHR),&emptyInstance);
         }
         else
-            instancesBuffer = {context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
+            instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
 
         vk::AccelerationStructureGeometryInstancesDataKHR instancesData;
         instancesData.setArrayOfPointers(false);

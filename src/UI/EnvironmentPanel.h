@@ -4,19 +4,18 @@
 #include <string>
 
 #include "Scene/Scene.h"
-#include "Vulkan/Renderer.h"
+#include "Shaders/SharedStructs.h"
 
 class EnvironmentPanel : public ImGuiComponent {
-private:
     Scene& scene;
-    int hdriTexture;
-    
+    EnvironmentData enviromentData{};
+
 public:
     EnvironmentPanel(Scene& scene);
-
+    
     void renderUi() override;
-
+    
     std::string getType() const override { return "Environment"; }
-
-    int getHdriTexture() const { return hdriTexture; }
+    
+    const EnvironmentData& getEnvironmentData() const { return enviromentData; }
 };

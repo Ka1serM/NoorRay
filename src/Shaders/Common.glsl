@@ -2,12 +2,12 @@
 #define _COMMON_GLSL_
 
 const float PI = 3.14159265358979323846;
-const float EPSILON = 0.00001;
+const float EPSILON = 0.0001;
 const float INF = 1.0e30;
 
 // --- Bounce Types ---
-const uint BOUNCE_TYPE_DIFFUSE      = 0;
-const uint BOUNCE_TYPE_SPECULAR     = 1;
+const uint BOUNCE_TYPE_DIFFUSE = 0;
+const uint BOUNCE_TYPE_SPECULAR = 1;
 const uint BOUNCE_TYPE_TRANSMISSION = 2;
 
 // --- Barycentric Helpers ---

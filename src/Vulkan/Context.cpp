@@ -187,8 +187,9 @@ void Context::pickPhysicalDevice() {
 
     physicalDevice = best->device;
 
-    std::cout << "\nPicked GPU: " << physicalDevice.getProperties().deviceName
-              << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
+
+    //rtxSupported = false;
+    std::cout << "\nPicked GPU: " << physicalDevice.getProperties().deviceName << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
 }
 
 void Context::createLogicalDevice() {

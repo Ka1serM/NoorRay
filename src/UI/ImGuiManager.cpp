@@ -134,54 +134,87 @@ void ImGuiManager::CreateFrameBuffers(const std::vector<vk::Image>& images, uint
 
 void ImGuiManager::SetBlenderTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 4.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 4.0f;
-    style.TabRounding = 4.0f;
-    style.PopupRounding = 4.0f;
-    style.ScrollbarRounding = 4.0f;
-    style.WindowPadding = ImVec2(8, 8);
-    style.FramePadding = ImVec2(5, 3);
-    style.ItemSpacing = ImVec2(6, 4);
-    style.PopupBorderSize = 1.f;
+
+    // Rounded corners everywhere
+    style.WindowRounding    = 8.0f;
+    style.ChildRounding     = 8.0f;
+    style.PopupRounding     = 8.0f;
+    style.FrameRounding     = 8.0f;
+    style.GrabRounding      = 8.0f;
+    style.TabRounding       = 8.0f;
+    style.ScrollbarRounding = 8.0f;
+
+    style.FrameBorderSize   = 1.0f;
+    style.PopupBorderSize   = 1.0f;
+    style.ScrollbarSize     = 18.0f;
+    style.GrabMinSize       = 12.0f;
+
+    //  Slightly bigger feel
+    style.WindowPadding     = ImVec2(12, 12);
+    style.FramePadding      = ImVec2(8, 5);
+    style.ItemSpacing       = ImVec2(8, 6);
+    style.ItemInnerSpacing  = ImVec2(6, 4);
     
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_MenuBarBg]           = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
+
+    // Backgrounds
     colors[ImGuiCol_WindowBg]           = ImVec4(0.15f, 0.15f, 0.16f, 1.00f);
     colors[ImGuiCol_ChildBg]            = ImVec4(0.13f, 0.13f, 0.14f, 1.00f);
     colors[ImGuiCol_PopupBg]            = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
+    colors[ImGuiCol_MenuBarBg]          = ImVec4(0.11f, 0.11f, 0.11f, 1.00f);
+
+    // Headers (selection highlight, tree nodes, list items)
     colors[ImGuiCol_Header]             = ImVec4(0.20f, 0.20f, 0.21f, 1.00f);
     colors[ImGuiCol_HeaderHovered]      = ImVec4(0.30f, 0.30f, 0.31f, 1.00f);
     colors[ImGuiCol_HeaderActive]       = ImVec4(0.25f, 0.25f, 0.26f, 1.00f);
+
+    // Buttons
     colors[ImGuiCol_Button]             = ImVec4(0.18f, 0.18f, 0.19f, 1.00f);
     colors[ImGuiCol_ButtonHovered]      = ImVec4(0.24f, 0.24f, 0.26f, 1.00f);
     colors[ImGuiCol_ButtonActive]       = ImVec4(0.28f, 0.28f, 0.30f, 1.00f);
+
+    // Frames (inputs, selection highlights use rounding here)
     colors[ImGuiCol_FrameBg]            = ImVec4(0.20f, 0.20f, 0.21f, 1.00f);
     colors[ImGuiCol_FrameBgHovered]     = ImVec4(0.30f, 0.30f, 0.31f, 1.00f);
     colors[ImGuiCol_FrameBgActive]      = ImVec4(0.35f, 0.35f, 0.36f, 1.00f);
+
+    // Tabs
     colors[ImGuiCol_Tab]                = ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
     colors[ImGuiCol_TabHovered]         = ImVec4(0.22f, 0.22f, 0.24f, 1.00f);
     colors[ImGuiCol_TabActive]          = ImVec4(0.19f, 0.19f, 0.21f, 1.00f);
     colors[ImGuiCol_TabUnfocused]       = ImVec4(0.12f, 0.12f, 0.14f, 1.00f);
-    colors[ImGuiCol_TabUnfocusedActive]= ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.16f, 0.16f, 0.18f, 1.00f);
+
+    // Titles
     colors[ImGuiCol_TitleBg]            = ImVec4(0.13f, 0.13f, 0.14f, 1.00f);
     colors[ImGuiCol_TitleBgActive]      = ImVec4(0.15f, 0.15f, 0.17f, 1.00f);
     colors[ImGuiCol_TitleBgCollapsed]   = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+
+    // Borders
     colors[ImGuiCol_Border]             = ImVec4(0.10f, 0.10f, 0.10f, 0.40f);
     colors[ImGuiCol_BorderShadow]       = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+
+    // Text
     colors[ImGuiCol_Text]               = ImVec4(0.90f, 0.90f, 0.92f, 1.00f);
     colors[ImGuiCol_TextDisabled]       = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
+
+    // Checks, sliders, grabs
     colors[ImGuiCol_CheckMark]          = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
     colors[ImGuiCol_SliderGrab]         = ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
     colors[ImGuiCol_SliderGrabActive]   = ImVec4(0.80f, 0.80f, 0.80f, 1.00f);
+
+    // Resize grips
     colors[ImGuiCol_ResizeGrip]         = ImVec4(0.65f, 0.65f, 0.65f, 0.60f);
     colors[ImGuiCol_ResizeGripHovered]  = ImVec4(0.75f, 0.75f, 0.75f, 0.80f);
     colors[ImGuiCol_ResizeGripActive]   = ImVec4(0.85f, 0.85f, 0.85f, 1.00f);
+
+    // Scrollbars
     colors[ImGuiCol_ScrollbarBg]        = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
     colors[ImGuiCol_ScrollbarGrab]      = ImVec4(0.20f, 0.20f, 0.25f, 1.00f);
     colors[ImGuiCol_ScrollbarGrabHovered]=ImVec4(0.25f, 0.25f, 0.30f, 1.00f);
     colors[ImGuiCol_ScrollbarGrabActive]= ImVec4(0.30f, 0.30f, 0.35f, 1.00f);
 }
+
 
 void ImGuiManager::setupDockSpace() {
     auto* mainViewport = ImGui::GetMainViewport();
@@ -262,6 +295,14 @@ void ImGuiManager::tableRowLabel(const char* label) {
     } else {
         ImGui::TextUnformatted(label);
         ImGui::SameLine();
+    }
+}
+
+void ImGuiManager::checkboxRow(const char* label, bool value, const std::function<void(bool)>& setter) {
+    tableRowLabel(label);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::Checkbox((std::string("##") + label).c_str(), &value)) {
+        setter(value);
     }
 }
 

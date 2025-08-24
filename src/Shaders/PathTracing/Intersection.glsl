@@ -1,6 +1,14 @@
-#include "../Common.glsl" 
+#include "../Bindings.glsl"
+#include "../Common.glsl"
+#include "ShadeMiss.glsl"
+#include "ShadeClosestHit.glsl"
 
-// Intersects a ray with a single triangle using the Möller-Trumbore algorithm.
+// --- Constants ---
+#define EPSILON 1e-5
+#define INF 1.0 / 0.0
+#define MAX_BVH_STACK_DEPTH 128
+
+// Ray-Primitive Intersection
 bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3 v2, inout float t, out vec3 bary) {
     vec3 e1 = v1 - v0;
     vec3 e2 = v2 - v0;
@@ -9,108 +17,148 @@ bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3
 
     if (abs(det) < EPSILON)
         return false;
-
+    
     float invDet = 1.0 / det;
     vec3 tvec = rayOrigin - v0;
     float u = dot(tvec, pvec) * invDet;
     if (u < 0.0 || u > 1.0)
         return false;
-
+    
     vec3 qvec = cross(tvec, e1);
     float v = dot(rayDirection, qvec) * invDet;
     if (v < 0.0 || u + v > 1.0)
         return false;
-
+    
     float current_t = dot(e2, qvec) * invDet;
     if (current_t > EPSILON && current_t < t) {
         t = current_t;
         bary = vec3(1.0 - u - v, u, v);
         return true;
     }
+
     return false;
 }
 
-// Intersects a ray with an Axis-Aligned Bounding Box.
-bool intersectAABB(vec3 rayOrigin, vec3 invDir, vec3 bbox_min, vec3 bbox_max, inout float t) {
-    vec3 t1 = (bbox_min - rayOrigin) * invDir;
-    vec3 t2 = (bbox_max - rayOrigin) * invDir;
+// Axis-Aligned Bounding Box (AABB) Intersection
+bool intersectAABB(vec3 rayOrigin, vec3 invDir, vec3 bbox_min, vec3 bbox_max, float t) {
+    vec3 tMin = (bbox_min - rayOrigin) * invDir;
+    vec3 tMax = (bbox_max - rayOrigin) * invDir;
 
-    // Conditionally swap t-values based on ray direction
-    if (invDir.x < 0.0f) { float temp = t1.x; t1.x = t2.x; t2.x = temp; }
-    if (invDir.y < 0.0f) { float temp = t1.y; t1.y = t2.y; t2.y = temp; }
-    if (invDir.z < 0.0f) { float temp = t1.z; t1.z = t2.z; t2.z = temp; }
+    vec3 t1 = min(tMin, tMax);
+    vec3 t2 = max(tMin, tMax);
 
-    // After swapping, t1 contains the near plane intersections and t2 contains the far ones.
     float tNear = max(max(t1.x, t1.y), t1.z);
     float tFar  = min(min(t2.x, t2.y), t2.z);
 
-    // An intersection occurs if the ray enters the box before it exits,
-    // the box is in front of the ray, and the intersection is closer than the current closest hit.
     return tNear <= tFar && tFar > 0.0f && tNear < t;
 }
 
-// Traverses a single BVH to find the closest hit triangle for a mesh.
-void traverseBVH(vec3 rayOrigin, vec3 rayDirection, BVHBuffer bvh, VertexBuffer vertexBuf, IndexBuffer indexBuf, inout HitInfo hit) {
+// BVH Traversal
+void traverseBVH(vec3 rayOrigin, vec3 rayDirection,  MeshAddresses mesh, inout HitInfo hit) {
     vec3 invDir = 1.0 / rayDirection;
-    int stack[128];
-    int stackPtr = 1;
-    stack[0] = 0; // Start with the root node
 
+    // Construct buffer references from the 64-bit addresses within the mesh struct.
+    BVHBuffer bvh = BVHBuffer(mesh.blasAddress);
+    VertexBuffer vertices = VertexBuffer(mesh.vertexAddress);
+    IndexBuffer indices = IndexBuffer(mesh.indexAddress);
+    int stack[MAX_BVH_STACK_DEPTH];
+    int stackPtr = 0;
+    
+    stack[stackPtr++] = 0; // Start with the root node.
     while (stackPtr > 0) {
-        BVHNode node = bvh.data[stack[--stackPtr]];
-
+        int nodeIndex = stack[--stackPtr];
+        BVHNode node = bvh.data[nodeIndex];
+        
         if (!intersectAABB(rayOrigin, invDir, node.bbox.min, node.bbox.max, hit.t))
             continue;
-
+        
         if (node.faceCount > 0) { // Leaf node
-                                  for (int i = 0; i < node.faceCount; ++i) {
-                                      uint primIdx = uint(node.faceIndices[i]);
-                                      uint i0 = indexBuf.data[3 * primIdx + 0];
-                                      uint i1 = indexBuf.data[3 * primIdx + 1];
-                                      uint i2 = indexBuf.data[3 * primIdx + 2];
 
-                                      vec3 currentBary;
-                                      if (intersectTriangle(rayOrigin, rayDirection, vertexBuf.data[i0].position, vertexBuf.data[i1].position, vertexBuf.data[i2].position, hit.t, currentBary)) {
-                                          hit.primitiveIndex = int(primIdx);
-                                          hit.barycentrics = currentBary;
-                                      }
-                                  }
-        } else { // Branch node
-                 stack[stackPtr++] = node.rightChild;
-                 stack[stackPtr++] = node.leftChild;
+            for (int i = 0; i < node.faceCount; ++i) {
+              uint primIdx = uint(node.faceIndices[i]);
+            
+              uint i0 = indices.data[3 * primIdx + 0];
+              uint i1 = indices.data[3 * primIdx + 1];
+              uint i2 = indices.data[3 * primIdx + 2];
+            
+              vec3 v0 = vertices.data[i0].position;
+              vec3 v1 = vertices.data[i1].position;
+              vec3 v2 = vertices.data[i2].position;
+            
+              vec3 currentBary;
+              if (intersectTriangle(rayOrigin, rayDirection, v0, v1, v2, hit.t, currentBary)) {
+                  hit.primitiveIndex = int(primIdx);
+                  hit.barycentrics = currentBary;
+              }
+            }
+        } else { // Interior node
+            if (stackPtr > MAX_BVH_STACK_DEPTH - 2)
+                 continue; // Stack is full, cannot traverse deeper.
+            
+            if (node.leftChild >= 0)
+                stack[stackPtr++] = node.leftChild;
+            
+            if (node.rightChild >= 0)
+                stack[stackPtr++] = node.rightChild;
         }
     }
 }
 
-// Traces a ray through all instances in the scene.
 HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection) {
-    HitInfo hit;
-    hit.t = INF;
-    hit.instanceIndex = -1;
-    hit.primitiveIndex = -1;
+    HitInfo bestHit;
+    bestHit.t = INF;
+    bestHit.instanceIndex = -1;
+    bestHit.primitiveIndex = -1;
 
-    for (int i = 0; i < sceneInstances.length(); ++i) {
-        ComputeInstance inst = sceneInstances[i];
-
-        if (inst.meshId >= uint(instances.length())) // Invalid instance
+    for (int i = 0; i < instances.length(); ++i) {
+        ComputeInstance inst = instances[i];
+        
+        if (inst.meshId == 0xFFFFFFFF)
             continue;
 
         vec3 localOrigin = (inst.inverseTransform * vec4(rayOrigin, 1.0)).xyz;
-        vec3 localDir = (inst.inverseTransform * vec4(rayDirection, 0.0)).xyz;
+        vec3 localDir = normalize((inst.inverseTransform * vec4(rayDirection, 0.0)).xyz);
 
         HitInfo localHit;
-        localHit.t = hit.t;
+        localHit.t = bestHit.t;
         localHit.primitiveIndex = -1;
 
-        MeshAddresses mesh = instances[inst.meshId];
-        traverseBVH(localOrigin, normalize(localDir), BVHBuffer(mesh.blasAddress), VertexBuffer(mesh.vertexAddress), IndexBuffer(mesh.indexAddress), localHit);
+        MeshAddresses mesh = meshes[inst.meshId];
+                
+        traverseBVH(localOrigin, localDir, mesh, localHit);
 
-        if (localHit.primitiveIndex != -1 && localHit.t < hit.t) {
-            hit.t = localHit.t;
-            hit.barycentrics = localHit.barycentrics;
-            hit.primitiveIndex = localHit.primitiveIndex;
-            hit.instanceIndex = i;
+        if (localHit.primitiveIndex != -1) {
+            bestHit.t = localHit.t;
+            bestHit.barycentrics = localHit.barycentrics;
+            bestHit.primitiveIndex = localHit.primitiveIndex;
+            bestHit.instanceIndex = i;
         }
     }
-    return hit;
+    return bestHit;
+}
+
+void traceRayCompute(vec3 rayOrigin, vec3 rayDirection, inout Payload payload) {
+    HitInfo hit = traceScene(rayOrigin, rayDirection);
+
+    if (hit.instanceIndex == -1)
+        shadeMiss(rayDirection, pushConstants.environment, payload);
+    else {
+        const ComputeInstance inst = instances[hit.instanceIndex];
+        const MeshAddresses mesh = meshes[inst.meshId];
+        const Face face = FaceBuffer(mesh.faceAddress).data[hit.primitiveIndex];
+        const Material material = MaterialBuffer(mesh.materialAddress).data[face.materialIndex];
+        const Vertex v0 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 0]];
+        const Vertex v1 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 1]];
+        const Vertex v2 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 2]];
+        vec3 localPos = interpolateBarycentric(hit.barycentrics, v0.position, v1.position, v2.position);
+        vec3 localNrm = normalize(interpolateBarycentric(hit.barycentrics, v0.normal, v1.normal, v2.normal));
+        vec3 localTan = normalize(interpolateBarycentric(hit.barycentrics, v0.tangent, v1.tangent, v2.tangent));
+        vec2 uv = interpolateBarycentric(hit.barycentrics, v0.uv, v1.uv, v2.uv);
+        vec3 worldPos = (inst.transform * vec4(localPos, 1.0)).xyz;
+        mat3 normalMatrix = transpose(inverse(mat3(inst.transform)));
+        vec3 interpolatedNormal = normalize(normalMatrix * localNrm);
+        vec3 worldTan = normalize(mat3(inst.transform) * localTan);
+        shadeClosestHit(worldPos, interpolatedNormal, worldTan, uv, rayDirection, material, payload);
+        payload.objectIndex = hit.instanceIndex;
+    }
 }

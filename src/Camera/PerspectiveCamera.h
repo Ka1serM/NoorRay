@@ -18,10 +18,10 @@ private:
 
     CameraData cameraData{};
 
-    mat4 viewMatrix;
-    mat4 projectionMatrix;
+    mat4 viewMatrix{};
+    mat4 projectionMatrix{};
 
-    static constexpr vec3 UP = vec3(0, 1, 0);
+    static constexpr auto UP = vec3(0, 1, 0);
 public:
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
     
@@ -45,6 +45,10 @@ public:
 
     void update();
     void renderUi() override;
+
+    void setPosition(const vec3& pos) override;
+    void setRotation(const quat& rot) override;
+    void setRotationEuler(const vec3& rot) override;
 
 private:
     void updateHorizontalVertical();

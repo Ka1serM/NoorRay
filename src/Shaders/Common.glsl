@@ -6,9 +6,12 @@ const float EPSILON = 0.0001;
 const float INF = 1.0e30;
 
 // --- Bounce Types ---
-const uint BOUNCE_TYPE_DIFFUSE = 0;
-const uint BOUNCE_TYPE_SPECULAR = 1;
-const uint BOUNCE_TYPE_TRANSMISSION = 2;
+const uint RAY_TERMINATED    = 1u << 0; // bit 0
+const uint RAY_TRANSPARENT   = 1u << 1; // bit 1 (alpha-tested geometry skip)
+const uint BOUNCE_DIFFUSE    = 1u << 2; // bit 2
+const uint BOUNCE_SPECULAR   = 1u << 3; // bit 3
+const uint BOUNCE_TRANSMIT   = 1u << 4; // bit 4
+const uint ENV_TRANSPARENT   = 1u << 5; // bit 5 (invisible environment background)
 
 // --- Barycentric Helpers ---
 vec3 calculateBarycentric(vec3 attribs) {
@@ -24,14 +27,16 @@ vec2 interpolateBarycentric(vec3 bary, vec2 p0, vec2 p1, vec2 p2) {
 }
 
 // --- PCG Random Number Generation ---
-uint pcg(inout uint state) {
+uint pcg(inout uint state)
+{
     uint prev = state * 747796405u + 2891336453u;
     uint word = ((prev >> ((prev >> 28u) + 4u)) ^ prev) * 277803737u;
     state = prev;
     return (word >> 22u) ^ word;
 }
 
-uvec2 pcg2d(uvec2 v) {
+uvec2 pcg2d(uvec2 v)
+{
     v = v * 1664525u + 1013904223u;
     v.x += v.y * 1664525u;
     v.y += v.x * 1664525u;
@@ -42,7 +47,9 @@ uvec2 pcg2d(uvec2 v) {
     return v;
 }
 
-float rand(inout uint seed) {
+// RNG float in [0,1)
+float rand(inout uint seed)
+{
     uint val = pcg(seed);
     return float(val) * (1.0 / 4294967296.0);
 }

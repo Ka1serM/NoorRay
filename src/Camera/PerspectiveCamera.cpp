@@ -47,7 +47,7 @@ mat4 PerspectiveCamera::getViewMatrix() const
 mat4 PerspectiveCamera::getProjectionMatrix() const {
     float fovX = 2.0f * atan(sensorWidth * 0.5f / cameraData.focalLength);
     float fovY = 2.0f * atan(tan(fovX * 0.5f) / aspectRatio);
-    return perspectiveZO(fovY, aspectRatio, 0.1f, 1000.0f);
+    return perspective(fovY, aspectRatio, 0.1f, 1000.0f);
 }
 
 void PerspectiveCamera::setFocalLength(const float val) {
@@ -91,13 +91,22 @@ void PerspectiveCamera::update() {
     const float pitch = radians(-dy * sensitivity);
 
     quat rot = getRotation();
+
+    // Camera forward (local +Z)
     vec3 forward = rot * FRONT;
+
+    // Camera right axis (local X)
     vec3 right = normalize(cross(forward, WORLD_UP));
 
+    // Apply yaw around WORLD_UP (global up)
     quat yawQuat = angleAxis(yaw, WORLD_UP);
+
+    // Apply pitch around camera’s right axis (local right)
     quat pitchQuat = angleAxis(pitch, right);
 
+    // Combine rotations: pitch * yaw * current rotation
     quat newRot = normalize(pitchQuat * yawQuat * rot);
+
     setRotation(newRot);
 
     // --- Movement ---
@@ -105,7 +114,7 @@ void PerspectiveCamera::update() {
     float speed = io.DeltaTime;
     if (ImGui::IsKeyDown(ImGuiKey_LeftShift))
         speed *= 10.0f;
-
+    
     vec3 position = getPosition();
     forward = newRot * vec3(0, 0, 1);
     right = normalize(cross(forward, WORLD_UP));
@@ -119,7 +128,6 @@ void PerspectiveCamera::update() {
     if (ImGui::IsKeyDown(ImGuiKey_Q)) position -= upDir * speed;
 
     setPosition(position);
-
     updateCameraData();
 
     const bool changed = wasDirty || !all(epsilonEqual(oldDirection, cameraData.direction, 0.001f)) || !all(epsilonEqual(oldPosition, getPosition(), 0.001f));

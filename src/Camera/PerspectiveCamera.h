@@ -20,8 +20,6 @@ private:
 
     mat4 viewMatrix{};
     mat4 projectionMatrix{};
-
-    static constexpr auto UP = vec3(0, 1, 0);
 public:
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
     

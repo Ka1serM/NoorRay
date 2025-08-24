@@ -4,7 +4,7 @@
 #include "ImGuiManager.h"
 #include "Scene/Scene.h"
 
-EnvironmentPanel::EnvironmentPanel(Scene& scene) : scene(scene) {}
+EnvironmentPanel::EnvironmentPanel(std::string name, Scene& scene) : ImGuiComponent(std::move(name)), scene(scene) {}
 
 void EnvironmentPanel::renderUi() {
     ImGui::Begin(getType().c_str());
@@ -67,9 +67,8 @@ void EnvironmentPanel::renderUi() {
         ImGui::EndTable();
     }
     
-    if (anyChanged) {
+    if (anyChanged)
         scene.setAccumulationDirty();
-    }
     
     ImGui::End();
 }

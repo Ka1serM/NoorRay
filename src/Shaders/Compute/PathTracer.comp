@@ -21,6 +21,6 @@ layout (push_constant) uniform PushConstants {
 
 void main() {
     const ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
-    const ivec2 screenSize = imageSize(outputNormal);
+    const ivec2 screenSize = imageSize(outputColor);
     primaryRayGen(pixelCoord, screenSize);
 }

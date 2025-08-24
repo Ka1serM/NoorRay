@@ -35,18 +35,18 @@ struct BVHNode {
 #endif
 };
 
-
 struct PushData {
-    int frame, isMoving,  _pad0, _pad1;
+    int samples, diffuseBounces, specularBounces, transmissionBounces;
+    int frame, isMoving, _pad0, _pad1;
 };
 
 struct EnvironmentData {
     vec3 color; float intensity;
     int textureIndex; int cdfTextureIndex; float rotation; float exposure;
-    int visible, _pad0, _pad1;
+    int visible, _pad0, _pad1,  _pad2;
 #ifdef __cplusplus
     EnvironmentData()
-        : color(1), intensity(1), textureIndex(-1), cdfTextureIndex(-1), rotation(0), exposure(0), visible(1), _pad0(0), _pad1(0)
+        : color(1), intensity(1), textureIndex(-1), cdfTextureIndex(-1), rotation(0), exposure(0), visible(0), _pad0(0), _pad1(0), _pad2(0)
     {
     }
 #endif
@@ -106,7 +106,7 @@ struct MeshAddresses {
 };
 
 struct Payload {
-    vec3 attenuation; int alpha;
+    vec3 attenuation; uint flags;
     vec3 emission; int pad0;
     
     vec3 position; uint depth; 
@@ -114,8 +114,6 @@ struct Payload {
     
     vec3 albedo; float roughness;
     vec3 normal; int objectIndex;
-
-    uint bounceType; bool done; int pad1, pad2;
 };
 
 

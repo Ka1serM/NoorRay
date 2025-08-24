@@ -41,25 +41,31 @@ void SceneObject::setTransformMatrix(const glm::mat4& transf) {
 }
 
 void SceneObject::renderUi() {
+    bool anyChanged = false;
 
     // Name
+    ImGui::TableNextRow();
     ImGuiManager::tableRowLabel("Name");
     ImGui::TextUnformatted(name.c_str());
-
-    ImGui::SeparatorText("Transform");
-
+    
     // Position
+    ImGui::TableNextRow();
     ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const glm::vec3 v) {
-        setPosition(v);
+        setPosition(v); anyChanged = true;
     });
 
     // Rotation
+    ImGui::TableNextRow();
     ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const glm::vec3 v) {
-        setRotationEuler(v);
+        setRotationEuler(v); anyChanged = true;
     });
 
     // Scale
+    ImGui::TableNextRow();
     ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const glm::vec3 v) {
-        setScale(v);
+        setScale(v); anyChanged = true;
     });
+
+    if (anyChanged)
+        scene.setAccumulationDirty();
 }

@@ -5,6 +5,7 @@
 #include <vulkan/vulkan_beta.h>
 #include <vector>
 #include <functional>
+#include <mutex>
 
 #include "SDL3/SDL_video.h"
 
@@ -53,8 +54,7 @@ public:
 
     // Helper functions
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
-    void oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func, vk::Fence fence) const;
-    void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) const;
+    void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func);
     vk::PresentModeKHR chooseSwapPresentMode() const;
     vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const;
 

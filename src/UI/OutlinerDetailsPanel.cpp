@@ -16,7 +16,7 @@ void OutlinerDetailsPanel::renderUi() {
 
     for (size_t i = 0; i < scene.getSceneObjects().size(); ++i) {
         const auto& obj = scene.getSceneObjects()[i];
-        if (ImGui::Selectable((obj->name + "###" + std::to_string(i)).c_str(), activeIndex == (int)i))
+        if (ImGui::Selectable((obj->name + "###" + std::to_string(i)).c_str(), activeIndex == static_cast<int>(i)))
             scene.setActiveObjectIndex(static_cast<int>(i)); // Set the active index in the scene
     }
 
@@ -30,8 +30,7 @@ void OutlinerDetailsPanel::renderUi() {
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
         // Use the scene's active object for rendering details
-        SceneObject* activeObject = scene.getActiveObject();
-        if (activeObject) {
+        if (SceneObject* activeObject = scene.getActiveObject()) {
             activeObject->renderUi();
 
             if (hovered && ImGui::IsKeyPressed(ImGuiKey_Delete)) {

@@ -5,6 +5,7 @@
 #include "glm/gtc/type_ptr.hpp"
 #include "SDL3/SDL_mouse.h"
 #include "Camera/PerspectiveCamera.h"
+#include "Scene/MeshInstance.h"
 
 ViewportPanel::ViewportPanel(Scene& scene, const Image& outputColor, Image& outputCrypto, uint32_t width, uint32_t height, const std::string& title)
     : scene(scene), outputCrypto(outputCrypto), width(width), height(height), title(title),

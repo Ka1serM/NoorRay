@@ -21,8 +21,10 @@ private:
     
     bool resized = false;
 
-    int width;
-    int height;
+    int windowWidth;
+    int windowHeight;
+    int renderWidth;
+    int renderHeight;
     
     Context context;
     Renderer renderer;

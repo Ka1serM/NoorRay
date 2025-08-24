@@ -13,8 +13,11 @@
 #include <iostream>
 #include "tiny_obj_loader.h"
 #include "Scene/Scene.h"
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#include "glm/gtx/norm.hpp"
 
 void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces, std::vector<Material>& materials)
 {
@@ -50,9 +53,9 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
                     vec4 transmission(0.0f);
                     for (size_t i = 0; i < transmission_data.size() && i < 3; ++i)
                         transmission[i] = transmission_data[i];
-                    material.transmission = transmission;
+                    material.transmissionColor = transmission;
                 } else
-                    material.transmission = vec4(0.0f);
+                    material.transmissionColor = vec4(0.0f);
 
                 if (mat_data.contains("emission")) {
                     auto emission_data = mat_data["emission"].get<std::vector<float>>();
@@ -199,15 +202,19 @@ void Utils::loadCrtScene(Scene& scene, const std::string& filepath, std::vector<
         throw std::runtime_error("Failed to parse JSON scene: " + std::string(e.what()));
     }
 }
-
-void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, std::vector<Face>& faces, std::vector<Material>& materials)
+void Utils::loadObj(
+    Scene& scene,
+    const std::string& filepath,
+    std::vector<Vertex>& vertices,
+    std::vector<uint32_t>& indices,
+    std::vector<Face>& faces,
+    std::vector<Material>& materials)
 {
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> mats;
     std::string warn, err;
 
-    // Extract directory from filepath
     std::string objDir;
     size_t lastSlash = filepath.find_last_of("/\\");
     objDir = (lastSlash != std::string::npos) ? filepath.substr(0, lastSlash) : ".";
@@ -219,62 +226,41 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
     materials.clear();
     for (const auto& mat : mats) {
         Material material{};
-        material.albedo       = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
-        material.specular     = mat.specular[0];
-        material.metallic     = mat.metallic;
-        material.roughness    = mat.roughness;
-        material.ior          = mat.ior;
-
-        material.transmission = vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
-        material.transmissionStrength = material.transmission != vec3(0.0f) ? 1.0f : 0.0f;
-
+        material.albedo = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
+        material.specular = mat.specular[0];
+        material.metallic = mat.metallic;
+        material.roughness = mat.roughness;
+        material.ior = mat.ior;
+        material.transmissionColor = vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
+        material.transmission = (mat.illum == 4 || mat.illum == 7) ? 1.0f : 0.0f;
+        material.opacity = mat.dissolve;
         material.emission = vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
-        material.emissionStrength = material.emission != vec3(0.0f) ? 1.0f : 0.0f;
-        
-        // Load textures if present
-        if (!mat.diffuse_texname.empty()) {
-            std::string texturePath = objDir + "/" + mat.diffuse_texname;
-            if (std::filesystem::exists(texturePath)) { // Check if file exists
-                scene.add(Texture(scene.getContext(), texturePath));
-                material.albedoIndex = static_cast<int>(scene.getTextures().size() - 1);
-            } else
-                std::cerr << "Warning: Diffuse texture file not found: " << texturePath << std::endl;
-        }
+        material.emissionStrength = (material.emission != vec3(0.0f)) ? 1.0f : 0.0f;
 
-        // Repeat for other textures
-        if (!mat.specular_texname.empty()) {
-            std::string texturePath = objDir + "/" + mat.specular_texname;
-            if (std::filesystem::exists(texturePath)) {
-                scene.add(Texture(scene.getContext(), texturePath));
-                material.specularIndex = static_cast<int>(scene.getTextures().size() - 1);
-            } else
-                std::cerr << "Warning: Specular texture file not found: " << texturePath << std::endl;
-        }
+        auto addTexture = [&](const std::string& texname, int& index) {
+            if (!texname.empty()) {
+                std::string texturePath = objDir + "/" + texname;
+                if (std::filesystem::exists(texturePath)) {
+                    scene.add(Texture(scene.getContext(), texturePath));
+                    index = static_cast<int>(scene.getTextures().size() - 1);
+                } else
+                    std::cerr << "Warning: Texture file not found: " << texturePath << std::endl;
+            }
+        };
 
-        if (!mat.roughness_texname.empty()) {
-            std::string texturePath = objDir + "/" + mat.roughness_texname;
-            if (std::filesystem::exists(texturePath)) {
-                scene.add(Texture(scene.getContext(), texturePath));
-                material.roughnessIndex = static_cast<int>(scene.getTextures().size() - 1);
-            } else
-                std::cerr << "Warning: Roughness texture file not found: " << texturePath << std::endl;
-        }
+        addTexture(mat.diffuse_texname, material.albedoIndex);
+        addTexture(mat.specular_texname, material.specularIndex);
+        addTexture(mat.roughness_texname, material.roughnessIndex);
+        addTexture(mat.normal_texname, material.normalIndex);
+        addTexture(mat.alpha_texname, material.opacityIndex);
+        addTexture(mat.emissive_texname, material.emissionIndex);
 
-        if (!mat.normal_texname.empty()) {
-            std::string texturePath = objDir + "/" + mat.normal_texname;
-            if (std::filesystem::exists(texturePath)) {
-                scene.add(Texture(scene.getContext(), texturePath));
-                material.normalIndex = static_cast<int>(scene.getTextures().size() - 1);
-            } else
-                std::cerr << "Warning: Normal texture file not found: " << texturePath << std::endl;
-        }
         materials.push_back(material);
     }
-    
-        // Process shapes and faces
+
+    // Load geometry
     for (const auto& shape : shapes) {
         size_t indexOffset = 0;
-
         for (size_t faceIndex = 0; faceIndex < shape.mesh.num_face_vertices.size(); ++faceIndex) {
             const unsigned int fv = shape.mesh.num_face_vertices[faceIndex];
             if (fv != 3)
@@ -284,36 +270,35 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
             int matIndex = shape.mesh.material_ids[faceIndex];
             face.materialIndex = (matIndex >= 0) ? matIndex : 0;
 
-            // Temporary indices for the current triangle
             uint32_t triIndices[3];
-
-            // Process vertices of the face
             for (unsigned int v = 0; v < fv; ++v) {
                 const tinyobj::index_t& idx = shape.mesh.indices[indexOffset + v];
 
                 Vertex vertex{};
                 vertex.position = vec3(
                     attrib.vertices[3 * idx.vertex_index + 0],
-                    -attrib.vertices[3 * idx.vertex_index + 1],  // Flip Y-axis
-                    attrib.vertices[3 * idx.vertex_index + 2]
+                    -attrib.vertices[3 * idx.vertex_index + 1],
+                    -attrib.vertices[3 * idx.vertex_index + 2]
                 );
 
                 if (!attrib.normals.empty() && idx.normal_index >= 0) {
                     vertex.normal = vec3(
                         attrib.normals[3 * idx.normal_index + 0],
-                        -attrib.normals[3 * idx.normal_index + 1], // Flip Y-axis
-                        attrib.normals[3 * idx.normal_index + 2]
+                        -attrib.normals[3 * idx.normal_index + 1],
+                        -attrib.normals[3 * idx.normal_index + 2]
                     );
-                } else
+                } else {
                     vertex.normal = vec3(0.0f, 1.0f, 0.0f);
+                }
 
                 if (!attrib.texcoords.empty() && idx.texcoord_index >= 0) {
                     vertex.uv = vec2(
                         attrib.texcoords[2 * idx.texcoord_index + 0],
                         1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]
                     );
-                } else
+                } else {
                     vertex.uv = vec2(0.0f);
+                }
 
                 vertices.push_back(vertex);
                 triIndices[v] = static_cast<uint32_t>(vertices.size() - 1);
@@ -323,7 +308,7 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
             faces.push_back(face);
             indexOffset += fv;
 
-            // Compute tangents for the current triangle
+            // Tangent calculation
             Vertex& v0 = vertices[triIndices[0]];
             Vertex& v1 = vertices[triIndices[1]];
             Vertex& v2 = vertices[triIndices[2]];
@@ -334,24 +319,31 @@ void Utils::loadObj(Scene& scene, const std::string& filepath, std::vector<Verte
             vec2 deltaUV2 = v2.uv - v0.uv;
 
             float f = deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y;
-            if (std::fabs(f) < 1e-8f)
-                f = 1.0f; // Avoid division by zero
-            else
-                f = 1.0f / f;
+            vec3 tangent;
 
-            vec3 tangent = f * (deltaUV2.y * edge1 - deltaUV1.y * edge2);
+            if (std::fabs(f) < 1e-8f) {
+                // Degenerate UV, pick arbitrary tangent
+                tangent = vec3(1.0f, 0.0f, 0.0f);
+            } else {
+                f = 1.0f / f;
+                tangent = f * (deltaUV2.y * edge1 - deltaUV1.y * edge2);
+            }
 
             v0.tangent += tangent;
             v1.tangent += tangent;
             v2.tangent += tangent;
         }
+    }
+
+    // Normalize per-vertex tangents safely
+    for (auto& v : vertices) {
+        if (length2(v.tangent) > 1e-8f)
+            v.tangent = normalize(v.tangent);
+        else
+            v.tangent = vec3(1.0f, 0.0f, 0.0f);
+    }
 }
 
-// Normalize tangents after all triangles are processed
-for (auto& v : vertices) {
-    v.tangent = normalize(v.tangent);
-}
-}
 
 std::string Utils::nameFromPath(const std::string& path) {
     size_t lastSlash = path.find_last_of("/\\");

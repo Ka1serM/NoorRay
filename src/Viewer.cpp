@@ -3,7 +3,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <SDL3/SDL.h>
-#include "imgui.h"
 #include "UI/DebugPanel.h"
 #include "UI/MainMenuBar.h"
 #include "UI/OutlinerDetailsPanel.h"
@@ -17,34 +16,35 @@
 #include "Raytracing/Computeraytracer.h"
 #include "Raytracing/Rtxraytracer.h"
 #include "UI/EnvironmentPanel.h"
+#include "UI/RenderPanel.h"
 #include "Vulkan/Tonemapper.h"
 
 Viewer::Viewer(const int width, const int height)
-    : width(width),
-      height(height),
+    : windowWidth(width),
+      windowHeight(height),
       context(width, height),
       renderer(context, width, height),
       imGuiManager(context, renderer.getSwapchainImages(), width, height),
       scene(context)
 {
-    const int viewportWidth = width / 2;
-    const int viewportHeight = height / 2;
+    renderWidth = windowWidth;
+    renderHeight = windowHeight;
 
     if (context.isRtxSupported())
-        raytracer = std::make_unique<RtxRaytracer>(scene, viewportWidth, viewportHeight);
+       raytracer = std::make_unique<RtxRaytracer>(scene, renderWidth, renderHeight);
     else
-        raytracer = std::make_unique<ComputeRaytracer>(scene, viewportWidth, viewportHeight);
+        raytracer = std::make_unique<ComputeRaytracer>(scene, renderWidth, renderHeight);
     
-    gpuImageTonemapper = std::make_unique<Tonemapper>(context, viewportWidth, viewportHeight, raytracer->getOutputColor());
+    gpuImageTonemapper = std::make_unique<Tonemapper>(context, renderWidth, renderHeight, raytracer->getOutputColor());
     
     setupScene();
     setupUI();
 }
 
 void Viewer::recreateSwapChain() {
-    SDL_GetWindowSizeInPixels(context.getWindow(), &width, &height);
-    renderer.recreateSwapChain(width, height);
-    imGuiManager.recreateForSwapChain(renderer.getSwapchainImages(), width, height);
+    SDL_GetWindowSizeInPixels(context.getWindow(), &windowWidth, &windowHeight);
+    renderer.recreateSwapChain(windowWidth, windowHeight);
+    imGuiManager.recreateForSwapChain(renderer.getSwapchainImages(), windowWidth, windowHeight);
 }
 
 void Viewer::run()
@@ -55,7 +55,8 @@ void Viewer::run()
     int frameCounter = 0;
     
     auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug"));
-    auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("GPU Viewport"));
+    auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("Viewport"));
+    const auto* environment = dynamic_cast<EnvironmentPanel*>(imGuiManager.getComponent("Environment"));
 
     bool isRunning = true;
     bool isFullscreen = false;
@@ -65,8 +66,7 @@ void Viewer::run()
         PushConstantsData pushConstantData{};
         pushConstantData.push.frame = frame;
         pushConstantData.camera = scene.getActiveCamera()->getCameraData();
-        if (const auto* environment = dynamic_cast<EnvironmentPanel*>(imGuiManager.getComponent("Environment")))
-            pushConstantData.push.hdriTexture = environment->getHdriTexture();
+        pushConstantData.environment = environment->getEnvironmentData();
 
         raytracer->render(cmd, pushConstantData);
         gpuImageTonemapper->dispatch(cmd);
@@ -115,7 +115,7 @@ void Viewer::run()
         }
 
         //skip frame
-        if (width == 0 || height == 0)
+        if (windowWidth == 0 || windowHeight == 0)
             continue;
 
         try {
@@ -145,7 +145,7 @@ void Viewer::run()
             }
 
             gpuViewport->recordCopy(commandBuffer, gpuImageTonemapper->getOutputImage());
-            imGuiManager.Draw(commandBuffer, renderer.getCurrentSwapchainImageIndex(), width, height);
+            imGuiManager.Draw(commandBuffer, renderer.getCurrentSwapchainImageIndex(), windowWidth, windowHeight);
 
             if (renderer.endFrame(computeWasSubmitted))
                 framebufferResized = true;
@@ -170,8 +170,10 @@ void Viewer::setupUI() {
     auto debugPanel = std::make_unique<DebugPanel>();
     auto environmentPanel = std::make_unique<EnvironmentPanel>(scene);
     auto outlinerDetailsPanel = std::make_unique<OutlinerDetailsPanel>(scene);
+    auto renderPanel = std::make_unique<RenderPanel>();
+    
 
-    auto gpuViewportUniquePtr = std::make_unique<ViewportPanel>(scene, gpuImageTonemapper->getOutputImage(), raytracer->getOutputCrypto(), width/2, height/2, "GPU Viewport");
+    auto gpuViewportUniquePtr = std::make_unique<ViewportPanel>(scene, gpuImageTonemapper->getOutputImage(), raytracer->getOutputCrypto(), renderWidth, renderHeight, "Viewport");
 
     mainMenuBar->setCallback("File.Quit", [&] {
         SDL_Event quitEvent;
@@ -305,6 +307,7 @@ void Viewer::setupUI() {
     imGuiManager.add(std::move(debugPanel));
     imGuiManager.add(std::move(environmentPanel));
     imGuiManager.add(std::move(outlinerDetailsPanel));
+    imGuiManager.add(std::move(renderPanel));
     imGuiManager.add(std::move(gpuViewportUniquePtr));
 }
 
@@ -332,9 +335,10 @@ void Viewer::setupScene() {
     stbi_image_free(hdriPixels);
     
     scene.add(Texture(context, "White", (const uint8_t[]){255, 255, 255, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
+    scene.add(Texture(context, "Gray", (const uint8_t[]){13, 13, 13, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     scene.add(Texture(context, "Black", (const uint8_t[]){0, 0, 0, 255}, 1, 1, vk::Format::eR8G8B8A8Unorm));
     
-    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(0, 0, 5.0f), vec3(-180, 0, 180), vec3(0)}, aspectRatio, 36.0f, 24.0f, 30.0f, 0.0f, 10.0f, 2.0f);
+    float aspectRatio = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(0, 0, -5.0f), vec3(0), vec3(1)}, aspectRatio, 36.0f, 24.0f, 30.0f, 0.0f, 10.0f, 2.0f);
     scene.add(std::move(cam));
 }

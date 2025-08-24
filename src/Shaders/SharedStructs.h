@@ -6,7 +6,6 @@
     using namespace glm;
 #endif
 
-
 #define BVH_MAX_LEAF_SIZE 4
 
 struct AABB {
@@ -38,7 +37,19 @@ struct BVHNode {
 
 
 struct PushData {
-    int frame, isMoving, hdriTexture, _pad0;
+    int frame, isMoving,  _pad0, _pad1;
+};
+
+struct EnvironmentData {
+    vec3 color; float intensity;
+    int textureIndex; int cdfTextureIndex; float rotation; float exposure;
+    int visible, _pad0, _pad1;
+#ifdef __cplusplus
+    EnvironmentData()
+        : color(1), intensity(1), textureIndex(-1), cdfTextureIndex(-1), rotation(0), exposure(0), visible(1), _pad0(0), _pad1(0)
+    {
+    }
+#endif
 };
 
 struct CameraData {
@@ -51,6 +62,7 @@ struct CameraData {
 struct PushConstantsData {
     PushData push;
     CameraData camera;
+    EnvironmentData environment;
 };
 
 struct Vertex {
@@ -68,16 +80,18 @@ struct Material {
     vec3 albedo; int albedoIndex;
     float specular, metallic, roughness, ior;
     int specularIndex, metallicIndex, roughnessIndex, normalIndex;
-    vec3 transmission; float transmissionStrength;
+    vec3 transmissionColor; float transmission;
     vec3 emission; float emissionStrength;
+    int emissionIndex, transmissionIndex, opacityIndex; float opacity;
 
 #ifdef __cplusplus
     Material()
-    : albedo{1}, albedoIndex(-1),
-      specular(0.5f), metallic(0), roughness(0), ior(1.5f),
-      transmission(1), transmissionStrength(0),
-      emission(1), emissionStrength(0),
-      specularIndex(-1), metallicIndex(-1), roughnessIndex(-1), normalIndex(-1)
+        : albedo{1}, albedoIndex(-1),
+          specular(0.5f), metallic(0), roughness(0), ior(1.5f),
+          specularIndex(-1), metallicIndex(-1),
+          roughnessIndex(-1), normalIndex(-1),
+          transmissionColor(1), transmission(0), emission(1),
+          emissionStrength(0), emissionIndex(-1), transmissionIndex(-1), opacityIndex(-1), opacity(1)
     {}
 #endif
 };
@@ -91,15 +105,19 @@ struct MeshAddresses {
     uint64_t blasAddress;
 };
 
-struct Payload
-{
-    vec3 albedo; int objectIndex;
-    vec3 normal; float roughness;
-    vec3 color; uint rngState;
-    vec3 throughput; bool done;
-    vec3 position; uint bounceType; 
-    vec3 nextDirection; int _pad0;
+struct Payload {
+    vec3 attenuation; int alpha;
+    vec3 emission; int pad0;
+    
+    vec3 position; uint depth; 
+    vec3 nextDirection; uint rngState;
+    
+    vec3 albedo; float roughness;
+    vec3 normal; int objectIndex;
+
+    uint bounceType; bool done; int pad1, pad2;
 };
+
 
 struct HitInfo {
     float t;

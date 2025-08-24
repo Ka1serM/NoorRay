@@ -25,6 +25,7 @@ public:
 
     // UI Helpers
     static void tableRowLabel(const char* label);
+    static void checkboxRow(const char* label, bool value, const std::function<void(bool)>& setter);
     static void dragFloatRow(const char* label, float value, float speed, float min, float max, const std::function<void(float)>& setter);
     static void dragFloat3Row(const char* label, glm::vec3 value, float speed, const std::function<void(glm::vec3)>& setter);
     static void colorEdit3Row(const char* label, glm::vec3 value, const std::function<void(glm::vec3)>& setter);

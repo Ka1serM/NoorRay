@@ -168,3 +168,18 @@ void PerspectiveCamera::renderUi() {
     if (anyChanged)
         scene.setAccumulationDirty();
 }
+
+void PerspectiveCamera::setPosition(const vec3& pos) {
+    SceneObject::setPosition(pos);
+    updateCameraData();
+}
+
+void PerspectiveCamera::setRotation(const quat& rot) {
+    SceneObject::setRotation(rot);
+    updateCameraData();
+}
+
+void PerspectiveCamera::setRotationEuler(const vec3& euler) {
+    SceneObject::setRotationEuler(euler);
+    updateCameraData();
+}

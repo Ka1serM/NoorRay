@@ -21,7 +21,7 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
     // Define the descriptor set layout bindings.
     std::vector<vk::DescriptorSetLayoutBinding> bindings{
         {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh instances buffer
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output color image
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output emission image
         {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output albedo image
         {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output normal image
         {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output crypto  image
@@ -78,10 +78,10 @@ void ComputeRaytracer::updateTLAS()
     {
         auto emptyInstance = ComputeInstance{};
         emptyInstance.meshId = UINT32_MAX; // invalid instance
-        instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance), &emptyInstance};
+        instancesBuffer = Buffer{context, Buffer::Type::Storage, sizeof(ComputeInstance), &emptyInstance};
     }
     else
-        instancesBuffer = {context, Buffer::Type::Storage, sizeof(ComputeInstance) * instances.size(), instances.data()};
+        instancesBuffer = Buffer{context, Buffer::Type::Storage, sizeof(ComputeInstance) * instances.size(), instances.data()};
 
     vk::DescriptorBufferInfo bufferInfo = instancesBuffer.getDescriptorInfo();
     vk::WriteDescriptorSet write{};

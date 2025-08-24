@@ -3,7 +3,7 @@
 
 #ifdef USE_COMPUTE
     // For the Compute pipeline, binding 0 is the buffer of instance data.
-layout(set = 0, binding = 0) buffer InstanceBuffer { ComputeInstance sceneInstances[]; };
+layout(set = 0, binding = 0) buffer InstanceBuffer { ComputeInstance instances[]; };
 #else
     // For the RTX pipeline, binding 0 is the Top-Level Acceleration Structure.
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
@@ -15,7 +15,7 @@ layout (set = 0, binding = 3, rgba16f) uniform image2D outputNormal;
 layout (set = 0, binding = 4, r32ui) uniform uimage2D outputCrypto;
 
 // Binding 2: Mesh Data Pointers (vertex, index, material addresses, etc.)
-layout(set = 0, binding = 5) buffer MeshAddressesBuffer { MeshAddresses instances[]; };
+layout(set = 0, binding = 5) buffer MeshAddressesBuffer { MeshAddresses meshes[]; };
 
 // Binding 3: Global Texture Sampler Array
 layout(set = 0, binding = 6) uniform sampler2D textureSamplers[];

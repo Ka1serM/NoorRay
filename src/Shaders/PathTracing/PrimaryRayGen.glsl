@@ -81,6 +81,8 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
     uint rngStateY = seed.y;
 
     vec3 accumulatedColor = vec3(0.0);
+    vec3 accumulatedAlbedo = vec3(0.0);
+    vec3 accumulatedNormal = vec3(0.0);
     bool hitAnything = false;
 
     for (int i = 0; i < pushConstants.push.samples; ++i) {
@@ -116,18 +118,21 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
             if ((payload.flags & BOUNCE_TRANSMIT) != 0u) transmissionCount++;
 
             if (diffuseCount > pushConstants.push.diffuseBounces || specularCount > pushConstants.push.specularBounces || transmissionCount > pushConstants.push.transmissionBounces)
-                payload.flags |= RAY_TERMINATED;
+            payload.flags |= RAY_TERMINATED;
 
             // --- Primary Ray / first bounce ---
             if (bounce == 0) {
-                imageStore(outputAlbedo, pixelCoord, vec4(payload.albedo, 1.0));
-                imageStore(outputNormal, pixelCoord, vec4(payload.normal, 0.0));
+                // Accumulate albedo and normal for this sample
+                accumulatedAlbedo += payload.albedo;
+                accumulatedNormal += payload.normal;
+
+                // Store crypto buffer (unchanged)
                 imageStore(outputCrypto, pixelCoord, uvec4(payload.objectIndex, 0, 0, 0));
 
                 // Transparent geometry > skip and continue ray
                 if ((payload.flags & RAY_TRANSPARENT) != 0u) {
                     if ((payload.flags & RAY_TERMINATED) == 0u)
-                        --bounce;
+                    --bounce;
                     continue;
                 }
 
@@ -140,27 +145,42 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
             rayDirection = payload.nextDirection;
 
             if ((payload.flags & RAY_TERMINATED) != 0u)
-                break;
+            break;
         }
 
         rand(rngStateX); // decorrelate RNG
     }
 
+    // Average the accumulated values for this frame
     vec3 newColor = accumulatedColor / float(pushConstants.push.samples);
+    vec3 newAlbedo = accumulatedAlbedo / float(pushConstants.push.samples);
+    vec3 newNormal = accumulatedNormal / float(pushConstants.push.samples);
     float newAlpha = float(hitAnything);
 
+    // Accumulate color (existing logic)
     vec3 newColorPremult = newColor * newAlpha;
-    vec4 prevData = imageLoad(outputColor, pixelCoord);
-    vec3 prevColorPremult = prevData.rgb;
-    float prevAlpha = prevData.a;
+    vec4 prevColorData = imageLoad(outputColor, pixelCoord);
+    vec3 prevColorPremult = prevColorData.rgb;
+    float prevAlpha = prevColorData.a;
     float frameF = float(pushConstants.push.frame);
 
     vec3 finalColorPremult = (prevColorPremult * frameF + newColorPremult) / (frameF + 1.0);
     float finalAlpha = (prevAlpha * frameF + newAlpha) / (frameF + 1.0);
 
+    // Accumulate albedo
+    vec4 prevAlbedoData = imageLoad(outputAlbedo, pixelCoord);
+    vec3 prevAlbedo = prevAlbedoData.rgb;
+    vec3 finalAlbedo = (prevAlbedo * frameF + newAlbedo) / (frameF + 1.0);
+
+    // Accumulate normal
+    vec4 prevNormalData = imageLoad(outputNormal, pixelCoord);
+    vec3 prevNormal = prevNormalData.rgb;
+    vec3 finalNormal = (prevNormal * frameF + newNormal) / (frameF + 1.0);
+
+    // Store the accumulated results
     imageStore(outputColor, pixelCoord, vec4(finalColorPremult, finalAlpha));
+    imageStore(outputAlbedo, pixelCoord, vec4(finalAlbedo, 1.0));
+    imageStore(outputNormal, pixelCoord, vec4(finalNormal, 0.0));
 }
-
-
 
 #endif // RAY_GENERATION_GLSL

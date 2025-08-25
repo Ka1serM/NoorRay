@@ -5,10 +5,10 @@
 
 class Renderer {
 public:
-    Renderer(Context& context, uint32_t width, uint32_t height);
+    Renderer(Context& context);
     ~Renderer();
 
-    void recreateSwapChain(uint32_t newWidth, uint32_t newHeight);
+    void recreateSwapChain();
     vk::CommandBuffer beginFrame();
     bool endFrame(bool waitForCompute);
 
@@ -28,7 +28,6 @@ private:
     void createSwapChain();
 
     Context& context;
-    uint32_t width, height;
     uint32_t m_currentFrame = 0;
     uint32_t m_imageIndex = 0;
 

@@ -12,13 +12,13 @@ class ImGuiComponent;
 
 class ImGuiManager {
 public:
-    ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height);
+    ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages);
     ~ImGuiManager();
     
-    void recreateForSwapChain(const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height);
+    void recreateForSwapChain(const std::vector<vk::Image>& swapchainImages);
 
     void renderUi();
-    void Draw(vk::CommandBuffer commandBuffer, uint32_t imageIndex, uint32_t width, uint32_t height);
+    void Draw(vk::CommandBuffer commandBuffer, uint32_t imageIndex);
 
     // Create and add a component of type T with constructor arguments Args
     template<typename T, typename... Args>

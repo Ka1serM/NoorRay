@@ -31,6 +31,9 @@ class Context {
     };
     
     SDL_Window* window;
+    int windowWidth;
+    int windowHeight;
+    float dpiScale;
 
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;
@@ -67,6 +70,10 @@ public:
 
     // Getters
     SDL_Window* getWindow() const { return window; }
+    uint32_t getWindowWidth() const { return windowWidth; }
+    uint32_t getWindowHeight() const { return windowHeight; }
+    float getDPIScale() const { return dpiScale; }
+    
     const vk::Instance& getInstance() const { return instance.get(); }
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }
@@ -75,6 +82,8 @@ public:
     const std::vector<uint32_t>& getQueueFamilyIndices() const { return queueFamilyIndices; }
     const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
+
+    void queryWindowSize();
 
     bool isRtxSupported() const { return rtxSupported; }
 };

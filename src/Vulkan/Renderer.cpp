@@ -5,8 +5,8 @@
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
 
-Renderer::Renderer(Context& context, const uint32_t width, const uint32_t height)
-    : context(context), width(width), height(height)
+Renderer::Renderer(Context& context)
+    : context(context)
 {
     // --- Graphics Frame Resources ---
     frames.resize(MAX_FRAMES_IN_FLIGHT);
@@ -46,8 +46,8 @@ void Renderer::createSwapChain() {
     if (surfaceCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
         extent = surfaceCapabilities.currentExtent;
     } else {
-        extent.width = std::clamp(width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
-        extent.height = std::clamp(height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
+        extent.width = std::clamp(context.getWindowWidth(), surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
+        extent.height = std::clamp(context.getWindowHeight(), surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
     }
     
     if (extent.width == 0 || extent.height == 0) {
@@ -55,10 +55,7 @@ void Renderer::createSwapChain() {
         swapchainImages.clear();
         return; 
     }
-
-    this->width = extent.width;
-    this->height = extent.height;
-
+    
     uint32_t imageCount = surfaceCapabilities.minImageCount + 1;
     if (surfaceCapabilities.maxImageCount > 0 && imageCount > surfaceCapabilities.maxImageCount)
         imageCount = surfaceCapabilities.maxImageCount;
@@ -91,11 +88,8 @@ void Renderer::createSwapChain() {
     std::cout << "Recreated swapchain with " << swapchainImages.size() << " images at " << extent.width << "x" << extent.height << std::endl;
 }
 
-// --- Public recreation function ---
-void Renderer::recreateSwapChain(uint32_t newWidth, uint32_t newHeight) {
+void Renderer::recreateSwapChain() {
     context.getDevice().waitIdle();
-    this->width = newWidth;
-    this->height = newHeight;
     createSwapChain();
     m_currentFrame = 0;
     computeSubmitted = false; 

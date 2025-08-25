@@ -14,14 +14,22 @@ constexpr bool EnableValidationLayers = false;
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-Context::Context(const int width, const int height) {
+Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1) {
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
         throw std::runtime_error("Failed to initialize SDL: " + std::string(SDL_GetError()));
 
     if (SDL_Vulkan_LoadLibrary(nullptr) < 0)
         throw std::runtime_error("Failed to load Vulkan library via SDL: " + std::string(SDL_GetError()));
 
-    window = SDL_CreateWindow("NoorRay by Marcel K.", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+    if (dpiScaleFloat != 0.0f) //only if this doesnt fail
+    {
+        dpiScale = dpiScaleFloat;
+        windowWidth  = static_cast<int>(windowWidth  * dpiScale);
+        windowHeight = static_cast<int>(windowHeight * dpiScale);
+    }
+    
+    window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     if (!window)
         throw std::runtime_error("Failed to create SDL window: " + std::string(SDL_GetError()));
 
@@ -360,6 +368,11 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
         std::cerr << "Validation layer: " << pCallbackData->pMessage << std::endl;
     }
     return vk::False;
+}
+
+void Context::queryWindowSize()
+{
+    SDL_GetWindowSizeInPixels(window, &windowWidth, &windowHeight);
 }
 
 Context::~Context() {

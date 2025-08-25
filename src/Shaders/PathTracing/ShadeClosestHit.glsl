@@ -45,7 +45,7 @@ float fresnelDielectric(float cosThetaI, float etaI, float etaT) {
         cosThetaI = -cosThetaI;
     }
     
-    // Compute sin^2 θt directly
+    // sin^2 θt
     float eta = etaI / etaT;
     float sin2ThetaT = eta * eta * max(0.0, 1.0 - cosThetaI * cosThetaI);
     
@@ -63,8 +63,6 @@ float fresnelDielectric(float cosThetaI, float etaI, float etaT) {
     return 0.5 * (Rs * Rs + Rp * Rp);
 }
 
-
-
 vec3 sampleDiffuse(vec3 N, inout uint rngState) {
     float u1 = rand(rngState);
     float u2 = rand(rngState);
@@ -75,8 +73,6 @@ vec3 sampleDiffuse(vec3 N, inout uint rngState) {
     buildCoordinateSystem(N, T, B);
     return normalize(T * local.x + B * local.y + N * local.z);
 }
-
-
 
 vec3 sampleGGXVNDF_local(vec3 Vlocal, float roughness, vec2 u) {
     float a = roughness * roughness;
@@ -89,8 +85,6 @@ vec3 sampleGGXVNDF_local(vec3 Vlocal, float roughness, vec2 u) {
     return normalize(vec3(a * Hstretched.x, a * Hstretched.y, Hstretched.z));
 }
 
-
-
 vec3 sampleH(vec3 V, vec3 N, float roughness, inout uint rngState) {
     float u1 = rand(rngState);
     float u2 = rand(rngState);
@@ -102,13 +96,9 @@ vec3 sampleH(vec3 V, vec3 N, float roughness, inout uint rngState) {
     return TBN * Hlocal;
 }
 
-
-
 float pdfDiffuse(vec3 N, vec3 L) {
     return max(dot(N, L), 0.0) / PI;
 }
-
-
 
 float pdfSpecular(vec3 V, vec3 N, vec3 H, float roughness) {
     float D = distributionGGX(N, H, roughness);
@@ -117,13 +107,9 @@ float pdfSpecular(vec3 V, vec3 N, vec3 H, float roughness) {
     return (D * G1_V) / max(4.0 * NdotV, EPSILON);
 }
 
-
-
-vec3 evaluateDiffuseBRDF(vec3 albedo, float metallic, vec3 F) {
-    return (1.0 - metallic) * (albedo / PI) * (vec3(1.0) - F);
+vec3 evaluateDiffuseBRDF(vec3 albedo, float metallic) {
+    return (1.0 - metallic) * (albedo / PI);
 }
-
-
 vec3 evaluateSpecularBRDF(vec3 normal, vec3 viewDir, vec3 sampledDir, vec3 F, float roughness, vec3 H) {
     float D = distributionGGX(normal, H, roughness);
     float G = geometrySmith(normal, viewDir, sampledDir, roughness);
@@ -157,8 +143,7 @@ void handleDielectricBSDF(vec3 viewDir, vec3 shadingNormal, float roughness, flo
 
     if (cannotRefract || rand(payload.rngState) < reflectProb) {
         vec3 reflectedDir = reflect(-viewDir, H);
-        vec3 F = vec3(reflectProb);
-        vec3 brdf = evaluateSpecularBRDF(Ns_shading, viewDir, reflectedDir, F, roughness, H);
+        vec3 brdf = evaluateSpecularBRDF(Ns_shading, viewDir, reflectedDir, vec3(reflectProb), roughness, H);
         float pdf = pdfSpecular(viewDir, Ns_shading, H, roughness);
 
         if (pdf > EPSILON && reflectProb > EPSILON) {
@@ -179,45 +164,50 @@ void handleDielectricBSDF(vec3 viewDir, vec3 shadingNormal, float roughness, flo
     payload.position += (2 * int(exiting) - 1) * shadingNormal * 0.000001;
 }
 
-void handleOpaqueBSDF(vec3 viewDir, vec3 shadingNormal, vec3 albedo, float metallic, float roughness, inout Payload payload) {
-    vec3 N = shadingNormal;
-    if (dot(N, viewDir) < 0.0)
-    N = -N;
+void handleOpaqueBSDF(vec3 viewDir, vec3 shadingNormal, vec3 albedo, float metallic, float specular, float roughness, inout Payload payload) {
+    vec3 normal = shadingNormal;
+    if (dot(normal, viewDir) < 0.0)
+        normal = -normal;
 
-    float VdotN = max(dot(viewDir, N), 0.0);
+    float VdotN = max(dot(viewDir, normal), 0.0);
     float F_dielectric_scalar = fresnelDielectric(VdotN, 1.0, 1.5);
     float specularWeight = mix(F_dielectric_scalar, 1.0, metallic);
-    float diffuseWeight  = (1.0 - specularWeight) * (1.0 - metallic);
-    float totalWeight    = specularWeight + diffuseWeight;
-    float probSpecular   = (totalWeight < EPSILON) ? 0.5 : specularWeight / totalWeight;
+    float diffuseWeight = 1.0 - specularWeight;
+    float probSpecular = specularWeight / max(specularWeight + diffuseWeight, EPSILON);
 
     vec3 sampledDir;
     vec3 H;
-
     if (rand(payload.rngState) < probSpecular) {
         payload.flags |= BOUNCE_SPECULAR;
-        H = sampleH(viewDir, N, roughness, payload.rngState);
+        H = sampleH(viewDir, normal, roughness, payload.rngState);
         sampledDir = reflect(-viewDir, H);
     } else {
         payload.flags |= BOUNCE_DIFFUSE;
-        sampledDir = sampleDiffuse(N, payload.rngState);
+        sampledDir = sampleDiffuse(normal, payload.rngState);
         H = normalize(viewDir + sampledDir);
     }
 
-    float VdotH = max(dot(viewDir, H), 0.0);
-    vec3 F_dielectric = vec3(fresnelDielectric(VdotH, 1.0, 1.5));
-    vec3 F = mix(F_dielectric, albedo, metallic);
+    // Base reflectance
+    vec3 dielectricF0 = vec3(0.04) * specular;
+    vec3 F0 = mix(dielectricF0, albedo, metallic);
 
-    vec3 diffuseBRDF  = evaluateDiffuseBRDF(albedo, metallic, F);
-    vec3 specularBRDF = evaluateSpecularBRDF(N, viewDir, sampledDir, F, roughness, H);
+    // Scalar Fresnel
+    float VdotH = max(dot(viewDir, H), 0.0);
+    float F_scalar = fresnelDielectric(VdotH, 1.0, 1.5);
+
+    // Final Fresnel color term
+    vec3 F = mix(F0, vec3(1.0), F_scalar);
+
+    vec3 diffuseBRDF  = evaluateDiffuseBRDF(albedo, metallic);
+    vec3 specularBRDF = evaluateSpecularBRDF(normal, viewDir, sampledDir, F, roughness, H);
     vec3 bsdf = diffuseBRDF + specularBRDF;
 
-    float p_spec = pdfSpecular(viewDir, N, H, roughness);
-    float p_diff = pdfDiffuse(N, sampledDir);
+    float p_spec = pdfSpecular(viewDir, normal, H, roughness);
+    float p_diff = pdfDiffuse(normal, sampledDir);
     float mis_pdf = probSpecular * p_spec + (1.0 - probSpecular) * p_diff;
 
     if (mis_pdf > EPSILON) {
-        float NdotL = max(dot(N, sampledDir), 0.0);
+        float NdotL = max(dot(normal, sampledDir), 0.0);
         payload.attenuation = (bsdf * NdotL / mis_pdf);
         payload.nextDirection = sampledDir;
     } else
@@ -234,13 +224,13 @@ void shadeClosestHit(in vec3 worldPosition, in vec3 interpolatedNormal, in vec3 
         opacity *= texture(textureSamplers[material.opacityIndex], interpolatedUV).a;
 
     if (rand(payload.rngState) > opacity) {
-        payload.flags |= RAY_TRANSPARENT; // replace alpha=0
+        payload.flags |= RAY_TRANSPARENT;
         return;
     }
 
     vec3 albedo = material.albedo;
     if (material.albedoIndex != -1)
-    albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
+        albedo *= texture(textureSamplers[material.albedoIndex], interpolatedUV).rgb;
 
     vec3 shadingNormal = normalize(interpolatedNormal);
     if (material.normalIndex != -1) {
@@ -253,11 +243,16 @@ void shadeClosestHit(in vec3 worldPosition, in vec3 interpolatedNormal, in vec3 
 
     vec3 emission = material.emission * material.emissionStrength;
     if (material.emissionIndex != -1)
-    emission *= texture(textureSamplers[material.emissionIndex], interpolatedUV).rgb;
+        emission *= texture(textureSamplers[material.emissionIndex], interpolatedUV).rgb;
 
     float metallic = material.metallic;
     if (material.metallicIndex != -1)
-    metallic *= texture(textureSamplers[material.metallicIndex], interpolatedUV).r;
+        metallic *= texture(textureSamplers[material.metallicIndex], interpolatedUV).r;
+
+    float specular = material.specular;
+    if (material.specularIndex != -1)
+        specular *= texture(textureSamplers[material.specularIndex], interpolatedUV).r;
+    specular *= 2.0;
 
     float roughness = material.roughness;
     if (material.roughnessIndex != -1)
@@ -266,7 +261,7 @@ void shadeClosestHit(in vec3 worldPosition, in vec3 interpolatedNormal, in vec3 
 
     float transmission = material.transmission;
     if (material.transmissionIndex != -1)
-    transmission *= texture(textureSamplers[material.transmissionIndex], interpolatedUV).r;
+        transmission *= texture(textureSamplers[material.transmissionIndex], interpolatedUV).r;
 
     vec3 viewDir = normalize(-worldRayDirection);
 
@@ -275,10 +270,9 @@ void shadeClosestHit(in vec3 worldPosition, in vec3 interpolatedNormal, in vec3 
     payload.emission = emission;
 
     if (rand(payload.rngState) < transmission)
-    handleDielectricBSDF(viewDir, shadingNormal, roughness, material.ior, material.transmissionColor, payload);
+        handleDielectricBSDF(viewDir, shadingNormal, roughness, material.ior, material.transmissionColor, payload);
     else
-    handleOpaqueBSDF(viewDir, shadingNormal, albedo, metallic, roughness, payload);
+        handleOpaqueBSDF(viewDir, shadingNormal, albedo, metallic, specular, roughness, payload);
 }
-
 
 #endif

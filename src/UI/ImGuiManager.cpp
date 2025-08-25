@@ -9,7 +9,7 @@
 #include "Vulkan/Context.h"
 #include <array>
 
-ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height)
+ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages)
     : context(context)
 {
     IMGUI_CHECKVERSION();
@@ -32,18 +32,30 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
 #endif
 
     static constexpr unsigned char font[] = {
-        #embed "../../assets/Inter-Regular.ttf"
+        #embed "../../assets/fonts/Inter-Regular.ttf"
     };
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), 18.0f, &font_config);
 
+    float content_scale = SDL_GetWindowDisplayScale(context.getWindow());
+    if (content_scale == 0.0f)
+        content_scale = 1.0f; // Fallback to 1.0 if SDL fails
+
+    // Load font with scaling
+    float font_size = 18.0f * content_scale;
+    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), font_size, &font_config);
+
+    // Scale everything globally
+    io.FontGlobalScale = 1.0f; // Optional if you already scaled the font
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(content_scale);
+    
     SetBlenderTheme();
 
     ImGui_ImplSDL3_InitForVulkan(context.getWindow());
 
     CreateRenderPass();
-    CreateFrameBuffers(swapchainImages, width, height);
+    CreateFrameBuffers(swapchainImages, context.getWindowWidth(), context.getWindowHeight());
 
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.Instance = context.getInstance();
@@ -69,9 +81,7 @@ ImGuiManager::~ImGuiManager() {
     std::cout << "Destroyed ImGuiManager" << std::endl;
 }
 
-// --- MODIFIED: This is the more efficient way to handle resizing ---
-// We only recreate the resources that are dependent on the swapchain size.
-void ImGuiManager::recreateForSwapChain(const std::vector<vk::Image>& swapchainImages, uint32_t width, uint32_t height)
+void ImGuiManager::recreateForSwapChain(const std::vector<vk::Image>& swapchainImages)
 {
     // Clean up only the swapchain-dependent resources.
     // The core ImGui Vulkan backend remains initialized.
@@ -79,7 +89,7 @@ void ImGuiManager::recreateForSwapChain(const std::vector<vk::Image>& swapchainI
 
     // Recreate the render pass and framebuffers for the new swapchain.
     CreateRenderPass();
-    CreateFrameBuffers(swapchainImages, width, height);
+    CreateFrameBuffers(swapchainImages, context.getWindowWidth(), context.getWindowHeight());
 }
 
 void ImGuiManager::cleanupSwapChainResources() {
@@ -244,13 +254,13 @@ void ImGuiManager::setupDockSpace() {
     ImGui::DockSpace(ImGui::GetID("MyDockSpace"), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
 }
 
-void ImGuiManager::Draw(const vk::CommandBuffer commandBuffer, const uint32_t imageIndex, const uint32_t width, const uint32_t height)
+void ImGuiManager::Draw(const vk::CommandBuffer commandBuffer, const uint32_t imageIndex)
 {
-    vk::ClearValue clearValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+    vk::ClearValue clearValue(std::array{0.0f, 0.0f, 0.0f, 1.0f});
     vk::RenderPassBeginInfo renderPassInfo(
         renderPass.get(),
         frameBuffers[imageIndex].get(),
-        vk::Rect2D({0, 0}, {width, height}),
+        vk::Rect2D({0, 0}, {context.getWindowWidth(), context.getWindowHeight()}),
         clearValue
     );
 

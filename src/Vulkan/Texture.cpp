@@ -1,9 +1,9 @@
 ﻿#include "Texture.h"
 #include <stdexcept>
 #include <stb_image.h>
-#include <iostream>
 #include <string>
-#include "Utils.h"
+
+#include "Scene/SceneImporter.h"
 
 Texture::Texture(Context& context, const std::string& filepath)
     : image([&]() -> Image {
@@ -28,11 +28,11 @@ Texture::Texture(Context& context, const std::string& filepath)
         return img;
     }())
 {
-    name = Utils::nameFromPath(filepath);
+    name = SceneImporter::nameFromPath(filepath);
     createSampler(context);
 }
 
-Texture::Texture(Context& context, const std::string& name, const void* data, int width, int height, vk::Format format)
+Texture::Texture(Context& context, const std::string& name, const void* data, const int width, const int height, const vk::Format format)
     : image(context, data, width, height, format), name(name)
 {
     if (width <= 0 || height <= 0)
@@ -44,7 +44,7 @@ Texture::Texture(Context& context, const std::string& name, const void* data, in
     createSampler(context);
 }
 
-void Texture::createSampler(Context& context)
+void Texture::createSampler(const Context& context)
 {
     vk::SamplerCreateInfo samplerInfo;
     samplerInfo.setMagFilter(vk::Filter::eLinear);

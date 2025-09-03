@@ -1,71 +1,107 @@
 ﻿#include "SceneObject.h"
 #include <glm/gtc/type_ptr.hpp>
-#include <utility>
 #include <imgui.h>
-
+#include "MeshInstance.h"
 #include "Scene.h"
 #include "../UI/ImGuiManager.h"
 
-SceneObject::SceneObject(Scene& scene, std::string  name, const Transform& transform) : transform(transform), scene(scene), name(std::move(name)) {
-
+SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : transform(transform), scene(scene), visible(true), ImGuiComponent(name)
+{
 }
 
-void SceneObject::setPosition(const glm::vec3& position) {
+SceneObject::SceneObject(const SceneObject& other)
+    : ImGuiComponent(other.name + " Copy"),
+      scene(other.scene), visible(other.visible),
+      transform(other.transform)
+{}
+
+std::unique_ptr<SceneObject> SceneObject::clone() const {
+    return std::make_unique<SceneObject>(*this);
+}
+
+void SceneObject::setPosition(const vec3& position) {
     transform.setPosition(position);
-    scene.setAccumulationDirty();
+    onTransformUpdated();
 }
 
-void SceneObject::setRotation(const glm::quat& rotation) {
+void SceneObject::setRotation(const quat& rotation) {
     transform.setRotation(rotation);
-    scene.setAccumulationDirty();
+    onTransformUpdated();
 }
 
-void SceneObject::setRotationEuler(const glm::vec3& rotation) {
+void SceneObject::setRotationEuler(const vec3& rotation) {
     transform.setRotationEuler(rotation);
-    scene.setAccumulationDirty();
+    onTransformUpdated();
 }
 
-void SceneObject::setScale(const glm::vec3& scale) {
+void SceneObject::setScale(const vec3& scale) {
     transform.setScale(scale);
-    scene.setAccumulationDirty();
+    onTransformUpdated();
 }
 
-void SceneObject::setTransform(const Transform& transf) {
+void SceneObject::setLocalTransform(const Transform& transf) {
     transform = transf;
-    scene.setAccumulationDirty();
+    onTransformUpdated();
 }
 
-void SceneObject::setTransformMatrix(const glm::mat4& transf) {
-    transform.setFromMatrix(transf);
-    scene.setAccumulationDirty();
+void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
+    if (parent) {
+        const mat4 parentWorld = parent->getWorldTransform().getMatrix();
+        const mat4 localMatrix = inverse(parentWorld) * worldMatrix;
+        transform.setFromMatrix(localMatrix);
+    } else
+        transform.setFromMatrix(worldMatrix);
+
+    onTransformUpdated();
 }
+
 
 void SceneObject::renderUi() {
     bool anyChanged = false;
 
     // Name
-    ImGui::TableNextRow();
     ImGuiManager::tableRowLabel("Name");
     ImGui::TextUnformatted(name.c_str());
     
     // Position
-    ImGui::TableNextRow();
-    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const glm::vec3 v) {
+    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const vec3 v) {
         setPosition(v); anyChanged = true;
     });
 
     // Rotation
-    ImGui::TableNextRow();
-    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const glm::vec3 v) {
-        setRotationEuler(v); anyChanged = true;
+    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const vec3 v) {
+          setRotationEuler(v);
+        anyChanged = true;
     });
 
     // Scale
-    ImGui::TableNextRow();
-    ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const glm::vec3 v) {
+    ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const vec3 v) {
         setScale(v); anyChanged = true;
     });
 
     if (anyChanged)
-        scene.setAccumulationDirty();
+    {
+        onTransformUpdated();
+       scene.setDirtyFlag(Accumulation);
+    }
+}
+
+Transform SceneObject::getWorldTransform() const {
+    mat4 worldMatrix = transform.getMatrix();
+
+    const SceneObject* currentParent = parent;
+    while (currentParent != nullptr) {
+        worldMatrix = currentParent->transform.getMatrix() * worldMatrix;
+        currentParent = currentParent->parent;
+    }
+
+    Transform worldTransform;
+    worldTransform.setFromMatrix(worldMatrix);
+    return worldTransform;
+}
+
+void SceneObject::onTransformUpdated() {
+    scene.setDirtyFlag(Accumulation);
+    for (SceneObject* child : children)
+        child->onTransformUpdated();
 }

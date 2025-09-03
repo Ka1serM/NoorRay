@@ -59,7 +59,7 @@ if(WIN32)
     set(RESOURCE_RC_PATH "${CMAKE_BINARY_DIR}/resource.rc")
 
     file(WRITE "${RESOURCE_RC_PATH}"
-            "MAINICON ICON \"${PROJECT_SOURCE_DIR}/assets/icon.ico\"\n"
+            "MAINICON ICON \"${PROJECT_SOURCE_DIR}/assets/icons/icon.ico\"\n"
     )
 
     message(STATUS "Generated resource.rc at ${RESOURCE_RC_PATH}")
@@ -122,7 +122,7 @@ if(APPLE)
     endif()
 
     target_sources(NoorRay PRIVATE
-            assets/icon.icns
+            assets/icons/icon.icns
     )
     set_source_files_properties(assets/icon.icns PROPERTIES
             MACOSX_PACKAGE_LOCATION "Resources"

@@ -7,7 +7,7 @@
 
 //Definition of AABB Struct is in Shaders/SharedStructs.h
 
-AABB::AABB() : min(std::numeric_limits<float>::max()), max(std::numeric_limits<float>::lowest())
+AABB::AABB() : min(std::numeric_limits<float>::max()), _pad0(0), max(std::numeric_limits<float>::lowest()), _pad1(0)
 {
 }
 

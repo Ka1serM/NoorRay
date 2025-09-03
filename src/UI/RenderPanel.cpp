@@ -3,7 +3,7 @@
 #include "Vulkan/Context.h"
 #include "Raytracing/Raytracer.h"
 #include "portable-file-dialogs.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image.h"
 #include "stb_image_write.h"
 #include <iostream>
 #include <filesystem>
@@ -12,6 +12,8 @@
 #include <future>
 #include <algorithm>
 #include <stdexcept>
+
+#include "ImGuiManager.h"
 
 // Helper function to convert 16-bit half float to 32-bit float.
 static float halfToFloat(const uint16_t half) {
@@ -48,7 +50,7 @@ RenderPanel::RenderPanel(
     Raytracer& raytracer,
     Renderer& renderer
 )
-    : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(4), specularBounces(12), transmissionBounces(24),
+    : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(8), specularBounces(12), transmissionBounces(24), exposure(0),
       context(context),
       raytracer(raytracer),
       renderer(renderer)
@@ -86,11 +88,13 @@ void RenderPanel::renderUi() {
 
     ImGui::Begin(getType().c_str());
 
-    // --- Render Settings (top) ---
+    // Render Settings (top) 
     if (ImGui::BeginTable("RenderSettingsTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
         // Label column auto-sizes by default
         ImGui::TableSetupColumn("Label"); // no width flags
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](const float v) { exposure = v; });
 
         // Samples Per Pixel
         ImGui::TableNextRow();
@@ -127,7 +131,7 @@ void RenderPanel::renderUi() {
         ImGui::EndTable();
     }
     
-    // --- Save Location ---
+    // Save Location 
     ImGui::SeparatorText("Save Location");
     if (ImGui::BeginTable("SaveLocationTable", 2, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed);
@@ -160,7 +164,7 @@ void RenderPanel::renderUi() {
         ImGui::EndTable();
     }
 
-    // --- Output Files ---
+    // Output Files 
     ImGui::Spacing();
     ImGui::SeparatorText("Output Files");
     if (ImGui::BeginTable("FilenamesTable", 2, ImGuiTableFlags_SizingFixedFit)) {
@@ -190,16 +194,18 @@ void RenderPanel::renderUi() {
         ImGui::EndTable();
     }
 
-    // --- Render Button ---
+    // Render Button 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
     ImGui::BeginDisabled(isSaving);
     const char* buttonText = isSaving ? "Saving..." : "Render";
+    float buttonWidth = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x;
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(100, 180, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(120, 200, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(80, 160, 220, 255));
-    if (ImGui::Button(buttonText, ImVec2(-FLT_MIN, 30))) saveRequested = true;
+    if (ImGui::Button(buttonText, ImVec2(buttonWidth, 0)))
+        saveRequested = true;
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
 
@@ -218,13 +224,13 @@ void RenderPanel::executeSave() {
     const std::filesystem::path basePath(saveLocation);
 
     auto addJob = [&](const char* buffer, const std::string& ext, const std::function<const Image&()>& provider) {
-        std::string filename(buffer);
-        if (!filename.empty()) {
-            if (filename.length() < ext.length() || filename.substr(filename.length() - ext.length()) != ext) {
+        if (std::string filename(buffer); !filename.empty()) {
+            
+            if (filename.length() < ext.length() || filename.substr(filename.length() - ext.length()) != ext)
                 filename += ext;
-            }
             const Image& img = provider(); // Get image to extract format
             m_saveJobs.push_back({provider, (basePath / filename).string(), img.getFormat()});
+            
         }
     };
     
@@ -273,7 +279,8 @@ std::vector<uint8_t> RenderPanel::copyImageToHostMemory(const vk::Image srcImage
     return imageData;
 }
 
-void RenderPanel::writeDataToFile(const std::vector<uint8_t>& imageData, const vk::Format format, const std::string& filename, const uint32_t width, const uint32_t height) const {
+void RenderPanel::writeDataToFile(const std::vector<uint8_t>& imageData, const vk::Format format, const std::string& filename, const uint32_t width, const uint32_t height)
+{
     int components = 0;
     size_t pixelSize = 0;
 

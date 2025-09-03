@@ -15,15 +15,13 @@ class MeshInstance : public SceneObject {
 
 public:
     MeshInstance(Scene& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf);
-    void updateInstanceTransform();
+    MeshInstance(const MeshInstance& other);
+    
     void renderUi() override;
+
+    std::unique_ptr<SceneObject> clone() const override;
 
     const MeshAsset& getMeshAsset() const { return *meshAsset.get(); }
     const vk::AccelerationStructureInstanceKHR& getInstanceData() const { return instanceData; }
-    void setPosition(const vec3& pos) override;
-    void setRotation(const quat& rot) override;
-    void setRotationEuler(const vec3& rot) override;
-    void setScale(const vec3& scale) override;
-    void setTransform(const Transform& transf) override;
-    void setTransformMatrix(const mat4& transf) override;
+    void onTransformUpdated() override;
 };

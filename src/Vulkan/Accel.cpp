@@ -35,7 +35,7 @@ void Accel::build(Context& context, vk::AccelerationStructureGeometryKHR geometr
     buildRangeInfo.setTransformOffset(0);
 
     // Submit build command once
-    context.oneTimeSubmit([&](vk::CommandBuffer commandBuffer) {
+    context.oneTimeSubmit([&](const vk::CommandBuffer commandBuffer) {
         commandBuffer.buildAccelerationStructuresKHR(buildGeometryInfo, &buildRangeInfo);
     });
 

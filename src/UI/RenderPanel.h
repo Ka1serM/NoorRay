@@ -26,9 +26,11 @@ public:
     int getDiffuseBounces() const { return diffuseBounces; }
     int getSpecularBounces() const { return specularBounces; }
     int getTransmissionBounces() const { return transmissionBounces; }
+    float getExposure() const { return exposure; }
     
 private:
     int samples, diffuseBounces, specularBounces, transmissionBounces;
+    float exposure;
     
     // State machine for the save process
     enum class SaveState {
@@ -45,7 +47,7 @@ private:
     };
 
     std::vector<uint8_t> copyImageToHostMemory(vk::Image srcImage, vk::Format format, uint32_t width, uint32_t height) const;
-    void writeDataToFile(const std::vector<uint8_t>& imageData, vk::Format format, const std::string& filename, uint32_t width, uint32_t height) const;
+    static void writeDataToFile(const std::vector<uint8_t>& imageData, vk::Format format, const std::string& filename, uint32_t width, uint32_t height);
     Context& context;
     Raytracer& raytracer;
     Renderer& renderer;

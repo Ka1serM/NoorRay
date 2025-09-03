@@ -1,53 +1,74 @@
 ﻿#pragma once
 
 #include <string>
-
+#include <vector>
 #include "Scene.h"
 #include "../Mesh/Transform.h"
 #include "UI/ImGuiComponent.h"
 
-//forward declaration to avoid circular dependency
 class Scene;
 
 class SceneObject : public ImGuiComponent {
 
-public:
+protected:
     Transform transform;
     Scene& scene;
-    
-    SceneObject(Scene& scene, std::string name, const Transform& transform);
+
+    SceneObject* parent = nullptr;
+    std::vector<SceneObject*> children;
+
+    bool visible;
+
+public:
+    SceneObject(Scene& scene, const std::string& name, const Transform& transform);
+    SceneObject(const SceneObject& other);
+    virtual std::unique_ptr<SceneObject> clone() const;
 
     std::string getType() const override { return "Scene Object"; }
+    void renderUi() override;
 
-    std::string name;
+    bool isVisible() const { return visible; }
+    void setVisible(const bool v) { visible = v; }
 
+    SceneObject* getParent() const { return parent; }
+    const std::vector<SceneObject*>& getChildren() const { return children; }
 
-    Transform getTransform() const {
-        return transform;
+    void setParent(SceneObject* parent) { this->parent = parent; }
+    
+    void addChild(SceneObject* child) {
+        children.push_back(child);
+        child->setParent(this);
     }
-
-    glm::vec3 getPosition() const {
+    
+    void removeChild(SceneObject* child) { std::erase(children, child); }
+    
+    vec3 getPosition() const {
         return transform.getPosition();
     }
 
-    glm::quat getRotation() const {
+    quat getRotation() const {
         return transform.getRotation();
     }
 
-    glm::vec3 getRotationEuler() const {
+    vec3 getRotationEuler() const {
         return transform.getRotationEuler();
     }
 
-    glm::vec3 getScale() const {
+    vec3 getScale() const {
         return transform.getScale();
     }
 
-    void renderUi() override;
-    virtual void setPosition(const glm::vec3& pos);
-    virtual void setRotation(const glm::quat& rot);
-    virtual void setRotationEuler(const glm::vec3& rot);
-    virtual void setScale(const glm::vec3& scale);
+    Transform getTransform() const { return transform; }
 
-    virtual void setTransform(const Transform& transf);
-    virtual void setTransformMatrix(const glm::mat4& transf);
+    virtual void onTransformUpdated();
+    
+    virtual void setPosition(const vec3& pos);
+    virtual void setRotation(const quat& rot);
+    virtual void setRotationEuler(const vec3& rot);
+    virtual void setScale(const vec3& scale);
+
+    virtual void setLocalTransform(const Transform& transf);
+    virtual void setWorldTransformFromMatrix(const mat4& transf);
+
+    Transform getWorldTransform() const;
 };

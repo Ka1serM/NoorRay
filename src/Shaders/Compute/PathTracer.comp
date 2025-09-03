@@ -1,12 +1,10 @@
 #version 460
 #pragma shader_stage(compute)
 
-layout (local_size_x = 8, local_size_y = 8) in;
-
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_nonuniform_qualifier: enable
 #extension GL_EXT_buffer_reference: require
 #extension GL_EXT_scalar_block_layout: enable
-#extension GL_EXT_shader_explicit_arithmetic_types_int64: require
 
 #include "../SharedStructs.h"
 
@@ -19,6 +17,7 @@ layout (push_constant) uniform PushConstants {
 #include "../Pathtracing/Intersection.glsl"
 #include "../Pathtracing/PrimaryRayGen.glsl"
 
+layout (local_size_x = GROUP_SIZE, local_size_y = GROUP_SIZE) in;
 void main() {
     const ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
     const ivec2 screenSize = imageSize(outputColor);

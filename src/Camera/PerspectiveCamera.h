@@ -9,8 +9,6 @@ class Scene;
 
 class PerspectiveCamera : public SceneObject {
 
-    Scene& scene;
-
 private:
     float aspectRatio;
     float sensorWidth;   // mm
@@ -20,9 +18,18 @@ private:
 
     mat4 viewMatrix{};
     mat4 projectionMatrix{};
+
+    bool arcballMode = false;
+    vec3 arcballPivot = vec3(0.0f);
 public:
-    PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
+    void setArcballActive(const bool enabled) { arcballMode = enabled; }
+    void setArcballPivot(const vec3& pivot) { /* arcballPivot = pivot; */ }
+    bool getArcballActive() const { return arcballMode;}
     
+    PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
+    PerspectiveCamera(const PerspectiveCamera& other);
+    std::unique_ptr<SceneObject> clone() const override;
+
     // Accessors for camera params
     float getFocalLength() const { return cameraData.focalLength; }
     float getAperture() const { return cameraData.aperture; }
@@ -44,10 +51,7 @@ public:
     void update();
     void renderUi() override;
 
-    void setPosition(const vec3& pos) override;
-    void setRotation(const quat& rot) override;
-    void setRotationEuler(const vec3& rot) override;
-
+    void onTransformUpdated() override;
 private:
     void updateHorizontalVertical();
     void updateCameraData();

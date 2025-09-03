@@ -5,9 +5,14 @@ Transform::Transform(const glm::vec3 position) : position(position), rotation(),
 
 Transform::Transform() : position(), rotation(), scale(1.0f) {}
 
+Transform::Transform(const glm::mat4& matrix)
+{
+    setFromMatrix(matrix);
+}
+
 Transform::Transform(const glm::vec3 position, const glm::quat rotation, const glm::vec3 scale) : position(position), rotation(rotation), scale(scale) {}
 
-Transform::Transform(const glm::vec3 position, const glm::vec3 rotationDegrees, const glm::vec3 scale) : position(position), scale(scale), rotation(glm::quat(radians(rotationDegrees))) {}
+Transform::Transform(const glm::vec3 position, const glm::vec3 rotationDegrees, const glm::vec3 scale) : position(position), rotation(glm::quat(radians(rotationDegrees))), scale(scale) {}
 
 glm::mat4 Transform::getMatrix() const {
     glm::mat4 mat = translate(glm::mat4(1.0f), position);
@@ -22,9 +27,9 @@ void Transform::setFromMatrix(const glm::mat4& mat) {
 
     // Extract scale
     // Basis vectors are the first 3 columns of the matrix
-    glm::vec3 col0 = glm::vec3(mat[0]);
-    glm::vec3 col1 = glm::vec3(mat[1]);
-    glm::vec3 col2 = glm::vec3(mat[2]);
+    auto col0 = glm::vec3(mat[0]);
+    auto col1 = glm::vec3(mat[1]);
+    auto col2 = glm::vec3(mat[2]);
 
     scale.x = glm::length(col0);
     scale.y = glm::length(col1);

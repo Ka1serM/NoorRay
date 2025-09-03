@@ -9,6 +9,7 @@ class OutlinerDetailsPanel : public ImGuiComponent {
 public:
     OutlinerDetailsPanel(std::string name, Scene& scene);
     void renderUi() override;
+    void drawNode(SceneObject* node);
 
     std::string getType() const override { return "Outliner Details"; }
 

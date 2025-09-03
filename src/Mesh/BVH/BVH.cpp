@@ -6,8 +6,6 @@
 
 #define GLM_ENABLE_EXPERIMENTAL
 
-#define BVH_MAX_DEPTH 128
-
 // Surface Area Heuristic constants
 #define SAH_TRAVERSAL_COST 1.0f
 #define SAH_INTERSECTION_COST 1.0f
@@ -16,7 +14,7 @@ void BVH::build(const Context& context, const std::vector<Vertex>& inputVertices
     pVertices = &inputVertices;
     pIndices = &inputIndices;
 
-    size_t faceCount = pIndices->size() / 3;
+    const size_t faceCount = pIndices->size() / 3;
     if (faceCount == 0) {
         nodes.clear();
         return;
@@ -86,18 +84,15 @@ void BVH::buildIterative(std::vector<PrimitiveInfo>& primitiveInfo, const AABB& 
             node.leftChild = -1;
             node.rightChild = -1;
             
-            for (int i = 0; i < count && i < BVH_MAX_LEAF_SIZE; ++i) {
+            for (int i = 0; i < count && i < BVH_MAX_LEAF_SIZE; ++i)
                 node.faceIndices[i] = primitiveInfo[task.start + i].faceIndex;
-            }
             continue;
         }
         
         // Find best split using optimized SAH
         int bestAxis, splitIndex;
-        if (!findBestSplit(primitiveInfo, task.start, task.end, task.bounds, bestAxis, splitIndex)) {
-            // Fallback to middle split if SAH fails
-            splitIndex = task.start + count / 2;
-        }
+        if (!findBestSplit(primitiveInfo, task.start, task.end, task.bounds, bestAxis, splitIndex))
+            splitIndex = task.start + count / 2; // Fallback to middle split if SAH fails
         
         // Partition primitives
         if (bestAxis != -1) {
@@ -111,16 +106,16 @@ void BVH::buildIterative(std::vector<PrimitiveInfo>& primitiveInfo, const AABB& 
         
         // Calculate bounds for children
         AABB leftBounds, rightBounds;
-        for (int i = task.start; i < splitIndex; ++i) {
+        for (int i = task.start; i < splitIndex; ++i)
             leftBounds.expand(primitiveInfo[i].bbox);
-        }
-        for (int i = splitIndex; i < task.end; ++i) {
+        
+        for (int i = splitIndex; i < task.end; ++i)
             rightBounds.expand(primitiveInfo[i].bbox);
-        }
         
         // Create child nodes
         int leftChildIndex = static_cast<int>(nodes.size());
         nodes.emplace_back();
+        
         int rightChildIndex = static_cast<int>(nodes.size());
         nodes.emplace_back();
         
@@ -134,9 +129,8 @@ void BVH::buildIterative(std::vector<PrimitiveInfo>& primitiveInfo, const AABB& 
     }
 }
 
-bool BVH::findBestSplit(std::vector<PrimitiveInfo>& primitiveInfo, int start, int end, 
-                       const AABB& bounds, int& bestAxis, int& bestSplitIndex) {
-    int count = end - start;
+bool BVH::findBestSplit(std::vector<PrimitiveInfo>& primitiveInfo, const int start, const int end, const AABB& bounds, int& bestAxis, int& bestSplitIndex) {
+    const int count = end - start;
     if (count <= 2) return false;
     
     bestAxis = -1;
@@ -166,11 +160,10 @@ bool BVH::findBestSplit(std::vector<PrimitiveInfo>& primitiveInfo, int start, in
         AABB leftBox;
         for (int i = 1; i < count; ++i) {
             leftBox.expand(primitiveInfo[start + i - 1].bbox);
-            
-            float leftArea = leftBox.surfaceArea();
-            float rightArea = rightBounds[i - 1].surfaceArea();
-            float cost = SAH_TRAVERSAL_COST + SAH_INTERSECTION_COST * 
-                        (i * leftArea + (count - i) * rightArea) / bounds.surfaceArea();
+
+            const float leftArea = leftBox.surfaceArea();
+            const float rightArea = rightBounds[i - 1].surfaceArea();
+            const float cost = SAH_TRAVERSAL_COST + SAH_INTERSECTION_COST * (i * leftArea + (count - i) * rightArea) / bounds.surfaceArea();
             
             if (cost < bestCost) {
                 bestCost = cost;
@@ -181,6 +174,5 @@ bool BVH::findBestSplit(std::vector<PrimitiveInfo>& primitiveInfo, int start, in
     }
     
     // Check if split is beneficial
-    float leafCost = SAH_INTERSECTION_COST * count;
-    return bestCost < leafCost;
+    return bestCost < SAH_INTERSECTION_COST * count;
 }

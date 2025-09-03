@@ -46,7 +46,7 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), font_size, &font_config);
 
     // Scale everything globally
-    io.FontGlobalScale = 1.0f; // Optional if you already scaled the font
+    io.FontGlobalScale = 1.0f;
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(content_scale);
     
@@ -61,7 +61,7 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     init_info.Instance = context.getInstance();
     init_info.PhysicalDevice = context.getPhysicalDevice();
     init_info.Device = context.getDevice();
-    init_info.QueueFamily = context.getQueueFamilyIndices().front();
+    init_info.QueueFamily = context.getQueueFamilyIndex();
     init_info.Queue = context.getQueue();
     init_info.DescriptorPool = context.getDescriptorPool();
     init_info.RenderPass = renderPass.get();
@@ -277,9 +277,8 @@ void ImGuiManager::renderUi()
 
     setupDockSpace();
 
-    for (const auto& component : components) {
+    for (const auto& component : components)
         component->renderUi();
-    }
 
     ImGui::End(); // End the DockSpace window
 
@@ -301,6 +300,7 @@ void ImGuiManager::tableRowLabel(const char* label) {
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted(label);
         ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
     } else {
         ImGui::TextUnformatted(label);
         ImGui::SameLine();
@@ -309,41 +309,31 @@ void ImGuiManager::tableRowLabel(const char* label) {
 
 void ImGuiManager::checkboxRow(const char* label, bool value, const std::function<void(bool)>& setter) {
     tableRowLabel(label);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::Checkbox((std::string("##") + label).c_str(), &value)) {
+    if (ImGui::Checkbox((std::string("##") + label).c_str(), &value))
         setter(value);
-    }
 }
 
-void ImGuiManager::dragFloatRow(const char* label, float value, float speed, float min, float max, const std::function<void(float)>& setter) {
+void ImGuiManager::dragFloatRow(const char* label, float value, const float speed, const float min, const float max, const std::function<void(float)>& setter) {
     tableRowLabel(label);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max, "%.3f", ImGuiSliderFlags_AlwaysClamp))
         setter(value);
-    }
 }
 
-void ImGuiManager::dragFloat3Row(const char* label, glm::vec3 value, float speed, const std::function<void(glm::vec3)>& setter) {
+void ImGuiManager::dragFloat3Row(const char* label, glm::vec3 value, const float speed, const std::function<void(glm::vec3)>& setter) {
     tableRowLabel(label);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed)) {
+    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed))
         setter(value);
-    }
 }
 
-void ImGuiManager::colorEdit3Row(const char* label, glm::vec3 value, const std::function<void(glm::vec3)>& setter) {
+void ImGuiManager::colorEdit3Row(const char* label, const glm::vec3 value, const std::function<void(glm::vec3)>& setter) {
     tableRowLabel(label);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (glm::vec3 temp = value; ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp))) {
+    if (glm::vec3 temp = value; ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp)))
         setter(temp);
-    }
 }
 
-auto ImGuiManager::colorEdit4Row(const char* label, glm::vec4 value, const std::function<void(glm::vec4)>& setter) -> void
+auto ImGuiManager::colorEdit4Row(const char* label, const glm::vec4 value, const std::function<void(glm::vec4)>& setter) -> void
 {
     tableRowLabel(label);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (glm::vec4 temp = value; ImGui::ColorEdit4((std::string("##") + label).c_str(), glm::value_ptr(temp))) {
+    if (glm::vec4 temp = value; ImGui::ColorEdit4((std::string("##") + label).c_str(), glm::value_ptr(temp)))
         setter(temp);
-    }
 }

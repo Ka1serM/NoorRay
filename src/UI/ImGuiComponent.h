@@ -1,9 +1,10 @@
 ﻿#pragma once
 
 #include <string>
-#include <functional>
 
 class ImGuiComponent {
+protected:
+    std::string name;
 public:
     ImGuiComponent() : name("") {}
 
@@ -15,7 +16,4 @@ public:
     virtual void renderUi() {}
     virtual std::string getType() const { return "ImGuiComponent"; }
     const std::string& getName() const { return name; }
-    
-protected:
-    std::string name;
 };

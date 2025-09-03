@@ -2,7 +2,7 @@
 #include <iostream>
 
 #include "Globals.h"
-#include "Utils.h"
+#include "Shaders/SharedStructs.h"
 
 Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage)
 : outputImage(context, width, height, context.chooseSwapSurfaceFormat().format,  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)

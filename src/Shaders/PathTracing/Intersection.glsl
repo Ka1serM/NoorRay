@@ -3,12 +3,6 @@
 #include "ShadeMiss.glsl"
 #include "ShadeClosestHit.glsl"
 
-// --- Constants ---
-#define EPSILON 1e-5
-#define INF 1.0 / 0.0
-#define MAX_BVH_STACK_DEPTH 128
-
-// Ray-Primitive Intersection
 bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3 v2, inout float t, out vec3 bary) {
     vec3 e1 = v1 - v0;
     vec3 e2 = v2 - v0;
@@ -39,7 +33,6 @@ bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3
     return false;
 }
 
-// Axis-Aligned Bounding Box (AABB) Intersection
 bool intersectAABB(vec3 rayOrigin, vec3 invDir, vec3 bbox_min, vec3 bbox_max, float t) {
     vec3 tMin = (bbox_min - rayOrigin) * invDir;
     vec3 tMax = (bbox_max - rayOrigin) * invDir;
@@ -50,10 +43,9 @@ bool intersectAABB(vec3 rayOrigin, vec3 invDir, vec3 bbox_min, vec3 bbox_max, fl
     float tNear = max(max(t1.x, t1.y), t1.z);
     float tFar  = min(min(t2.x, t2.y), t2.z);
 
-    return tNear <= tFar && tFar > 0.0f && tNear < t;
+    return tNear <= tFar && tFar > -AABB_EPSILON && tNear < t;
 }
 
-// BVH Traversal
 void traverseBVH(vec3 rayOrigin, vec3 rayDirection,  MeshAddresses mesh, inout HitInfo hit) {
     vec3 invDir = 1.0 / rayDirection;
 
@@ -61,7 +53,7 @@ void traverseBVH(vec3 rayOrigin, vec3 rayDirection,  MeshAddresses mesh, inout H
     BVHBuffer bvh = BVHBuffer(mesh.blasAddress);
     VertexBuffer vertices = VertexBuffer(mesh.vertexAddress);
     IndexBuffer indices = IndexBuffer(mesh.indexAddress);
-    int stack[MAX_BVH_STACK_DEPTH];
+    int stack[BVH_MAX_DEPTH];
     int stackPtr = 0;
     
     stack[stackPtr++] = 0; // Start with the root node.
@@ -92,7 +84,7 @@ void traverseBVH(vec3 rayOrigin, vec3 rayDirection,  MeshAddresses mesh, inout H
               }
             }
         } else { // Interior node
-            if (stackPtr > MAX_BVH_STACK_DEPTH - 2)
+            if (stackPtr > BVH_MAX_DEPTH - 2)
                  continue; // Stack is full, cannot traverse deeper.
             
             if (node.leftChild >= 0)
@@ -153,18 +145,29 @@ void traceRayCompute(vec3 rayOrigin, vec3 rayDirection, inout Payload payload) {
         const MeshAddresses mesh = meshes[inst.meshId];
         const Face face = FaceBuffer(mesh.faceAddress).data[hit.primitiveIndex];
         const Material material = MaterialBuffer(mesh.materialAddress).data[face.materialIndex];
+
         const Vertex v0 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 0]];
         const Vertex v1 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 1]];
         const Vertex v2 = VertexBuffer(mesh.vertexAddress).data[IndexBuffer(mesh.indexAddress).data[3 * hit.primitiveIndex + 2]];
+
         vec3 localPos = interpolateBarycentric(hit.barycentrics, v0.position, v1.position, v2.position);
-        vec3 localNrm = normalize(interpolateBarycentric(hit.barycentrics, v0.normal, v1.normal, v2.normal));
+        vec3 shadingNormalLocal = normalize(interpolateBarycentric(hit.barycentrics, v0.normal, v1.normal, v2.normal));
         vec3 localTan = normalize(interpolateBarycentric(hit.barycentrics, v0.tangent, v1.tangent, v2.tangent));
         vec2 uv = interpolateBarycentric(hit.barycentrics, v0.uv, v1.uv, v2.uv);
+
+        vec3 p0 = v0.position;
+        vec3 p1 = v1.position;
+        vec3 p2 = v2.position;
+        vec3 geometricNormalLocal = normalize(cross(p1 - p0, p2 - p0));
+
         vec3 worldPos = (inst.transform * vec4(localPos, 1.0)).xyz;
         mat3 normalMatrix = transpose(inverse(mat3(inst.transform)));
-        vec3 interpolatedNormal = normalize(normalMatrix * localNrm);
-        vec3 worldTan = normalize(mat3(inst.transform) * localTan);
-        shadeClosestHit(worldPos, interpolatedNormal, worldTan, uv, rayDirection, material, payload);
+
+        vec3 geometricNormalWorld = normalize(normalMatrix * geometricNormalLocal); // The true face normal
+        vec3 shadingNormalWorld = normalize(normalMatrix * shadingNormalLocal);     // The smooth, interpolated normal
+        vec3 worldTan = normalize(normalMatrix * localTan);
+
+        shadeClosestHit(worldPos, geometricNormalWorld, shadingNormalWorld, worldTan, uv, rayDirection, material, payload);
         payload.objectIndex = hit.instanceIndex;
     }
 }

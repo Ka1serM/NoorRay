@@ -22,13 +22,12 @@ Context::Context(const int width, const int height) : windowWidth(width), window
         throw std::runtime_error("Failed to load Vulkan library via SDL: " + std::string(SDL_GetError()));
 
     float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    if (dpiScaleFloat != 0.0f) //only if this doesnt fail
-    {
+    if (dpiScaleFloat != 0.0f) {
         dpiScale = dpiScaleFloat;
         windowWidth  = static_cast<int>(windowWidth  * dpiScale);
         windowHeight = static_cast<int>(windowHeight * dpiScale);
     }
-    
+
     window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
     if (!window)
         throw std::runtime_error("Failed to create SDL window: " + std::string(SDL_GetError()));
@@ -38,35 +37,40 @@ Context::Context(const int width, const int height) : windowWidth(width), window
         throw std::runtime_error("Failed to get vkGetInstanceProcAddr: " + std::string(SDL_GetError()));
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-
     createVulkanInstance();
-
     VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
     if (EnableValidationLayers) {
         vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
-        messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
-        messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
+        messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
+                                        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
+        messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+                                     vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
         messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
         messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
     }
 
     VkSurfaceKHR _surface;
     if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &_surface))
-         throw std::runtime_error("Failed to create window surface with SDL: " + std::string(SDL_GetError()));
+        throw std::runtime_error("Failed to create window surface with SDL: " + std::string(SDL_GetError()));
 
     surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {instance.get()});
-    
+
     pickPhysicalDevice();
     createLogicalDevice();
     VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
 
-    queue = device->getQueue(queueFamilyIndices.front(), 0);
+    // Create graphics command pool
+    vk::CommandPoolCreateInfo graphicsPoolInfo{};
+    graphicsPoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+    graphicsPoolInfo.setQueueFamilyIndex(graphicsQueueFamilyIndex);
+    graphicsCommandPool = device->createCommandPoolUnique(graphicsPoolInfo);
 
-    vk::CommandPoolCreateInfo commandPoolInfo;
-    commandPoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-    commandPoolInfo.setQueueFamilyIndex(queueFamilyIndices.front());
-    commandPool = device->createCommandPoolUnique(commandPoolInfo);
+    // Create compute command pool
+    vk::CommandPoolCreateInfo computePoolInfo{};
+    computePoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+    computePoolInfo.setQueueFamilyIndex(computeQueueFamilyIndex);
+    computeCommandPool = device->createCommandPoolUnique(computePoolInfo);
 
     std::vector<vk::DescriptorPoolSize> poolSizes = {
         { vk::DescriptorType::eSampler, 64 },
@@ -82,15 +86,18 @@ Context::Context(const int width, const int height) : windowWidth(width), window
         { vk::DescriptorType::eInputAttachment, 8 },
     };
 
-    if(rtxSupported)
-        poolSizes.emplace_back( vk::DescriptorType::eAccelerationStructureKHR, 16 );
+    if (rtxSupported)
+        poolSizes.emplace_back(vk::DescriptorType::eAccelerationStructureKHR, 16);
 
     uint32_t maxSets = 210;
     vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
+    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | 
+                     vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
     poolInfo.maxSets = maxSets;
     poolInfo.setPoolSizes(poolSizes);
     descriptorPool = device->createDescriptorPoolUnique(poolInfo);
+
+    std::cout << "Context initialized with graphics and compute command pools." << std::endl;
 }
 
 void Context::createVulkanInstance() {
@@ -201,48 +208,71 @@ void Context::pickPhysicalDevice() {
 }
 
 void Context::createLogicalDevice() {
-    std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
+    std::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
+
+    graphicsQueueFamilyIndex = UINT32_MAX;
+    computeQueueFamilyIndex  = UINT32_MAX;
+
+    // Find graphics + present queue
     for (uint32_t i = 0; i < queueFamilies.size(); i++) {
         const auto& flags = queueFamilies[i].queueFlags;
         bool hasGraphics = static_cast<bool>(flags & vk::QueueFlagBits::eGraphics);
-        bool hasCompute = static_cast<bool>(flags & vk::QueueFlagBits::eCompute);
-        bool hasPresent = physicalDevice.getSurfaceSupportKHR(i, surface.get());
+        bool hasCompute  = static_cast<bool>(flags & vk::QueueFlagBits::eCompute);
+        bool hasPresent  = physicalDevice.getSurfaceSupportKHR(i, surface.get());
 
-        if (hasGraphics && hasCompute && hasPresent) {
-            queueFamilyIndices.push_back(i);
-            break;
-        }
+        if (hasGraphics && hasPresent && graphicsQueueFamilyIndex == UINT32_MAX)
+            graphicsQueueFamilyIndex = i;
+
+        if (hasCompute && computeQueueFamilyIndex == UINT32_MAX)
+            computeQueueFamilyIndex = i;
     }
 
-    if (queueFamilyIndices.empty())
-        throw std::runtime_error("Could not find a suitable queue family!");
+    if (graphicsQueueFamilyIndex == UINT32_MAX)
+        throw std::runtime_error("Failed to find a graphics + present queue family!");
+    if (computeQueueFamilyIndex == UINT32_MAX)
+        computeQueueFamilyIndex = graphicsQueueFamilyIndex; // fallback to same queue if needed
+
+    constexpr float queuePriority = 1.0f;
+    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
+
+    // Graphics queue
+    vk::DeviceQueueCreateInfo graphicsQueueInfo{};
+    graphicsQueueInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+    graphicsQueueInfo.queueCount = 1;
+    graphicsQueueInfo.pQueuePriorities = &queuePriority;
+    queueCreateInfos.push_back(graphicsQueueInfo);
+
+    // Compute queue (if different)
+    if (computeQueueFamilyIndex != graphicsQueueFamilyIndex) {
+        vk::DeviceQueueCreateInfo computeQueueInfo{};
+        computeQueueInfo.queueFamilyIndex = computeQueueFamilyIndex;
+        computeQueueInfo.queueCount = 1;
+        computeQueueInfo.pQueuePriorities = &queuePriority;
+        queueCreateInfos.push_back(computeQueueInfo);
+    }
 
     if (rtxSupported) {
         std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
         RequiredDeviceExtensions.insert(RequiredDeviceExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
-    } else {
+    } else
         std::cout << "Ray tracing extensions are not supported. Proceeding without them." << std::endl;
-    }
-
+    
+    // Prepare device features
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
     rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
-
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelFeatures{};
     accelFeatures.sType = vk::StructureType::ePhysicalDeviceAccelerationStructureFeaturesKHR;
-
     vk::PhysicalDeviceVulkan12Features features12{};
     features12.sType = vk::StructureType::ePhysicalDeviceVulkan12Features;
-
     features12.pNext = &rtFeatures;
     rtFeatures.pNext = &accelFeatures;
 
     vk::PhysicalDeviceFeatures2 features2{};
     features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
     features2.pNext = &features12;
-
     physicalDevice.getFeatures2(&features2);
 
-    auto& coreFeatures = features2.features;
+        auto& coreFeatures = features2.features;
 
     std::cout << "=== Core Features ===" << std::endl;
     std::cout << "shaderInt64: " << coreFeatures.shaderInt64 << std::endl;
@@ -282,27 +312,28 @@ void Context::createLogicalDevice() {
     features12.pNext = &rtFeatures;
     rtFeatures.pNext = &accelFeatures;
     features2.pNext = &features12;
-
-    constexpr float queuePriority = 1.0f;
-    vk::DeviceQueueCreateInfo queueCreateInfo{};
-    queueCreateInfo.queueFamilyIndex = queueFamilyIndices.front();
-    queueCreateInfo.queueCount = 1;
-    queueCreateInfo.pQueuePriorities = &queuePriority;
-
+    
     vk::DeviceCreateInfo deviceCreateInfo{};
-    deviceCreateInfo.sType = vk::StructureType::eDeviceCreateInfo;
-    deviceCreateInfo.queueCreateInfoCount = 1;
-    deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+    deviceCreateInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+    deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
     deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(RequiredDeviceExtensions.size());
     deviceCreateInfo.ppEnabledExtensionNames = RequiredDeviceExtensions.data();
-
     deviceCreateInfo.pNext = &features2;
     deviceCreateInfo.pEnabledFeatures = nullptr;
 
+    // Create device
     device = physicalDevice.createDeviceUnique(deviceCreateInfo);
+
+    // Retrieve queues
+    graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
+    computeQueue  = device->getQueue(computeQueueFamilyIndex, 0);
+
+    std::cout << "Logical device created with separate queues:" 
+              << "\n  Graphics queue family: " << graphicsQueueFamilyIndex
+              << "\n  Compute queue family:  " << computeQueueFamilyIndex << std::endl;
 }
 
-uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const {
+uint32_t Context::findMemoryType(const uint32_t typeFilter, const vk::MemoryPropertyFlags properties) const {
     const vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i)
         if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
@@ -312,8 +343,8 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
 }
 
 void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) {
-    
-    vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
+
+    const vk::CommandBufferAllocateInfo allocInfo(computeCommandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
     vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
 
     commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
@@ -321,10 +352,23 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
     commandBuffer->end();
 
     vk::UniqueFence fence = device->createFenceUnique({});
-    vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
-    queue.submit(submitInfo, *fence);
-
+    const vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
+    computeQueue.submit(submitInfo, *fence);
+    
     (void)device->waitForFences(*fence, VK_TRUE, UINT64_MAX);
+}
+
+void Context::oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func) {
+    const vk::CommandBufferAllocateInfo allocInfo(computeCommandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
+    vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
+
+    commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    func(*commandBuffer);
+    commandBuffer->end();
+
+    const vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
+    computeQueue.submit(submitInfo, {});
+    // no fence, no CPU wait
 }
 
 vk::PresentModeKHR Context::chooseSwapPresentMode() const {
@@ -370,9 +414,17 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
     return vk::False;
 }
 
-void Context::queryWindowSize()
+bool Context::queryWindowSize()
 {
-    SDL_GetWindowSizeInPixels(window, &windowWidth, &windowHeight);
+    int newWidth = 0, newHeight = 0;
+    SDL_GetWindowSizeInPixels(window, &newWidth, &newHeight);
+
+    if (newWidth != windowWidth || newHeight != windowHeight) {
+        windowWidth = newWidth;
+        windowHeight = newHeight;
+        return true; // resize occurred
+    }
+    return false; // no change
 }
 
 Context::~Context() {

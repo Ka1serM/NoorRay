@@ -8,9 +8,9 @@
 #include "UI/ImGuiManager.h"
 #include "Scene/Scene.h"
 
-static constexpr vec3 FRONT = vec3(0, 0, 1);
-static constexpr vec3 WORLD_UP = vec3(0.0f, -1.0f, 0.0f);
-static constexpr vec3 VULKAN_Z_PLUS = vec3(0.0f, 0.0f, 1.0f);
+static constexpr auto FRONT = vec3(0, 0, 1);
+static constexpr auto WORLD_UP = vec3(0.0f, -1.0f, 0.0f);
+static constexpr auto VULKAN_Z_PLUS = vec3(0.0f, 0.0f, 1.0f);
 
 PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) 
     : SceneObject(scene, name, transform), scene(scene), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
@@ -53,87 +53,103 @@ mat4 PerspectiveCamera::getProjectionMatrix() const {
 void PerspectiveCamera::setFocalLength(const float val) {
     cameraData.focalLength = val;
     updateHorizontalVertical();
-    scene.setAccumulationDirty();
+   scene.setDirtyFlag(Accumulation);
 }
 
 void PerspectiveCamera::setAperture(const float val) {
     cameraData.aperture = val;
-    scene.setAccumulationDirty();
+   scene.setDirtyFlag(Accumulation);
 }
 
 void PerspectiveCamera::setFocusDistance(const float val) {
     cameraData.focusDistance = val;
-    scene.setAccumulationDirty();
+   scene.setDirtyFlag(Accumulation);
 }
 
 void PerspectiveCamera::setBokehBias(const float val) {
     cameraData.bokehBias = val;
-    scene.setAccumulationDirty();
+   scene.setDirtyFlag(Accumulation);
 }
 
 void PerspectiveCamera::setSensorSize(const float width, const float height) {
     sensorWidth = width;
     sensorHeight = height;
     updateHorizontalVertical();
-    scene.setAccumulationDirty();
+   scene.setDirtyFlag(Accumulation);
 }
-
 void PerspectiveCamera::update() {
-    const bool wasDirty = scene.isAccumulationDirty();
+    const bool wasDirty = scene.isDirty(Accumulation);
     const vec3 oldPosition = getPosition();
     const vec3 oldDirection = cameraData.direction;
 
-    float dx, dy = 0;
-    SDL_GetRelativeMouseState(&dx, &dy);
+    if (arcballMode) {
+        float dx, dy;
+        SDL_GetRelativeMouseState(&dx, &dy);
 
-    constexpr float sensitivity = 0.1f;
-    const float yaw = radians(-dx * sensitivity);
-    const float pitch = radians(-dy * sensitivity);
+        float sensitivity = 0.005f;
+        arcballYaw   -= dx * sensitivity;
+        arcballPitch -= dy * sensitivity;
+        arcballPitch  = clamp(arcballPitch, -glm::half_pi<float>() + 0.01f, glm::half_pi<float>() - 0.01f);
 
-    quat rot = getRotation();
+        // Compute new camera position
+        vec3 offset;
+        offset.x = arcballDistance * cos(arcballPitch) * cos(arcballYaw);
+        offset.y = arcballDistance * sin(arcballPitch);
+        offset.z = arcballDistance * cos(arcballPitch) * sin(arcballYaw);
 
-    // Camera forward (local +Z)
-    vec3 forward = rot * FRONT;
+        vec3 camPos = arcballPivot + offset;
+        setPosition(camPos);
 
-    // Camera right axis (local X)
-    vec3 right = normalize(cross(forward, WORLD_UP));
+        // Compute rotation to look at the pivot
+        vec3 forward = normalize(arcballPivot - camPos);       // direction camera should face
+        vec3 right   = normalize(cross(WORLD_UP, forward));    // local X axis
+        vec3 up      = cross(forward, right);                  // local Y axis
 
-    // Apply yaw around WORLD_UP (global up)
-    quat yawQuat = angleAxis(yaw, WORLD_UP);
+        mat3 rotMat = mat3(right, up, forward);               // 3x3 rotation matrix
+        setRotation(quat_cast(rotMat));                       // convert to quaternion
+    }
+    else {
+        // First-person camera
+        float dx, dy = 0;
+        SDL_GetRelativeMouseState(&dx, &dy);
 
-    // Apply pitch around camera’s right axis (local right)
-    quat pitchQuat = angleAxis(pitch, right);
+        constexpr float sensitivity = 0.1f;
+        const float yaw = radians(-dx * sensitivity);
+        const float pitch = radians(-dy * sensitivity);
 
-    // Combine rotations: pitch * yaw * current rotation
-    quat newRot = normalize(pitchQuat * yawQuat * rot);
+        quat rot = getRotation();
+        vec3 forward = rot * FRONT;
+        vec3 right = normalize(cross(forward, WORLD_UP));
+        quat yawQuat = angleAxis(yaw, WORLD_UP);
+        quat pitchQuat = angleAxis(pitch, right);
+        quat newRot = normalize(pitchQuat * yawQuat * rot);
+        setRotation(newRot);
 
-    setRotation(newRot);
+        // Movement
+        ImGuiIO& io = ImGui::GetIO();
+        float speed = io.DeltaTime;
+        if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) speed *= 10.0f;
 
-    // --- Movement ---
-    ImGuiIO& io = ImGui::GetIO();
-    float speed = io.DeltaTime;
-    if (ImGui::IsKeyDown(ImGuiKey_LeftShift))
-        speed *= 10.0f;
-    
-    vec3 position = getPosition();
-    forward = newRot * vec3(0, 0, 1);
-    right = normalize(cross(forward, WORLD_UP));
-    vec3 upDir = WORLD_UP;
+        vec3 position = getPosition();
+        forward = newRot * vec3(0, 0, 1);
+        right = normalize(cross(forward, WORLD_UP));
+        vec3 upDir = WORLD_UP;
 
-    if (ImGui::IsKeyDown(ImGuiKey_W)) position += forward * speed;
-    if (ImGui::IsKeyDown(ImGuiKey_S)) position -= forward * speed;
-    if (ImGui::IsKeyDown(ImGuiKey_A)) position -= right * speed;
-    if (ImGui::IsKeyDown(ImGuiKey_D)) position += right * speed;
-    if (ImGui::IsKeyDown(ImGuiKey_E)) position += upDir * speed;
-    if (ImGui::IsKeyDown(ImGuiKey_Q)) position -= upDir * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_W)) position += forward * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) position -= forward * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) position -= right * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) position += right * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_E)) position += upDir * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_Q)) position -= upDir * speed;
 
-    setPosition(position);
+        setPosition(position);
+    }
+
     updateCameraData();
 
-    const bool changed = wasDirty || !all(epsilonEqual(oldDirection, cameraData.direction, 0.001f)) || !all(epsilonEqual(oldPosition, getPosition(), 0.001f));
-    if (changed) {
+    if (wasDirty || !all(epsilonEqual(oldDirection, cameraData.direction, 0.001f)) || !all(epsilonEqual(oldPosition, getPosition(), 0.001f))) {
         updateHorizontalVertical();
-        scene.setAccumulationDirty();
+        scene.setDirtyFlag(Accumulation);
     }
 }
 
@@ -174,20 +190,10 @@ void PerspectiveCamera::renderUi() {
     });
     
     if (anyChanged)
-        scene.setAccumulationDirty();
+       scene.setDirtyFlag(Accumulation);
 }
 
-void PerspectiveCamera::setPosition(const vec3& pos) {
-    SceneObject::setPosition(pos);
-    updateCameraData();
-}
-
-void PerspectiveCamera::setRotation(const quat& rot) {
-    SceneObject::setRotation(rot);
-    updateCameraData();
-}
-
-void PerspectiveCamera::setRotationEuler(const vec3& euler) {
-    SceneObject::setRotationEuler(euler);
+void PerspectiveCamera::onTransformUpdated() {
+    SceneObject::onTransformUpdated();
     updateCameraData();
 }

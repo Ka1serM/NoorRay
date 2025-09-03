@@ -152,7 +152,7 @@ public:
 
         const vk::WriteDescriptorSet write{
             descriptorSet.get(),
-            6, // DstBinding 6 is for textures
+            7, // DstBinding 6 is for textures
             0,
             descriptorCount,
             vk::DescriptorType::eCombinedImageSampler,
@@ -184,7 +184,7 @@ public:
 
         vk::WriteDescriptorSet write{};
         write.setDstSet(descriptorSet.get());
-        write.setDstBinding(5); // DstBinding 5 is for meshes
+        write.setDstBinding(6); // DstBinding 5 is for meshes
         write.setDescriptorType(vk::DescriptorType::eStorageBuffer);
         write.setDescriptorCount(1); // Always 1 for a single buffer binding
         write.setBufferInfo(bufferInfo); 

@@ -1,7 +1,6 @@
 ﻿#include "ComputeRaytracer.h"
 
 #include "Globals.h"
-#include "Utils.h"
 #include "Scene/MeshInstance.h"
 
 ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height)
@@ -19,21 +18,21 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
     shaderStageInfo.setPName("main");
 
     // Define the descriptor set layout bindings.
-    std::vector<vk::DescriptorSetLayoutBinding> bindings{
+    const std::vector<vk::DescriptorSetLayoutBinding> bindings{
         {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh instances buffer
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output emission image
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output color image
         {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output albedo image
         {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output normal image
-        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output crypto  image
-        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh buffer
-        {6, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute}, // Textures
+        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output crypto image
+        {5, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output position image
+        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh buffer
+        {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute}, // Textures
     };
 
     createDescriptorSet(bindings);
 
     // 4. Create the pipeline layout
     vk::PushConstantRange pushRange{};
-    pushRange.setOffset(0);
     pushRange.setSize(sizeof(PushConstantsData));
     pushRange.setStageFlags(vk::ShaderStageFlagBits::eCompute);
 
@@ -66,7 +65,7 @@ void ComputeRaytracer::updateTLAS()
 
     for (const auto* meshInstance : meshInstances)
     {
-        const mat4 transform = meshInstance->getTransform().getMatrix();
+        const mat4 transform = meshInstance->getWorldTransform().getMatrix();
         instances.push_back({
             .transform = transform,
             .inverseTransform = inverse(transform),

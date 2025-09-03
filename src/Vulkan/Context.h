@@ -40,9 +40,15 @@ class Context {
     vk::UniqueSurfaceKHR surface;
     vk::PhysicalDevice physicalDevice;
     vk::UniqueDevice device;
-    vk::Queue queue;
-    std::vector<uint32_t> queueFamilyIndices;
-    vk::UniqueCommandPool commandPool;
+
+    vk::Queue graphicsQueue;  // For swapchain/UI work
+    vk::Queue computeQueue;   // For asynchronous compute (raytracing)
+    uint32_t graphicsQueueFamilyIndex;
+    uint32_t computeQueueFamilyIndex;
+    
+    vk::UniqueCommandPool graphicsCommandPool;
+    vk::UniqueCommandPool computeCommandPool;
+    
     vk::UniqueDescriptorPool descriptorPool;
 
     bool rtxSupported = false;
@@ -58,6 +64,7 @@ public:
     // Helper functions
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
     void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func);
+    void oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func);
     vk::PresentModeKHR chooseSwapPresentMode() const;
     vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const;
 
@@ -78,12 +85,16 @@ public:
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }
     const vk::Device& getDevice() const { return device.get(); }
-    const vk::Queue& getQueue() const { return queue; }
-    const std::vector<uint32_t>& getQueueFamilyIndices() const { return queueFamilyIndices; }
-    const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
+    const vk::Queue& getGraphicsQueue() const { return graphicsQueue; }
+    const vk::Queue& getComputeQueue() const { return computeQueue; }
+    uint32_t getGraphicsQueueFamilyIndex() const { return graphicsQueueFamilyIndex; }
+    uint32_t getComputeQueueFamilyIndex() const { return computeQueueFamilyIndex; }
+    const vk::CommandPool& getGraphicsCommandPool() const { return graphicsCommandPool.get(); }
+    const vk::CommandPool& getComputeCommandPool() const { return computeCommandPool.get(); }
+    
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
 
-    void queryWindowSize();
+    bool queryWindowSize();
 
     bool isRtxSupported() const { return rtxSupported; }
 };

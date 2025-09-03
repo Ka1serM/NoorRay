@@ -1,14 +1,17 @@
 ﻿#include "MainMenuBar.h"
 #include "imgui.h"
 #include "portable-file-dialogs.h"
-#include "Utils.h"
 #include "Scene/MeshInstance.h"
 #include <SDL3/SDL.h>
 #include <iostream>
 #include <future>
 
-MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene) 
-    : ImGuiComponent(std::move(name)), scene(scene), context(context) {}
+#include "Scene/SceneImporter.h"
+
+MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene)
+: ImGuiComponent(std::move(name)), scene(scene), context(context), pendingFileType()
+{
+}
 
 void MainMenuBar::renderUi() {
     if (ImGui::BeginMainMenuBar()) {
@@ -83,44 +86,23 @@ void MainMenuBar::renderAddMenu() const {
 }
 
 // Function to handle the import logic once a file is selected
-void MainMenuBar::handleFileImport(const std::string& filePath, FileType type) const
+void MainMenuBar::handleFileImport(const std::string& filePath, const FileType type) const
 {
-    if (filePath.empty()) {
+    if (filePath.empty())
         return;
-    }
 
     try {
         switch (type) {
-            case FileType::OBJ: {
-                std::vector<Vertex> vertices;
-                std::vector<uint32_t> indices;
-                std::vector<Face> faces;
-                std::vector<Material> materials;
-                Utils::loadObj(scene, filePath, vertices, indices, faces, materials);
-                auto meshAsset = std::make_shared<MeshAsset>(scene, filePath, std::move(vertices), std::move(indices), std::move(faces), std::move(materials));
-                scene.add(meshAsset);
-                auto instance = std::make_unique<MeshInstance>(scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
-                int instanceIndex = scene.add(std::move(instance));
-                scene.setActiveObjectIndex(instanceIndex);
+            case FileType::OBJ:
+                SceneImporter::ImportObjScene(scene, filePath);
                 break;
-            }
-            case FileType::CRTSCENE: {
-                std::vector<Vertex> vertices;
-                std::vector<uint32_t> indices;
-                std::vector<Face> faces;
-                std::vector<Material> materials;
-                Utils::loadCrtScene(scene, filePath, vertices, indices, faces, materials);
-                auto meshAsset = std::make_shared<MeshAsset>(scene, filePath, std::move(vertices), std::move(indices), std::move(faces), std::move(materials));
-                scene.add(meshAsset);
-                auto instance = std::make_unique<MeshInstance>(scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
-                int instanceIndex = scene.add(std::move(instance));
-                scene.setActiveObjectIndex(instanceIndex);
+            case FileType::CRTSCENE:
+                SceneImporter::ImportCrtScene(scene, filePath);
                 break;
-            }
-            case FileType::TEXTURE: {
+        
+            case FileType::TEXTURE:
                 scene.add(Texture(context, filePath));
                 break;
-            }
             default:
                 break;
         }

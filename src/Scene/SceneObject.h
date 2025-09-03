@@ -1,31 +1,35 @@
 ﻿#pragma once
 
 #include <string>
-
+#include <vector>
 #include "Scene.h"
 #include "../Mesh/Transform.h"
 #include "UI/ImGuiComponent.h"
 
-//forward declaration to avoid circular dependency
 class Scene;
 
 class SceneObject : public ImGuiComponent {
 
-public:
+protected:
     Transform transform;
     Scene& scene;
-    
-    SceneObject(Scene& scene, std::string name, const Transform& transform);
+
+    SceneObject* parent = nullptr;
+    std::vector<SceneObject*> children;
+
+public:
+    SceneObject(Scene& scene, const std::string& name, const Transform& transform);
 
     std::string getType() const override { return "Scene Object"; }
+    void renderUi() override;
 
-    std::string name;
+    SceneObject* getParent() const { return parent; }
+    const std::vector<SceneObject*>& getChildren() const { return children; }
 
-
-    Transform getTransform() const {
-        return transform;
-    }
-
+    void setParent(SceneObject* parent) { this->parent = parent; }
+    void addChild(SceneObject* child) { children.push_back(child); }
+    void removeChild(SceneObject* child) { std::erase(children, child); }
+    
     glm::vec3 getPosition() const {
         return transform.getPosition();
     }
@@ -42,12 +46,17 @@ public:
         return transform.getScale();
     }
 
-    void renderUi() override;
+    Transform getTransform() const { return transform; }
+
+    virtual void onTransformUpdated();
+    
     virtual void setPosition(const glm::vec3& pos);
     virtual void setRotation(const glm::quat& rot);
     virtual void setRotationEuler(const glm::vec3& rot);
     virtual void setScale(const glm::vec3& scale);
 
-    virtual void setTransform(const Transform& transf);
-    virtual void setTransformMatrix(const glm::mat4& transf);
+    virtual void setLocalTransform(const Transform& transf);
+    virtual void setWorldTransformFromMatrix(const glm::mat4& transf);
+
+    Transform getWorldTransform() const;
 };

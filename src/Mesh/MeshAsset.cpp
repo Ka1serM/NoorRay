@@ -1,6 +1,5 @@
 ﻿#include "MeshAsset.h"
-#include "Utils.h"
-
+#include <utility>
 #include <vector>
 #include <string>
 #include <memory>
@@ -159,7 +158,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::stri
             uint32_t i2 = i0 + 1;
             uint32_t i3 = i1 + 1;
 
-            indices.insert(indices.end(), {i0, i1, i2, i2, i1, i3});
+            indices.insert(indices.end(), {i0, i2, i1, i2, i3, i1});
         }
     }
 
@@ -219,8 +218,8 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
     return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
 }
 
-MeshAsset::MeshAsset(Scene& scene, const std::string& name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
-    : scene(scene), path(name), vertices(vertices), indices(indices), faces(faces), materials(materials)
+MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
+    : scene(scene), path(std::move(name)), vertices(vertices), indices(indices), faces(faces), materials(materials)
 {
 
     // Upload mesh data to GPU from the new member variable copies
@@ -296,8 +295,9 @@ void MeshAsset::renderUi() {
 
     // Helper lambda for drawing texture selection combos.
     auto drawTextureCombo = [&](const char* label, int& texIndex, const int materialIndex) {
+        ImGui::TableNextRow();
         // The current index for the combo box. We add 1 because index 0 is our "No Texture" option.
-        int currentComboIndex = texIndex == -1 ? 0 : texIndex + 1;
+        const int currentComboIndex = texIndex == -1 ? 0 : texIndex + 1;
 
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(label);
@@ -336,47 +336,33 @@ void MeshAsset::renderUi() {
             if (ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp))
             {
                 drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
-                ImGui::TableNextRow();
                 ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
 
-                ImGui::TableNextRow();
+
                 drawTextureCombo("Specular Texture", mat.specularIndex, i);
-                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.specular = v; anyMaterialChanged = true; });
 
-                ImGui::TableNextRow();
+
                 drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
-                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.metallic = v; anyMaterialChanged = true; });
 
-                ImGui::TableNextRow();
+
                 drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
-                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.roughness = v; anyMaterialChanged = true; });
                 
-                ImGui::TableNextRow();
                 drawTextureCombo("Normal Texture", mat.normalIndex, i);
-                
-                ImGui::TableNextRow();
+
                 ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
-                
-                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Transmission Strength", mat.transmission, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmission = v; anyMaterialChanged = true; });
-                ImGui::TableNextRow();
                 drawTextureCombo("Transmission Texture", mat.transmissionIndex, i);
-                ImGui::TableNextRow();
                 ImGuiManager::colorEdit3Row("Transmission Color", mat.transmissionColor, [&](const vec3 v) { mat.transmissionColor = v; anyMaterialChanged = true; });
                 
-                ImGui::TableNextRow();
                 ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
-                ImGui::TableNextRow();
                 drawTextureCombo("Emission Texture", mat.emissionIndex, i);
-                ImGui::TableNextRow();
                 ImGuiManager::colorEdit3Row("Emission Color", mat.emission, [&](const vec3 v) { mat.emission = v; anyMaterialChanged = true; });
 
-                ImGui::TableNextRow();
+
                 ImGuiManager::dragFloatRow("Opacity", mat.opacity, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.opacity = v; anyMaterialChanged = true; });
-                ImGui::TableNextRow();
                 drawTextureCombo("Opacity Texture", mat.opacityIndex, i);
                 
                 ImGui::EndTable();
@@ -387,7 +373,7 @@ void MeshAsset::renderUi() {
 
     if (anyMaterialChanged) {
         dirty = true;
-        scene.setMeshesDirty();
+        scene.setDirtyFlag(Meshes);
     }
 }
 
@@ -395,4 +381,5 @@ void MeshAsset::renderUi() {
 void MeshAsset::updateMaterials() {
     materialBuffer = Buffer{scene.getContext(), Buffer::Type::Storage, sizeof(Material) * materials.size(), materials.data()};
     dirty = false; // Reset dirty flag after updating
+    scene.setDirtyFlag(Accumulation);
 }

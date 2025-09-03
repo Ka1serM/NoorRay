@@ -20,6 +20,15 @@ private:
 
     mat4 viewMatrix{};
     mat4 projectionMatrix{};
+
+    bool arcballMode = false;
+    vec3 arcballPivot = vec3(0.0f);
+    float arcballYaw = 0.0f;
+    float arcballPitch = 0.0f;
+    float arcballDistance = 5.0f;
+
+    void setArcballMode(bool enabled) { arcballMode = enabled; }
+    void setArcballPivot(const vec3& pivot) { arcballPivot = pivot; }
 public:
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
     
@@ -44,9 +53,7 @@ public:
     void update();
     void renderUi() override;
 
-    void setPosition(const vec3& pos) override;
-    void setRotation(const quat& rot) override;
-    void setRotationEuler(const vec3& rot) override;
+    void onTransformUpdated() override;
 
 private:
     void updateHorizontalVertical();

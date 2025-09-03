@@ -82,7 +82,7 @@ Image::Image(Context& context, const void* data, int width, int height, vk::Form
     viewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
     view = context.getDevice().createImageViewUnique(viewInfo);
 
-    context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
+    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
         setImageLayout(cmd, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
         vk::BufferImageCopy region{};
@@ -256,42 +256,4 @@ void Image::setImageLayout(const vk::CommandBuffer& commandBuffer, const vk::Ima
     barrier.setDstAccessMask(toAccessFlags(newLayout));
 
     commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,{}, 0, nullptr, 0, nullptr, 1, &barrier);
-}
-
-void Image::update(Context& context, const void* data, size_t dataSize) {
-    if (!data || dataSize == 0) {
-        std::cerr << "Warning: Attempted to update image with null data or zero size." << std::endl;
-        return;
-    }
-
-    vk::BufferCreateInfo bufferInfo{};
-    bufferInfo.setSize(dataSize);
-    bufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
-    vk::UniqueBuffer stagingBuffer = context.getDevice().createBufferUnique(bufferInfo);
-
-    vk::MemoryRequirements memRequirements = context.getDevice().getBufferMemoryRequirements(*stagingBuffer);
-    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    vk::MemoryAllocateInfo allocInfo{};
-    allocInfo.setAllocationSize(memRequirements.size);
-    allocInfo.setMemoryTypeIndex(memTypeIndex);
-    vk::UniqueDeviceMemory stagingMemory = context.getDevice().allocateMemoryUnique(allocInfo);
-    context.getDevice().bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
-
-    void* mapped = context.getDevice().mapMemory(*stagingMemory, 0, dataSize);
-    std::memcpy(mapped, data, dataSize);
-    context.getDevice().unmapMemory(*stagingMemory);
-
-    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-        setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
-        
-        vk::BufferImageCopy region{};
-        region.setBufferOffset(0);
-        region.setImageSubresource({vk::ImageAspectFlagBits::eColor, 0, 0, 1});
-        region.setImageOffset({0, 0, 0});
-        region.setImageExtent({info.extent.width, info.extent.height, 1});
-        
-        cmd.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, region);
-        setImageLayout(cmd, vk::ImageLayout::eGeneral);
-    });
 }

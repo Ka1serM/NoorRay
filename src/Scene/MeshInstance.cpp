@@ -7,7 +7,7 @@
 MeshInstance::MeshInstance(Scene& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf) : SceneObject(scene, name, transf), meshAsset(std::move(asset)) {
 
     instanceData = vk::AccelerationStructureInstanceKHR{};
-    instanceData.setTransform(transform.getVkTransformMatrix());
+    instanceData.setTransform(getWorldTransform().getVkTransformMatrix());
     instanceData.setInstanceCustomIndex(meshAsset->getMeshIndex()); // Use in Shader to access correct Buffer for Mesh
     instanceData.setMask(0xFF);
     instanceData.setInstanceShaderBindingTableRecordOffset(0);
@@ -16,15 +16,15 @@ MeshInstance::MeshInstance(Scene& scene, const std::string& name, std::shared_pt
     instanceData.setAccelerationStructureReference(meshAsset->getBlasAddress());
 }
 
-void MeshInstance::updateInstanceTransform() {
-    instanceData.setTransform(transform.getVkTransformMatrix());
-    scene.setTlasDirty();
+void MeshInstance::onTransformUpdated() {
+    SceneObject::onTransformUpdated();
+    instanceData.setTransform(getWorldTransform().getVkTransformMatrix());
+    scene.setDirtyFlag(TLAS);
 }
 
 void MeshInstance::renderUi() {
     SceneObject::renderUi();
 
-    ImGui::TableNextRow();
     ImGuiManager::tableRowLabel("Mesh Asset");
 
     ImGui::TableNextColumn();
@@ -32,43 +32,4 @@ void MeshInstance::renderUi() {
         meshAsset->renderUi();  // render mesh details inside the value column
     else
         ImGui::TextUnformatted("No Mesh Assigned.");
-
-    ImGui::TableNextRow();  
-}
-
-
-void MeshInstance::setPosition(const vec3& pos)
-{
-    SceneObject::setPosition(pos);
-    updateInstanceTransform();
-}
-
-void MeshInstance::setRotation(const quat& rot)
-{
-    SceneObject::setRotation(rot);
-    updateInstanceTransform();
-}
-
-void MeshInstance::setRotationEuler(const vec3& rot)
-{
-    SceneObject::setRotationEuler(rot);
-    updateInstanceTransform();
-}
-
-void MeshInstance::setScale(const vec3& scale)
-{
-    SceneObject::setScale(scale);
-    updateInstanceTransform();
-}
-
-void MeshInstance::setTransform(const Transform& transf)
-{
-    SceneObject::setTransform(transf);
-    updateInstanceTransform();
-}
-
-void MeshInstance::setTransformMatrix(const mat4& transf)
-{
-    SceneObject::setTransformMatrix(transf);
-    updateInstanceTransform();
 }

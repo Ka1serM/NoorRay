@@ -1,76 +1,137 @@
 ﻿#include "Scene.h"
-#include <ranges>
+#include <algorithm>
 #include <iostream>
 #include "Camera/PerspectiveCamera.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneObject.h"
 
-Scene::Scene(Context& context) : context(context) {
-}
+Scene::Scene(Context& context) : context(context) {}
 
-// Adds a generic SceneObject to the scene.
+// Adds a generic SceneObject to the scene, making it a root object by default.
 int Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     if (auto* camera = dynamic_cast<PerspectiveCamera*>(sceneObject.get()))
         activeCamera = camera;
     
     if (auto* meshInstance = dynamic_cast<MeshInstance*>(sceneObject.get()))
-        addMeshInstance(meshInstance);
+        meshInstances.push_back(meshInstance);
 
-    // Add the object to the main list and mark the TLAS as dirty.
+    // Get a raw pointer to the object before we move the unique_ptr
+    SceneObject* rawPtr = sceneObject.get();
+
+    // Move the object into the ownership list
     sceneObjects.push_back(std::move(sceneObject));
-    setTlasDirty();
-    return static_cast<int>(sceneObjects.size() - 1);
+    
+    // Add the raw pointer to the root object list for the hierarchy
+    rootObjects.push_back(rawPtr);
+    
+    setDirtyFlag(TLAS);
+    setDirtyFlag(Accumulation);
+
+    return sceneObjects.size() - 1; // Return the index of the newly added object
 }
 
 // Adds a mesh asset to the scene.
 void Scene::add(const std::shared_ptr<MeshAsset>& meshAsset) {
     meshAsset->setMeshIndex(static_cast<uint32_t>(meshAssets.size()));
     meshAssets.push_back(meshAsset);
-    setMeshesDirty();
+    setDirtyFlag(Meshes);
 }
 
 // Adds a texture to the scene.
 void Scene::add(Texture&& texture) {
     textureNames.push_back(texture.getName());
     textures.push_back(std::move(texture));
-    // Mark the textures as dirty.
-    setTexturesDirty();
+    setDirtyFlag(Textures);
 }
 
-// Removes a specific SceneObject from the scene.
-bool Scene::remove(const SceneObject* obj) {
-    // Prevent the removal of the active camera.
-    if (activeCamera == obj) {
-        std::cerr << "Warning: Cannot remove the active camera." << std::endl;
+bool Scene::remove(SceneObject* objToRemove) {
+    if (!objToRemove)
         return false;
+
+    // If it's the active camera, just reparent it to root instead of deleting
+    if (objToRemove == activeCamera) {
+        if (objToRemove->getParent())
+            objToRemove->getParent()->removeChild(objToRemove);
+        rootObjects.push_back(objToRemove);
+        return false; // Do not delete camera
     }
 
-    // Check if the object is a mesh instance.
-    const auto* meshInstance = dynamic_cast<const MeshInstance*>(obj);
-    if (meshInstance) {
-        const auto it = std::ranges::find(meshInstances, meshInstance);
-        if (it != meshInstances.end())
-            meshInstances.erase(it);
+    // Recursively remove children, but skip active camera
+    while (!objToRemove->getChildren().empty()) {
+        if (SceneObject* child = objToRemove->getChildren().back(); child == activeCamera) {
+            // Reparent camera to root instead of deleting
+            objToRemove->removeChild(child);
+            rootObjects.push_back(child);
+        } else
+            remove(child); // Safe recursive delete
     }
 
-    const auto it = std::ranges::find_if(sceneObjects,
-        [obj](const std::unique_ptr<SceneObject>& ptr) {
-            return ptr.get() == obj;
-        });
+    // Remove from parent's children list OR from the root list
+    if (objToRemove->getParent())
+        objToRemove->getParent()->removeChild(objToRemove);
+    else
+        std::erase(rootObjects, objToRemove);
 
-    // If found, erase it and mark the TLAS as dirty.
-    if (it != sceneObjects.end()) {
+    // Reset active object index if necessary
+    if (objToRemove == getActiveObject())
+        setActiveObjectIndex(-1);
+
+    if (auto* meshInstance = dynamic_cast<MeshInstance*>(objToRemove))
+        std::erase(meshInstances, meshInstance);
+
+    // Erase the object from main ownership list
+    if (const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) { return ptr.get() == objToRemove; });
+        it != sceneObjects.end()) 
+    {
         sceneObjects.erase(it);
-        setTlasDirty();
+        setDirtyFlag(TLAS);
+        setDirtyFlag(Accumulation);
         return true;
     }
 
     return false;
 }
 
-// Private helper to add a mesh instance. No lock needed as it's called from a locked context.
-void Scene::addMeshInstance(MeshInstance* instance) {
-    meshInstances.push_back(instance);
+// Changes the parent of a SceneObject.
+void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {
+    if (objectToMove == newParent)
+        return; // Cannot parent to self.
+
+    // Prevent parenting to a descendant (which would create a cycle).
+    const SceneObject* p = newParent;
+    while (p != nullptr) {
+        if (p == objectToMove)
+            return;
+        p = p->getParent();
+    }
+
+    // Cache current world transform
+    const Transform worldTransform = objectToMove->getWorldTransform();
+
+    // 1. Remove from old parent
+    if (objectToMove->getParent())
+        objectToMove->getParent()->removeChild(objectToMove);
+    else
+        std::erase(rootObjects, objectToMove);
+
+    // 2. Add to new parent
+    if (newParent)
+        newParent->addChild(objectToMove);
+    else
+        rootObjects.push_back(objectToMove);
+
+    // 3. Update parent pointer
+    objectToMove->setParent(newParent);
+
+    // 4. Restore local transform
+    if (newParent) {
+        const mat4 parentWorld = newParent->getWorldTransform().getMatrix();
+        const mat4 localMatrix = inverse(parentWorld) * worldTransform.getMatrix();
+        objectToMove->setLocalTransform(Transform{localMatrix});
+    } else
+        objectToMove->setLocalTransform(worldTransform);
+
+    objectToMove->onTransformUpdated();
 }
 
 // Retrieves a mesh asset by its name (path).
@@ -79,9 +140,4 @@ std::shared_ptr<MeshAsset> Scene::getMeshAsset(const std::string& name) const {
         if (meshAsset->getPath() == name)
             return meshAsset;
     return nullptr;
-}
-
-// Retrieves the names of all loaded textures.
-std::vector<std::string> Scene::getTextureNames() const {
-    return textureNames;
 }

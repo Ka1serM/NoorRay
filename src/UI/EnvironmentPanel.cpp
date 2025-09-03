@@ -14,14 +14,12 @@ void EnvironmentPanel::renderUi() {
     {
         ImGuiManager::colorEdit3Row("Color", enviromentData.color, [&](const vec3 v) { enviromentData.color = v; anyChanged = true; });
         
-        ImGui::TableNextRow();
         ImGuiManager::dragFloatRow("Intensity", enviromentData.intensity, 0.01f, 0.0f, 1000000.0f, [&](const float v) { enviromentData.intensity = v; anyChanged = true; });
         
-        ImGui::TableNextRow();
         ImGuiManager::tableRowLabel("HDRI Texture");
         
         const auto& textures = scene.getTextures();
-        int oldHdriTexture = enviromentData.textureIndex;
+        const int oldHdriTexture = enviromentData.textureIndex;
 
         if (enviromentData.textureIndex >= static_cast<int>(textures.size()))
             enviromentData.textureIndex = -1;
@@ -54,21 +52,17 @@ void EnvironmentPanel::renderUi() {
         }
         
         if (enviromentData.textureIndex != -1) {
-            ImGui::TableNextRow();
             ImGuiManager::dragFloatRow("Exposure", enviromentData.exposure, 0.01f, -100.f, 100.f, [&](const float v) { enviromentData.exposure = v; anyChanged = true; });
-            
-            ImGui::TableNextRow();
             ImGuiManager::dragFloatRow("Rotation", enviromentData.rotation, 0.1f, 0, 360, [&](const float v) { enviromentData.rotation = v; anyChanged = true; });
         }
 
-        ImGui::TableNextRow();
         ImGuiManager::checkboxRow("Visible", enviromentData.visible, [&](const bool v) { enviromentData.visible = v; anyChanged = true; });
         
         ImGui::EndTable();
     }
     
     if (anyChanged)
-        scene.setAccumulationDirty();
+        scene.setDirtyFlag(Accumulation);
     
     ImGui::End();
 }

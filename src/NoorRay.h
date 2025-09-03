@@ -16,10 +16,6 @@ class NoorRay
 
     std::unique_ptr<GpuRaytracer> raytracer;
     std::unique_ptr<Tonemapper> tonemapper;
-
-    void setupUI();
-    void setupScene();
-
 public:
     
     NoorRay(int windowWidth, int windowHeight, int renderWidth, int renderHeight);

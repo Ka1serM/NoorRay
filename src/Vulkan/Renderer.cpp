@@ -8,11 +8,10 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
 Renderer::Renderer(Context& context)
     : context(context)
 {
-    // --- Graphics Frame Resources ---
+    // Graphics Frame Resources 
     frames.resize(MAX_FRAMES_IN_FLIGHT);
-    
-    vk::CommandBufferAllocateInfo cmdAllocInfo(
-        context.getCommandPool(), vk::CommandBufferLevel::ePrimary, MAX_FRAMES_IN_FLIGHT);
+
+    const vk::CommandBufferAllocateInfo cmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, MAX_FRAMES_IN_FLIGHT);
     auto cmdBuffers = context.getDevice().allocateCommandBuffersUnique(cmdAllocInfo);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
@@ -21,26 +20,26 @@ Renderer::Renderer(Context& context)
         frames[i].inFlightFence = context.getDevice().createFenceUnique({ vk::FenceCreateFlagBits::eSignaled });
     }
 
-    // --- Asynchronous Compute Resources ---
-    vk::CommandBufferAllocateInfo computeCmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, 1);
+    //  Asynchronous Compute Resources 
+    const vk::CommandBufferAllocateInfo computeCmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, 1);
     computeCommandBuffer = std::move(context.getDevice().allocateCommandBuffersUnique(computeCmdAllocInfo).front());
     computeFence = context.getDevice().createFenceUnique({ vk::FenceCreateFlagBits::eSignaled });
     computeFinishedSemaphore = context.getDevice().createSemaphoreUnique({});
     computeSubmitted = false;
 
-    // --- Create initial swapchain ---
+    //  Create initial swapchain 
     createSwapChain();
 }
 
-// --- Destructor ---
+//  Destructor 
 Renderer::~Renderer() {
     context.getDevice().waitIdle();
     std::cout << "Destroying Renderer" << std::endl;
 }
 
-// --- Swapchain creation logic ---
+//  Swapchain creation 
 void Renderer::createSwapChain() {
-    vk::SurfaceCapabilitiesKHR surfaceCapabilities = context.getPhysicalDevice().getSurfaceCapabilitiesKHR(context.getSurface());
+    const vk::SurfaceCapabilitiesKHR surfaceCapabilities = context.getPhysicalDevice().getSurfaceCapabilitiesKHR(context.getSurface());
 
     vk::Extent2D extent;
     if (surfaceCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
@@ -63,7 +62,7 @@ void Renderer::createSwapChain() {
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.getSurface());
     swapchainInfo.setMinImageCount(imageCount);
-    auto swapSurfaceFormat = context.chooseSwapSurfaceFormat();
+    const auto swapSurfaceFormat = context.chooseSwapSurfaceFormat();
     swapchainInfo.setImageFormat(swapSurfaceFormat.format);
     swapchainInfo.setImageColorSpace(swapSurfaceFormat.colorSpace);
     swapchainInfo.setImageExtent(extent);
@@ -72,13 +71,14 @@ void Renderer::createSwapChain() {
     swapchainInfo.setPreTransform(surfaceCapabilities.currentTransform);
     swapchainInfo.setPresentMode(context.chooseSwapPresentMode());
     swapchainInfo.setClipped(true);
-    swapchainInfo.setQueueFamilyIndices(context.getQueueFamilyIndices());
+    std::vector queueFamilyIndices{context.getQueueFamilyIndex()};
+    swapchainInfo.setQueueFamilyIndices(queueFamilyIndices);
     swapchainInfo.setOldSwapchain(swapchain.get());
 
     swapchain = context.getDevice().createSwapchainKHRUnique(swapchainInfo);
     swapchainImages = context.getDevice().getSwapchainImagesKHR(swapchain.get());
     
-    // --- Create per-image semaphores and fences ---
+    //  Create per-image semaphores and fences 
     renderFinishedSemaphores.resize(swapchainImages.size());
     for(size_t i = 0; i < swapchainImages.size(); ++i)
         renderFinishedSemaphores[i] = context.getDevice().createSemaphoreUnique({});
@@ -95,24 +95,20 @@ void Renderer::recreateSwapChain() {
     computeSubmitted = false; 
 }
 
-// --- Frame begin ---
+//  Frame begin 
 vk::CommandBuffer Renderer::beginFrame() {
     // 1. Wait for a frame resource slot to be available.
     (void)context.getDevice().waitForFences(frames[m_currentFrame].inFlightFence.get(), true, UINT64_MAX);
 
-    if (!swapchain) return nullptr;
+    if (!swapchain)
+        return nullptr;
 
     // 2. Acquire an image from the swapchain.
-    auto result = context.getDevice().acquireNextImageKHR(
-        swapchain.get(),
-        UINT64_MAX,
-        frames[m_currentFrame].imageAcquiredSemaphore.get(),
-        nullptr
-    );
+    const auto result = context.getDevice().acquireNextImageKHR(swapchain.get(), UINT64_MAX, frames[m_currentFrame].imageAcquiredSemaphore.get(), nullptr);
 
-    if (result.result == vk::Result::eErrorOutOfDateKHR || result.result == vk::Result::eSuboptimalKHR) {
-        return nullptr; // Signal to Viewer that a recreate is needed.
-    }
+    if (result.result == vk::Result::eErrorOutOfDateKHR || result.result == vk::Result::eSuboptimalKHR)
+        return nullptr; // Signal to Viewer that a recreate is needed
+    
     m_imageIndex = result.value;
 
     // 3. Check if a previous frame is still using this image.
@@ -131,19 +127,19 @@ vk::CommandBuffer Renderer::beginFrame() {
     return frames[m_currentFrame].commandBuffer.get();
 }
 
-// --- Frame end ---
-bool Renderer::endFrame(bool waitForCompute) {
+//  Frame end 
+bool Renderer::endFrame(const bool waitForCompute) {
     frames[m_currentFrame].commandBuffer->end();
 
     std::vector<vk::Semaphore> waitSemaphores;
     std::vector<vk::PipelineStageFlags> waitStages;
 
     waitSemaphores.push_back(frames[m_currentFrame].imageAcquiredSemaphore.get());
-    waitStages.push_back(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    waitStages.emplace_back(vk::PipelineStageFlagBits::eColorAttachmentOutput);
 
     if (waitForCompute && computeSubmitted) {
         waitSemaphores.push_back(computeFinishedSemaphore.get());
-        waitStages.push_back(vk::PipelineStageFlagBits::eTransfer);
+        waitStages.emplace_back(vk::PipelineStageFlagBits::eTransfer);
     }
 
     vk::SubmitInfo submitInfo{};
@@ -151,34 +147,41 @@ bool Renderer::endFrame(bool waitForCompute) {
     submitInfo.setWaitDstStageMask(waitStages);
     submitInfo.setCommandBuffers(frames[m_currentFrame].commandBuffer.get());
     
-    // --- Use the semaphore corresponding to the acquired image index ---
+    //  Use the semaphore corresponding to the acquired image index 
     submitInfo.setSignalSemaphores(renderFinishedSemaphores[m_imageIndex].get());
 
-    context.getQueue().submit(submitInfo, frames[m_currentFrame].inFlightFence.get());
+    try {
+        context.getQueue().submit(submitInfo, frames[m_currentFrame].inFlightFence.get());
+    } catch (vk::DeviceLostError& e) {
+        std::cerr << "Device lost during submit: " << e.what() << std::endl;
+    }
 
     if (!swapchain)
         return true; // Swapchain was destroyed (e.g., minimized), signal recreate.
 
     vk::PresentInfoKHR presentInfo{};
-    // Wait on the semaphore corresponding to the acquired image index ---
+    // Wait on the semaphore corresponding to the acquired image index 
     presentInfo.setWaitSemaphores(renderFinishedSemaphores[m_imageIndex].get());
     presentInfo.setSwapchains(swapchain.get());
     presentInfo.setImageIndices(m_imageIndex);
 
-    vk::Result result = context.getQueue().presentKHR(presentInfo);
+    const vk::Result result = context.getQueue().presentKHR(presentInfo);
     
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     
-    if(waitForCompute) {
+    if(waitForCompute)
         computeSubmitted = false;
-    }
 
     return (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR);
 }
 
-// --- Compute Methods ---
+//  Compute 
 bool Renderer::isComputeWorkFinished() {
     return context.getDevice().getFenceStatus(computeFence.get()) == vk::Result::eSuccess;
+}
+
+void Renderer::waitForComputeIdle() {
+    (void)context.getDevice().waitForFences(computeFence.get(), VK_TRUE, UINT64_MAX);
 }
 
 void Renderer::submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands) {
@@ -194,8 +197,4 @@ void Renderer::submitCompute(const std::function<void(vk::CommandBuffer)>& recor
 
     context.getQueue().submit(submitInfo, computeFence.get());
     computeSubmitted = true;
-}
-
-void Renderer::waitForComputeIdle() const {
-    (void)context.getDevice().waitForFences(computeFence.get(), true, UINT64_MAX);
 }

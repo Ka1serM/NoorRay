@@ -22,9 +22,13 @@ public:
 
     // Create and add a component of type T with constructor arguments Args
     template<typename T, typename... Args>
-    void addComponent(Args&&... args) {
+    T* addComponent(Args&&... args) {
         static_assert(std::is_base_of_v<ImGuiComponent, T>, "T must derive from ImGuiComponent");
-        components.emplace_back(std::make_unique<T>(std::forward<Args>(args)...));
+    
+        auto ptr = std::make_unique<T>(std::forward<Args>(args)...);
+        T* rawPtr = ptr.get();                  // store raw pointer to return
+        components.emplace_back(std::move(ptr)); // store in container
+        return rawPtr;
     }
     
     ImGuiComponent* getComponent(const std::string& name) const;

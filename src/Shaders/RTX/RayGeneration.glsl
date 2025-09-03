@@ -1,14 +1,14 @@
 #version 460
 #pragma shader_stage(raygen)
 
+#extension GL_EXT_debug_printf : enable
 #extension GL_EXT_ray_tracing: enable
 #extension GL_EXT_nonuniform_qualifier: enable
 #extension GL_EXT_buffer_reference: require
 #extension GL_EXT_scalar_block_layout: enable
-#extension GL_EXT_shader_explicit_arithmetic_types_int64: require
 
-#include "../Common.glsl"
 #include "../SharedStructs.h"
+#include "../Common.glsl"
 #include "../Bindings.glsl"
 
 layout (push_constant) uniform PushConstants {

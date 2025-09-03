@@ -5,7 +5,6 @@
 #include <algorithm>
 
 #include "Globals.h"
-#include "Utils.h"
 #include "Scene/MeshInstance.h"
 
 RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : GpuRaytracer(scene, width, height)
@@ -48,9 +47,7 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : GpuR
 
     for (size_t i = 0; i < std::size(shaders); ++i)
     {
-        shaderModules.emplace_back(context.getDevice().createShaderModuleUnique({
-            {}, shaderSizes[i], reinterpret_cast<const uint32_t*>(shaders[i])
-        }));
+        shaderModules.emplace_back(context.getDevice().createShaderModuleUnique({{}, shaderSizes[i], reinterpret_cast<const uint32_t*>(shaders[i])}));
 
         shaderStagesVector.push_back({{}, shaderStages[i], *shaderModules.back(), "main"});
 
@@ -76,9 +73,10 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : GpuR
         {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output emission image
         {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output albedo image
         {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output normal image
-        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output crypto  image
-        {5, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR}, // Mesh instances buffer
-        {6, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR}, // Textures
+        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output crypto image
+        {5, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output position image
+        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR}, // Mesh instances buffer
+        {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR}, // Textures
     };
 
     createDescriptorSet(bindings);

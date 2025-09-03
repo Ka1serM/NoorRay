@@ -4,8 +4,13 @@
     #include <glm/vec3.hpp>
     #include <glm/mat4x4.hpp>
     using namespace glm;
+#else
+    #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #endif
 
+#define INVALID_INSTANCE 0xFFFFFFFFu //max uint32_t
+#define GROUP_SIZE 16
+#define BVH_MAX_DEPTH 128
 #define BVH_MAX_LEAF_SIZE 4
 
 struct AABB {
@@ -37,7 +42,7 @@ struct BVHNode {
 
 struct PushData {
     int samples, diffuseBounces, specularBounces, transmissionBounces;
-    int frame, isMoving, _pad0, _pad1;
+    float exposure; int frame, isMoving, visualizeBVH;
 };
 
 struct EnvironmentData {
@@ -46,9 +51,8 @@ struct EnvironmentData {
     int visible, _pad0, _pad1,  _pad2;
 #ifdef __cplusplus
     EnvironmentData()
-        : color(1), intensity(1), textureIndex(-1), cdfTextureIndex(-1), rotation(0), exposure(0), visible(0), _pad0(0), _pad1(0), _pad2(0)
-    {
-    }
+    : color(1), intensity(1), textureIndex(0), cdfTextureIndex(-1), rotation(0), exposure(0), visible(0), _pad0(0), _pad1(0), _pad2(0)
+    {}
 #endif
 };
 
@@ -105,6 +109,13 @@ struct MeshAddresses {
     uint64_t blasAddress;
 };
 
+// Sampler struct to keep track of state for the current pixel.
+struct SamplerState {
+    vec2 randomOffset;
+    int frame;
+    int dimension;
+};
+
 struct Payload {
     vec3 attenuation; uint flags;
     vec3 emission; int pad0;
@@ -113,14 +124,14 @@ struct Payload {
     vec3 nextDirection; uint rngState;
     
     vec3 albedo; float roughness;
-    vec3 normal; int objectIndex;
+    vec3 normal; uint objectIndex;
 };
 
 
 struct HitInfo {
     float t;
-    int instanceIndex;
-    int primitiveIndex;
+    uint instanceIndex;
+    uint primitiveIndex;
     vec3 barycentrics;
 };
 

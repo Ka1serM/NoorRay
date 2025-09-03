@@ -1,14 +1,17 @@
 ﻿#include "MainMenuBar.h"
 #include "imgui.h"
 #include "portable-file-dialogs.h"
-#include "Utils.h"
 #include "Scene/MeshInstance.h"
 #include <SDL3/SDL.h>
 #include <iostream>
 #include <future>
 
-MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene) 
-    : ImGuiComponent(std::move(name)), scene(scene), context(context) {}
+#include "Scene/SceneImporter.h"
+
+MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene)
+: ImGuiComponent(std::move(name)), scene(scene), context(context), pendingFileType()
+{
+}
 
 void MainMenuBar::renderUi() {
     if (ImGui::BeginMainMenuBar()) {
@@ -25,21 +28,21 @@ void MainMenuBar::renderAddMenu() const {
                 auto cube = MeshAsset::CreateCube(scene, "Cube", {});
                 scene.add(cube);
                 auto instance = std::make_unique<MeshInstance>(scene, "Cube Instance", cube, Transform(vec3(0, 0, 0)));
-                int instanceIndex = scene.add(std::move(instance));
+                uint32_t instanceIndex = scene.add(std::move(instance));
                 scene.setActiveObjectIndex(instanceIndex);
             }
             if (ImGui::MenuItem("Plane")) {
                 auto plane = MeshAsset::CreatePlane(scene, "Plane", {});
                 scene.add(plane);
                 auto instance = std::make_unique<MeshInstance>(scene, "Plane Instance", plane, Transform(vec3(0, 0, 0)));
-                int instanceIndex = scene.add(std::move(instance));
+                uint32_t instanceIndex = scene.add(std::move(instance));
                 scene.setActiveObjectIndex(instanceIndex);
             }
             if (ImGui::MenuItem("Sphere")) {
                 auto sphere = MeshAsset::CreateSphere(scene, "Sphere", {}, 24, 48);
                 scene.add(sphere);
                 auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
-                int instanceIndex = scene.add(std::move(instance));
+                uint32_t instanceIndex = scene.add(std::move(instance));
                 scene.setActiveObjectIndex(instanceIndex);
             }
             ImGui::EndMenu();
@@ -53,7 +56,7 @@ void MainMenuBar::renderAddMenu() const {
                 auto sphere = MeshAsset::CreateSphere(scene, "SphereLight", material, 24, 48);
                 scene.add(sphere);
                 auto instance = std::make_unique<MeshInstance>(scene, "SphereLight Instance", sphere, Transform(vec3(0, 0, 0)));
-                int instanceIndex = scene.add(std::move(instance));
+                uint32_t instanceIndex = scene.add(std::move(instance));
                 scene.setActiveObjectIndex(instanceIndex);
             }
             if (ImGui::MenuItem("Rect Light")) {
@@ -63,7 +66,7 @@ void MainMenuBar::renderAddMenu() const {
                 auto plane = MeshAsset::CreatePlane(scene, "RectLight", material);
                 scene.add(plane);
                 auto instance = std::make_unique<MeshInstance>(scene, "RectLight Instance", plane, Transform(vec3(0, 0, 0)));
-                int instanceIndex = scene.add(std::move(instance));
+                uint32_t instanceIndex = scene.add(std::move(instance));
                 scene.setActiveObjectIndex(instanceIndex);
             }
             if (ImGui::MenuItem("Disk Light")) {
@@ -73,7 +76,7 @@ void MainMenuBar::renderAddMenu() const {
                 auto disk = MeshAsset::CreateDisk(scene, "DiskLight", material, 48);
                 scene.add(disk);
                 auto instance = std::make_unique<MeshInstance>(scene, "DiskLight Instance", disk, Transform(vec3(0, 0, 0)));
-                int instanceIndex = scene.add(std::move(instance));
+                uint32_t instanceIndex = scene.add(std::move(instance));
                 scene.setActiveObjectIndex(instanceIndex);
             }
             ImGui::EndMenu();
@@ -83,44 +86,23 @@ void MainMenuBar::renderAddMenu() const {
 }
 
 // Function to handle the import logic once a file is selected
-void MainMenuBar::handleFileImport(const std::string& filePath, FileType type) const
+void MainMenuBar::handleFileImport(const std::string& filePath, const FileType type) const
 {
-    if (filePath.empty()) {
+    if (filePath.empty())
         return;
-    }
 
     try {
         switch (type) {
-            case FileType::OBJ: {
-                std::vector<Vertex> vertices;
-                std::vector<uint32_t> indices;
-                std::vector<Face> faces;
-                std::vector<Material> materials;
-                Utils::loadObj(scene, filePath, vertices, indices, faces, materials);
-                auto meshAsset = std::make_shared<MeshAsset>(scene, filePath, std::move(vertices), std::move(indices), std::move(faces), std::move(materials));
-                scene.add(meshAsset);
-                auto instance = std::make_unique<MeshInstance>(scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
-                int instanceIndex = scene.add(std::move(instance));
-                scene.setActiveObjectIndex(instanceIndex);
+            case FileType::OBJ:
+                SceneImporter::ImportObjScene(scene, filePath);
                 break;
-            }
-            case FileType::CRTSCENE: {
-                std::vector<Vertex> vertices;
-                std::vector<uint32_t> indices;
-                std::vector<Face> faces;
-                std::vector<Material> materials;
-                Utils::loadCrtScene(scene, filePath, vertices, indices, faces, materials);
-                auto meshAsset = std::make_shared<MeshAsset>(scene, filePath, std::move(vertices), std::move(indices), std::move(faces), std::move(materials));
-                scene.add(meshAsset);
-                auto instance = std::make_unique<MeshInstance>(scene, Utils::nameFromPath(meshAsset->getPath()) + " Instance", meshAsset, Transform{});
-                int instanceIndex = scene.add(std::move(instance));
-                scene.setActiveObjectIndex(instanceIndex);
+            case FileType::CRTSCENE:
+                SceneImporter::ImportCrtScene(scene, filePath);
                 break;
-            }
-            case FileType::TEXTURE: {
+        
+            case FileType::TEXTURE:
                 scene.add(Texture(context, filePath));
                 break;
-            }
             default:
                 break;
         }

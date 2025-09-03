@@ -3,13 +3,11 @@
 #include <memory>
 #include <vector>
 #include <string>
-#include <shared_mutex>
-#include <atomic>
-#include <mutex>
-
 #include "Vulkan/Context.h"
 #include "Vulkan/Texture.h"
 #include <vulkan/vulkan.hpp>
+
+#include "Shaders/SharedStructs.h"
 
 class SceneObject;
 class MeshInstance;
@@ -17,113 +15,88 @@ class MeshAsset;
 class PerspectiveCamera;
 class Buffer;
 
+// Dirty flags as bitfield
+enum DirtyFlag : uint8_t {
+    TLAS         = 1 << 0,
+    Meshes       = 1 << 1,
+    Textures     = 1 << 2,
+    Accumulation = 1 << 3,
+};
+
 class Scene {
+    Context& context;
+
+    std::vector<Texture> textures;
+    std::vector<std::string> textureNames;
+    std::vector<std::shared_ptr<MeshAsset>> meshAssets;
+
+    // Owns ALL objects in the scene.
+    std::vector<std::unique_ptr<SceneObject>> sceneObjects;
+    // Non-owning pointers to top-level objects for the hierarchy.
+    std::vector<SceneObject*> rootObjects;
+
+    std::vector<MeshInstance*> meshInstances;
+    PerspectiveCamera* activeCamera = nullptr;
+    uint32_t activeObjectIndex = INVALID_INSTANCE;
+    uint8_t dirtyFlags = 0;
+
+    SceneObject* copiedObject = nullptr;
+
+    uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
+    
 public:
     Scene(Context& context);
 
-    std::shared_lock<std::shared_mutex> shared_lock() const {
-        return std::shared_lock(sceneMutex);
-    }
-
-    std::unique_lock<std::shared_mutex> unique_lock() const {
-        return std::unique_lock(sceneMutex);
-    }
-
-    int add(std::unique_ptr<SceneObject> sceneObject);
+    void copy(SceneObject* objectToCopy);
+    SceneObject* cloneHierarchy(const SceneObject* source);
+    void paste();
+    
+    uint32_t add(std::unique_ptr<SceneObject> sceneObject);
     void add(const std::shared_ptr<MeshAsset>& meshAsset);
     void add(Texture&& texture);
-    bool remove(const SceneObject* obj);
+    bool remove(SceneObject* objToRemove);
+    void reparent(SceneObject* objectToMove, SceneObject* newParent);
 
+    // Getters for scene content
     PerspectiveCamera* getActiveCamera() const { return activeCamera; }
     const std::vector<std::unique_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
+    const std::vector<SceneObject*>& getRootObjects() const { return rootObjects; }
+
+    SceneObject* getObject(const uint32_t index) const {
+        if (index < static_cast<uint32_t>(sceneObjects.size()))
+            return sceneObjects[index].get();
+        return nullptr;
+    }
     
+    // Index-based selection
+    void setActiveObjectIndex(const uint32_t index) { activeObjectIndex = index; }
+    // Delete signed integer overloads to forbid implicit conversions
+    void setActiveObjectIndex(int) = delete;
+    void setActiveObjectIndex(long) = delete;
+    void setActiveObjectIndex(long long) = delete;
+    void setActiveObjectIndex(short) = delete;
+    void setActiveObjectIndex(char) = delete;
+    void resetActiveObjectIndex() { activeObjectIndex = INVALID_INSTANCE; }
+    
+    uint32_t getActiveObjectIndex() const { return activeObjectIndex; }
     SceneObject* getActiveObject() const {
-        if (activeObjectIndex >= 0 && activeObjectIndex < static_cast<int>(sceneObjects.size()))
+        if (activeObjectIndex < sceneObjects.size())
             return sceneObjects[activeObjectIndex].get();
         return nullptr;
     }
-
-    void setActiveObjectIndex(const int index) { activeObjectIndex = index; }
-    int getActiveObjectIndex() const { return activeObjectIndex; }
     
     const std::vector<MeshInstance*>& getMeshInstances() const { return meshInstances; }
     std::shared_ptr<MeshAsset> getMeshAsset(const std::string& name) const;
     const std::vector<std::shared_ptr<MeshAsset>>& getMeshAssets() const { return meshAssets; }
-    std::vector<std::string> getTextureNames() const;
     const std::vector<Texture>& getTextures() const { return textures; }
     Context& getContext() const { return context; }
+    std::vector<std::string> getTextureNames() const { return textureNames; }
 
-    void setTlasDirty() { 
-        tlasDirty.store(true, std::memory_order_relaxed);
-        accumulationDirty.store(true, std::memory_order_relaxed);
-    }
-    
-    void setMeshesDirty() { 
-        meshesDirty.store(true, std::memory_order_relaxed);
-        accumulationDirty.store(true, std::memory_order_relaxed);
-    }
-    
-    void setTexturesDirty() { 
-        texturesDirty.store(true, std::memory_order_relaxed);
-        accumulationDirty.store(true, std::memory_order_relaxed);
-    }
-    
-    void setAccumulationDirty() { 
-        accumulationDirty.store(true, std::memory_order_relaxed);
-    }
-
-    bool isTlasDirty() const { 
-        return tlasDirty.load(std::memory_order_relaxed); 
-    }
-    
-    bool isMeshesDirty() const { 
-        return meshesDirty.load(std::memory_order_relaxed); 
-    }
-    
-    bool isTexturesDirty() const { 
-        return texturesDirty.load(std::memory_order_relaxed); 
-    }
-    
-    bool isAccumulationDirty() const { 
-        return accumulationDirty.load(std::memory_order_relaxed); 
-    }
-
-    bool isAnyDirty() const {
-        return tlasDirty.load(std::memory_order_relaxed) || 
-               meshesDirty.load(std::memory_order_relaxed) || 
-               texturesDirty.load(std::memory_order_relaxed);
-    }
-
-    void clearDirtyFlags() {
-        tlasDirty.store(false, std::memory_order_relaxed);
-        meshesDirty.store(false, std::memory_order_relaxed);
-        texturesDirty.store(false, std::memory_order_relaxed);
-        accumulationDirty.store(false, std::memory_order_relaxed);
-    }
-
-    void clearAccumulationDirtyFlag() {
-        accumulationDirty.store(false, std::memory_order_relaxed);
-    }
-
-private:
-    void addMeshInstance(MeshInstance* instance);
-
-    Context& context;
-    mutable std::shared_mutex sceneMutex;
-
-    std::vector<Texture> textures;
-    std::vector<std::string> textureNames;
-
-    std::vector<std::shared_ptr<MeshAsset>> meshAssets;
-
-    std::vector<std::unique_ptr<SceneObject>> sceneObjects;
-    std::vector<MeshInstance*> meshInstances;
-    PerspectiveCamera* activeCamera = nullptr;
-
-    int activeObjectIndex = -1;
-
-    std::atomic<bool> tlasDirty{false};
-    std::atomic<bool> meshesDirty{false};
-    std::atomic<bool> texturesDirty{false};
-    std::atomic<bool> accumulationDirty{false};
+    // Dirty flag management
+    void setDirtyFlag(const DirtyFlag flag) { dirtyFlags |= flag; }
+    void clearDirtyFlag(const DirtyFlag flag) { dirtyFlags &= ~flag; }
+    bool isDirty(const DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
+    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures); }
+    void clearDirtyFlags() { dirtyFlags = 0; }
+    void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
 };

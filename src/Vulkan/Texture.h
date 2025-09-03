@@ -13,7 +13,7 @@ class Texture {
     vk::UniqueSampler sampler;
     vk::DescriptorImageInfo descriptorInfo;
 
-    void createSampler(Context& context);
+    void createSampler(const Context& context);
 
 public:
     Texture(Context& context, const std::string& filepath);

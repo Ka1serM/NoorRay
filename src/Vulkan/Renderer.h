@@ -13,6 +13,7 @@ public:
     bool endFrame(bool waitForCompute);
 
     bool isComputeWorkFinished();
+    void waitForComputeIdle();
     void submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands);
     
     const std::vector<vk::Image>& getSwapchainImages() const { return swapchainImages; }

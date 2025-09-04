@@ -23,13 +23,11 @@ private:
 
     bool arcballMode = false;
     vec3 arcballPivot = vec3(0.0f);
-    float arcballYaw = 0.0f;
-    float arcballPitch = 0.0f;
-    float arcballDistance = 5.0f;
-
-    void setArcballMode(bool enabled) { arcballMode = enabled; }
-    void setArcballPivot(const vec3& pivot) { arcballPivot = pivot; }
 public:
+    void setArcballActive(const bool enabled) { arcballMode = enabled; }
+    void setArcballPivot(const vec3& pivot) { /* arcballPivot = pivot; */ }
+    bool getArcballActive() const { return arcballMode;}
+    
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
     
     // Accessors for camera params
@@ -54,7 +52,6 @@ public:
     void renderUi() override;
 
     void onTransformUpdated() override;
-
 private:
     void updateHorizontalVertical();
     void updateCameraData();

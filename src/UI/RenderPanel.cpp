@@ -50,7 +50,7 @@ RenderPanel::RenderPanel(
     Raytracer& raytracer,
     Renderer& renderer
 )
-    : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(4), specularBounces(12), transmissionBounces(24), exposure(0),
+    : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(8), specularBounces(12), transmissionBounces(24), exposure(0),
       context(context),
       raytracer(raytracer),
       renderer(renderer)
@@ -200,10 +200,11 @@ void RenderPanel::renderUi() {
     ImGui::Spacing();
     ImGui::BeginDisabled(isSaving);
     const char* buttonText = isSaving ? "Saving..." : "Render";
+    float buttonWidth = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x;
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(100, 180, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(120, 200, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(80, 160, 220, 255));
-    if (ImGui::Button(buttonText, ImVec2(-FLT_MIN, 30)))
+    if (ImGui::Button(buttonText, ImVec2(buttonWidth, 0)))
         saveRequested = true;
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();

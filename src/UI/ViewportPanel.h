@@ -13,7 +13,8 @@ class ViewportPanel : public ImGuiComponent {
 public:
 
     void renderUi() override;
-    void handlePicking(ImVec2 imageSize) const;
+    void handleObjectPicking(int32_t pixelX, int32_t pixelY) const;
+    void handlePositionPicking(int32_t pixelX, int32_t pixelY) const;
     void recordCopy(vk::CommandBuffer cmd, Image& srcImage);
     ~ViewportPanel() override;
 
@@ -28,16 +29,18 @@ private:
     uint32_t width;
     uint32_t height;
 
-    Image displayImage;
     vk::UniqueSampler sampler;
     vk::UniqueDescriptorSetLayout descriptorSetLayout;
     vk::UniqueDescriptorSet outputImageDescriptorSet;
+
+    Image displayImage;
     
     Buffer cryptoStagingBuffer; // Staging buffer for picking
     void* cryptoStagingBufferMappedPtr = nullptr;
+    bool  pickingRequested = false;
 
-    Buffer positionStagingBuffer; // Staging buffer for picking
-    void* positionStagingBufferMappedPtr = nullptr;
+   Buffer positionStagingBuffer; // Staging buffer for picking
+   void* positionStagingBufferMappedPtr = nullptr;
 
     bool isCapturingMouse = false;
     float oldX = 0.f, oldY = 0.f;

@@ -3,7 +3,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
 #include "Scene/Scene.h"
 #include "../Shaders/SharedStructs.h"
 #include "UI/ImGuiComponent.h"
@@ -17,8 +16,8 @@ class MeshAsset : public ImGuiComponent
 public:
     static std::shared_ptr<MeshAsset> CreateCube(Scene& scene, const std::string& name, const Material& material);
     static std::shared_ptr<MeshAsset> CreatePlane(Scene& scene, const std::string& name, const Material& material);
-    static std::shared_ptr<MeshAsset> CreateSphere(Scene& scene, const std::string& name,  const Material& material, uint32_t latitudeSegments = 16, uint32_t longitudeSegments = 16);
-    static std::shared_ptr<MeshAsset> CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments = 16);
+    static std::shared_ptr<MeshAsset> CreateSphere(Scene& scene, const std::string& name,  const Material& material, uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
+    static std::shared_ptr<MeshAsset> CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments = 64);
     
     MeshAsset(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials);
 

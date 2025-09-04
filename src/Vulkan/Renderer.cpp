@@ -11,7 +11,7 @@ Renderer::Renderer(Context& context)
     // Graphics Frame Resources 
     frames.resize(MAX_FRAMES_IN_FLIGHT);
 
-    const vk::CommandBufferAllocateInfo cmdAllocInfo(context.getGraphicsCommandPool(), vk::CommandBufferLevel::ePrimary, MAX_FRAMES_IN_FLIGHT);
+    const vk::CommandBufferAllocateInfo cmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, MAX_FRAMES_IN_FLIGHT);
     auto cmdBuffers = context.getDevice().allocateCommandBuffersUnique(cmdAllocInfo);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
@@ -21,7 +21,7 @@ Renderer::Renderer(Context& context)
     }
 
     //  Asynchronous Compute Resources 
-    const vk::CommandBufferAllocateInfo computeCmdAllocInfo(context.getComputeCommandPool(), vk::CommandBufferLevel::ePrimary, 1);
+    const vk::CommandBufferAllocateInfo computeCmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, 1);
     computeCommandBuffer = std::move(context.getDevice().allocateCommandBuffersUnique(computeCmdAllocInfo).front());
     computeFence = context.getDevice().createFenceUnique({ vk::FenceCreateFlagBits::eSignaled });
     computeFinishedSemaphore = context.getDevice().createSemaphoreUnique({});
@@ -71,7 +71,7 @@ void Renderer::createSwapChain() {
     swapchainInfo.setPreTransform(surfaceCapabilities.currentTransform);
     swapchainInfo.setPresentMode(context.chooseSwapPresentMode());
     swapchainInfo.setClipped(true);
-    std::vector queueFamilyIndices{context.getGraphicsQueueFamilyIndex()};
+    std::vector queueFamilyIndices{context.getQueueFamilyIndex()};
     swapchainInfo.setQueueFamilyIndices(queueFamilyIndices);
     swapchainInfo.setOldSwapchain(swapchain.get());
 
@@ -151,7 +151,7 @@ bool Renderer::endFrame(const bool waitForCompute) {
     submitInfo.setSignalSemaphores(renderFinishedSemaphores[m_imageIndex].get());
 
     try {
-        context.getGraphicsQueue().submit(submitInfo, frames[m_currentFrame].inFlightFence.get());
+        context.getQueue().submit(submitInfo, frames[m_currentFrame].inFlightFence.get());
     } catch (vk::DeviceLostError& e) {
         std::cerr << "Device lost during submit: " << e.what() << std::endl;
     }
@@ -165,7 +165,7 @@ bool Renderer::endFrame(const bool waitForCompute) {
     presentInfo.setSwapchains(swapchain.get());
     presentInfo.setImageIndices(m_imageIndex);
 
-    const vk::Result result = context.getGraphicsQueue().presentKHR(presentInfo);
+    const vk::Result result = context.getQueue().presentKHR(presentInfo);
     
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     
@@ -180,6 +180,10 @@ bool Renderer::isComputeWorkFinished() {
     return context.getDevice().getFenceStatus(computeFence.get()) == vk::Result::eSuccess;
 }
 
+void Renderer::waitForComputeIdle() {
+    (void)context.getDevice().waitForFences(computeFence.get(), VK_TRUE, UINT64_MAX);
+}
+
 void Renderer::submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands) {
     context.getDevice().resetFences(computeFence.get());
 
@@ -191,6 +195,6 @@ void Renderer::submitCompute(const std::function<void(vk::CommandBuffer)>& recor
     submitInfo.setCommandBuffers(computeCommandBuffer.get());
     submitInfo.setSignalSemaphores(computeFinishedSemaphore.get());
 
-    context.getComputeQueue().submit(submitInfo, computeFence.get());
+    context.getQueue().submit(submitInfo, computeFence.get());
     computeSubmitted = true;
 }

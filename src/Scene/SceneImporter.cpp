@@ -77,7 +77,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
     // Parent object for this file
     std::string parentName = nameFromPath(filepath);
     auto parentObject = std::make_unique<SceneObject>(scene, parentName, Transform{});
-    int parentIndex = scene.add(std::move(parentObject));
+    uint32_t parentIndex = scene.add(std::move(parentObject));
 
     // Process each shape
     for (const auto& shape : shapes) {
@@ -189,7 +189,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
         Transform transform;
         transform.setPosition(center);
         auto instance = std::make_unique<MeshInstance>(scene, meshName, meshAsset, transform);
-        int instanceIndex = scene.add(std::move(instance));
+        uint32_t instanceIndex = scene.add(std::move(instance));
 
         scene.reparent(scene.getObject(instanceIndex), scene.getObject(parentIndex));
     }
@@ -198,11 +198,10 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
 }
 
 std::string SceneImporter::nameFromPath(const std::string& path) {
-    size_t lastSlash = path.find_last_of("/\\");
+    const size_t lastSlash = path.find_last_of("/\\");
     std::string name = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
 
-    size_t lastDot = name.find_last_of('.');
-    if (lastDot != std::string::npos)
+    if (const size_t lastDot = name.find_last_of('.'); lastDot != std::string::npos)
         name = name.substr(0, lastDot);
 
     return name;

@@ -7,6 +7,8 @@
 #include "Vulkan/Texture.h"
 #include <vulkan/vulkan.hpp>
 
+#include "Shaders/SharedStructs.h"
+
 class SceneObject;
 class MeshInstance;
 class MeshAsset;
@@ -26,7 +28,7 @@ public:
     Scene(Context& context);
     
     // Object management
-    int add(std::unique_ptr<SceneObject> sceneObject);
+    uint32_t add(std::unique_ptr<SceneObject> sceneObject);
     void add(const std::shared_ptr<MeshAsset>& meshAsset);
     void add(Texture&& texture);
     bool remove(SceneObject* objToRemove);
@@ -37,17 +39,25 @@ public:
     const std::vector<std::unique_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
     const std::vector<SceneObject*>& getRootObjects() const { return rootObjects; }
 
-    SceneObject* getObject(const int index) const {
-        if (index >= 0 && index < static_cast<int>(sceneObjects.size()))
+    SceneObject* getObject(const uint32_t index) const {
+        if (index < static_cast<uint32_t>(sceneObjects.size()))
             return sceneObjects[index].get();
         return nullptr;
     }
     
     // Index-based selection
     void setActiveObjectIndex(const uint32_t index) { activeObjectIndex = index; }
+    // Delete signed integer overloads to forbid implicit conversions
+    void setActiveObjectIndex(int) = delete;
+    void setActiveObjectIndex(long) = delete;
+    void setActiveObjectIndex(long long) = delete;
+    void setActiveObjectIndex(short) = delete;
+    void setActiveObjectIndex(char) = delete;
+    void resetActiveObjectIndex() { activeObjectIndex = INVALID_INSTANCE; }
+    
     uint32_t getActiveObjectIndex() const { return activeObjectIndex; }
     SceneObject* getActiveObject() const {
-        if (activeObjectIndex >= 0 && activeObjectIndex < sceneObjects.size())
+        if (activeObjectIndex < sceneObjects.size())
             return sceneObjects[activeObjectIndex].get();
         return nullptr;
     }
@@ -81,6 +91,6 @@ private:
 
     std::vector<MeshInstance*> meshInstances;
     PerspectiveCamera* activeCamera = nullptr;
-    uint32_t activeObjectIndex = -1;
+    uint32_t activeObjectIndex = INVALID_INSTANCE;
     uint8_t dirtyFlags = 0;
 };

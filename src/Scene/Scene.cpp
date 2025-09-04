@@ -8,26 +8,21 @@
 Scene::Scene(Context& context) : context(context) {}
 
 // Adds a generic SceneObject to the scene, making it a root object by default.
-int Scene::add(std::unique_ptr<SceneObject> sceneObject) {
+uint32_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     if (auto* camera = dynamic_cast<PerspectiveCamera*>(sceneObject.get()))
         activeCamera = camera;
     
     if (auto* meshInstance = dynamic_cast<MeshInstance*>(sceneObject.get()))
         meshInstances.push_back(meshInstance);
 
-    // Get a raw pointer to the object before we move the unique_ptr
     SceneObject* rawPtr = sceneObject.get();
-
-    // Move the object into the ownership list
     sceneObjects.push_back(std::move(sceneObject));
-    
-    // Add the raw pointer to the root object list for the hierarchy
     rootObjects.push_back(rawPtr);
     
     setDirtyFlag(TLAS);
     setDirtyFlag(Accumulation);
 
-    return sceneObjects.size() - 1; // Return the index of the newly added object
+    return sceneObjects.size() - 1;
 }
 
 // Adds a mesh asset to the scene.
@@ -44,46 +39,57 @@ void Scene::add(Texture&& texture) {
     setDirtyFlag(Textures);
 }
 
+// In Scene.cpp
 bool Scene::remove(SceneObject* objToRemove) {
     if (!objToRemove)
         return false;
 
-    // If it's the active camera, just reparent it to root instead of deleting
+    // Prevent deleting the active camera
     if (objToRemove == activeCamera) {
-        if (objToRemove->getParent())
-            objToRemove->getParent()->removeChild(objToRemove);
-        rootObjects.push_back(objToRemove);
-        return false; // Do not delete camera
+        reparent(objToRemove, nullptr); // Simply unparent it
+        return false;
     }
-
-    // Recursively remove children, but skip active camera
+    
+    // Recursively remove children
     while (!objToRemove->getChildren().empty()) {
-        if (SceneObject* child = objToRemove->getChildren().back(); child == activeCamera) {
-            // Reparent camera to root instead of deleting
-            objToRemove->removeChild(child);
-            rootObjects.push_back(child);
-        } else
-            remove(child); // Safe recursive delete
+        remove(objToRemove->getChildren().back());
     }
 
-    // Remove from parent's children list OR from the root list
+    // --- FIX: Safely handle active object index before modification ---
+    SceneObject* previouslyActiveObject = getActiveObject();
+    bool activeObjectWasRemoved = (objToRemove == previouslyActiveObject);
+    
+    // Remove from parent or root
     if (objToRemove->getParent())
         objToRemove->getParent()->removeChild(objToRemove);
     else
         std::erase(rootObjects, objToRemove);
 
-    // Reset active object index if necessary
-    if (objToRemove == getActiveObject())
-        setActiveObjectIndex(-1);
-
+    // Remove from helper lists
     if (auto* meshInstance = dynamic_cast<MeshInstance*>(objToRemove))
         std::erase(meshInstances, meshInstance);
 
-    // Erase the object from main ownership list
-    if (const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) { return ptr.get() == objToRemove; });
-        it != sceneObjects.end()) 
-    {
+    // Erase from main ownership list
+    const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) { return ptr.get() == objToRemove; });
+    if (it != sceneObjects.end()) {
         sceneObjects.erase(it);
+
+        // --- FIX: Recalculate the active object index ---
+        if (activeObjectWasRemoved) {
+            resetActiveObjectIndex(); // The active object was deleted, so deselect.
+        } else if (previouslyActiveObject) {
+            // Find the new index of the previously active object.
+            const auto newIt = std::ranges::find_if(sceneObjects, 
+                [previouslyActiveObject](const auto& ptr) { return ptr.get() == previouslyActiveObject; });
+            
+            if (newIt != sceneObjects.end()) {
+                activeObjectIndex = std::distance(sceneObjects.begin(), newIt);
+            } else {
+                // This case should not happen if logic is correct
+                resetActiveObjectIndex();
+            }
+        }
+        
         setDirtyFlag(TLAS);
         setDirtyFlag(Accumulation);
         return true;

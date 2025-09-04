@@ -37,14 +37,14 @@ public:
     Image& getOutputAlbedo() { return outputAlbedo; }
     Image& getOutputNormal() { return outputNormal; }
     Image& getOutputCrypto() { return outputCrypto; }
-    Image& getOutputPosition() { return outputCrypto; }
+    Image& getOutputPosition() { return outputPosition; }
     
     uint32_t getWidth() const { return width; }
     uint32_t getHeight() const { return height; }
 
     void resize(const uint32_t newWidth, const uint32_t newHeight) {
-          if (newWidth == 0 || newHeight == 0) return;
-          if (newWidth == width && newHeight == height) return;
+          if (newWidth == 0 || newHeight == 0 || (newWidth == width && newHeight == height))
+              return;
 
           width  = newWidth;
           height = newHeight;
@@ -53,7 +53,7 @@ public:
           outputAlbedo = Image(context, width, height, vk::Format::eR8G8B8A8Unorm, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
           outputNormal = Image(context, width, height, vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
           outputCrypto = Image(context, width, height, vk::Format::eR32Uint, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
-          outputPosition = Image(context, width, height, vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
+         outputPosition = Image(context, width, height, vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
 
           std::cout << "Raytracer resized to " << width << "x" << height << std::endl;
       }

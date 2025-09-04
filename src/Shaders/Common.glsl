@@ -1,6 +1,7 @@
 #ifndef _COMMON_GLSL_ //include guard to prevent multiple inclusions
 #define _COMMON_GLSL_
 
+
 const float PI = 3.14159265358979323846;
 const float EPSILON = 0.0001;
 const float AABB_EPSILON  = 1e-5;
@@ -13,6 +14,10 @@ const uint BOUNCE_DIFFUSE    = 1u << 2; // bit 2
 const uint BOUNCE_SPECULAR   = 1u << 3; // bit 3
 const uint BOUNCE_TRANSMIT   = 1u << 4; // bit 4
 const uint ENV_TRANSPARENT   = 1u << 5; // bit 5 (invisible environment background)
+
+float luminance(vec3 c) { 
+    return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+}
 
 // Barycentric Helpers
 vec3 calculateBarycentric(vec3 attribs) {

@@ -31,7 +31,7 @@ void OutlinerDetailsPanel::renderUi() {
     if (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Delete))
         if (SceneObject* activeObject = scene.getActiveObject())
             if (scene.remove(activeObject))
-                scene.setActiveObjectIndex(-1);
+                scene.resetActiveObjectIndex();
 
     ImGui::End();
 
@@ -63,9 +63,10 @@ void OutlinerDetailsPanel::drawNode(SceneObject* node) {
     // Handle selection by finding the object's index
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         const auto& allObjects = scene.getSceneObjects();
+        
         const auto it = std::ranges::find_if(allObjects, [node](const auto& ptr) { return ptr.get() == node; });
         if (it != allObjects.end()) {
-            const int index = std::distance(allObjects.begin(), it);
+            const uint32_t index = std::distance(allObjects.begin(), it);
             scene.setActiveObjectIndex(index);
         }
     }

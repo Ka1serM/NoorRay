@@ -8,6 +8,7 @@
     #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #endif
 
+#define INVALID_INSTANCE 0xFFFFFFFFu //max uint32_t
 #define GROUP_SIZE 16
 #define BVH_MAX_DEPTH 128
 #define BVH_MAX_LEAF_SIZE 4
@@ -123,14 +124,14 @@ struct Payload {
     vec3 nextDirection; uint rngState;
     
     vec3 albedo; float roughness;
-    vec3 normal; int objectIndex;
+    vec3 normal; uint objectIndex;
 };
 
 
 struct HitInfo {
     float t;
-    int instanceIndex;
-    int primitiveIndex;
+    uint instanceIndex;
+    uint primitiveIndex;
     vec3 barycentrics;
 };
 

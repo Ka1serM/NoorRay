@@ -1,7 +1,6 @@
 ﻿#include "SceneObject.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <imgui.h>
-
 #include "MeshInstance.h"
 #include "Scene.h"
 #include "../UI/ImGuiManager.h"
@@ -54,22 +53,26 @@ void SceneObject::renderUi() {
     ImGui::TextUnformatted(name.c_str());
     
     // Position
-    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const glm::vec3 v) {
+    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const vec3 v) {
         setPosition(v); anyChanged = true;
     });
 
     // Rotation
-    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const glm::vec3 v) {
-        setRotationEuler(v); anyChanged = true;
+    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const vec3 v) {
+          setRotationEuler(v);
+        anyChanged = true;
     });
 
     // Scale
-    ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const glm::vec3 v) {
+    ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const vec3 v) {
         setScale(v); anyChanged = true;
     });
 
     if (anyChanged)
+    {
+        onTransformUpdated();
        scene.setDirtyFlag(Accumulation);
+    }
 }
 
 Transform SceneObject::getWorldTransform() const {

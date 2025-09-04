@@ -3,6 +3,8 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <imgui.h>
 #include <cmath>
+#include <iostream>
+
 #include "glm/gtx/rotate_vector.hpp"
 #include "SDL3/SDL_mouse.h"
 #include "UI/ImGuiManager.h"
@@ -77,42 +79,50 @@ void PerspectiveCamera::setSensorSize(const float width, const float height) {
     updateHorizontalVertical();
    scene.setDirtyFlag(Accumulation);
 }
+
 void PerspectiveCamera::update() {
     const bool wasDirty = scene.isDirty(Accumulation);
     const vec3 oldPosition = getPosition();
     const vec3 oldDirection = cameraData.direction;
 
+    float dx, dy;
+    SDL_GetRelativeMouseState(&dx, &dy);
+    ImGuiIO& io = ImGui::GetIO();
+        
     if (arcballMode) {
-        float dx, dy;
-        SDL_GetRelativeMouseState(&dx, &dy);
+        vec3 position = getPosition();
+        quat orientation = getRotation();
 
-        float sensitivity = 0.005f;
-        arcballYaw   -= dx * sensitivity;
-        arcballPitch -= dy * sensitivity;
-        arcballPitch  = clamp(arcballPitch, -glm::half_pi<float>() + 0.01f, glm::half_pi<float>() - 0.01f);
+        // MOVEMENT LOGIC
+        float moveSpeed = io.DeltaTime * 5.0f; // Base speed for movement
+        if (ImGui::IsKeyDown(ImGuiKey_LeftShift))
+            moveSpeed *= 10.0f; // Speed up with Shift key
 
-        // Compute new camera position
-        vec3 offset;
-        offset.x = arcballDistance * cos(arcballPitch) * cos(arcballYaw);
-        offset.y = arcballDistance * sin(arcballPitch);
-        offset.z = arcballDistance * cos(arcballPitch) * sin(arcballYaw);
+        // Zoom (W/S): Move along the vector from the pivot to the camera
+        const vec3 directionToCamera = normalize(position - arcballPivot);
+        if (ImGui::IsKeyDown(ImGuiKey_W))
+            position -= directionToCamera * moveSpeed;
+        if (ImGui::IsKeyDown(ImGuiKey_S))
+            position += directionToCamera * moveSpeed;
 
-        vec3 camPos = arcballPivot + offset;
-        setPosition(camPos);
+        // 2. Calculate the rotation quaternions from mouse input
+        constexpr float sensitivity = 0.004f;
+        const float yawAngle = -dx * sensitivity;
+        const float pitchAngle = -dy * sensitivity;
+        
+        const quat yawQuat = angleAxis(yawAngle, WORLD_UP);
+        const vec3 localRight = orientation * vec3(1, 0, 0);
+        const quat pitchQuat = angleAxis(pitchAngle, localRight);
 
-        // Compute rotation to look at the pivot
-        vec3 forward = normalize(arcballPivot - camPos);       // direction camera should face
-        vec3 right   = normalize(cross(WORLD_UP, forward));    // local X axis
-        vec3 up      = cross(forward, right);                  // local Y axis
-
-        mat3 rotMat = mat3(right, up, forward);               // 3x3 rotation matrix
-        setRotation(quat_cast(rotMat));                       // convert to quaternion
+        // 3. Update the camera's position (based on rotation and new zoom/pan)
+        vec3 offset = position - arcballPivot;
+        offset = yawQuat * pitchQuat * offset;
+        setPosition(arcballPivot + offset);
+    
+        // 4. Update the camera's orientation
+        setRotation(normalize(yawQuat * pitchQuat * orientation));
     }
     else {
-        // First-person camera
-        float dx, dy = 0;
-        SDL_GetRelativeMouseState(&dx, &dy);
-
         constexpr float sensitivity = 0.1f;
         const float yaw = radians(-dx * sensitivity);
         const float pitch = radians(-dy * sensitivity);
@@ -126,9 +136,9 @@ void PerspectiveCamera::update() {
         setRotation(newRot);
 
         // Movement
-        ImGuiIO& io = ImGui::GetIO();
-        float speed = io.DeltaTime;
-        if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) speed *= 10.0f;
+        float speed = io.DeltaTime * 5.0f; // Base speed
+        if (ImGui::IsKeyDown(ImGuiKey_LeftShift))
+            speed *= 10.0f;
 
         vec3 position = getPosition();
         forward = newRot * vec3(0, 0, 1);
@@ -196,4 +206,5 @@ void PerspectiveCamera::renderUi() {
 void PerspectiveCamera::onTransformUpdated() {
     SceneObject::onTransformUpdated();
     updateCameraData();
+    updateHorizontalVertical();
 }

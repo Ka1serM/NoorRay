@@ -99,8 +99,8 @@ void traverseBVH(vec3 rayOrigin, vec3 rayDirection,  MeshAddresses mesh, inout H
 HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection) {
     HitInfo bestHit;
     bestHit.t = INF;
-    bestHit.instanceIndex = -1;
-    bestHit.primitiveIndex = -1;
+    bestHit.instanceIndex = INVALID_INSTANCE;
+    bestHit.primitiveIndex = INVALID_INSTANCE;
 
     for (int i = 0; i < instances.length(); ++i) {
         ComputeInstance inst = instances[i];
@@ -113,12 +113,12 @@ HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection) {
 
         HitInfo localHit;
         localHit.t = bestHit.t;   // limit traversal to current best
-        localHit.primitiveIndex = -1;
+        localHit.primitiveIndex = INVALID_INSTANCE;
 
         MeshAddresses mesh = meshes[inst.meshId];
         traverseBVH(localOrigin, localDir, mesh, localHit);
 
-        if (localHit.primitiveIndex != -1) {
+        if (localHit.primitiveIndex != INVALID_INSTANCE) {
             // Convert hit point back to world space to get correct distance
             vec3 localPos  = localOrigin + localDir * localHit.t;
             vec3 worldPos  = (inst.transform * vec4(localPos, 1.0)).xyz;
@@ -138,7 +138,7 @@ HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection) {
 void traceRayCompute(vec3 rayOrigin, vec3 rayDirection, inout Payload payload) {
     HitInfo hit = traceScene(rayOrigin, rayDirection);
 
-    if (hit.instanceIndex == -1)
+    if (hit.instanceIndex == INVALID_INSTANCE)
         shadeMiss(rayDirection, pushConstants.environment, payload);
     else {
         const ComputeInstance inst = instances[hit.instanceIndex];

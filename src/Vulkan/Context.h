@@ -2,7 +2,7 @@
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_beta.h>
+#include <vulkan/vulkan_beta.h> //needed for portability subset extension (Apple)
 #include <vector>
 #include <functional>
 #include <mutex>
@@ -36,19 +36,15 @@ class Context {
     float dpiScale;
 
     vk::UniqueInstance instance;
-    vk::UniqueDebugUtilsMessengerEXT messenger;
+    vk::UniqueDebugUtilsMessengerEXT debugMessenger;
+    vk::UniqueDebugUtilsMessengerEXT debugPrintfMessenger;
     vk::UniqueSurfaceKHR surface;
     vk::PhysicalDevice physicalDevice;
     vk::UniqueDevice device;
 
-    vk::Queue graphicsQueue;  // For swapchain/UI work
-    vk::Queue computeQueue;   // For asynchronous compute (raytracing)
-    uint32_t graphicsQueueFamilyIndex;
-    uint32_t computeQueueFamilyIndex;
-    
-    vk::UniqueCommandPool graphicsCommandPool;
-    vk::UniqueCommandPool computeCommandPool;
-    
+    vk::Queue queue;
+    uint32_t queueFamilyIndex{};
+    vk::UniqueCommandPool commandPool;
     vk::UniqueDescriptorPool descriptorPool;
 
     bool rtxSupported = false;
@@ -64,12 +60,17 @@ public:
     // Helper functions
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
     void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func);
-    void oneTimeSubmitAsync(const std::function<void(vk::CommandBuffer)>& func);
     vk::PresentModeKHR chooseSwapPresentMode() const;
     vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const;
 
-    // Static callback with corrected C++ types
+    // Static callbacks
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugUtilsMessengerCallback(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+        vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
+        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+        void* pUserData);
+
+    static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugPrintfCallback(
         vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
         vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
         const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
@@ -85,13 +86,9 @@ public:
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }
     const vk::Device& getDevice() const { return device.get(); }
-    const vk::Queue& getGraphicsQueue() const { return graphicsQueue; }
-    const vk::Queue& getComputeQueue() const { return computeQueue; }
-    uint32_t getGraphicsQueueFamilyIndex() const { return graphicsQueueFamilyIndex; }
-    uint32_t getComputeQueueFamilyIndex() const { return computeQueueFamilyIndex; }
-    const vk::CommandPool& getGraphicsCommandPool() const { return graphicsCommandPool.get(); }
-    const vk::CommandPool& getComputeCommandPool() const { return computeCommandPool.get(); }
-    
+    const vk::Queue& getQueue() const { return queue; }
+    uint32_t getQueueFamilyIndex() const { return queueFamilyIndex; }
+    const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
 
     bool queryWindowSize();

@@ -11,58 +11,6 @@ void buildCoordinateSystem(vec3 N, out vec3 T, out vec3 B) {
     B = cross(T, N);
 }
 
-float distributionGGX(vec3 N, vec3 H, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-    return a2 / max(denom, EPSILON);
-}
-
-float geometrySchlickGGX(float NdotV, float roughness) {
-    float k = (roughness * roughness) / 2.0;
-    return NdotV / max(NdotV * (1.0 - k) + k, EPSILON);
-}
-
-float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    float ggxV = geometrySchlickGGX(NdotV, roughness);
-    float ggxL = geometrySchlickGGX(NdotL, roughness);
-    return ggxV * ggxL;
-}
-
-float fresnelDielectric(float cosThetaI, float etaI, float etaT) {
-    cosThetaI = clamp(cosThetaI, -1.0, 1.0);
-    
-    // Swap on entering
-    if (!(cosThetaI > 0.0)) {
-        float tmp = etaI;
-        etaI = etaT;
-        etaT = tmp;
-        cosThetaI = -cosThetaI;
-    }
-    
-    // Compute sin^2 θt directly
-    float eta = etaI / etaT;
-    float sin2ThetaT = eta * eta * max(0.0, 1.0 - cosThetaI * cosThetaI);
-    
-    // Total internal reflection
-    if (sin2ThetaT >= 1.0)
-        return 1.0;
-
-    float cosThetaT = sqrt(1.0 - sin2ThetaT);
-
-    // Fresnel terms
-    float A = etaT * cosThetaI;
-    float B = etaI * cosThetaT;
-    float Rs = (A - B) / (A + B);
-    float Rp = (A * cosThetaT - B * cosThetaI) / (A * cosThetaT + B * cosThetaI);
-    return 0.5 * (Rs * Rs + Rp * Rp);
-}
-
 vec3 sampleDiffuse(vec3 N, inout uint rngState) {
     float u1 = rand(rngState);
     float u2 = rand(rngState);
@@ -72,6 +20,14 @@ vec3 sampleDiffuse(vec3 N, inout uint rngState) {
     vec3 T, B;
     buildCoordinateSystem(N, T, B);
     return normalize(T * local.x + B * local.y + N * local.z);
+}
+
+vec3 evaluateDiffuseBRDF(vec3 albedo, float metallic) {
+    return (1 - metallic) * (albedo / PI);
+}
+
+float pdfDiffuse(vec3 N, vec3 L) {
+    return max(dot(N, L), 0.0) / PI;
 }
 
 vec3 sampleGGXVNDF_local(vec3 Vlocal, float roughness, vec2 u) {
@@ -85,8 +41,6 @@ vec3 sampleGGXVNDF_local(vec3 Vlocal, float roughness, vec2 u) {
     return normalize(vec3(a * Hstretched.x, a * Hstretched.y, Hstretched.z));
 }
 
-
-
 vec3 sampleHalfVector(vec3 V, vec3 N, float roughness, inout uint rngState) {
     float u1 = rand(rngState);
     float u2 = rand(rngState);
@@ -98,25 +52,34 @@ vec3 sampleHalfVector(vec3 V, vec3 N, float roughness, inout uint rngState) {
     return TBN * Hlocal;
 }
 
+float distributionGGX(vec3 N, vec3 H, float roughness)
+{
+    float a      = roughness*roughness;
+    float a2     = a*a;
+    float NdotH  = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH*NdotH;
 
+    float num   = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
 
-float pdfDiffuse(vec3 N, vec3 L) {
-    return max(dot(N, L), 0.0) / PI;
+    return num / denom;
 }
 
-
-
-float pdfSpecular(vec3 V, vec3 N, vec3 H, float roughness) {
-    float D = distributionGGX(N, H, roughness);
-    float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), EPSILON); // avoid division by zero
-    return (D * NdotH) / (4.0 * VdotH);
+float geometrySchlickGGX(float NdotV, float roughness) {
+    float k = (roughness * roughness) / 2.0;
+    return NdotV / max(NdotV * (1.0 - k) + k, EPSILON);
 }
 
-vec3 evaluateDiffuseBRDF(vec3 albedo, float metallic) {
-    return (1.0 - metallic) * (albedo / PI);
-}
+float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
+{
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2  = geometrySchlickGGX(NdotV, roughness);
+    float ggx1  = geometrySchlickGGX(NdotL, roughness);
 
+    return ggx1 * ggx2;
+}
 
 vec3 evaluateSpecularBRDF(vec3 normal, vec3 viewDir, vec3 sampledDir, vec3 F, float roughness, vec3 H) {
     float D = distributionGGX(normal, H, roughness);
@@ -126,18 +89,54 @@ vec3 evaluateSpecularBRDF(vec3 normal, vec3 viewDir, vec3 sampledDir, vec3 F, fl
     return (D * G * F) / max(4.0 * NdotV * NdotL, EPSILON);
 }
 
+float pdfSpecular(vec3 V, vec3 N, vec3 H, float roughness) {
+    float D = distributionGGX(N, H, roughness);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), EPSILON); // avoid division by zero
+    return (D * NdotH) / (4.0 * VdotH);
+}
+
+float fresnelDielectric(float cosThetaI, float etaI, float etaT) {
+    // Branchless swap if ray is inside the surface
+    float entering = step(0.0, cosThetaI); // 1 if cosThetaI > 0, else 0
+    float newEtaI = mix(etaT, etaI, entering);
+    float newEtaT = mix(etaI, etaT, entering);
+    cosThetaI = mix(-cosThetaI, cosThetaI, entering);
+
+    // Ratio of indices
+    float eta = newEtaI / newEtaT;
+
+    // sin^2(theta_t) using Snell's law
+    float cosThetaI2 = cosThetaI * cosThetaI;
+    float sin2ThetaT = eta * eta * max(0.0, 1.0 - cosThetaI2);
+
+    // Total internal reflection
+    if (sin2ThetaT >= 1.0)
+        return 1.0;
+
+    float cosThetaT = sqrt(1.0 - sin2ThetaT);
+
+    // Fresnel equations
+    float A = newEtaT * cosThetaI;
+    float B = newEtaI * cosThetaT;
+    float Rs = (A - B) / (A + B);
+    float Rp = (A * cosThetaT - B * cosThetaI) / (A * cosThetaT + B * cosThetaI);
+
+    return 0.5 * (Rs * Rs + Rp * Rp);
+}
+
 void handleDielectricBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, float roughness, float ior, vec3 transmissionColor, inout Payload payload) {
     payload.flags |= BOUNCE_TRANSMIT;
 
     vec3 Ns_shading = shadingNormal;
     if (dot(Ns_shading, viewDir) < 0.0)
-    Ns_shading = -Ns_shading;
+        Ns_shading = -Ns_shading;
 
     vec3 H = sampleHalfVector(viewDir, Ns_shading, roughness, payload.rngState);
     float VdotH = max(dot(viewDir, H), 0.0);
     vec3 I = normalize(-viewDir);
     float etaI = 1.0, etaT = ior;
-    vec3 N_geo = shadingNormal;
+    vec3 N_geo = geometricNormal;
 
     bool exiting = dot(I, N_geo) > 0.0;
     if (exiting) {
@@ -145,31 +144,22 @@ void handleDielectricBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal
         etaI = ior; etaT = 1.0;
     }
 
-    float reflectProb = fresnelDielectric(VdotH, 1.0, ior);
+    float reflectProb = max(fresnelDielectric(VdotH, 1.0, ior), EPSILON);
     vec3 refractedDir = refract(I, H, etaI / etaT);
     bool cannotRefract = length(refractedDir) < 1e-5;
 
     if (cannotRefract || rand(payload.rngState) < reflectProb) {
         vec3 reflectedDir = reflect(-viewDir, H);
         vec3 brdf = evaluateSpecularBRDF(Ns_shading, viewDir, reflectedDir, vec3(reflectProb), roughness, H);
-        float pdf = pdfSpecular(viewDir, Ns_shading, H, roughness);
+        float pdf = max(pdfSpecular(viewDir, Ns_shading, H, roughness), EPSILON);
 
-        if (pdf > EPSILON && reflectProb > EPSILON) {
-            float NdotL = max(dot(Ns_shading, reflectedDir), 0.0);
-            payload.attenuation = (brdf * NdotL) / (pdf * reflectProb);
-            payload.nextDirection = reflectedDir;
-        } else
-            payload.attenuation = vec3(0.0);
+        payload.attenuation = (brdf * max(dot(Ns_shading, reflectedDir), 0.0)) / (pdf * reflectProb);
+        payload.nextDirection = reflectedDir;
+
     } else {
-        float transProb = 1.0 - reflectProb;
-        if (transProb > EPSILON) {
-            payload.attenuation = transmissionColor / transProb;
-            payload.nextDirection = refractedDir;
-        } else
-            payload.attenuation = vec3(0.0);
+        payload.attenuation = transmissionColor / max(1.0 - reflectProb, EPSILON);
+        payload.nextDirection = refractedDir;
     }
-
-    payload.position += (2 * int(exiting) - 1) * geometricNormal * 0.000001;
 }
 
 void handleOpaqueBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, vec3 albedo, float metallic, float specular, float roughness, inout Payload payload) {
@@ -178,61 +168,37 @@ void handleOpaqueBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, ve
     if (NdotV < 0.0)
         normal = -normal;
 
-    // Fresnel for dielectric
-    float F_dielectric_scalar = fresnelDielectric(abs(NdotV), 1.0, 1.5);
-    // Metallic = 0 -> mostly dielectric (mix diffuse + specular)
-    // Metallic = 1 -> fully specular, no diffuse
-    float diffuseWeight  = (1.0 - metallic) * (1.0 - F_dielectric_scalar);
-    float specularWeight = F_dielectric_scalar + metallic * (1.0 - F_dielectric_scalar);
-
-    float totalWeight    = diffuseWeight + specularWeight;
-    float probSpecular   = specularWeight / max(totalWeight, EPSILON);
+    float probSpecular = mix(fresnelDielectric(abs(NdotV), 1.0, 1.5), 1.0, metallic);
 
     vec3 sampledDir;
     vec3 halfVector;
-    vec3 F_dielectric;
-    float VdotH;
-
     if (rand(payload.rngState) < probSpecular) {
-        // Specular branch
         payload.flags |= BOUNCE_SPECULAR;
         halfVector = sampleHalfVector(viewDir, normal, roughness, payload.rngState);
         sampledDir = reflect(-viewDir, halfVector);
-
-        VdotH = max(dot(viewDir, halfVector), 0.0);
-        F_dielectric = vec3(fresnelDielectric(VdotH, 1.0, 1.5));
     } else {
-        // Diffuse branch
         payload.flags |= BOUNCE_DIFFUSE;
         sampledDir = sampleDiffuse(normal, payload.rngState);
-
-        // Fake half-vector only for MIS/Fresnel weighting
-        halfVector = normalize(viewDir + sampledDir);
-        VdotH = max(dot(viewDir, halfVector), 0.0);
-        F_dielectric = vec3(fresnelDielectric(VdotH, 1.0, 1.5));
+        halfVector = normalize(viewDir + sampledDir); // Fake half-vector only for MIS/Fresnel weighting
     }
-
+    payload.nextDirection = sampledDir;
+        
     // Mix with metallic
+    vec3 F_dielectric = vec3(fresnelDielectric(max(dot(viewDir, halfVector), 0.0), 1.0, 1.5));
     vec3 F = mix(F_dielectric, albedo, metallic);
 
     // BRDF evaluation
     vec3 diffuseBRDF  = evaluateDiffuseBRDF(albedo, metallic);
     vec3 specularBRDF = evaluateSpecularBRDF(normal, viewDir, sampledDir, F, roughness, halfVector);
-    vec3 bsdf = diffuseBRDF + specularBRDF;
+    vec3 combinedBRDF = diffuseBRDF + specularBRDF;
 
     // PDFs
-    float p_spec = pdfSpecular(viewDir, normal, halfVector, roughness);
-    float p_diff = pdfDiffuse(normal, sampledDir);
-    float mis_pdf = probSpecular * p_spec + (1.0 - probSpecular) * p_diff;
-
-    if (mis_pdf > EPSILON) {
-        float NdotL = max(dot(normal, sampledDir), 0.0);
-        payload.attenuation = (bsdf * NdotL / mis_pdf);
-        payload.nextDirection = sampledDir;
-    } else
-    payload.attenuation = vec3(0.0);
-
-    payload.position += geometricNormal * 0.001;
+    float pdfSpecular = pdfSpecular(viewDir, normal, halfVector, roughness);
+    float pdfDiffuse = pdfDiffuse(normal, sampledDir);
+    
+    float combinedPdf = max(probSpecular * pdfSpecular + (1.0 - probSpecular) * pdfDiffuse, EPSILON);
+    
+    payload.attenuation = combinedBRDF * max(dot(normal, sampledDir), 0.0) / combinedPdf;
 }
 
 void shadeClosestHit(in vec3 worldPosition, in vec3 geometricNormal, in vec3 shadingNormal, in vec3 interpolatedTangent, in vec2 interpolatedUV, in vec3 worldRayDirection, in Material material, inout Payload payload) {

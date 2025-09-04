@@ -1,6 +1,5 @@
 ﻿#include "DebugPanel.h"
 #include <imgui.h>
-
 #include "ImGuiManager.h"
 
 DebugPanel::DebugPanel(std::string name) 
@@ -29,8 +28,8 @@ void DebugPanel::renderUi() {
         ImGuiManager::tableRowLabel("FPS");
         ImGui::Text("%.2f", fps);
         
-        ImGuiManager::tableRowLabel("Show BVH");
-        ImGui::Combo("##BVHMode", &visualizeBVH, modes, IM_ARRAYSIZE(modes));
+        //ImGuiManager::tableRowLabel("Show BVH");
+        //ImGui::Combo("##BVHMode", &visualizeBVH, modes, IM_ARRAYSIZE(modes));
         
         ImGui::EndTable();
     }

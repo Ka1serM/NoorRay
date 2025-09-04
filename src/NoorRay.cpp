@@ -27,8 +27,8 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
 {
     // Apply DPI scaling for the raytracer
     const float dpiScale = context.getDPIScale();
-    int scaledRenderWidth  = static_cast<int>(renderWidth  * dpiScale);
-    int scaledRenderHeight = static_cast<int>(renderHeight * dpiScale);
+    int scaledRenderWidth  = static_cast<int>(static_cast<float>(renderWidth)  * dpiScale);
+    int scaledRenderHeight = static_cast<int>(static_cast<float>(renderHeight) * dpiScale);
 
     if (context.isRtxSupported())
         raytracer = std::make_unique<RtxRaytracer>(scene, scaledRenderWidth, scaledRenderHeight);
@@ -56,13 +56,13 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
 
     scene.add(Texture(context, "HDRI Sky", hdriPixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
     stbi_image_free(hdriPixels);
-    
-    auto cube = MeshAsset::CreateCube(scene, "Cube", {});
-    scene.add(cube);
-    auto instance = std::make_unique<MeshInstance>(scene, "Cube Instance", cube, Transform(vec3(0, 0, 0)));
-    const int instanceIndex = scene.add(std::move(instance));
-    scene.setActiveObjectIndex(instanceIndex);
 
+    auto sphere = MeshAsset::CreateSphere(scene, "Sphere", {});
+    scene.add(sphere);
+    auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
+    uint32_t instanceIndex = scene.add(std::move(instance));
+    scene.setActiveObjectIndex(instanceIndex);
+    
     float aspectRatio = static_cast<float>(raytracer->getWidth()) / static_cast<float>(raytracer->getHeight());
     auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 1.8f, 5.0f, 2.0f);
     scene.add(std::move(cam));
@@ -70,8 +70,8 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
 
 void NoorRay::run() {
     auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug"));
-    auto* gpuViewport = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("Viewport"));
-    const auto* environment = dynamic_cast<EnvironmentPanel*>(imGuiManager.getComponent("Environment"));
+    auto* viewportPanel = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("Viewport"));
+    const auto* environmentPanel = dynamic_cast<EnvironmentPanel*>(imGuiManager.getComponent("Environment"));
     auto* renderPanel = dynamic_cast<RenderPanel*>(imGuiManager.getComponent("Render"));
 
     int frame = 0;
@@ -155,7 +155,7 @@ void NoorRay::run() {
                         pushConstants.push.samples  = renderPanel->getSamples();
                         pushConstants.push.exposure = renderPanel->getExposure();
                         pushConstants.camera  = scene.getActiveCamera()->getCameraData();
-                        pushConstants.environment = environment->getEnvironmentData();
+                        pushConstants.environment = environmentPanel->getEnvironmentData();
 
                         raytracer->render(cmd, pushConstants);
                         tonemapper->dispatch(cmd);
@@ -171,7 +171,7 @@ void NoorRay::run() {
                 continue;
             }
 
-            gpuViewport->recordCopy(cmd, tonemapper->getOutputImage());
+            viewportPanel->recordCopy(cmd, tonemapper->getOutputImage());
             imGuiManager.Draw(cmd, renderer.getCurrentSwapchainImageIndex());
 
             if (renderer.endFrame(computeWasSubmitted))

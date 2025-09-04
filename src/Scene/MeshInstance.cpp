@@ -25,8 +25,8 @@ void MeshInstance::onTransformUpdated() {
 void MeshInstance::renderUi() {
     SceneObject::renderUi();
 
-    ImGuiManager::tableRowLabel("Mesh Asset");
-
+    ImGui::SeparatorText("Mesh Asset");
+    
     ImGui::TableNextColumn();
     if (meshAsset)
         meshAsset->renderUi();  // render mesh details inside the value column

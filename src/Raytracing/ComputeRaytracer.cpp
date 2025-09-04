@@ -99,7 +99,7 @@ void ComputeRaytracer::render(const vk::CommandBuffer& commandBuffer, const Push
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout.get(), 0, descriptorSet.get(), {});
     commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushConstantsData), &pushConstants);
 
-    uint32_t groupCountX = (width + GROUP_SIZE - 1) / GROUP_SIZE;
-    uint32_t groupCountY = (height + GROUP_SIZE - 1) / GROUP_SIZE;
+    const uint32_t groupCountX = (width + GROUP_SIZE - 1) / GROUP_SIZE;
+    const uint32_t groupCountY = (height + GROUP_SIZE - 1) / GROUP_SIZE;
     commandBuffer.dispatch(groupCountX, groupCountY, 1);
 }

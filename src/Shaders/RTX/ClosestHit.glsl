@@ -49,5 +49,5 @@ void main() {
    vec3 tangentWorld = normalize(normalMatrix * localTangent);
    
    shadeClosestHit(worldPosition, geometricNormalWorld, shadingNormalWorld, tangentWorld, interpolatedUV, gl_WorldRayDirectionEXT, material, payload);
-   payload.objectIndex = gl_InstanceID;
+   payload.objectIndex = uint(gl_InstanceID);
 }

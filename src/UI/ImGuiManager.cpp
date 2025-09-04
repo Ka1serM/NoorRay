@@ -61,8 +61,8 @@ ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapc
     init_info.Instance = context.getInstance();
     init_info.PhysicalDevice = context.getPhysicalDevice();
     init_info.Device = context.getDevice();
-    init_info.QueueFamily = context.getGraphicsQueueFamilyIndex();
-    init_info.Queue = context.getGraphicsQueue();
+    init_info.QueueFamily = context.getQueueFamilyIndex();
+    init_info.Queue = context.getQueue();
     init_info.DescriptorPool = context.getDescriptorPool();
     init_info.RenderPass = renderPass.get();
     init_info.Subpass = 0;

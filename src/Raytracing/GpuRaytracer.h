@@ -82,7 +82,6 @@ public:
         vk::DescriptorImageInfo colorInfo{};
         colorInfo.setImageView(outputColor.getImageView());
         colorInfo.setImageLayout(vk::ImageLayout::eGeneral);
-
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
                                    .setDstBinding(1)
@@ -94,7 +93,6 @@ public:
         vk::DescriptorImageInfo albedoInfo{};
         albedoInfo.setImageView(outputAlbedo.getImageView());
         albedoInfo.setImageLayout(vk::ImageLayout::eGeneral);
-
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
                                    .setDstBinding(2)
@@ -106,7 +104,6 @@ public:
         vk::DescriptorImageInfo normalInfo{};
         normalInfo.setImageView(outputNormal.getImageView());
         normalInfo.setImageLayout(vk::ImageLayout::eGeneral);
-
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
                                    .setDstBinding(3)
@@ -118,7 +115,6 @@ public:
         vk::DescriptorImageInfo cryptoInfo{};
         cryptoInfo.setImageView(outputCrypto.getImageView());
         cryptoInfo.setImageLayout(vk::ImageLayout::eGeneral);
-
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
                                    .setDstBinding(4)
@@ -126,6 +122,18 @@ public:
                                    .setDescriptorCount(1)
                                    .setImageInfo(cryptoInfo));
 
+
+        // Output Position (binding = 5)
+        vk::DescriptorImageInfo positionInfo{};
+        positionInfo.setImageView(outputPosition.getImageView());
+        positionInfo.setImageLayout(vk::ImageLayout::eGeneral);
+        descriptorWrites.push_back(vk::WriteDescriptorSet{}
+                           .setDstSet(descriptorSet.get())
+                           .setDstBinding(5)
+                           .setDescriptorType(vk::DescriptorType::eStorageImage)
+                           .setDescriptorCount(1)
+                           .setImageInfo(positionInfo));
+        
         // Update all descriptor sets at once
         context.getDevice().updateDescriptorSets(descriptorWrites, {});
     }
@@ -148,11 +156,11 @@ public:
             textureImageInfos.push_back(info);
         }
 
-        uint32_t descriptorCount = static_cast<uint32_t>(textureImageInfos.size());
+        const uint32_t descriptorCount = static_cast<uint32_t>(textureImageInfos.size());
 
         const vk::WriteDescriptorSet write{
             descriptorSet.get(),
-            7, // DstBinding 6 is for textures
+            7, // DstBinding 7 is for textures
             0,
             descriptorCount,
             vk::DescriptorType::eCombinedImageSampler,
@@ -184,7 +192,7 @@ public:
 
         vk::WriteDescriptorSet write{};
         write.setDstSet(descriptorSet.get());
-        write.setDstBinding(6); // DstBinding 5 is for meshes
+        write.setDstBinding(6); // DstBinding 6 is for meshes
         write.setDescriptorType(vk::DescriptorType::eStorageBuffer);
         write.setDescriptorCount(1); // Always 1 for a single buffer binding
         write.setBufferInfo(bufferInfo); 

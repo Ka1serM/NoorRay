@@ -84,8 +84,9 @@ vec3 accumulateBuffer(vec3 oldValue, vec3 newValue, float alpha, int frame) {
 }
 
 void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
-    if (pixelCoord.x >= screenSize.x || pixelCoord.y >= screenSize.y) return;
-
+    if (pixelCoord.x >= screenSize.x || pixelCoord.y >= screenSize.y)
+        return;
+    
     #ifdef USE_COMPUTE
         Payload payload;
     #endif
@@ -98,8 +99,8 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
     vec3 accumulatedNormal = vec3(0.0);
     bool hitAnything = false;
 
-    for (int i = 0; i < pushConstants.push.samples; ++i) {
-        SamplerState samplerState = initSamplerState(pixelCoord, pushConstants.push.frame + i);
+    for (int sampleIndex = 0; sampleIndex < pushConstants.push.samples; ++sampleIndex) {
+        SamplerState samplerState = initSamplerState(pixelCoord, pushConstants.push.frame + sampleIndex);
 
         vec3 rayOrigin, rayDirection;
         generatePrimaryRay(pixelCoord, screenSize, pushConstants.camera, samplerState, rayOrigin, rayDirection);
@@ -118,7 +119,7 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
             payload.attenuation = vec3(1.0);
             payload.depth = bounce;
             payload.flags = 0u;
-            payload.objectIndex = -1;
+            payload.objectIndex = INVALID_INSTANCE;
 
             #ifdef USE_COMPUTE
                 traceRayCompute(rayOrigin, rayDirection, payload);
@@ -136,22 +137,26 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
             if ((payload.flags & BOUNCE_TRANSMIT) != 0u)
                 transmissionCount++;
 
-            if (diffuseCount > pushConstants.push.diffuseBounces ||
-            specularCount > pushConstants.push.specularBounces ||
-            transmissionCount > pushConstants.push.transmissionBounces)
+            if (diffuseCount > pushConstants.push.diffuseBounces || specularCount > pushConstants.push.specularBounces || transmissionCount > pushConstants.push.transmissionBounces)
                 payload.flags |= RAY_TERMINATED;
 
             if (bounce == 0) {
                 if ((payload.flags & RAY_TRANSPARENT) != 0u) {
                     if ((payload.flags & RAY_TERMINATED) == 0u)
-                    --bounce;
+                        --bounce;
                     continue;
                 }
+                
                 accumulatedAlbedo += payload.albedo;
                 accumulatedNormal += payload.normal;
+                
                 // Store crypto and position buffer directly
-                imageStore(outputCrypto, pixelCoord, uvec4(payload.objectIndex, 0, 0, 0));
-                imageStore(outputPosition, pixelCoord, vec4(rayOrigin, 0));
+                if(sampleIndex == 0) {
+                    imageStore(outputCrypto, pixelCoord, uvec4(payload.objectIndex, 0, 0, 0));
+                    imageStore(outputPosition, pixelCoord, vec4(payload.position, 0));
+                    debugPrintfEXT("Instance ID = %u\n", payload.objectIndex);
+                    debugPrintfEXT("Position = (%f, %f, %f)\n", payload.position.x, payload.position.y, payload.position.z);
+                }
                 
                 hitAnything = ((payload.flags & ENV_TRANSPARENT) == 0u);
             }
@@ -160,8 +165,17 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
             throughput *= payload.attenuation;
             rayDirection = payload.nextDirection;
 
+            //RUSSIAN ROULETTE TERMINATION
+            if (bounce > 2) { //start RR after a few bounces
+                float p_continue = clamp(luminance(throughput), 0.05, 1.0);
+                if (rand(payload.rngState) > p_continue) 
+                  payload.flags |= RAY_TERMINATED;
+                else
+                  throughput /= p_continue; // keep estimator unbiased
+            }
+
             if ((payload.flags & RAY_TERMINATED) != 0u)
-            break;
+                break;
         }
     }
 

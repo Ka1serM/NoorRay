@@ -9,7 +9,6 @@ OutlinerDetailsPanel::OutlinerDetailsPanel(std::string name, Scene& scene)
     : ImGuiComponent(std::move(name)), scene(scene) {}
 
 void OutlinerDetailsPanel::renderUi() {
-    // Outliner Panel
     ImGui::Begin("Outliner");
 
     // Recursively draw all root-level objects
@@ -18,6 +17,10 @@ void OutlinerDetailsPanel::renderUi() {
 
     // Drop target for unparenting that fills the remaining space.
     ImGui::Dummy(ImGui::GetContentRegionAvail());
+    if (ImGui::IsItemClicked())
+        scene.resetActiveObjectIndex();
+
+    // The Dummy also serves as the drop target.
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT")) {
             IM_ASSERT(payload->DataSize == sizeof(SceneObject*));
@@ -27,11 +30,23 @@ void OutlinerDetailsPanel::renderUi() {
         ImGui::EndDragDropTarget();
     }
 
-    // Handle deletion with key
-    if (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Delete))
-        if (SceneObject* activeObject = scene.getActiveObject())
-            if (scene.remove(activeObject))
-                scene.resetActiveObjectIndex();
+    // Handle Copy, Paste, and Delete
+    if (ImGui::IsWindowFocused()) {
+        const bool isCtrlDown = ImGui::IsKeyDown(ImGuiMod_Ctrl);
+        SceneObject* activeObject = scene.getActiveObject();
+
+        // Copy (Ctrl+C)
+        if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_C))
+            scene.copy(activeObject);
+        
+        // Paste (Ctrl+V)
+        if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_V))
+            scene.paste();
+
+        // Deletion (Delete key)
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete))
+            scene.remove(activeObject);
+    }
 
     ImGui::End();
 
@@ -50,11 +65,12 @@ void OutlinerDetailsPanel::renderUi() {
 }
 
 void OutlinerDetailsPanel::drawNode(SceneObject* node) {
-    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
 
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+    
     if (node == scene.getActiveObject())
         flags |= ImGuiTreeNodeFlags_Selected;
-
+    
     if (node->getChildren().empty())
         flags |= ImGuiTreeNodeFlags_Leaf;
 
@@ -89,10 +105,9 @@ void OutlinerDetailsPanel::drawNode(SceneObject* node) {
 
     // If the node is open, recursively draw its children
     if (node_open) {
-        
         for (SceneObject* child : node->getChildren())
             drawNode(child);
-        
         ImGui::TreePop();
     }
+
 }

@@ -5,7 +5,18 @@
 #include "Scene.h"
 #include "../UI/ImGuiManager.h"
 
-SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : transform(transform), scene(scene), ImGuiComponent(name) {
+SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : transform(transform), scene(scene), visible(true), ImGuiComponent(name)
+{
+}
+
+SceneObject::SceneObject(const SceneObject& other)
+    : ImGuiComponent(other.name + " Copy"),
+      scene(other.scene), visible(other.visible),
+      transform(other.transform)
+{}
+
+std::unique_ptr<SceneObject> SceneObject::clone() const {
+    return std::make_unique<SceneObject>(*this);
 }
 
 void SceneObject::setPosition(const vec3& position) {

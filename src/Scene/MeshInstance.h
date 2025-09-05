@@ -15,7 +15,11 @@ class MeshInstance : public SceneObject {
 
 public:
     MeshInstance(Scene& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf);
+    MeshInstance(const MeshInstance& other);
+    
     void renderUi() override;
+
+    std::unique_ptr<SceneObject> clone() const override;
 
     const MeshAsset& getMeshAsset() const { return *meshAsset.get(); }
     const vk::AccelerationStructureInstanceKHR& getInstanceData() const { return instanceData; }

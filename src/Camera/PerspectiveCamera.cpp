@@ -15,7 +15,7 @@ static constexpr auto WORLD_UP = vec3(0.0f, -1.0f, 0.0f);
 static constexpr auto VULKAN_Z_PLUS = vec3(0.0f, 0.0f, 1.0f);
 
 PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) 
-    : SceneObject(scene, name, transform), scene(scene), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
+    : SceneObject(scene, name, transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
 {
     cameraData.focalLength = focalLength;
     cameraData.aperture = aperture;
@@ -24,6 +24,23 @@ PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Tran
 
     updateCameraData();
     updateHorizontalVertical();
+}
+
+PerspectiveCamera::PerspectiveCamera(const PerspectiveCamera& other)
+    : SceneObject(other),
+      aspectRatio(other.aspectRatio),
+      sensorWidth(other.sensorWidth),
+      sensorHeight(other.sensorHeight),
+      cameraData(other.cameraData),
+      arcballMode(other.arcballMode),
+      arcballPivot(other.arcballPivot)
+{
+    updateCameraData();
+    updateHorizontalVertical();
+}
+
+std::unique_ptr<SceneObject> PerspectiveCamera::clone() const {
+    return std::make_unique<PerspectiveCamera>(*this);
 }
 
 void PerspectiveCamera::updateCameraData() {

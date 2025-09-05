@@ -9,8 +9,6 @@ class Scene;
 
 class PerspectiveCamera : public SceneObject {
 
-    Scene& scene;
-
 private:
     float aspectRatio;
     float sensorWidth;   // mm
@@ -29,7 +27,9 @@ public:
     bool getArcballActive() const { return arcballMode;}
     
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
-    
+    PerspectiveCamera(const PerspectiveCamera& other);
+    std::unique_ptr<SceneObject> clone() const override;
+
     // Accessors for camera params
     float getFocalLength() const { return cameraData.focalLength; }
     float getAperture() const { return cameraData.aperture; }

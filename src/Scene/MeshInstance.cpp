@@ -16,6 +16,25 @@ MeshInstance::MeshInstance(Scene& scene, const std::string& name, std::shared_pt
     instanceData.setAccelerationStructureReference(meshAsset->getBlasAddress());
 }
 
+MeshInstance::MeshInstance(const MeshInstance& other)
+    : SceneObject(other),
+      meshAsset(other.meshAsset)
+{
+    if (meshAsset) {
+        instanceData = vk::AccelerationStructureInstanceKHR{};
+        instanceData.setTransform(getWorldTransform().getVkTransformMatrix());
+        instanceData.setInstanceCustomIndex(meshAsset->getMeshIndex());
+        instanceData.setMask(0xFF);
+        instanceData.setInstanceShaderBindingTableRecordOffset(0);
+        instanceData.setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
+        instanceData.setAccelerationStructureReference(meshAsset->getBlasAddress());
+    }
+}
+
+std::unique_ptr<SceneObject> MeshInstance::clone() const {
+    return std::make_unique<MeshInstance>(*this);
+}
+
 void MeshInstance::onTransformUpdated() {
     SceneObject::onTransformUpdated();
     instanceData.setTransform(getWorldTransform().getVkTransformMatrix());

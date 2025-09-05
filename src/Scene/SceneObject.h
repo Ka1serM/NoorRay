@@ -21,6 +21,8 @@ protected:
 
 public:
     SceneObject(Scene& scene, const std::string& name, const Transform& transform);
+    SceneObject(const SceneObject& other);
+    virtual std::unique_ptr<SceneObject> clone() const;
 
     std::string getType() const override { return "Scene Object"; }
     void renderUi() override;
@@ -32,7 +34,12 @@ public:
     const std::vector<SceneObject*>& getChildren() const { return children; }
 
     void setParent(SceneObject* parent) { this->parent = parent; }
-    void addChild(SceneObject* child) { children.push_back(child); }
+    
+    void addChild(SceneObject* child) {
+        children.push_back(child);
+        child->setParent(this);
+    }
+    
     void removeChild(SceneObject* child) { std::erase(children, child); }
     
     vec3 getPosition() const {

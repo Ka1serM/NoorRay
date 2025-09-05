@@ -24,10 +24,33 @@ enum DirtyFlag : uint8_t {
 };
 
 class Scene {
+    Context& context;
+
+    std::vector<Texture> textures;
+    std::vector<std::string> textureNames;
+    std::vector<std::shared_ptr<MeshAsset>> meshAssets;
+
+    // Owns ALL objects in the scene.
+    std::vector<std::unique_ptr<SceneObject>> sceneObjects;
+    // Non-owning pointers to top-level objects for the hierarchy.
+    std::vector<SceneObject*> rootObjects;
+
+    std::vector<MeshInstance*> meshInstances;
+    PerspectiveCamera* activeCamera = nullptr;
+    uint32_t activeObjectIndex = INVALID_INSTANCE;
+    uint8_t dirtyFlags = 0;
+
+    SceneObject* copiedObject = nullptr;
+
+    uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
+    
 public:
     Scene(Context& context);
+
+    void copy(SceneObject* objectToCopy);
+    SceneObject* cloneHierarchy(const SceneObject* source);
+    void paste();
     
-    // Object management
     uint32_t add(std::unique_ptr<SceneObject> sceneObject);
     void add(const std::shared_ptr<MeshAsset>& meshAsset);
     void add(Texture&& texture);
@@ -76,21 +99,4 @@ public:
     bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
-
-private:
-    Context& context;
-
-    std::vector<Texture> textures;
-    std::vector<std::string> textureNames;
-    std::vector<std::shared_ptr<MeshAsset>> meshAssets;
-
-    // Owns ALL objects in the scene.
-    std::vector<std::unique_ptr<SceneObject>> sceneObjects;
-    // Non-owning pointers to top-level objects for the hierarchy.
-    std::vector<SceneObject*> rootObjects;
-
-    std::vector<MeshInstance*> meshInstances;
-    PerspectiveCamera* activeCamera = nullptr;
-    uint32_t activeObjectIndex = INVALID_INSTANCE;
-    uint8_t dirtyFlags = 0;
 };

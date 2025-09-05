@@ -90,10 +90,10 @@ vec3 evaluateSpecularBRDF(vec3 normal, vec3 viewDir, vec3 sampledDir, vec3 F, fl
 }
 
 float pdfSpecular(vec3 V, vec3 N, vec3 H, float roughness) {
+    float NdotV = max(dot(N, V), EPSILON);
     float D = distributionGGX(N, H, roughness);
-    float NdotH = max(dot(N, H), 0.0);
-    float VdotH = max(dot(V, H), EPSILON); // avoid division by zero
-    return (D * NdotH) / (4.0 * VdotH);
+    float G1_V = geometrySchlickGGX(NdotV, roughness);
+    return (G1_V * D) / (4.0 * NdotV);
 }
 
 float fresnelDielectric(float cosThetaI, float etaI, float etaT) {
@@ -136,8 +136,8 @@ void handleDielectricBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal
     float VdotH = max(dot(viewDir, H), 0.0);
     vec3 I = normalize(-viewDir);
     float etaI = 1.0, etaT = ior;
+    
     vec3 N_geo = geometricNormal;
-
     bool exiting = dot(I, N_geo) > 0.0;
     if (exiting) {
         N_geo = -N_geo;
@@ -163,10 +163,15 @@ void handleDielectricBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal
 }
 
 void handleOpaqueBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, vec3 albedo, float metallic, float specular, float roughness, inout Payload payload) {
+    float NdotV = dot(shadingNormal, viewDir);
+
     vec3 normal = shadingNormal;
-    float NdotV = dot(normal, viewDir);
     if (NdotV < 0.0)
         normal = -normal;
+
+    vec3 geoNormal = geometricNormal;
+    if (dot(geometricNormal, viewDir) < 0.0)
+            geoNormal = - geoNormal;
 
     float probSpecular = mix(fresnelDielectric(abs(NdotV), 1.0, 1.5), 1.0, metallic);
 
@@ -199,6 +204,8 @@ void handleOpaqueBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, ve
     float combinedPdf = max(probSpecular * pdfSpecular + (1.0 - probSpecular) * pdfDiffuse, EPSILON);
     
     payload.attenuation = combinedBRDF * max(dot(normal, sampledDir), 0.0) / combinedPdf;
+     
+    payload.position += geoNormal * 0.001;
 }
 
 void shadeClosestHit(in vec3 worldPosition, in vec3 geometricNormal, in vec3 shadingNormal, in vec3 interpolatedTangent, in vec2 interpolatedUV, in vec3 worldRayDirection, in Material material, inout Payload payload) {

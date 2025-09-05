@@ -1,8 +1,10 @@
 ﻿#include "ViewportPanel.h"
 #include <iostream>
 #include <ranges>
+
 #include "imgui.h"
 #include "ImGuizmo.h"
+#include "ImViewGuizmo.h"
 #include "glm/gtc/type_ptr.hpp"
 #include "SDL3/SDL_mouse.h"
 #include "Camera/PerspectiveCamera.h"
@@ -70,10 +72,11 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     style.Colors[ImGuizmo::ROTATION_USING_BORDER] = ImVec4(1.0f, 0.8f, 0.2f, 1.0f); // golden ring
     style.Colors[ImGuizmo::ROTATION_USING_FILL] = ImVec4(1.0f, 0.8f, 0.2f, 0.3f); // subtle fill
 }
+
 void ViewportPanel::renderUi() {
     ImGui::Begin(name.c_str());
 
-    // ... (Viewport Size & Position calculation is unchanged) ...
+    // (Viewport Size & Position calculation is unchanged)
     const float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
     ImVec2 imageSize;
     const ImVec2 availSize = ImGui::GetContentRegionAvail();
@@ -84,14 +87,14 @@ void ViewportPanel::renderUi() {
         imageSize.x = availSize.x;
         imageSize.y = imageSize.x / aspectRatio;
     }
+    
     const ImVec2 padding = {(availSize.x - imageSize.x) * 0.5f, (availSize.y - imageSize.y) * 0.5f};
     const ImVec2 cursorPos = ImGui::GetCursorPos();
     ImGui::SetCursorPos({cursorPos.x + padding.x, cursorPos.y + padding.y});
     const ImVec2 imagePos = ImGui::GetCursorScreenPos();
     
-    // ... (Checkerboard Background drawing is unchanged) ...
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    constexpr float tileSize = 10.0f;
+    constexpr float tileSize = 20.0f;
     constexpr ImU32 col1 = IM_COL32(50, 50, 50, 255);
     const float x0 = imagePos.x, y0 = imagePos.y;
     const float x1 = imagePos.x + imageSize.x, y1 = imagePos.y + imageSize.y;
@@ -136,6 +139,7 @@ void ViewportPanel::renderUi() {
             if (ImGui::IsKeyPressed(ImGuiKey_R))
                 currentOperation = ImGuizmo::SCALE;
         }
+        
         const mat4& view = camera->getViewMatrix();
         mat4 proj = camera->getProjectionMatrix();
         mat4 model = activeObject->getWorldTransform().getMatrix();
@@ -185,8 +189,8 @@ void ViewportPanel::renderUi() {
         }
     }
 
-    // ... (Object picking logic is unchanged) ...
-    if (isImageHovered && !ImGuizmo::IsUsing() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // ..Object picking
+    if (isImageHovered && !ImGuizmo::IsUsing() && !ImViewGuizmo::IsUsing() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const ImVec2 mousePos = ImGui::GetMousePos();
         const ImVec2 windowPos = ImGui::GetItemRectMin();
         const int32_t pixelX = static_cast<int32_t>(std::clamp((mousePos.x - windowPos.x) / imageSize.x, 0.f, 1.f) * static_cast<float>(width));
@@ -198,12 +202,22 @@ void ViewportPanel::renderUi() {
     if (isCapturingMouse)
         camera->update();
     
+    // Get the camera's current state
+    vec3 position = camera->getPosition();
+    quat rotation = camera->getRotation();
+    if (ImViewGuizmo::Manipulate(position, rotation,  ImVec2(imagePos.x + imageSize.x, imagePos.y), 256.f))
+    {
+        camera->setPosition(position);
+        camera->setRotation(rotation);
+    }
+    
     ImGui::End();
 }
 
 void ViewportPanel::handlePositionPicking(const int32_t pixelX, const int32_t pixelY) const {
     auto* camera = scene.getActiveCamera();
-    if (!camera) return;
+    if (!camera)
+        return;
 
     vk::BufferImageCopy copyRegion{};
     copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};

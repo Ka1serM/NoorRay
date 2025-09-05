@@ -60,11 +60,11 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     auto sphere = MeshAsset::CreateSphere(scene, "Sphere", {});
     scene.add(sphere);
     auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
-    uint32_t instanceIndex = scene.add(std::move(instance));
+    const uint32_t instanceIndex = scene.add(std::move(instance));
     scene.setActiveObjectIndex(instanceIndex);
     
     float aspectRatio = static_cast<float>(raytracer->getWidth()) / static_cast<float>(raytracer->getHeight());
-    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 1.8f, 5.0f, 2.0f);
+    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 0, 5.0f, 2.0f);
     scene.add(std::move(cam));
 }
 

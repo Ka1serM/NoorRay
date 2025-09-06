@@ -7,7 +7,7 @@
 EnvironmentPanel::EnvironmentPanel(std::string name, Scene& scene) : ImGuiComponent(std::move(name)), scene(scene) {}
 
 void EnvironmentPanel::renderUi() {
-    ImGui::Begin(getType().c_str());
+    ImGui::Begin(name.c_str());
     bool anyChanged = false;
 
     if (ImGui::BeginTable("Environment Table", 2, ImGuiTableFlags_SizingStretchProp))

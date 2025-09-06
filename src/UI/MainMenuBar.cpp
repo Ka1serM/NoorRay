@@ -1,18 +1,15 @@
 ﻿#include "MainMenuBar.h"
 #include "imgui.h"
-#include "portable-file-dialogs.h"
 #include "Scene/MeshInstance.h"
 #include <SDL3/SDL.h>
 #include <iostream>
-#include <future>
-
 #include "Log.h"
 #include "Scene/SceneImporter.h"
+#include <memory>
 
 MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene)
-: ImGuiComponent(std::move(name)), scene(scene), context(context), pendingFileType()
-{
-}
+    : ImGuiComponent(std::move(name)), scene(scene), context(context)
+{}
 
 void MainMenuBar::renderUi() {
     if (ImGui::BeginMainMenuBar()) {
@@ -86,7 +83,6 @@ void MainMenuBar::renderAddMenu() const {
     }
 }
 
-// Function to handle the import logic once a file is selected
 void MainMenuBar::handleFileImport(const std::string& filePath, const FileType type) const
 {
     if (filePath.empty())
@@ -112,39 +108,38 @@ void MainMenuBar::handleFileImport(const std::string& filePath, const FileType t
 }
 
 void MainMenuBar::renderFileMenu() {
-    // Check if any async file dialog has completed
-    if (openFuture.valid() && openFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        const auto selection = openFuture.get();
-        if (!selection.empty()) {
+    // Check if a dialog is open and has returned a result.
+    if (openDialog && openDialog->ready(0)) {
+        
+        const auto& selection = openDialog->result();
+        if (!selection.empty())
             handleFileImport(selection[0], pendingFileType);
-        }
+        
+        // Reset the unique_ptr to close the dialog and reset the state.
+        openDialog.reset();
+        pendingFileType = FileType::NONE;
     }
 
     if (ImGui::BeginMenu("File")) {
         ImGui::Separator();
 
         if (ImGui::BeginMenu("Import")) {
-            // Disable menu items if a dialog is already open
-            ImGui::BeginDisabled(openFuture.valid() && openFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready);
+            // Disable menu items if a dialog is currently running.
+            // A dialog is running if the unique_ptr is not null.
+            ImGui::BeginDisabled(static_cast<bool>(openDialog));
             
             if (ImGui::MenuItem("Wavefront .obj")) {
-                openFuture = std::async(std::launch::async, [] {
-                    return pfd::open_file("Import OBJ Model", ".", { "OBJ Files", "*.obj", "All Files", "*" }).result();
-                });
+                openDialog = std::make_unique<pfd::open_file>("Import OBJ Model", ".", std::vector<std::string>{"OBJ Files", "*.obj", "All Files", "*"});
                 pendingFileType = FileType::OBJ;
             }
 
             if (ImGui::MenuItem("Khronos .gltf")) {
-                openFuture = std::async(std::launch::async, [] {
-                    return pfd::open_file("Import GLTF", ".", { "GLTF Files", "*.gltf *.glb","All Files", "*" }).result();
-                });
+                openDialog = std::make_unique<pfd::open_file>("Import GLTF", ".", std::vector<std::string>{"GLTF Files", "*.gltf *.glb", "All Files", "*"});
                 pendingFileType = FileType::GLTF;
             }
 
             if (ImGui::MenuItem("Bitmap Texture")) {
-                openFuture = std::async(std::launch::async, [] {
-                    return pfd::open_file("Import Texture", ".", { "Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic", "All Files", "*" }).result();
-                });
+                openDialog = std::make_unique<pfd::open_file>("Import Texture", ".", std::vector<std::string>{"Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic", "All Files", "*"});
                 pendingFileType = FileType::TEXTURE;
             }
             

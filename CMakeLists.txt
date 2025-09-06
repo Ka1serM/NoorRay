@@ -12,29 +12,28 @@ add_subdirectory(external/SDL)
 # External Libraries
 add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
-add_subdirectory(external/json)
 
 # tinygltf (header-only)
 add_library(tinygltf INTERFACE)
 target_include_directories(tinygltf INTERFACE
-    ${PROJECT_SOURCE_DIR}/external/tinygltf
+        ${PROJECT_SOURCE_DIR}/external/tinygltf
 )
 
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
-# MoltenVK static library from Vulkan SDK .xcframework on macOS
+# MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
-    set(MOLTENVK_LIB "$ENV{VULKAN_SDK}/lib/MoltenVK.xcframework/macos-arm64_x86_64/libMoltenVK.a")
-    if(EXISTS "${MOLTENVK_LIB}")
-        message(STATUS "Using static MoltenVK library at ${MOLTENVK_LIB}")
-        add_library(MoltenVK STATIC IMPORTED)
+    set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
+    if(EXISTS "${MOLTENVK_DYLIB}")
+        message(STATUS "Using dynamic MoltenVK library at ${MOLTENVK_DYLIB}")
+        add_library(MoltenVK SHARED IMPORTED)
         set_target_properties(MoltenVK PROPERTIES
-                IMPORTED_LOCATION "${MOLTENVK_LIB}"
+                IMPORTED_LOCATION "${MOLTENVK_DYLIB}"
                 INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include"
         )
     else()
-        message(FATAL_ERROR "MoltenVK static library not found at expected path: ${MOLTENVK_LIB}")
+        message(FATAL_ERROR "MoltenVK dylib not found at expected path: ${MOLTENVK_DYLIB}")
     endif()
 endif()
 
@@ -63,13 +62,10 @@ file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
 # Resource handling on Windows
 if(WIN32)
     set(RESOURCE_RC_PATH "${CMAKE_BINARY_DIR}/resource.rc")
-
     file(WRITE "${RESOURCE_RC_PATH}"
             "MAINICON ICON \"${PROJECT_SOURCE_DIR}/assets/icons/icon.ico\"\n"
     )
-
     message(STATUS "Generated resource.rc at ${RESOURCE_RC_PATH}")
-
     list(APPEND SRC_FILES "${RESOURCE_RC_PATH}")
 endif()
 
@@ -88,7 +84,6 @@ target_link_libraries(NoorRay PRIVATE
         glm
         imgui
         Vulkan::Vulkan
-        nlohmann_json::nlohmann_json
         SDL3::SDL3-static
         tinygltf
 )
@@ -110,7 +105,7 @@ if(APPLE)
 
     set_target_properties(NoorRay PROPERTIES
             MACOSX_BUNDLE TRUE
-            MACOSX_BUNDLE_IDENTIFIER "com.marcelk.noorray"
+            MACOSX_BUNDLE_IDENTIFIER "dev.marcelk.noorray"
             MACOSX_BUNDLE_NAME "NoorRay"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
             MACOSX_BUNDLE_VERSION "${PROJECT_VERSION}"
@@ -118,26 +113,91 @@ if(APPLE)
             MACOSX_BUNDLE_ICON_FILE "icon.icns"
     )
 
+    # MoltenVk and Vulkan loader bundling and @rpath fix
     if(DEFINED ENV{VULKAN_SDK})
         set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/lib/libvulkan.1.dylib")
-        add_custom_command(TARGET NoorRay POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${VULKAN_LOADER_DYLIB}"
-                "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
-                COMMENT "Bundling Vulkan loader for macOS..."
-        )
+        set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
+
+        if(EXISTS "${VULKAN_LOADER_DYLIB}" AND EXISTS "${MOLTENVK_DYLIB}")
+            add_custom_command(TARGET NoorRay POST_BUILD
+                    # Ensure Frameworks folder exists
+                    COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks"
+
+                    # Copy the Vulkan loader
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${VULKAN_LOADER_DYLIB}"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
+
+                    # Copy MoltenVK dylib
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOLTENVK_DYLIB}"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libMoltenVK.dylib"
+
+                    # Fix binary to use @rpath/libvulkan.1.dylib
+                    COMMAND /usr/bin/install_name_tool -change
+                    "${VULKAN_LOADER_DYLIB}"
+                    "@rpath/libvulkan.1.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
+
+                    # Fix binary to use @rpath/libMoltenVK.dylib
+                    COMMAND /usr/bin/install_name_tool -change
+                    "${MOLTENVK_DYLIB}"
+                    "@rpath/libMoltenVK.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
+
+                    # Add rpath to point to Frameworks folder
+                    COMMAND /usr/bin/install_name_tool -add_rpath
+                    "@executable_path/../Frameworks"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
+
+                    # Fix the dylib IDs
+                    COMMAND /usr/bin/install_name_tool -id
+                    "@rpath/libvulkan.1.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
+
+                    COMMAND /usr/bin/install_name_tool -id
+                    "@rpath/libMoltenVK.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libMoltenVK.dylib"
+
+                    COMMENT "Bundling Vulkan loader and MoltenVK dylib, fixing @rpath for NoorRay"
+            )
+        else()
+            message(FATAL_ERROR "Vulkan loader or MoltenVK dylib not found at expected paths: ${VULKAN_LOADER_DYLIB}, ${MOLTENVK_DYLIB}")
+        endif()
     endif()
 
-    target_sources(NoorRay PRIVATE
-            assets/icons/icon.icns
+    # Resources handling
+    add_custom_command(TARGET NoorRay POST_BUILD
+        # Create Resource folder chain
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d"
+    
+        # Copy app icon
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
+        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
+        
+        # Copy MoltenVK_icd.json
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/assets/MoltenVK_icd.json"
+        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
+    
+        COMMENT "Copying app icon and MoltenVK ICD JSON into Resources"
     )
-    set_source_files_properties(assets/icon.icns PROPERTIES
-            MACOSX_PACKAGE_LOCATION "Resources"
-    )
+
 
 endif()
 
-if(MINGW)
+# Use sanitizers ONLY for Debug builds
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "Enabling Sanitizers for Debug build")
+    add_compile_options(-fsanitize=address -fsanitize=undefined)
+    add_link_options(-fsanitize=address -fsanitize=undefined)
+endif()
+
+if (MINGW)
+    message(STATUS "Enabling Static Linking for Release build")
     target_link_options(NoorRay PRIVATE
             -static-libgcc
             -static-libstdc++

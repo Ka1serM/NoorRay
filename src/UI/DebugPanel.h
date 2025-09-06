@@ -6,9 +6,7 @@
 class DebugPanel : public ImGuiComponent {
 public:
     explicit DebugPanel(std::string name);
-
-    std::string getType() const override { return "Debug"; }
-
+    
     void onComputeFinished();
     void renderUi() override;
 

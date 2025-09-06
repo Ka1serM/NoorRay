@@ -42,7 +42,7 @@ public:
     static void colorEdit4Row(const char* label, glm::vec4 value, const std::function<void(glm::vec4)>& setter);
 
 private:
-    void SetBlenderTheme();
+    static void SetBlenderTheme();
     void setupDockSpace();
     void CreateRenderPass();
     void CreateFrameBuffers(const std::vector<vk::Image>& images, uint32_t width, uint32_t height);

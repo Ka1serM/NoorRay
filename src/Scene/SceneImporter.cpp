@@ -4,13 +4,11 @@
 #include <stdexcept>
 #include "Shaders/SharedStructs.h"
 #include "Vulkan/Texture.h"
-#include <nlohmann/json.hpp>
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 #include <iostream>
-
 #include "Scene/Scene.h"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
@@ -28,7 +26,7 @@
 
 void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 {
-    // --- Boilerplate: Load GLTF file from disk ---
+    // Boilerplate: Load GLTF file from disk 
     const std::filesystem::path filePath(filepath);
     if (!std::filesystem::exists(filePath))
         throw std::runtime_error("File not found: " + filepath);
@@ -44,12 +42,12 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
     if (!success)
         throw std::runtime_error("Failed to load GLTF file: " + warn + err);
-    if (!warn.empty()) LOG_ERROR("TinyGLTF Warning: " << warn);
-    if (!err.empty()) LOG_ERROR("TinyGLTF Info/Error: " << err);
+    if (!warn.empty())
+        LOG_ERROR("TinyGLTF Warning: " << warn);
+    if (!err.empty())
+        LOG_ERROR("TinyGLTF Info/Error: " << err);
        
-    // --- STEP 1: Import all unique assets (meshes and materials) ---
-    // We load all renderable geometry and material data first. These assets will be
-    // referenced later when we create nodes in the scene.
+    // STEP 1: Import all unique assets (meshes and materials) 
 
     // Load Materials
     std::vector<Material> globalMaterials;
@@ -166,7 +164,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         }
     }
 
-    // --- STEP 2: Import nodes with final world transforms ---
+    // STEP 2: Import nodes with final world transforms 
     // First, traverse the GLTF hierarchy to compute the world transform for every node. 
     // Then, create a flat list of SceneObjects, each with its correct world transform.
     // At this stage, all objects are temporarily added to the scene as root objects.
@@ -227,7 +225,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         }
     }
 
-    // --- STEP 3: Assemble the final scene hierarchy ---
+    // STEP 3: Assemble the final scene hierarchy 
     // With all nodes created, build the hierarchy by reparenting each node. The 'reparent'
     // operation should preserve the node's world transform by calculating the correct
     // new local transform relative to its parent.
@@ -249,13 +247,11 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     }
     
     // Attach the scene's original root nodes to our new import object
-    if (model.defaultScene >= 0) {
-        for (int rootNodeIndex : model.scenes[model.defaultScene].nodes) {
-            if (nodeMap[rootNodeIndex]) {
+    if (model.defaultScene >= 0)
+        for (int rootNodeIndex : model.scenes[model.defaultScene].nodes)
+            if (nodeMap[rootNodeIndex])
                 scene.reparent(nodeMap[rootNodeIndex], importRootPtr);
-            }
-        }
-    }
+    
     scene.setActiveObjectIndex(rootIdx);
 
     const mat4 correctionMatrix = scale(mat4(1.0f), vec3(1.0f, -1.0f, -1.0f));
@@ -276,13 +272,9 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
     std::vector<tinyobj::material_t> mats;
     std::string warn, err;
 
-    // Load the OBJ file, with the crucial 'triangulate' parameter set to true.
-    // This converts all polygons (quads, n-gons) into triangles.
     if (!tinyobj::LoadObj(&attrib, &shapes, &mats, &warn, &err, filepath.c_str(), objDir.string().c_str(), true))
         throw std::runtime_error("Failed to load OBJ file: " + warn + err);
 
-    // Log any warnings or errors from the loader, but don't necessarily stop.
-    // A missing material file is a common "error" we want to handle gracefully.
     if (!warn.empty())
        LOG_ERROR("TinyObjLoader Warning: " << warn);
     if (!err.empty())

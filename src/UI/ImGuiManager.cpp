@@ -103,7 +103,7 @@ void ImGuiManager::cleanupSwapChainResources() {
 void ImGuiManager::CreateRenderPass() {
     vk::AttachmentDescription colorAttachment(
         {}, // flags
-        context.chooseSwapSurfaceFormat().format,
+        context.getSwapchainFormat().format,
         vk::SampleCountFlagBits::e1,
         vk::AttachmentLoadOp::eClear,
         vk::AttachmentStoreOp::eStore,
@@ -131,21 +131,15 @@ void ImGuiManager::CreateRenderPass() {
     renderPass = context.getDevice().createRenderPassUnique(renderPassInfo);
 }
 
-void ImGuiManager::CreateFrameBuffers(const std::vector<vk::Image>& images, uint32_t width, uint32_t height) {
+void ImGuiManager::CreateFrameBuffers(const std::vector<vk::Image>& images, const uint32_t width, const uint32_t height) {
     imageViews.reserve(images.size());
     frameBuffers.reserve(images.size());
 
     for (const auto& image : images) {
-        vk::ImageViewCreateInfo viewInfo(
-            {}, image, vk::ImageViewType::e2D, context.chooseSwapSurfaceFormat().format,
-            {}, { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
-        );
+        vk::ImageViewCreateInfo viewInfo({}, image, vk::ImageViewType::e2D, context.getSwapchainFormat().format, {}, { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
         imageViews.push_back(context.getDevice().createImageViewUnique(viewInfo));
-
-        std::array<vk::ImageView, 1> attachments = { imageViews.back().get() };
-        vk::FramebufferCreateInfo framebufferInfo(
-            {}, renderPass.get(), attachments, width, height, 1
-        );
+        std::array attachments = { imageViews.back().get() };
+        vk::FramebufferCreateInfo framebufferInfo({}, renderPass.get(), attachments, width, height, 1);
         frameBuffers.push_back(context.getDevice().createFramebufferUnique(framebufferInfo));
     }
 }

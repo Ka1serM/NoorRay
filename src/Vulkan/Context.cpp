@@ -134,6 +134,7 @@ void Context::createVulkanInstance() {
     }
 
 #ifdef __APPLE__
+    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
     extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 #endif
 
@@ -143,7 +144,7 @@ void Context::createVulkanInstance() {
                 .setPEnabledLayerNames(layers)
                 .setPEnabledExtensionNames(extensions);
 
-#ifdef __APPLE__
+#ifdef __APPLE__ 
     instanceInfo.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
 #endif
 

@@ -22,18 +22,18 @@ target_include_directories(tinygltf INTERFACE
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
-# MoltenVK static library from Vulkan SDK .xcframework on macOS
+# MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
-    set(MOLTENVK_LIB "$ENV{VULKAN_SDK}/lib/MoltenVK.xcframework/macos-arm64_x86_64/libMoltenVK.a")
-    if(EXISTS "${MOLTENVK_LIB}")
-        message(STATUS "Using static MoltenVK library at ${MOLTENVK_LIB}")
-        add_library(MoltenVK STATIC IMPORTED)
+    set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/macOS/lib/libMoltenVK.dylib")
+    if(EXISTS "${MOLTENVK_DYLIB}")
+        message(STATUS "Using dynamic MoltenVK library at ${MOLTENVK_DYLIB}")
+        add_library(MoltenVK SHARED IMPORTED)
         set_target_properties(MoltenVK PROPERTIES
-                IMPORTED_LOCATION "${MOLTENVK_LIB}"
-                INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include"
+                IMPORTED_LOCATION "${MOLTENVK_DYLIB}"
+                INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/macOS/include"
         )
     else()
-        message(FATAL_ERROR "MoltenVK static library not found at expected path: ${MOLTENVK_LIB}")
+        message(FATAL_ERROR "MoltenVK dylib not found at expected path: ${MOLTENVK_DYLIB}")
     endif()
 endif()
 
@@ -62,13 +62,10 @@ file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
 # Resource handling on Windows
 if(WIN32)
     set(RESOURCE_RC_PATH "${CMAKE_BINARY_DIR}/resource.rc")
-
     file(WRITE "${RESOURCE_RC_PATH}"
             "MAINICON ICON \"${PROJECT_SOURCE_DIR}/assets/icons/icon.ico\"\n"
     )
-
     message(STATUS "Generated resource.rc at ${RESOURCE_RC_PATH}")
-
     list(APPEND SRC_FILES "${RESOURCE_RC_PATH}")
 endif()
 
@@ -118,7 +115,7 @@ if(APPLE)
 
     # Vulkan loader bundling and @rpath fix
     if(DEFINED ENV{VULKAN_SDK})
-        set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/lib/libvulkan.1.dylib")
+        set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/macOS/lib/libvulkan.1.dylib")
         if(EXISTS "${VULKAN_LOADER_DYLIB}")
             add_custom_command(TARGET NoorRay POST_BUILD
                     # Ensure Frameworks folder exists
@@ -153,20 +150,30 @@ if(APPLE)
         endif()
     endif()
 
-    # Icon handling: ensure Resources folder exists and copy icon
+    # Resources handling
     add_custom_command(TARGET NoorRay POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
-            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
-            COMMENT "Copying app icon into Resources folder"
+        # Create Resource folder chain
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d"
+    
+        # Copy app icon
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
+        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
+        
+        # Copy MoltenVK_icd.json
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/assets/MoltenVK_icd.json"
+        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
+    
+        COMMENT "Copying app icon and MoltenVK ICD JSON into Resources"
     )
+
 
 endif()
 
 # Use sanitizers ONLY for Debug builds
-if (CMAKE_BUILD_type STREQUAL "Debug")
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(STATUS "Enabling Sanitizers for Debug build")
     add_compile_options(-fsanitize=address -fsanitize=undefined)
     add_link_options(-fsanitize=address -fsanitize=undefined)

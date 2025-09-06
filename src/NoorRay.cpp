@@ -5,7 +5,7 @@
 #include <SDL3/SDL.h>
 #include "UI/DebugPanel.h"
 #include "UI/MainMenuBar.h"
-#include "UI/OutlinerDetailsPanel.h"
+#include "UI/SceneGraphPanel.h"
 #include "UI/ViewportPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
@@ -13,6 +13,7 @@
 #include "Camera/PerspectiveCamera.h"
 #include "Raytracing/ComputeRaytracer.h"
 #include "Raytracing/RtxRaytracer.h"
+#include "UI/DetailsPanel.h"
 #include "UI/EnvironmentPanel.h"
 #include "UI/RenderPanel.h"
 #include "Vulkan/Tonemapper.h"
@@ -41,7 +42,8 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     imGuiManager.addComponent<MainMenuBar>("Menu", context, scene);
     imGuiManager.addComponent<DebugPanel>("Debug");
     imGuiManager.addComponent<EnvironmentPanel>("Environment", scene);
-    imGuiManager.addComponent<OutlinerDetailsPanel>("Outliner", scene);
+    imGuiManager.addComponent<SceneGraphPanel>("Scene Graph", scene);
+    imGuiManager.addComponent<DetailsPanel>("Details", scene);
     imGuiManager.addComponent<RenderPanel>("Render", context, *raytracer, renderer, *tonemapper);
     imGuiManager.addComponent<ViewportPanel>("Viewport", context, scene, tonemapper->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(), raytracer->getWidth(), raytracer->getHeight());
 
@@ -99,6 +101,7 @@ void NoorRay::run() {
             case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
                 framebufferResized = true;
                 break;
+            default: ;
             }
         }
     };
@@ -118,35 +121,37 @@ void NoorRay::run() {
 
         try {
             imGuiManager.renderUi();
+            vk::CommandBuffer cmd = renderer.beginFrame();
+            if (!cmd) {
+                framebufferResized = true;
+                continue;
+            }
 
-            //Compute scheduling
-            bool computeWasSubmitted = false;
+            imGuiManager.Draw(cmd, renderer.getCurrentSwapchainImageIndex());
+            
             if (renderer.isComputeWorkFinished()) {
                 debugPanel->onComputeFinished();
+                // A compute frame is ready. We can now safely access its output.
+                context.oneTimeSubmit([&](const vk::CommandBuffer copyCmd) {
+                    viewportPanel->updateDisplayImage(copyCmd, tonemapper->getOutputImage());
+                });
+                // Now that the result is safely copied, we can decide what to do next.
                 if (renderPanel->isSaveRequested()) {
+                    // The pipeline is paused. The save function can safely access the finished data.
                     renderPanel->executeSave();
                 } else {
-                    // Update resources if dirty
-                    if (scene.isAnyDirty())
-                    {
-                        if (scene.isDirty(Meshes))
-                            raytracer->updateMeshes();
-                        if (scene.isDirty(Textures))
-                            raytracer->updateTextures();
-                        if (scene.isDirty(TLAS))
-                            raytracer->updateTLAS();
+                    // The pipeline is running. Submit the next compute job.
+                    if (scene.isAnyDirty()) {
+                        if (scene.isDirty(Meshes)) raytracer->updateMeshes();
+                        if (scene.isDirty(Textures)) raytracer->updateTextures();
+                        if (scene.isDirty(TLAS)) raytracer->updateTLAS();
                     }
 
-                    // Reset or increment accumulation
-                    if (scene.isDirty(Accumulation))
-                        frame = 0;
-                    else
-                        frame++;
+                    if (scene.isDirty(Accumulation)) frame = 0; else frame++;
                     
                     scene.clearDirtyFlags();
                     
-                    // Submit compute work
-                    renderer.submitCompute([&](const vk::CommandBuffer cmd) {
+                    renderer.submitCompute([&](const vk::CommandBuffer computeCmd) {
                         PushConstantsData pushConstants{};
                         pushConstants.push.frame = frame;
                         pushConstants.push.diffuseBounces = renderPanel->getDiffuseBounces();
@@ -157,24 +162,13 @@ void NoorRay::run() {
                         pushConstants.camera  = scene.getActiveCamera()->getCameraData();
                         pushConstants.environment = environmentPanel->getEnvironmentData();
 
-                        raytracer->render(cmd, pushConstants);
-                        tonemapper->dispatch(cmd);
+                        raytracer->render(computeCmd, pushConstants);
+                        tonemapper->dispatch(computeCmd);
                     });
-                    computeWasSubmitted = true;
                 }
             }
 
-            //Graphics pass
-            vk::CommandBuffer cmd = renderer.beginFrame();
-            if (!cmd) {
-                framebufferResized = true;
-                continue;
-            }
-
-            viewportPanel->recordCopy(cmd, tonemapper->getOutputImage());
-            imGuiManager.Draw(cmd, renderer.getCurrentSwapchainImageIndex());
-
-            if (renderer.endFrame(computeWasSubmitted))
+            if (renderer.endFrame())
                 framebufferResized = true;
 
         } catch (const vk::OutOfDateKHRError&) {

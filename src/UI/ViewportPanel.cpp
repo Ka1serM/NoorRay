@@ -239,7 +239,7 @@ void ViewportPanel::handleViewGizmo() const {
     ImViewGuizmo::BeginFrame();
     bool wasModified = false;
     
-    ImVec2 gizmoPos = {viewportPos.x + viewportSize.x - 100.f * uiScale, viewportPos.y + 100.f * uiScale};
+    ImVec2 gizmoPos = {viewportPos.x + viewportSize.x - 110.f * uiScale, viewportPos.y + 110.f * uiScale};
     wasModified |= ImViewGuizmo::Rotate(position, rotation, gizmoPos);
     
     gizmoPos.x += 30.f * uiScale; gizmoPos.y += 90.f * uiScale;
@@ -248,14 +248,14 @@ void ViewportPanel::handleViewGizmo() const {
     gizmoPos.y += 60.f * uiScale;
     wasModified |= ImViewGuizmo::Pan(position, rotation, gizmoPos);
 
-    if (wasModified) {
+    if (wasModified && !ImGuizmo::IsUsing()) {
         camera->setPosition(position);
         camera->setRotation(rotation);
     }
 }
 
 void ViewportPanel::renderToolbar() {
-    const ImVec2 toolbarOffset(10.0f * uiScale, 80.0f * uiScale); 
+    const ImVec2 toolbarOffset(25.0f * uiScale, 25.0f * uiScale); 
     ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x, viewportPos.y + toolbarOffset.y));
 
     const float buttonSize = 50.0f * uiScale;
@@ -264,34 +264,38 @@ void ViewportPanel::renderToolbar() {
     const float spacing = 5.0f * uiScale;
 
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.8f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 
-    const ImVec4& activeColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
-    const ImVec4& normalColor = ImGui::GetStyle().Colors[ImGuiCol_Button];
-    
+    constexpr ImU32 normalColor  = IM_COL32(144, 144, 144, 50);
+    constexpr ImU32 hoveredColor = IM_COL32(215, 215, 215, 50);
+    constexpr ImU32 activeColor  = IM_COL32(215, 215, 215, 100);
+
     // Translate Button
     ImGui::PushStyleColor(ImGuiCol_Button, (currentOperation == ImGuizmo::TRANSLATE) ? activeColor : normalColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (currentOperation == ImGuizmo::TRANSLATE) ? activeColor : hoveredColor);
     if (ImGui::Button("T", buttonVecSize))
         currentOperation = ImGuizmo::TRANSLATE;
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
 
-    ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x,  ImGui::GetCursorScreenPos().y + spacing));
+    ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x, ImGui::GetCursorScreenPos().y + spacing));
 
     // Rotate Button
     ImGui::PushStyleColor(ImGuiCol_Button, (currentOperation == ImGuizmo::ROTATE) ? activeColor : normalColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (currentOperation == ImGuizmo::ROTATE) ? activeColor : hoveredColor);
     if (ImGui::Button("R", buttonVecSize))
         currentOperation = ImGuizmo::ROTATE;
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
 
     ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x, ImGui::GetCursorScreenPos().y + spacing));
 
     // Scale Button
     ImGui::PushStyleColor(ImGuiCol_Button, (currentOperation == ImGuizmo::SCALE) ? activeColor : normalColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (currentOperation == ImGuizmo::SCALE) ? activeColor : hoveredColor);
     if (ImGui::Button("S", buttonVecSize))
         currentOperation = ImGuizmo::SCALE;
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
 
-    ImGui::PopStyleVar(2); // Pop FrameRounding and Alpha
+    ImGui::PopStyleVar(2);
 }
 
 void ViewportPanel::renderUi() {
@@ -382,8 +386,7 @@ void ViewportPanel::handleObjectPicking() const {
         scene.resetActiveObjectIndex();
 }
 
-
-void ViewportPanel::recordCopy(const vk::CommandBuffer cmd, Image& srcImage) {
+void ViewportPanel::updateDisplayImage(const vk::CommandBuffer cmd, Image& srcImage) {
     srcImage.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
     displayImage.setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
 

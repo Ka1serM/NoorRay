@@ -160,7 +160,7 @@ namespace ImViewGuizmo {
     /// @param snapDistance The distance the camera will snap to when an axis is clicked.
     /// @param rotationSpeed The rotation speed when dragging the gizmo.
     /// @return True if the camera was modified, false otherwise.
-    bool Rotate(vec3& cameraPos, quat& cameraRot, ImVec2 position, float snapDistance =  10.f, float rotationSpeed = 0.005f);
+    bool Rotate(vec3& cameraPos, quat& cameraRot, ImVec2 position, float rotationSpeed = 0.005f);
 
     /// @brief Renders a zoom button and handles its logic.
     /// @param cameraPos The position of the camera (will be modified).
@@ -172,6 +172,7 @@ namespace ImViewGuizmo {
     
     /// @brief Renders a pan button and handles its logic.
     /// @param cameraPos The position of the camera (will be modified).
+    /// @param cameraRot The rotation of the camera (used for direction).
     /// @param position The top-left screen position of the button.
     /// @param panSpeed The speed/sensitivity of the pan.
     /// @return True if the camera was modified, false otherwise.
@@ -194,7 +195,7 @@ namespace ImViewGuizmo {
         }
     }
 
-    bool Rotate(vec3& cameraPos, quat& cameraRot, ImVec2 position, float snapDistance, float rotationSpeed)
+    bool Rotate(vec3& cameraPos, quat& cameraRot, const ImVec2 position, const float rotationSpeed)
     {
         BeginFrame();
         ImGuiIO& io = ImGui::GetIO();
@@ -367,7 +368,10 @@ namespace ImViewGuizmo {
             int axisIndex = ctx.hoveredAxisID / 2;
             float sign = (ctx.hoveredAxisID % 2 == 0) ? -1.0f : 1.0f;
             vec3 targetDir = sign * axisVectors[axisIndex];
-            vec3 targetPosition = targetDir * snapDistance;
+
+            // Use the current distance to the pivot point as the snap distance
+            const float currentDistance = length(cameraPos);
+            vec3 targetPosition = targetDir * currentDistance;
 
             vec3 up = worldUp; 
             if (axisIndex == 1)
@@ -385,7 +389,7 @@ namespace ImViewGuizmo {
                     ctx.animationStartTime = static_cast<float>(ImGui::GetTime());
                     ctx.startPos = cameraPos;
                     ctx.targetPos = targetPosition;
-                    ctx.startUp = cameraRot * vec3(0.0f, 1.0f, 0.0f);
+                    ctx.startUp = cameraRot * -worldUp;
                     ctx.targetUp = targetUp;
                 }
             } else {
@@ -402,12 +406,12 @@ namespace ImViewGuizmo {
         return wasModified;
     }
 
-    bool Zoom(vec3& cameraPos, const quat& cameraRot, ImVec2 position, float zoomSpeed) {
+    bool Zoom(vec3& cameraPos, const quat& cameraRot, const ImVec2 position, const float zoomSpeed) {
         BeginFrame();
-        ImGuiIO& io = ImGui::GetIO();
+        const ImGuiIO& io = ImGui::GetIO();
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         Context& ctx = GetContext();
-        Style& style = GetStyle();
+        const Style& style = GetStyle();
         bool wasModified = false;
 
         const bool canInteract = !(io.ConfigFlags & ImGuiConfigFlags_NoMouse);
@@ -432,8 +436,7 @@ namespace ImViewGuizmo {
         if (ctx.activeTool == TOOL_ZOOM) {
             if (io.MouseDelta.y != 0.0f) {
                 // Use the camera's local forward vector for zooming
-                vec3 cameraForward = cameraRot * worldForward;
-                cameraPos += cameraForward * -io.MouseDelta.y * zoomSpeed;
+                cameraPos += cameraRot * worldForward * -io.MouseDelta.y * zoomSpeed;
                 wasModified = true;
             }
         }
@@ -472,7 +475,7 @@ namespace ImViewGuizmo {
         return wasModified;
     }
     
-    bool Pan(vec3& cameraPos, const quat& cameraRot, ImVec2 position, float panSpeed) {
+    bool Pan(vec3& cameraPos, const quat& cameraRot, const ImVec2 position, const float panSpeed) {
         BeginFrame();
         ImGuiIO& io = ImGui::GetIO();
         ImDrawList* drawList = ImGui::GetWindowDrawList();

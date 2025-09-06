@@ -10,7 +10,7 @@ public:
 
     void recreateSwapChain();
     vk::CommandBuffer beginFrame();
-    bool endFrame(bool waitForCompute);
+    bool endFrame();
 
     bool isComputeWorkFinished();
     void waitForComputeIdle();

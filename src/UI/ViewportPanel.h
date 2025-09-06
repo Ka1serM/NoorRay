@@ -15,7 +15,7 @@ public:
     void renderUi() override;
     void handleObjectPicking() const;
     void handlePositionPicking() const;
-    void recordCopy(vk::CommandBuffer cmd, Image& srcImage);
+    void updateDisplayImage(vk::CommandBuffer cmd, Image& srcImage);
     ~ViewportPanel() override;
 
     ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, uint32_t width, uint32_t height);

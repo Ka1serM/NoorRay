@@ -5,7 +5,7 @@
 
 #include "Log.h"
 
-constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 Renderer::Renderer(Context& context)
     : context(context)
@@ -64,7 +64,7 @@ void Renderer::createSwapChain() {
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.getSurface());
     swapchainInfo.setMinImageCount(imageCount);
-    const auto swapSurfaceFormat = context.chooseSwapSurfaceFormat();
+    const auto swapSurfaceFormat = context.getSwapchainFormat();
     swapchainInfo.setImageFormat(swapSurfaceFormat.format);
     swapchainInfo.setImageColorSpace(swapSurfaceFormat.colorSpace);
     swapchainInfo.setImageExtent(extent);
@@ -85,7 +85,7 @@ void Renderer::createSwapChain() {
     for(size_t i = 0; i < swapchainImages.size(); ++i)
         renderFinishedSemaphores[i] = context.getDevice().createSemaphoreUnique({});
     
-    imagesInFlightFences.resize(swapchainImages.size(), VK_NULL_HANDLE);
+    imagesInFlightFences.assign(swapchainImages.size(), VK_NULL_HANDLE);
     
     LOG_INFO("Recreated swapchain with " << swapchainImages.size() << " images at " << extent.width << "x" << extent.height);
 }
@@ -130,39 +130,42 @@ vk::CommandBuffer Renderer::beginFrame() {
 }
 
 //  Frame end 
-bool Renderer::endFrame(const bool waitForCompute) {
+// Renderer.cpp - Only the modified endFrame function is shown.
+// The rest of the file remains the same.
+
+/**
+ * @brief Ends the graphics frame, submitting the recorded command buffer and presenting the image.
+ * This version is decoupled from the compute queue.
+ * @return True if the swapchain is out of date and needs to be recreated.
+ */
+bool Renderer::endFrame() { 
     frames[m_currentFrame].commandBuffer->end();
 
-    std::vector<vk::Semaphore> waitSemaphores;
-    std::vector<vk::PipelineStageFlags> waitStages;
-
-    waitSemaphores.push_back(frames[m_currentFrame].imageAcquiredSemaphore.get());
-    waitStages.emplace_back(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-
-    if (waitForCompute && computeSubmitted) {
-        waitSemaphores.push_back(computeFinishedSemaphore.get());
-        waitStages.emplace_back(vk::PipelineStageFlagBits::eTransfer);
-    }
+    // The graphics submission now only waits for the swapchain image to be acquired.
+    // It no longer waits for the compute semaphore.
+    vk::Semaphore waitSemaphores[] = { frames[m_currentFrame].imageAcquiredSemaphore.get() };
+    vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
 
     vk::SubmitInfo submitInfo{};
     submitInfo.setWaitSemaphores(waitSemaphores);
     submitInfo.setWaitDstStageMask(waitStages);
     submitInfo.setCommandBuffers(frames[m_currentFrame].commandBuffer.get());
     
-    //  Use the semaphore corresponding to the acquired image index 
+    // Signal the semaphore that presentation will wait on.
     submitInfo.setSignalSemaphores(renderFinishedSemaphores[m_imageIndex].get());
 
     try {
         context.getQueue().submit(submitInfo, frames[m_currentFrame].inFlightFence.get());
     } catch (vk::DeviceLostError& e) {
        LOG_ERROR("Device lost during submit: " << e.what());
+       // A device lost is unrecoverable in this context, but we can try to signal a recreate.
+       return true;
     }
 
     if (!swapchain)
         return true; // Swapchain was destroyed (e.g., minimized), signal recreate.
 
     vk::PresentInfoKHR presentInfo{};
-    // Wait on the semaphore corresponding to the acquired image index 
     presentInfo.setWaitSemaphores(renderFinishedSemaphores[m_imageIndex].get());
     presentInfo.setSwapchains(swapchain.get());
     presentInfo.setImageIndices(m_imageIndex);
@@ -170,9 +173,6 @@ bool Renderer::endFrame(const bool waitForCompute) {
     const vk::Result result = context.getQueue().presentKHR(presentInfo);
     
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-    
-    if(waitForCompute)
-        computeSubmitted = false;
 
     return (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR);
 }

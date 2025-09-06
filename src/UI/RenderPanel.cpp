@@ -1,9 +1,7 @@
 ﻿#include "RenderPanel.h"
 #include "imgui.h"
 #include "Vulkan/Context.h"
-#include "Raytracing/Raytracer.h"
 #include "portable-file-dialogs.h"
-#include "stb_image.h"
 #include "stb_image_write.h"
 #include <iostream>
 #include <filesystem>
@@ -12,8 +10,13 @@
 #include <future>
 #include <algorithm>
 #include <stdexcept>
+#include <memory>
+#include <utility>
 
 #include "ImGuiManager.h"
+#include "Log.h"
+#include "Raytracing/Raytracer.h"
+#include "Vulkan/Buffer.h"
 #include "Vulkan/Tonemapper.h"
 
 // Helper function to convert 16-bit half float to 32-bit float.
@@ -43,7 +46,6 @@ static float halfToFloat(const uint16_t half) {
     memcpy(&f, &result, sizeof(float));
     return f;
 }
-
 
 RenderPanel::RenderPanel(
     std::string name,
@@ -77,9 +79,10 @@ void RenderPanel::renderUi() {
         for (const auto& job : m_saveJobs) {
             const Image& imageToSave = job.imageProvider();
             std::vector<uint8_t> imageData = copyImageToHostMemory(imageToSave.getImage(), job.format, width, height);
+            
             std::future<void> saveFuture = std::async(std::launch::async,
-                [this, imgData = std::move(imageData), format = job.format, filename = job.filename, w = width, h = height]() {
-                    this->writeDataToFile(imgData, format, filename, w, h);
+                [imgData = std::move(imageData), format = job.format, filename = job.filename, w = width, h = height]() mutable {
+                    writeDataToFile(imgData, format, filename, w, h);
                 });
             m_saveFutures.push_back(std::move(saveFuture));
         }
@@ -88,132 +91,86 @@ void RenderPanel::renderUi() {
     }
 
     const bool isSaving = (m_saveState != SaveState::IDLE);
-
     ImGui::Begin(name.c_str());
 
     // Render Settings (top) 
     if (ImGui::BeginTable("RenderSettingsTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-        // Label column auto-sizes by default
-        ImGui::TableSetupColumn("Label"); // no width flags
+        ImGui::TableSetupColumn("Label");
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
-
         ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](const float v) { exposure = v; });
-
-        // Samples Per Pixel
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Samples Per Pixel");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragInt("##SamplesDrag", &samples, 0.1f, 1, 64, "%d");
-
-        // Diffuse Bounces
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Diffuse Bounces");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragInt("##DiffuseBounces", &diffuseBounces, 0.1f, 1, 64, "%d");
-
-        // Specular Bounces
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Specular Bounces");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragInt("##SpecularBounces", &specularBounces, 0.1f, 1, 64, "%d");
-
-        // Transmission Bounces
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Transmission Bounces");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::DragInt("##TransmissionBounces", &transmissionBounces, 0.1f, 1, 64, "%d");
-
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Samples Per Pixel");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##SamplesDrag", &samples, 0.1f, 1, 64, "%d");
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Diffuse Bounces");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##DiffuseBounces", &diffuseBounces, 0.1f, 1, 64, "%d");
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Specular Bounces");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##SpecularBounces", &specularBounces, 0.1f, 1, 64, "%d");
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Transmission Bounces");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##TransmissionBounces", &transmissionBounces, 0.1f, 1, 64, "%d");
         ImGui::EndTable();
     }
     
     // Save Location 
     ImGui::SeparatorText("Save Location");
+
+    // Poll for the result from the previous frame
+    if (m_folderDialog && m_folderDialog->ready(0)) {
+        const std::string& selection = m_folderDialog->result();
+        if (!selection.empty())
+            saveLocation = selection;
+        // Reset the pointer to signal the dialog is finished
+        m_folderDialog.reset();
+    }
+
+    // Draw the UI for the current frame
     if (ImGui::BeginTable("SaveLocationTable", 2, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("Widget", ImGuiTableColumnFlags_WidthStretch);
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Output Folder");
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Output Folder");
         ImGui::TableSetColumnIndex(1);
-
         float buttonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - buttonWidth - ImGui::GetStyle().ItemSpacing.x);
         ImGui::InputText("##savePath", const_cast<char*>(saveLocation.c_str()), saveLocation.size() + 1, ImGuiInputTextFlags_ReadOnly);
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
+        ImGui::PopItemWidth(); ImGui::SameLine();
 
-        // Launch async folder selection
+        // The button is disabled if the dialog pointer is not null (i.e., active).
+        ImGui::BeginDisabled(m_folderDialog != nullptr);
         if (ImGui::Button("Select", ImVec2(buttonWidth, 0)))
-            if (!m_pendingFolderSelection.valid())
-                m_pendingFolderSelection = std::async(std::launch::async, []() {
-                    return pfd::select_folder("Select Render Output Folder", "").result();
-                });
-
-        // Poll async result
-        if (m_pendingFolderSelection.valid())
-            if (m_pendingFolderSelection.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                const std::string selection = m_pendingFolderSelection.get();
-                if (!selection.empty()) saveLocation = selection;
-            }
+            m_folderDialog = std::make_unique<pfd::select_folder>("Select Render Output Folder", ".");
+        
+        ImGui::EndDisabled();
 
         ImGui::EndTable();
     }
 
     // Output Files 
-    ImGui::Spacing();
-    ImGui::SeparatorText("Output Files");
+    ImGui::Spacing(); ImGui::SeparatorText("Output Files");
     if (ImGui::BeginTable("FilenamesTable", 2, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("Widget", ImGuiTableColumnFlags_WidthStretch);
-
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Beauty (.png)");
-        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##beauty", "e.g., final_render.png", beautyFilenameBuffer, sizeof(beautyFilenameBuffer));
-        ImGui::PopItemWidth();
-
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##beauty", "e.g., final_render.png", beautyFilenameBuffer, sizeof(beautyFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Raw (.hdr)");
-        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##raw", "e.g., final_raw.hdr", rawFilenameBuffer, sizeof(rawFilenameBuffer));
-        ImGui::PopItemWidth();
-
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##raw", "e.g., final_raw.hdr", rawFilenameBuffer, sizeof(rawFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Albedo (.png)");
-        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##albedo", "e.g., albedo_pass.png", albedoFilenameBuffer, sizeof(albedoFilenameBuffer));
-        ImGui::PopItemWidth();
-
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##albedo", "e.g., albedo_pass.png", albedoFilenameBuffer, sizeof(albedoFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Normals (.hdr)");
-        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##normal", "e.g., world_normals.hdr", normalFilenameBuffer, sizeof(normalFilenameBuffer));
-        ImGui::PopItemWidth();
-
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##normal", "e.g., world_normals.hdr", normalFilenameBuffer, sizeof(normalFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Crypto (.bin)");
-        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##crypto", "e.g., object_ids.bin", cryptoFilenameBuffer, sizeof(cryptoFilenameBuffer));
-        ImGui::PopItemWidth();
-
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##crypto", "e.g., object_ids.bin", cryptoFilenameBuffer, sizeof(cryptoFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::EndTable();
     }
 
     // Render Button 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
     ImGui::BeginDisabled(isSaving);
     const char* buttonText = isSaving ? "Saving..." : "Render";
     float buttonWidth = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x;
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(100, 180, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(120, 200, 255, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(80, 160, 220, 255));
-    if (ImGui::Button(buttonText, ImVec2(buttonWidth, 0)))
+    if (ImGui::Button(buttonText, ImVec2(buttonWidth, 0))) {
         saveRequested = true;
+    }
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
 
@@ -222,23 +179,28 @@ void RenderPanel::renderUi() {
 
 void RenderPanel::executeSave() {
     if (m_saveState != SaveState::IDLE) {
-        LOG_INFO( "Save operation already in progress.");
+        LOG_INFO("Save operation already in progress.");
         saveRequested = false;
         return;
     }
 
-    LOG_INFO( "Preparing save operation...");
+    LOG_INFO("Preparing save operation...");
     m_saveJobs.clear();
     const std::filesystem::path basePath(saveLocation);
+    if (!std::filesystem::exists(basePath)) {
+        LOG_ERROR("Save directory does not exist: " << saveLocation);
+         pfd::message("Save Error", "The selected output directory does not exist.", pfd::choice::ok, pfd::icon::error);
+        saveRequested = false;
+        return;
+    }
 
     auto addJob = [&](const char* buffer, const std::string& ext, const std::function<const Image&()>& provider) {
         if (std::string filename(buffer); !filename.empty()) {
-            
-            if (filename.length() < ext.length() || filename.substr(filename.length() - ext.length()) != ext)
+            if (filename.length() < ext.length() || filename.substr(filename.length() - ext.length()) != ext) {
                 filename += ext;
-            const Image& img = provider(); // Get image to extract format
+            }
+            const Image& img = provider();
             m_saveJobs.push_back({provider, (basePath / filename).string(), img.getFormat()});
-            
         }
     };
 
@@ -260,12 +222,13 @@ std::vector<uint8_t> RenderPanel::copyImageToHostMemory(const vk::Image srcImage
         case vk::Format::eR32G32B32A32Sfloat: pixelSize = 16; break;
         case vk::Format::eR16G16B16A16Sfloat: pixelSize = 8;  break;
         case vk::Format::eR8G8B8A8Unorm:      pixelSize = 4;  break;
+        case vk::Format::eB8G8R8A8Unorm:      pixelSize = 4;  break;
         case vk::Format::eR32Uint:            pixelSize = 4;  break;
         default: throw std::runtime_error("Unsupported format for saving.");
     }
 
     const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(width) * height * pixelSize;
-    Buffer stagingBuffer(context, Buffer::Type::Custom, imageSize, nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    const Buffer stagingBuffer(context, Buffer::Type::Custom, imageSize, nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
     context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
         vk::ImageMemoryBarrier barrier;
@@ -287,39 +250,51 @@ std::vector<uint8_t> RenderPanel::copyImageToHostMemory(const vk::Image srcImage
     return imageData;
 }
 
-void RenderPanel::writeDataToFile(const std::vector<uint8_t>& imageData, const vk::Format format, const std::string& filename, const uint32_t width, const uint32_t height)
-{
-    int components = 0;
-    size_t pixelSize = 0;
+void RenderPanel::writeDataToFile(std::vector<uint8_t>& imageData, const vk::Format format, const std::string& filename, const uint32_t width, const uint32_t height) {
+    auto handle_error = [&](const std::string& specific_error) {
+        const std::string error_message = specific_error + ":\n" + filename;
+        LOG_ERROR(error_message);
+        pfd::message("File Save Error", error_message + "\n\nPlease check folder permissions and ensure the path is valid.", pfd::choice::ok, pfd::icon::error);
+    };
 
+    bool success = false;
     switch (format) {
         case vk::Format::eR32G32B32A32Sfloat: 
-            pixelSize = 16; components = 4;
-            stbi_write_hdr(filename.c_str(), width, height, components, reinterpret_cast<const float*>(imageData.data()));
+            success = stbi_write_hdr(filename.c_str(), width, height, 4, reinterpret_cast<const float*>(imageData.data())) != 0;
             break;
         case vk::Format::eR16G16B16A16Sfloat: {
-            pixelSize = 8; components = 4;
             std::vector<float> floatData(width * height * 4);
-            const uint16_t* halfData = reinterpret_cast<const uint16_t*>(imageData.data());
-            for (size_t i = 0; i < width * height * 4; ++i) floatData[i] = halfToFloat(halfData[i]);
-            stbi_write_hdr(filename.c_str(), width, height, components, floatData.data());
+            const auto* halfData = reinterpret_cast<const uint16_t*>(imageData.data());
+            for (size_t i = 0; i < width * height * 4; ++i) {
+                floatData[i] = halfToFloat(halfData[i]);
+            }
+            success = stbi_write_hdr(filename.c_str(), width, height, 4, floatData.data()) != 0;
             break;
         }
         case vk::Format::eR8G8B8A8Unorm:
-            pixelSize = 4; components = 4;
-            stbi_write_png(filename.c_str(), width, height, components, imageData.data(), width * pixelSize);
+            success = stbi_write_png(filename.c_str(), width, height, 4, imageData.data(), width * 4) != 0;
+            break;
+        case vk::Format::eB8G8R8A8Unorm:
+            for (size_t i = 0; i < imageData.size(); i += 4)
+                std::swap(imageData[i], imageData[i + 2]); // Swap B and R
+            success = stbi_write_png(filename.c_str(), width, height, 4, imageData.data(), width * 4) != 0;
             break;
         case vk::Format::eR32Uint: {
-            pixelSize = 4; components = 1;
             std::ofstream outFile(filename, std::ios::binary);
             if (outFile.is_open()) {
                 outFile.write(reinterpret_cast<const char*>(imageData.data()), imageData.size());
                 outFile.close();
-            } else
-                LOG_ERROR("Failed to open file for writing: " << filename);
+                success = outFile.good();
+            }
             break;
         }
-        default:LOG_ERROR("Unsupported format for saving: " << vk::to_string(format)); break;
+        default:
+            LOG_ERROR("Unsupported format for saving: " << vk::to_string(format));
+            return;
     }
-    LOG_INFO( "Successfully saved image to " << filename);
+
+    if (success)
+        LOG_INFO("Successfully saved image to " << filename);
+    else
+        handle_error("Failed to write data to file");
 }

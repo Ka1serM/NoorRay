@@ -1,6 +1,7 @@
 ﻿#pragma once
+
 #include "UI/ImGuiComponent.h"
-#include "Vulkan/Buffer.h"
+#include "portable-file-dialogs.h"
 #include <string>
 #include <future>
 #include <vector>
@@ -8,7 +9,7 @@
 
 #include "Vulkan/Tonemapper.h"
 
-namespace vk { class Image; }
+namespace vk { class Image; enum class Format; }
 class Context;
 class Raytracer;
 class Renderer;
@@ -30,6 +31,7 @@ public:
     float getExposure() const { return exposure; }
     
 private:
+    // Render Settings
     int samples, diffuseBounces, specularBounces, transmissionBounces;
     float exposure;
     
@@ -42,18 +44,22 @@ private:
     
     // Struct to hold information for a single save job
     struct SaveJob {
-        std::function<const Image&()> imageProvider; // Use a lambda to get the image at the time of copy
+        std::function<const Image&()> imageProvider;
         std::string filename;
         vk::Format format;
     };
 
+    // Helper Functions
     std::vector<uint8_t> copyImageToHostMemory(vk::Image srcImage, vk::Format format, uint32_t width, uint32_t height) const;
-    static void writeDataToFile(const std::vector<uint8_t>& imageData, vk::Format format, const std::string& filename, uint32_t width, uint32_t height);
+    static void writeDataToFile(std::vector<uint8_t>& imageData, vk::Format format, const std::string& filename, uint32_t width, uint32_t height);
+    
+    // Core System References
     Context& context;
     Raytracer& raytracer;
     Renderer& renderer;
     Tonemapper& tonemapper;
 
+    // UI State
     std::string saveLocation = ".";
     char beautyFilenameBuffer[256] = "render_beauty.png";
     char rawFilenameBuffer[256] = "render_hdr.hdr";
@@ -61,11 +67,11 @@ private:
     char normalFilenameBuffer[256] = "render_normals.hdr";
     char cryptoFilenameBuffer[256] = "render_crypto.bin";
 
+    // Save Process Management
     bool saveRequested = false;
     std::vector<std::future<void>> m_saveFutures;
-    std::future<std::string> m_pendingFolderSelection;
+    std::unique_ptr<pfd::select_folder> m_folderDialog;
     
-    // New state management members
     SaveState m_saveState = SaveState::IDLE;
     std::vector<SaveJob> m_saveJobs;
 };

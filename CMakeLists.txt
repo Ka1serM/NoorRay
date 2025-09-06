@@ -12,7 +12,6 @@ add_subdirectory(external/SDL)
 # External Libraries
 add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
-add_subdirectory(external/json)
 
 # tinygltf (header-only)
 add_library(tinygltf INTERFACE)
@@ -88,7 +87,6 @@ target_link_libraries(NoorRay PRIVATE
         glm
         imgui
         Vulkan::Vulkan
-        nlohmann_json::nlohmann_json
         SDL3::SDL3-static
         tinygltf
 )
@@ -110,7 +108,7 @@ if(APPLE)
 
     set_target_properties(NoorRay PROPERTIES
             MACOSX_BUNDLE TRUE
-            MACOSX_BUNDLE_IDENTIFIER "com.marcelk.noorray"
+            MACOSX_BUNDLE_IDENTIFIER "dev.marcelk.noorray"
             MACOSX_BUNDLE_NAME "NoorRay"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
             MACOSX_BUNDLE_VERSION "${PROJECT_VERSION}"
@@ -167,7 +165,15 @@ if(APPLE)
 
 endif()
 
-if(MINGW)
+# Use sanitizers ONLY for Debug builds
+if (CMAKE_BUILD_type STREQUAL "Debug")
+    message(STATUS "Enabling Sanitizers for Debug build")
+    add_compile_options(-fsanitize=address -fsanitize=undefined)
+    add_link_options(-fsanitize=address -fsanitize=undefined)
+endif()
+
+if (MINGW)
+    message(STATUS "Enabling Static Linking for Release build")
     target_link_options(NoorRay PRIVATE
             -static-libgcc
             -static-libstdc++

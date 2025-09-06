@@ -89,7 +89,7 @@ void RenderPanel::renderUi() {
 
     const bool isSaving = (m_saveState != SaveState::IDLE);
 
-    ImGui::Begin(getType().c_str());
+    ImGui::Begin(name.c_str());
 
     // Render Settings (top) 
     if (ImGui::BeginTable("RenderSettingsTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {

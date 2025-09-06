@@ -7,107 +7,127 @@
 #include <SDL3/SDL_vulkan.h>
 
 #if !defined(NDEBUG)
-    constexpr bool EnableValidationLayers = true;
+    constexpr bool EnableValidationLayers = false;
 #else
-constexpr bool EnableValidationLayers = false;
+    constexpr bool EnableValidationLayers = false;
 #endif
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1) {
-    if (SDL_Init(SDL_INIT_VIDEO) < 0)
-        throw std::runtime_error("Failed to initialize SDL: " + std::string(SDL_GetError()));
+    try {
+        if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+            std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
+            throw std::runtime_error("Failed to initialize SDL.");
+        }
 
-    if (SDL_Vulkan_LoadLibrary(nullptr) < 0)
-        throw std::runtime_error("Failed to load Vulkan library via SDL: " + std::string(SDL_GetError()));
+        if (SDL_Vulkan_LoadLibrary(nullptr) < 0) {
+            std::cerr << "[FATAL] Failed to load Vulkan library via SDL: " << SDL_GetError() << std::endl;
+            throw std::runtime_error("Failed to load Vulkan library.");
+        }
 
-    const float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    if (dpiScaleFloat != 0.0f) //only if this doesnt fail
-    {
-        dpiScale = dpiScaleFloat;
-        windowWidth  = static_cast<int>(static_cast<float>(windowWidth)  * dpiScale);
-        windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
+        const float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+        if (dpiScaleFloat != 0.0f) {
+            dpiScale = dpiScaleFloat;
+            windowWidth  = static_cast<int>(static_cast<float>(windowWidth)  * dpiScale);
+            windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
+        }
+        
+        window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+        if (!window) {
+            std::cerr << "[FATAL] Failed to create SDL window: " << SDL_GetError() << std::endl;
+            throw std::runtime_error("Failed to create SDL window.");
+        }
+
+        auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+        if (!vkGetInstanceProcAddr) {
+            std::cerr << "[FATAL] Failed to get vkGetInstanceProcAddr: " << SDL_GetError() << std::endl;
+            throw std::runtime_error("Failed to get vkGetInstanceProcAddr.");
+        }
+
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+
+        createVulkanInstance();
+
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
+
+        if (EnableValidationLayers) {
+            vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
+            messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
+            messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
+            messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
+            messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
+        }
+
+        VkSurfaceKHR _surface;
+        if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &_surface)) {
+            std::cerr << "[FATAL] Failed to create window surface with SDL: " << SDL_GetError() << std::endl;
+            throw std::runtime_error("Failed to create window surface.");
+        }
+        surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {instance.get()});
+        
+        pickPhysicalDevice();
+        createLogicalDevice();
+
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
+
+        queue = device->getQueue(queueFamilyIndex, 0);
+
+        vk::CommandPoolCreateInfo commandPoolInfo;
+        commandPoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+        commandPoolInfo.setQueueFamilyIndex(queueFamilyIndex);
+        commandPool = device->createCommandPoolUnique(commandPoolInfo);
+
+        std::vector<vk::DescriptorPoolSize> poolSizes = {
+            { vk::DescriptorType::eSampler, 64 },
+            { vk::DescriptorType::eCombinedImageSampler, 10000 },
+            { vk::DescriptorType::eSampledImage, 64 },
+            { vk::DescriptorType::eStorageImage, 64 },
+            { vk::DescriptorType::eUniformTexelBuffer, 64 },
+            { vk::DescriptorType::eStorageTexelBuffer, 64 },
+            { vk::DescriptorType::eUniformBuffer, 128 },
+            { vk::DescriptorType::eStorageBuffer, 30128 },
+            { vk::DescriptorType::eUniformBufferDynamic, 64 },
+            { vk::DescriptorType::eStorageBufferDynamic, 64 },
+            { vk::DescriptorType::eInputAttachment, 8 },
+        };
+
+        if(rtxSupported)
+            poolSizes.emplace_back( vk::DescriptorType::eAccelerationStructureKHR, 16 );
+
+        constexpr uint32_t maxSets = 210;
+        vk::DescriptorPoolCreateInfo poolInfo{};
+        poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
+        poolInfo.maxSets = maxSets;
+        poolInfo.setPoolSizes(poolSizes);
+        descriptorPool = device->createDescriptorPoolUnique(poolInfo);
+
+    } catch (const vk::Error& e) {
+        std::cerr << "[FATAL] Vulkan Error in Context constructor: " << e.what() << std::endl;
+        throw std::runtime_error("Vulkan initialization failed.");
+    } catch (const std::exception& e) {
+        // Log if it's a standard exception that we threw
+        std::cerr << "[FATAL] Error in Context constructor: " << e.what() << std::endl;
+        throw;
     }
-    
-    window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-    if (!window)
-        throw std::runtime_error("Failed to create SDL window: " + std::string(SDL_GetError()));
-
-    auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
-    if (!vkGetInstanceProcAddr)
-        throw std::runtime_error("Failed to get vkGetInstanceProcAddr: " + std::string(SDL_GetError()));
-
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-
-    createVulkanInstance();
-
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
-
-    if (EnableValidationLayers) {
-        vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
-        messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
-        messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
-        messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
-        messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
-    }
-
-    VkSurfaceKHR _surface;
-    if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &_surface))
-         throw std::runtime_error("Failed to create window surface with SDL: " + std::string(SDL_GetError()));
-
-    surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {instance.get()});
-    
-    pickPhysicalDevice();
-    createLogicalDevice();
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
-
-    queue = device->getQueue(queueFamilyIndex, 0);
-
-    vk::CommandPoolCreateInfo commandPoolInfo;
-    commandPoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-    commandPoolInfo.setQueueFamilyIndex(queueFamilyIndex);
-    commandPool = device->createCommandPoolUnique(commandPoolInfo);
-
-    std::vector<vk::DescriptorPoolSize> poolSizes = {
-        { vk::DescriptorType::eSampler, 64 },
-        { vk::DescriptorType::eCombinedImageSampler, 10000 },
-        { vk::DescriptorType::eSampledImage, 64 },
-        { vk::DescriptorType::eStorageImage, 64 },
-        { vk::DescriptorType::eUniformTexelBuffer, 64 },
-        { vk::DescriptorType::eStorageTexelBuffer, 64 },
-        { vk::DescriptorType::eUniformBuffer, 128 },
-        { vk::DescriptorType::eStorageBuffer, 30128 },
-        { vk::DescriptorType::eUniformBufferDynamic, 64 },
-        { vk::DescriptorType::eStorageBufferDynamic, 64 },
-        { vk::DescriptorType::eInputAttachment, 8 },
-    };
-
-    if(rtxSupported)
-        poolSizes.emplace_back( vk::DescriptorType::eAccelerationStructureKHR, 16 );
-
-    uint32_t maxSets = 210;
-    vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
-    poolInfo.maxSets = maxSets;
-    poolInfo.setPoolSizes(poolSizes);
-    descriptorPool = device->createDescriptorPoolUnique(poolInfo);
 }
 
 void Context::createVulkanInstance() {
     unsigned int sdlExtensionCount = 0;
     const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-    if (!sdlExtensions)
-        throw std::runtime_error("Failed to get Vulkan instance extensions from SDL: " + std::string(SDL_GetError()));
+    if (!sdlExtensions) {
+        std::cerr << "[FATAL] Failed to get Vulkan instance extensions from SDL: " << SDL_GetError() << std::endl;
+        throw std::runtime_error("Failed to get Vulkan instance extensions.");
+    }
 
     std::vector extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
     std::vector<const char*> layers;
 
-    if (EnableValidationLayers)
-    {
-        if (!checkValidationLayerSupport()) {
-            std::cerr << "WARNING: Validation layers requested, but not available!" << std::endl;
-        } else {
-            std::cout << "INFO: Validation layers are ENABLED." << std::endl;
+    if (EnableValidationLayers) {
+        if (!checkValidationLayerSupport())
+            std::cerr << "[WARN] Validation layers requested, but not available!" << std::endl;
+        else {
+            std::cout << "[INFO] Validation layers are ENABLED." << std::endl;
             extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             layers.push_back("VK_LAYER_KHRONOS_validation");
         }
@@ -119,37 +139,38 @@ void Context::createVulkanInstance() {
 
     vk::ApplicationInfo appInfo("Vulkan Pathtracer", 1, "No Engine", 1, VK_API_VERSION_1_3);
     vk::InstanceCreateInfo instanceInfo{};
-
-    // Now that the vectors are finalized, set the pointers
     instanceInfo.setPApplicationInfo(&appInfo)
                 .setPEnabledLayerNames(layers)
                 .setPEnabledExtensionNames(extensions);
 
 #ifdef __APPLE__
-    // Set the flag after adding the extension
     instanceInfo.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
 #endif
 
-    instance = createInstanceUnique(instanceInfo);
+    instance = vk::createInstanceUnique(instanceInfo);
 }
 
 bool Context::checkValidationLayerSupport() {
-    std::vector<vk::LayerProperties> availableLayers = vk::enumerateInstanceLayerProperties();
-    
-    for (const auto& layerProperties : availableLayers)
-        if (strcmp("VK_LAYER_KHRONOS_validation", layerProperties.layerName) == 0)
-            return true;
-    
+    try {
+        std::vector<vk::LayerProperties> availableLayers = vk::enumerateInstanceLayerProperties();
+        for (const auto& layerProperties : availableLayers)
+            if (strcmp("VK_LAYER_KHRONOS_validation", layerProperties.layerName) == 0)
+                return true;
+        
+    } catch (const vk::Error& e) {
+        std::cerr << "[WARN] Could not enumerate instance layer properties: " << e.what() << std::endl;
+    }
     return false;
 }
 
 void Context::pickPhysicalDevice() {
     std::vector<vk::PhysicalDevice> devices = instance->enumeratePhysicalDevices();
     if (devices.empty()) {
+        std::cerr << "[FATAL] Failed to find GPUs with Vulkan support!" << std::endl;
         throw std::runtime_error("Failed to find GPUs with Vulkan support!");
     }
 
-    std::cout << "Available GPUs:\n";
+    std::cout << "[INFO] Available GPUs:\n";
 
     struct Candidate {
         vk::PhysicalDevice device;
@@ -166,8 +187,8 @@ void Context::pickPhysicalDevice() {
             std::set<std::string> missing(requiredExts.begin(), requiredExts.end());
             for (const auto& ext : device.enumerateDeviceExtensionProperties())
                 missing.erase(ext.extensionName);
-
-            bool hasAllExtensions = missing.empty();
+            
+            const bool hasAllExtensions = missing.empty();
 
             uint64_t vramSize = 0;
             for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i)
@@ -184,19 +205,15 @@ void Context::pickPhysicalDevice() {
                 continue;
 
             Candidate candidate{device, vramSize};
-
             if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
-                if (!bestDiscrete || vramSize > bestDiscrete->vram)
-                    bestDiscrete = candidate;
+                if (!bestDiscrete || vramSize > bestDiscrete->vram) bestDiscrete = candidate;
             } else {
-                if (!bestFallback || vramSize > bestFallback->vram)
-                    bestFallback = candidate;
+                if (!bestFallback || vramSize > bestFallback->vram) bestFallback = candidate;
             }
         }
-
-        if (bestDiscrete)
+        if (bestDiscrete.has_value())
             return bestDiscrete;
-
+        
         return bestFallback;
     };
 
@@ -211,18 +228,17 @@ void Context::pickPhysicalDevice() {
         rtxSupported = false;
     }
 
-    if (!best)
-        throw std::runtime_error("No suitable GPU found that supports required Vulkan extensions!");
+    if (!best) {
+        std::cerr << "[FATAL] No suitable GPU found that supports required Vulkan extensions!" << std::endl;
+        throw std::runtime_error("No suitable GPU found!");
+    }
 
     physicalDevice = best->device;
-
-
-    //rtxSupported = false;
-    std::cout << "\nPicked GPU: " << physicalDevice.getProperties().deviceName << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
+    std::cout << "\n[INFO] Picked GPU: " << physicalDevice.getProperties().deviceName << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
 }
 
 void Context::createLogicalDevice() {
-    std::vector queueFamilies = physicalDevice.getQueueFamilyProperties();
+    std::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
     for (uint32_t i = 0; i < queueFamilies.size(); i++) {
         const auto& flags = queueFamilies[i].queueFlags;
         bool hasGraphics = static_cast<bool>(flags & vk::QueueFlagBits::eGraphics);
@@ -235,15 +251,17 @@ void Context::createLogicalDevice() {
         }
     }
 
-    if (queueFamilyIndex == UINT32_MAX)
+    if (queueFamilyIndex == UINT32_MAX) {
+        std::cerr << "[FATAL] Could not find a suitable queue family!" << std::endl;
         throw std::runtime_error("Could not find a suitable queue family!");
-
-    if (rtxSupported) {
-        std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
-        RequiredDeviceExtensions.insert(RequiredDeviceExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
-    } else {
-        std::cout << "Ray tracing extensions are not supported. Proceeding without them." << std::endl;
     }
+
+    auto enabledExtensions = RequiredDeviceExtensions;
+    if (rtxSupported) {
+        std::cout << "[INFO] Ray tracing extensions are supported. Enabling them." << std::endl;
+        enabledExtensions.insert(enabledExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
+    } else
+        std::cout << "[INFO] Ray tracing extensions are not supported. Proceeding without them." << std::endl;
 
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
     rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
@@ -290,83 +308,58 @@ void Context::createLogicalDevice() {
     features12.descriptorBindingPartiallyBound = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
-
+    
     if (rtxSupported && rtFeatures.rayTracingPipeline && accelFeatures.accelerationStructure) {
         rtFeatures.rayTracingPipeline = VK_TRUE;
         accelFeatures.accelerationStructure = VK_TRUE;
     } else {
         rtFeatures.rayTracingPipeline = VK_FALSE;
         accelFeatures.accelerationStructure = VK_FALSE;
-        std::cout << "Warning: Ray tracing features requested but not fully supported, disabling them." << std::endl;
+        if (rtxSupported) {
+            std::cout << "[WARN] Ray tracing extensions found, but features not fully supported. Disabling." << std::endl;
+        }
     }
 
-    features12.pNext = &rtFeatures;
-    rtFeatures.pNext = &accelFeatures;
-    features2.pNext = &features12;
-
     constexpr float queuePriority = 1.0f;
-    vk::DeviceQueueCreateInfo queueCreateInfo{};
-    queueCreateInfo.queueFamilyIndex = queueFamilyIndex;
-    queueCreateInfo.queueCount = 1;
-    queueCreateInfo.pQueuePriorities = &queuePriority;
+    vk::DeviceQueueCreateInfo queueCreateInfo({}, queueFamilyIndex, 1, &queuePriority);
 
-    vk::DeviceCreateInfo deviceCreateInfo{};
-    deviceCreateInfo.sType = vk::StructureType::eDeviceCreateInfo;
-    deviceCreateInfo.queueCreateInfoCount = 1;
-    deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
-    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(RequiredDeviceExtensions.size());
-    deviceCreateInfo.ppEnabledExtensionNames = RequiredDeviceExtensions.data();
-
+    vk::DeviceCreateInfo deviceCreateInfo({}, 1, &queueCreateInfo);
+    deviceCreateInfo.setPEnabledExtensionNames(enabledExtensions);
     deviceCreateInfo.pNext = &features2;
-    deviceCreateInfo.pEnabledFeatures = nullptr;
 
     device = physicalDevice.createDeviceUnique(deviceCreateInfo);
 }
 
 uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const {
     const vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i)
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
             return i;
-
+        }
+    }
+    std::cerr << "[FATAL] Failed to find suitable memory type!" << std::endl;
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
 void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) {
-    
-    vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
+    try {
+        vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
+        vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
 
-    commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    func(*commandBuffer);
-    commandBuffer->end();
+        commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        func(*commandBuffer);
+        commandBuffer->end();
 
-    vk::UniqueFence fence = device->createFenceUnique({});
-    vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
-    queue.submit(submitInfo, *fence);
+        vk::UniqueFence fence = device->createFenceUnique({});
+        vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
+        queue.submit(submitInfo, *fence);
 
-    (void)device->waitForFences(*fence, VK_TRUE, UINT64_MAX);
-}
-
-vk::PresentModeKHR Context::chooseSwapPresentMode() const {
-    const std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.getSurfacePresentModesKHR(surface.get());
-
-    for (const auto& mode : availablePresentModes) {
-        if (mode == vk::PresentModeKHR::eImmediate) {
-            std::cout << "Present Mode: Immediate (Unlocked, Tearing)" << std::endl;
-            return mode;
-        }
+        if (device->waitForFences(*fence, VK_TRUE, UINT64_MAX) != vk::Result::eSuccess)
+            std::cerr << "[ERROR] Fence wait failed during one-time submit." << std::endl;
+        
+    } catch (const vk::Error& e) {
+        std::cerr << "[ERROR] Vulkan error during one-time submit: " << e.what() << std::endl;
     }
-    
-    for (const auto& mode : availablePresentModes) {
-        if (mode == vk::PresentModeKHR::eMailbox) {
-            std::cout << "Present Mode: Mailbox (Low-latency, No Tearing)" << std::endl;
-            return mode;
-        }
-    }
-    
-    std::cout << "Present Mode: FIFO (V-Sync)" << std::endl;
-    return vk::PresentModeKHR::eFifo;
 }
 
 vk::SurfaceFormatKHR Context::chooseSwapSurfaceFormat() const {
@@ -379,15 +372,40 @@ vk::SurfaceFormatKHR Context::chooseSwapSurfaceFormat() const {
     throw std::runtime_error("No suitable swap surface format found! Expected eR8G8B8A8Unorm with SrgbNonlinear color space.");
 }
 
+vk::PresentModeKHR Context::chooseSwapPresentMode() const {
+    const std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.getSurfacePresentModesKHR(surface.get());
+
+    for (const auto& mode : availablePresentModes)
+        if (mode == vk::PresentModeKHR::eMailbox) {
+            std::cout << "Present Mode: Mailbox (Low-latency, No Tearing)" << std::endl;
+            return mode;
+        }
+    
+    for (const auto& mode : availablePresentModes)
+        if (mode == vk::PresentModeKHR::eFifo) {
+            std::cout << "Present Mode: FIFO (V-Sync)" << std::endl;
+            return mode;
+        }
+    
+    std::cout << "Present Mode: Immediate (Unlocked, Tearing)" << std::endl;
+    return vk::PresentModeKHR::eImmediate;
+}
+
 VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
     vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
     const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
     void* pUserData)
 {
-    if (messageSeverity >= vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
-        std::cerr << "Validation layer: " << pCallbackData->pMessage << std::endl;
-    }
+    std::string severity;
+    if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
+        severity = "[VULKAN ERROR]";
+    else if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
+        severity = "[VULKAN WARN]";
+    else
+        return vk::False; // Don't log info or verbose messages for brevity
+    
+    std::cerr << severity << ": " << pCallbackData->pMessage << std::endl;
     return vk::False;
 }
 
@@ -397,9 +415,14 @@ void Context::queryWindowSize()
 }
 
 Context::~Context() {
-    std::cout << "Destroying Context..." << std::endl;
-    if (device)
-        device->waitIdle();
+    std::cout << "[INFO] Destroying Context..." << std::endl;
+    try {
+        if (device) {
+            device->waitIdle();
+        }
+    } catch (const vk::Error& e) {
+        std::cerr << "[ERROR] Vulkan error during device->waitIdle(): " << e.what() << std::endl;
+    }
 
     SDL_DestroyWindow(window);
     SDL_Vulkan_UnloadLibrary();

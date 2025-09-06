@@ -1,15 +1,14 @@
-﻿#include "OutlinerDetailsPanel.h"
-#include "Scene/Scene.h"
+﻿#include "SceneGraphPanel.h"
 #include "Scene/SceneObject.h"
 #include <imgui.h>
 #include <algorithm>
 #include <iterator>
 
-OutlinerDetailsPanel::OutlinerDetailsPanel(std::string name, Scene& scene)
+SceneGraphPanel::SceneGraphPanel(std::string name, Scene& scene)
     : ImGuiComponent(std::move(name)), scene(scene) {}
 
-void OutlinerDetailsPanel::renderUi() {
-    ImGui::Begin("Outliner");
+void SceneGraphPanel::renderUi() {
+    ImGui::Begin(name.c_str());
 
     // Recursively draw all root-level objects
     for (SceneObject* rootObject : scene.getRootObjects())
@@ -30,42 +29,30 @@ void OutlinerDetailsPanel::renderUi() {
         ImGui::EndDragDropTarget();
     }
 
-    // Handle Copy, Paste, and Delete
+    // Handle Copy, Paste, and Delete when the outliner is focused
     if (ImGui::IsWindowFocused()) {
         const bool isCtrlDown = ImGui::IsKeyDown(ImGuiMod_Ctrl);
         SceneObject* activeObject = scene.getActiveObject();
 
-        // Copy (Ctrl+C)
-        if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_C))
-            scene.copy(activeObject);
-        
-        // Paste (Ctrl+V)
+        if (activeObject) {
+            // Copy (Ctrl+C)
+            if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_C))
+                scene.copy(activeObject);
+            
+            // Deletion (Delete key)
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete))
+                scene.remove(activeObject);
+        }
+
+        // Paste (Ctrl+V) - can happen even if no object is selected
         if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_V))
             scene.paste();
-
-        // Deletion (Delete key)
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete))
-            scene.remove(activeObject);
     }
 
-    ImGui::End();
-
-    // Details Panel
-    ImGui::Begin("Details");
-    if (ImGui::BeginTable("ObjectDetails", 2, ImGuiTableFlags_SizingStretchProp)) {
-        
-        if (SceneObject* activeObject = scene.getActiveObject())
-            activeObject->renderUi(); // Object renders its own details
-        else
-            ImGui::TextUnformatted("No Object Selected.");
-        
-        ImGui::EndTable();
-    }
     ImGui::End();
 }
 
-void OutlinerDetailsPanel::drawNode(SceneObject* node) {
-
+void SceneGraphPanel::drawNode(SceneObject* node) {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     
     if (node == scene.getActiveObject())
@@ -79,7 +66,6 @@ void OutlinerDetailsPanel::drawNode(SceneObject* node) {
     // Handle selection by finding the object's index
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         const auto& allObjects = scene.getSceneObjects();
-        
         const auto it = std::ranges::find_if(allObjects, [node](const auto& ptr) { return ptr.get() == node; });
         if (it != allObjects.end()) {
             const uint32_t index = std::distance(allObjects.begin(), it);
@@ -87,13 +73,14 @@ void OutlinerDetailsPanel::drawNode(SceneObject* node) {
         }
     }
     
-    // Drag & Drop
+    // Drag & Drop Source
     if (ImGui::BeginDragDropSource()) {
         ImGui::SetDragDropPayload("SCENE_OBJECT", &node, sizeof(SceneObject*));
         ImGui::Text("Reparent %s", node->getName().c_str());
         ImGui::EndDragDropSource();
     }
 
+    // Drag & Drop Target
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT")) {
             IM_ASSERT(payload->DataSize == sizeof(SceneObject*));
@@ -109,5 +96,4 @@ void OutlinerDetailsPanel::drawNode(SceneObject* node) {
             drawNode(child);
         ImGui::TreePop();
     }
-
 }

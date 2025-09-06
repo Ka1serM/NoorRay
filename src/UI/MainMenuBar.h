@@ -12,9 +12,6 @@ class MainMenuBar : public ImGuiComponent {
 public:
     MainMenuBar(std::string name, Context& context, Scene& scene);
     void renderUi() override;
-
-    std::string getType() const override { return "Main Menu"; }
-
 private:
     // Enum to keep track of the file type for the pending async import.
     enum class FileType {

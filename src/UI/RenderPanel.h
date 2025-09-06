@@ -19,7 +19,6 @@ public:
     RenderPanel(std::string name, Context& context, Raytracer& raytracer, Renderer& renderer, Tonemapper& tonemapper);
 
     void renderUi() override;
-    std::string getType() const override { return "Render"; }
 
     bool isSaveRequested() const { return saveRequested; }
     void executeSave();

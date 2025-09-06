@@ -24,7 +24,7 @@ find_package(Vulkan REQUIRED)
 
 # MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
-    set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/macOS/lib/libMoltenVK.dylib")
+    set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
     if(EXISTS "${MOLTENVK_DYLIB}")
         message(STATUS "Using dynamic MoltenVK library at ${MOLTENVK_DYLIB}")
         add_library(MoltenVK SHARED IMPORTED)
@@ -115,7 +115,7 @@ if(APPLE)
 
     # Vulkan loader bundling and @rpath fix
     if(DEFINED ENV{VULKAN_SDK})
-        set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/macOS/lib/libvulkan.1.dylib")
+        set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/lib/libvulkan.1.dylib")
         if(EXISTS "${VULKAN_LOADER_DYLIB}")
             add_custom_command(TARGET NoorRay POST_BUILD
                     # Ensure Frameworks folder exists

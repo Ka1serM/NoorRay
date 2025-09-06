@@ -64,7 +64,7 @@ void Renderer::createSwapChain() {
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.getSurface());
     swapchainInfo.setMinImageCount(imageCount);
-    const auto swapSurfaceFormat = context.chooseSwapSurfaceFormat();
+    const auto swapSurfaceFormat = context.getSwapchainFormat();
     swapchainInfo.setImageFormat(swapSurfaceFormat.format);
     swapchainInfo.setImageColorSpace(swapSurfaceFormat.colorSpace);
     swapchainInfo.setImageExtent(extent);

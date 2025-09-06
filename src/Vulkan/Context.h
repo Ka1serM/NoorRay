@@ -45,6 +45,8 @@ class Context {
     vk::UniqueCommandPool commandPool;
     vk::UniqueDescriptorPool descriptorPool;
 
+    vk::SurfaceFormatKHR swapchainFormat;
+
     bool rtxSupported = false;
 
     void createVulkanInstance();
@@ -60,7 +62,6 @@ public:
     uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const;
     void oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func);
     vk::PresentModeKHR chooseSwapPresentMode() const;
-    vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const;
 
     // Static callback with corrected C++ types
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugUtilsMessengerCallback(
@@ -74,6 +75,7 @@ public:
     uint32_t getWindowWidth() const { return windowWidth; }
     uint32_t getWindowHeight() const { return windowHeight; }
     float getDPIScale() const { return dpiScale; }
+    const vk::SurfaceFormatKHR& getSwapchainFormat() const { return swapchainFormat; }
     
     const vk::Instance& getInstance() const { return instance.get(); }
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }

@@ -14,7 +14,7 @@
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1) {
+Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1), swapchainFormat({vk::Format::eUndefined}) {
     try {
         if (SDL_Init(SDL_INIT_VIDEO) < 0) {
             std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
@@ -236,7 +236,16 @@ void Context::pickPhysicalDevice() {
 
     physicalDevice = best->device;
     std::cout << "\n[INFO] Picked GPU: " << physicalDevice.getProperties().deviceName << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
-}
+    
+    for (const auto& availableFormat : physicalDevice.getSurfaceFormatsKHR(surface.get()))
+        if (availableFormat.format == vk::Format::eB8G8R8A8Unorm && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+        {
+           swapchainFormat = availableFormat;
+            return;
+        }
+
+    if (swapchainFormat.format == vk::Format::eUndefined)
+        throw std::runtime_error("No suitable swap surface format found! Expected eB8G8R8A8Unorm with SrgbNonlinear color space.");}
 
 void Context::createLogicalDevice() {
     std::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
@@ -361,16 +370,6 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
     } catch (const vk::Error& e) {
         std::cerr << "[ERROR] Vulkan error during one-time submit: " << e.what() << std::endl;
     }
-}
-
-vk::SurfaceFormatKHR Context::chooseSwapSurfaceFormat() const {
-    std::vector<vk::SurfaceFormatKHR> availableFormats = physicalDevice.getSurfaceFormatsKHR(surface.get());
-
-    for (const auto& availableFormat : availableFormats)
-        if (availableFormat.format == vk::Format::eR8G8B8A8Unorm && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-            return availableFormat;
-
-    throw std::runtime_error("No suitable swap surface format found! Expected eR8G8B8A8Unorm with SrgbNonlinear color space.");
 }
 
 vk::PresentModeKHR Context::chooseSwapPresentMode() const {

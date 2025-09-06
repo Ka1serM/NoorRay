@@ -113,10 +113,12 @@ if(APPLE)
             MACOSX_BUNDLE_ICON_FILE "icon.icns"
     )
 
-    # Vulkan loader bundling and @rpath fix
+    # MoltenVk and Vulkan loader bundling and @rpath fix
     if(DEFINED ENV{VULKAN_SDK})
         set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/lib/libvulkan.1.dylib")
-        if(EXISTS "${VULKAN_LOADER_DYLIB}")
+        set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
+
+        if(EXISTS "${VULKAN_LOADER_DYLIB}" AND EXISTS "${MOLTENVK_DYLIB}")
             add_custom_command(TARGET NoorRay POST_BUILD
                     # Ensure Frameworks folder exists
                     COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -127,10 +129,21 @@ if(APPLE)
                     "${VULKAN_LOADER_DYLIB}"
                     "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
 
+                    # Copy MoltenVK dylib
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${MOLTENVK_DYLIB}"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libMoltenVK.dylib"
+
                     # Fix binary to use @rpath/libvulkan.1.dylib
                     COMMAND /usr/bin/install_name_tool -change
                     "${VULKAN_LOADER_DYLIB}"
                     "@rpath/libvulkan.1.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
+
+                    # Fix binary to use @rpath/libMoltenVK.dylib
+                    COMMAND /usr/bin/install_name_tool -change
+                    "${MOLTENVK_DYLIB}"
+                    "@rpath/libMoltenVK.dylib"
                     "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
 
                     # Add rpath to point to Frameworks folder
@@ -138,15 +151,19 @@ if(APPLE)
                     "@executable_path/../Frameworks"
                     "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
 
-                    # Fix the dylib's own ID
+                    # Fix the dylib IDs
                     COMMAND /usr/bin/install_name_tool -id
                     "@rpath/libvulkan.1.dylib"
                     "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
 
-                    COMMENT "Bundling Vulkan loader and fixing @rpath for NoorRay"
+                    COMMAND /usr/bin/install_name_tool -id
+                    "@rpath/libMoltenVK.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libMoltenVK.dylib"
+
+                    COMMENT "Bundling Vulkan loader and MoltenVK dylib, fixing @rpath for NoorRay"
             )
         else()
-            message(FATAL_ERROR "Vulkan loader not found at ${VULKAN_LOADER_DYLIB}")
+            message(FATAL_ERROR "Vulkan loader or MoltenVK dylib not found at expected paths: ${VULKAN_LOADER_DYLIB}, ${MOLTENVK_DYLIB}")
         endif()
     endif()
 

@@ -6,6 +6,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include "Log.h"
+
 #if !defined(NDEBUG)
     constexpr bool EnableValidationLayers = true;
 #else
@@ -15,41 +17,48 @@ constexpr bool EnableValidationLayers = false;
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1) {
-    
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
         throw std::runtime_error("Failed to initialize SDL: " + std::string(SDL_GetError()));
 
     if (SDL_Vulkan_LoadLibrary(nullptr) < 0)
         throw std::runtime_error("Failed to load Vulkan library via SDL: " + std::string(SDL_GetError()));
 
-    const float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-
-    if (dpiScaleFloat != 0.0f) {
+    float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+    if (dpiScaleFloat != 0.0f) //only if this doesnt fail
+    {
         dpiScale = dpiScaleFloat;
-        windowWidth  = static_cast<int>(static_cast<float>(windowWidth)  * dpiScale);
-        windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
+        windowWidth  = static_cast<int>(windowWidth  * dpiScale);
+        windowHeight = static_cast<int>(windowHeight * dpiScale);
     }
-
+    
     window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-
     if (!window)
         throw std::runtime_error("Failed to create SDL window: " + std::string(SDL_GetError()));
 
-    const auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+    auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
     if (!vkGetInstanceProcAddr)
         throw std::runtime_error("Failed to get vkGetInstanceProcAddr: " + std::string(SDL_GetError()));
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-    
+
     createVulkanInstance();
+
     VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
-    if (EnableValidationLayers) {
+    if (false) {
         // Validation messenger
         vk::DebugUtilsMessengerCreateInfoEXT validationMessengerInfo;
         validationMessengerInfo
-            .setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
-            .setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance)
+            .setMessageSeverity(
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError
+            )
+            .setMessageType(
+                vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+                vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
+            )
             .pfnUserCallback = &Context::debugUtilsMessengerCallback; // static function
         
         debugMessenger = instance->createDebugUtilsMessengerEXTUnique(validationMessengerInfo);
@@ -113,7 +122,7 @@ Context::Context(const int width, const int height) : windowWidth(width), window
     poolInfo.setPoolSizes(poolSizes);
     descriptorPool = device->createDescriptorPoolUnique(poolInfo);
 
-    std::cout << "Context initialized with graphics and compute command pools." << std::endl;
+    LOG_INFO( "Context initialized with graphics and compute command pools.");
 }
 
 void Context::createVulkanInstance() {
@@ -127,11 +136,12 @@ void Context::createVulkanInstance() {
     std::vector<const char*> layers;
     
     if (EnableValidationLayers) {
-        std::cout << "INFO: Validation layers are ENABLED." << std::endl;
+        LOG_INFO("INFO: Validation layers are ENABLED.");
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        layers.push_back("VK_LAYER_KHRONOS_validation");
-    } else
-        std::cout << "INFO: Validation layers are DISABLED (Release Mode)." << std::endl;
+         layers.push_back("VK_LAYER_KHRONOS_validation");
+    }
+    else
+        LOG_INFO( "INFO: Validation layers are DISABLED (Release Mode).");
 
     constexpr vk::ApplicationInfo appInfo("NoorRay", 1, "No Engine", 1, VK_API_VERSION_1_3);
     
@@ -139,7 +149,7 @@ void Context::createVulkanInstance() {
     instanceInfo.setPApplicationInfo(&appInfo).setPEnabledLayerNames(layers).setPEnabledExtensionNames(extensions);
 
     // Enable debug printf feature if validation layers are enabled
-    if (EnableValidationLayers)
+    if (false)
     {
         vk::ValidationFeaturesEXT validationFeaturesInfo{};
         const std::vector enabledFeatures = { vk::ValidationFeatureEnableEXT::eDebugPrintf };
@@ -162,7 +172,7 @@ void Context::pickPhysicalDevice() {
     if (devices.empty())
         throw std::runtime_error("Failed to find GPUs with Vulkan support!");
 
-    std::cout << "Available GPUs:\n";
+    LOG_INFO( "Available GPUs:\n");
 
     struct Candidate {
         vk::PhysicalDevice device;
@@ -187,11 +197,11 @@ void Context::pickPhysicalDevice() {
                 if (memProps.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal)
                     vramSize += memProps.memoryHeaps[i].size;
 
-            std::cout << "  - " << props.deviceName
+            LOG_INFO( "  - " << props.deviceName
                       << " (Type: " << vk::to_string(props.deviceType)
                       << ", VRAM: " << (vramSize / (1024 * 1024)) << "MB"
                       << ", Extensions OK: " << (hasAllExtensions ? "Yes" : "No") << ")"
-                      << std::endl;
+                     );
 
             if (!hasAllExtensions)
                 continue;
@@ -231,9 +241,9 @@ void Context::pickPhysicalDevice() {
 
     //rtxSupported = false;
     if (rtxSupported)
-        std::cout << "\nPicked GPU: " << physicalDevice.getProperties().deviceName << " (Ray Tracing Enabled)" << std::endl;
+        LOG_INFO( "\nPicked GPU: " << physicalDevice.getProperties().deviceName << " (Ray Tracing Enabled)");
     else
-        std::cout << "\nPicked GPU: " << physicalDevice.getProperties().deviceName << " (Ray Tracing Not Supported)" << std::endl;
+        LOG_INFO( "\nPicked GPU: " << physicalDevice.getProperties().deviceName << " (Ray Tracing Not Supported)");
 }
 
 void Context::createLogicalDevice() {
@@ -257,10 +267,10 @@ void Context::createLogicalDevice() {
     
     // Ray tracing extensions
     if (rtxSupported) {
-        std::cout << "Ray tracing extensions are supported. Enabling them." << std::endl;
+        LOG_INFO( "Ray tracing extensions are supported. Enabling them.");
         RequiredDeviceExtensions.insert(RequiredDeviceExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
     } else
-        std::cout << "Ray tracing extensions are not supported. Proceeding without them." << std::endl;
+        LOG_INFO( "Ray tracing extensions are not supported. Proceeding without them.");
 
     // Prepare device features
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
@@ -298,7 +308,7 @@ void Context::createLogicalDevice() {
         rtFeatures.rayTracingPipeline = VK_FALSE;
         accelFeatures.accelerationStructure = VK_FALSE;
         if (rtxSupported)
-            std::cout << "Warning: Ray tracing features requested but not fully supported, disabling them." << std::endl;
+            LOG_INFO( "Warning: Ray tracing features requested but not fully supported, disabling them.");
     }
 
     features12.pNext = &rtFeatures;
@@ -358,19 +368,19 @@ vk::PresentModeKHR Context::chooseSwapPresentMode() const {
 
     for (const auto& mode : availablePresentModes) {
         if (mode == vk::PresentModeKHR::eImmediate) {
-            std::cout << "Present Mode: Immediate (Unlocked, Tearing)" << std::endl;
+            LOG_INFO( "Present Mode: Immediate (Unlocked, Tearing)");
             return mode;
         }
     }
     
     for (const auto& mode : availablePresentModes) {
         if (mode == vk::PresentModeKHR::eMailbox) {
-            std::cout << "Present Mode: Mailbox (Low-latency, No Tearing)" << std::endl;
+            LOG_INFO( "Present Mode: Mailbox (Low-latency, No Tearing)");
             return mode;
         }
     }
     
-    std::cout << "Present Mode: FIFO (V-Sync)" << std::endl;
+    LOG_INFO( "Present Mode: FIFO (V-Sync)");
     return vk::PresentModeKHR::eFifo;
 }
 
@@ -381,6 +391,10 @@ vk::SurfaceFormatKHR Context::chooseSwapSurfaceFormat() const {
         if (availableFormat.format == vk::Format::eR8G8B8A8Unorm && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
             return availableFormat;
 
+    // fallback to the first available format
+    if (!availableFormats.empty())
+        return availableFormats[0];
+    
     throw std::runtime_error("No suitable swap surface format found! Expected eR8G8B8A8Unorm with SrgbNonlinear color space.");
 }
 
@@ -390,9 +404,15 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
     const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
     void* pUserData)
 {
-    if (messageSeverity >= vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
-        std::cerr << "[Validation] " << pCallbackData->pMessage << std::endl;
-    }
+    if (messageSeverity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
+        LOG_ERROR("[Validation ERROR] " << pCallbackData->pMessage);
+    else if (messageSeverity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
+        LOG_INFO("[Validation WARNING] " << pCallbackData->pMessage);
+    else if (messageSeverity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo)
+        LOG_INFO("[Validation INFO] " << pCallbackData->pMessage);
+    else
+        LOG_INFO("[Validation VERBOSE] " << pCallbackData->pMessage);
+
     return VK_FALSE;
 }
 
@@ -402,9 +422,9 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugPrintfCallback(
     const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
     void* pUserData)
 {
-    if (pCallbackData && pCallbackData->pMessage) {
-        std::cout << "[DebugPrintf] " << pCallbackData->pMessage << std::endl;
-    }
+    if (pCallbackData && pCallbackData->pMessage)
+        LOG_INFO( "[DebugPrintf] " << pCallbackData->pMessage);
+
     return VK_FALSE;
 }
 
@@ -422,7 +442,7 @@ bool Context::queryWindowSize()
 }
 
 Context::~Context() {
-    std::cout << "Destroying Context..." << std::endl;
+    LOG_INFO("Destroying Context...");
     if (device)
         device->waitIdle();
 

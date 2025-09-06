@@ -3,6 +3,8 @@
 #include <vector>
 #include <algorithm>
 
+#include "Log.h"
+
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
 
 Renderer::Renderer(Context& context)
@@ -34,7 +36,7 @@ Renderer::Renderer(Context& context)
 //  Destructor 
 Renderer::~Renderer() {
     context.getDevice().waitIdle();
-    std::cout << "Destroying Renderer" << std::endl;
+    LOG_INFO("Destroying Renderer");
 }
 
 //  Swapchain creation 
@@ -85,7 +87,7 @@ void Renderer::createSwapChain() {
     
     imagesInFlightFences.resize(swapchainImages.size(), VK_NULL_HANDLE);
     
-    std::cout << "Recreated swapchain with " << swapchainImages.size() << " images at " << extent.width << "x" << extent.height << std::endl;
+    LOG_INFO("Recreated swapchain with " << swapchainImages.size() << " images at " << extent.width << "x" << extent.height);
 }
 
 void Renderer::recreateSwapChain() {
@@ -153,7 +155,7 @@ bool Renderer::endFrame(const bool waitForCompute) {
     try {
         context.getQueue().submit(submitInfo, frames[m_currentFrame].inFlightFence.get());
     } catch (vk::DeviceLostError& e) {
-        std::cerr << "Device lost during submit: " << e.what() << std::endl;
+       LOG_ERROR("Device lost during submit: " << e.what());
     }
 
     if (!swapchain)

@@ -2,6 +2,7 @@
 #include <iostream>
 
 #include "Globals.h"
+#include "Log.h"
 #include "Shaders/SharedStructs.h"
 
 Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage)
@@ -63,15 +64,15 @@ Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const 
 
 Tonemapper::~Tonemapper()
 {
-    std::cout << "Destroying Tonemapper" << std::endl;
+    LOG_INFO("Destroying Tonemapper");
 }
 
 void Tonemapper::dispatch(const vk::CommandBuffer commandBuffer) {
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0, descriptorSet.get(), {});
-    uint32_t groupCountX = (outputImage.getImageCreateInfo().extent.width + GROUP_SIZE - 1) / GROUP_SIZE;
-    uint32_t groupCountY = (outputImage.getImageCreateInfo().extent.height + GROUP_SIZE - 1) / GROUP_SIZE;
+    const uint32_t groupCountX = (outputImage.getImageCreateInfo().extent.width + GROUP_SIZE - 1) / GROUP_SIZE;
+    const uint32_t groupCountY = (outputImage.getImageCreateInfo().extent.height + GROUP_SIZE - 1) / GROUP_SIZE;
     commandBuffer.dispatch(groupCountX, groupCountY, 1);
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }

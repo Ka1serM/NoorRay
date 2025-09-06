@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include <iostream>
+
+#include "Log.h"
 #include "Vulkan/Image.h"
 #include "Scene/Scene.h"
 #include "../Shaders/SharedStructs.h"
@@ -30,7 +32,7 @@ public:
 
     virtual ~Raytracer()
     {
-        std::cout << "Destroying Raytracer" << std::endl;
+        LOG_INFO( "Destroying Raytracer");
     }
     
     Image& getOutputColor() { return outputColor; }
@@ -55,7 +57,7 @@ public:
           outputCrypto = Image(context, width, height, vk::Format::eR32Uint, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
          outputPosition = Image(context, width, height, vk::Format::eR16G16B16A16Sfloat, vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
 
-          std::cout << "Raytracer resized to " << width << "x" << height << std::endl;
+          LOG_INFO( "Raytracer resized to " << width << "x" << height);
       }
 
     // Pure virtual since implementations differ

@@ -42,9 +42,9 @@ class Scene {
 
     SceneObject* copiedObject = nullptr;
 
+public:
     uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
     
-public:
     Scene(Context& context);
 
     void copy(SceneObject* objectToCopy);

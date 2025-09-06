@@ -4,6 +4,8 @@
 #include <string>
 #include <cstring>
 
+#include "Log.h"
+
 Image::Image(Context& context, const void* data, int width, int height, vk::Format format)
 {
     if (width <= 0 || height <= 0) {
@@ -99,7 +101,7 @@ Image::Image(Context& context, const void* data, int width, int height, vk::Form
 
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    std::cout << "Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << std::endl;
+    LOG_INFO( "Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format));
 }
 
 Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight)
@@ -178,7 +180,7 @@ Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight
 
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    std::cout << "Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm" << std::endl;
+    LOG_INFO( "Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm");
 }
 
 Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) {
@@ -222,7 +224,7 @@ Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format forma
         setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
     });
     currentLayout = vk::ImageLayout::eGeneral;
-    std::cout << " Image (blank) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << ", Usage=" << static_cast<uint32_t>(usage) << std::endl;
+    LOG_INFO("Image (blank) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << ", Usage=" << static_cast<uint32_t>(usage));
 }
 
 vk::AccessFlags Image::toAccessFlags(const vk::ImageLayout layout) {

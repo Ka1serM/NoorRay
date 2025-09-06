@@ -19,7 +19,7 @@ private:
     // Enum to keep track of the file type for the pending async import.
     enum class FileType {
         OBJ,
-        CRTSCENE,
+        GLTF,
         TEXTURE
     };
 

@@ -14,6 +14,7 @@
 #include <stdexcept>
 
 #include "ImGuiManager.h"
+#include "Vulkan/Tonemapper.h"
 
 // Helper function to convert 16-bit half float to 32-bit float.
 static float halfToFloat(const uint16_t half) {
@@ -48,12 +49,14 @@ RenderPanel::RenderPanel(
     std::string name,
     Context& context,
     Raytracer& raytracer,
-    Renderer& renderer
+    Renderer& renderer,
+    Tonemapper& tonemapper
 )
     : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(8), specularBounces(12), transmissionBounces(24), exposure(0),
       context(context),
       raytracer(raytracer),
-      renderer(renderer)
+      renderer(renderer),
+      tonemapper(tonemapper)
 {
 }
 
@@ -157,7 +160,7 @@ void RenderPanel::renderUi() {
         // Poll async result
         if (m_pendingFolderSelection.valid())
             if (m_pendingFolderSelection.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                std::string selection = m_pendingFolderSelection.get();
+                const std::string selection = m_pendingFolderSelection.get();
                 if (!selection.empty()) saveLocation = selection;
             }
 
@@ -171,9 +174,14 @@ void RenderPanel::renderUi() {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("Widget", ImGuiTableColumnFlags_WidthStretch);
 
-        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Beauty (.hdr)");
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Beauty (.png)");
         ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##beauty", "e.g., final_render.hdr", beautyFilenameBuffer, sizeof(beautyFilenameBuffer));
+        ImGui::InputTextWithHint("##beauty", "e.g., final_render.png", beautyFilenameBuffer, sizeof(beautyFilenameBuffer));
+        ImGui::PopItemWidth();
+
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Raw (.hdr)");
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##raw", "e.g., final_raw.hdr", rawFilenameBuffer, sizeof(rawFilenameBuffer));
         ImGui::PopItemWidth();
 
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Albedo (.png)");
@@ -214,12 +222,12 @@ void RenderPanel::renderUi() {
 
 void RenderPanel::executeSave() {
     if (m_saveState != SaveState::IDLE) {
-        std::cout << "Save operation already in progress." << std::endl;
+        LOG_INFO( "Save operation already in progress.");
         saveRequested = false;
         return;
     }
 
-    std::cout << "Preparing save operation..." << std::endl;
+    LOG_INFO( "Preparing save operation...");
     m_saveJobs.clear();
     const std::filesystem::path basePath(saveLocation);
 
@@ -233,15 +241,15 @@ void RenderPanel::executeSave() {
             
         }
     };
-    
-    addJob(beautyFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputColor(); });
+
+    addJob(beautyFilenameBuffer, ".png", [&]()->const Image& { return tonemapper.getOutputImage(); });
+    addJob(rawFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputColor(); });
     addJob(albedoFilenameBuffer, ".png", [&]()->const Image& { return raytracer.getOutputAlbedo(); });
     addJob(normalFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputNormal(); });
     addJob(cryptoFilenameBuffer, ".bin", [&]()->const Image& { return raytracer.getOutputCrypto(); });
 
-    if (!m_saveJobs.empty()) {
+    if (!m_saveJobs.empty())
         m_saveState = SaveState::COPY_PENDING;
-    }
     
     saveRequested = false;
 }
@@ -307,10 +315,11 @@ void RenderPanel::writeDataToFile(const std::vector<uint8_t>& imageData, const v
             if (outFile.is_open()) {
                 outFile.write(reinterpret_cast<const char*>(imageData.data()), imageData.size());
                 outFile.close();
-            } else { std::cerr << "Failed to open file for writing: " << filename << std::endl; }
+            } else
+                LOG_ERROR("Failed to open file for writing: " << filename);
             break;
         }
-        default: std::cerr << "Unsupported format for saving: " << vk::to_string(format) << std::endl; break;
+        default:LOG_ERROR("Unsupported format for saving: " << vk::to_string(format)); break;
     }
-    std::cout << "Successfully saved image to " << filename << std::endl;
+    LOG_INFO( "Successfully saved image to " << filename);
 }

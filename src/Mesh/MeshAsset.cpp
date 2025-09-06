@@ -349,13 +349,16 @@ void MeshAsset::renderUi() {
 
                 drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
                 ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.roughness = v; anyMaterialChanged = true; });
+
                 
                 drawTextureCombo("Normal Texture", mat.normalIndex, i);
 
+                
                 ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
                 ImGuiManager::dragFloatRow("Transmission Strength", mat.transmission, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmission = v; anyMaterialChanged = true; });
                 drawTextureCombo("Transmission Texture", mat.transmissionIndex, i);
                 ImGuiManager::colorEdit3Row("Transmission Color", mat.transmissionColor, [&](const vec3 v) { mat.transmissionColor = v; anyMaterialChanged = true; });
+
                 
                 ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
                 drawTextureCombo("Emission Texture", mat.emissionIndex, i);

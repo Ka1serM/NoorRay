@@ -42,7 +42,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     imGuiManager.addComponent<DebugPanel>("Debug");
     imGuiManager.addComponent<EnvironmentPanel>("Environment", scene);
     imGuiManager.addComponent<OutlinerDetailsPanel>("Outliner", scene);
-    imGuiManager.addComponent<RenderPanel>("Render", context, *raytracer, renderer);
+    imGuiManager.addComponent<RenderPanel>("Render", context, *raytracer, renderer, *tonemapper);
     imGuiManager.addComponent<ViewportPanel>("Viewport", context, scene, tonemapper->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(), raytracer->getWidth(), raytracer->getHeight());
 
     
@@ -180,7 +180,7 @@ void NoorRay::run() {
         } catch (const vk::OutOfDateKHRError&) {
             framebufferResized = true;
         } catch (const std::exception& e) {
-            std::cerr << "Main loop exception: " << e.what() << "\n";
+           LOG_ERROR("Main loop exception: " << e.what());
             isRunning = false;
         }
     }

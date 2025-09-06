@@ -6,6 +6,8 @@
 #include <vector>
 #include <functional>
 
+#include "Vulkan/Tonemapper.h"
+
 namespace vk { class Image; }
 class Context;
 class Raytracer;
@@ -14,7 +16,7 @@ class Image;
 
 class RenderPanel : public ImGuiComponent {
 public:
-    RenderPanel(std::string name, Context& context, Raytracer& raytracer, Renderer& renderer);
+    RenderPanel(std::string name, Context& context, Raytracer& raytracer, Renderer& renderer, Tonemapper& tonemapper);
 
     void renderUi() override;
     std::string getType() const override { return "Render"; }
@@ -51,9 +53,11 @@ private:
     Context& context;
     Raytracer& raytracer;
     Renderer& renderer;
+    Tonemapper& tonemapper;
 
     std::string saveLocation = ".";
-    char beautyFilenameBuffer[256] = "render_beauty.hdr";
+    char beautyFilenameBuffer[256] = "render_beauty.png";
+    char rawFilenameBuffer[256] = "render_hdr.hdr";
     char albedoFilenameBuffer[256] = "render_albedo.png";
     char normalFilenameBuffer[256] = "render_normals.hdr";
     char cryptoFilenameBuffer[256] = "render_crypto.bin";

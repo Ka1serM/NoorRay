@@ -43,7 +43,7 @@ class Context {
     vk::UniqueDevice device;
 
     vk::Queue queue;
-    uint32_t queueFamilyIndex{};
+    uint32_t queueFamilyIndex = UINT32_MAX;
     vk::UniqueCommandPool commandPool;
     vk::UniqueDescriptorPool descriptorPool;
 

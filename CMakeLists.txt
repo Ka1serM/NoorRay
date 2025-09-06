@@ -14,6 +14,12 @@ add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
 add_subdirectory(external/json)
 
+# tinygltf (header-only)
+add_library(tinygltf INTERFACE)
+target_include_directories(tinygltf INTERFACE
+    ${PROJECT_SOURCE_DIR}/external/tinygltf
+)
+
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
@@ -84,6 +90,7 @@ target_link_libraries(NoorRay PRIVATE
         Vulkan::Vulkan
         nlohmann_json::nlohmann_json
         SDL3::SDL3-static
+        tinygltf
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)

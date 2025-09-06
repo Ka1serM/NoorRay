@@ -4,10 +4,18 @@
 
 #include "imgui.h"
 #include "ImGuizmo.h"
+#define IMVIEWGUIZMO_IMPLEMENTATION
 #include "ImViewGuizmo.h"
+#include "Log.h"
 #include "glm/gtc/type_ptr.hpp"
 #include "SDL3/SDL_mouse.h"
 #include "Camera/PerspectiveCamera.h"
+#include "Mesh/BVH/BVH.h"
+#include "Mesh/BVH/BVH.h"
+#include "Mesh/BVH/BVH.h"
+#include "Mesh/BVH/BVH.h"
+#include "Mesh/BVH/BVH.h"
+#include "Mesh/BVH/BVH.h"
 #include "Scene/MeshInstance.h"
 
 ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, const uint32_t width, const uint32_t height)
@@ -73,36 +81,55 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     style.Colors[ImGuizmo::ROTATION_USING_FILL] = ImVec4(1.0f, 0.8f, 0.2f, 0.3f); // subtle fill
 }
 
-void ViewportPanel::renderUi() {
-    ImGui::Begin(name.c_str());
-
-    // (Viewport Size & Position calculation is unchanged)
+void ViewportPanel::updateLayout() {
     const float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-    ImVec2 imageSize;
     const ImVec2 availSize = ImGui::GetContentRegionAvail();
+    
+    // Calculate the scaled image size to fit while maintaining aspect ratio
     if (availSize.x / availSize.y > aspectRatio) {
-        imageSize.y = availSize.y;
-        imageSize.x = imageSize.y * aspectRatio;
+        viewportSize.y = availSize.y;
+        viewportSize.x = viewportSize.y * aspectRatio;
     } else {
-        imageSize.x = availSize.x;
-        imageSize.y = imageSize.x / aspectRatio;
+        viewportSize.x = availSize.x;
+        viewportSize.y = viewportSize.x / aspectRatio;
     }
+
+    // Calculate the padding required to center the image
+    const ImVec2 padding = {(availSize.x - viewportSize.x) * 0.5f, (availSize.y - viewportSize.y) * 0.5f};
     
-    const ImVec2 padding = {(availSize.x - imageSize.x) * 0.5f, (availSize.y - imageSize.y) * 0.5f};
-    const ImVec2 cursorPos = ImGui::GetCursorPos();
-    ImGui::SetCursorPos({cursorPos.x + padding.x, cursorPos.y + padding.y});
-    const ImVec2 imagePos = ImGui::GetCursorScreenPos();
+    // Apply the padding by moving the cursor
+    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPos().x + padding.x, ImGui::GetCursorPos().y + padding.y));
     
+    // Store the final screen position for use by gizmos, picking, etc.
+    viewportPos = ImGui::GetCursorScreenPos();
+}
+
+ivec2 ViewportPanel::screenToPixel() const {
+    const ImVec2 screenPos = ImGui::GetMousePos();
+    const ImVec2 relativePos = ImVec2(screenPos.x - viewportPos.x, screenPos.y - viewportPos.y);
+
+    const float normX = std::clamp(relativePos.x / viewportSize.x, 0.f, 1.f);
+    const float normY = std::clamp(relativePos.y / viewportSize.y, 0.f, 1.f);
+
+    int pixelX = static_cast<int>(std::round(normX * static_cast<float>(width)));
+    int pixelY = static_cast<int>(std::round(normY * static_cast<float>(height)));
+
+    return ivec2(pixelX, pixelY);
+}
+
+void ViewportPanel::drawBackground() const {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     constexpr float tileSize = 20.0f;
     constexpr ImU32 col1 = IM_COL32(50, 50, 50, 255);
-    const float x0 = imagePos.x, y0 = imagePos.y;
-    const float x1 = imagePos.x + imageSize.x, y1 = imagePos.y + imageSize.y;
-    const int numX = static_cast<int>(imageSize.x / tileSize) + 1;
-    const int numY = static_cast<int>(imageSize.y / tileSize) + 1;
+    const float x0 = viewportPos.x, y0 = viewportPos.y;
+    const float x1 = viewportPos.x + viewportSize.x, y1 = viewportPos.y + viewportSize.y;
+    const int numX = static_cast<int>(viewportSize.x / tileSize) + 1;
+    const int numY = static_cast<int>(viewportSize.y / tileSize) + 1;
+
     for (int y = 0; y < numY; y++) {
         for (int x = 0; x < numX; x++) {
-            if ((x + y) % 2 != 0) continue;
+            if ((x + y) % 2 != 0)
+                continue;
             ImVec2 topLeft{x0 + x * tileSize, y0 + y * tileSize};
             ImVec2 bottomRight{topLeft.x + tileSize, topLeft.y + tileSize};
             if (bottomRight.x > x1) bottomRight.x = x1;
@@ -110,118 +137,193 @@ void ViewportPanel::renderUi() {
             drawList->AddRectFilled(topLeft, bottomRight, col1);
         }
     }
-    
-    // Display Image & Get State
-    ImGui::Image(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get()), imageSize);
-    const bool isImageHovered = ImGui::IsItemHovered();
+}
+
+void ViewportPanel::drawImageAndUpdateState() {
+    ImGui::Image(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get()), viewportSize);
+    isViewportHovered = ImGui::IsItemHovered();
+    uiScale = std::max(viewportSize.x / 1080.0f, 0.5f);
+}
+
+void ViewportPanel::beginMouseCapture() {
+    if (isCapturingMouse)
+        return;
+    isCapturingMouse = true;
+    SDL_GetMouseState(&oldX, &oldY);
+    SDL_SetWindowRelativeMouseMode(context.getWindow(), true);
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+    // Clear any initial delta movement
+    (void)SDL_GetRelativeMouseState(nullptr, nullptr); 
+}
+
+void ViewportPanel::endMouseCapture() {
+    if (!isCapturingMouse)
+        return;
+    isCapturingMouse = false;
+    SDL_SetWindowRelativeMouseMode(context.getWindow(), false);
+    ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    SDL_WarpMouseInWindow(context.getWindow(), oldX, oldY);
+
+    auto* camera = scene.getActiveCamera();
+    if (camera && camera->getArcballActive())
+        camera->setArcballActive(false);
+}
+
+void ViewportPanel::handleInput() {
+    // Stop capturing mouse
+    if (isCapturingMouse && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        endMouseCapture();
+        return; // Consume the event, don't start a new action
+    }
+
+    if (!isViewportHovered)
+        return;
+
+    // Start camera movement
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        beginMouseCapture();
+        if (ImGui::IsKeyDown(ImGuiKey_LeftAlt)) // Start Arcball
+            handlePositionPicking();
+    }
+
+    // Handle object picking (only if not using a gizmo or moving the camera)
+    if (!isCapturingMouse && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsUsing() && !ImViewGuizmo::IsUsing() && !ImViewGuizmo::IsOver() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        handleObjectPicking();
+}
+
+void ViewportPanel::handleTransformGizmo() {
+    const auto activeObject = scene.getActiveObject();
+    if (!activeObject)
+        return;
+
     auto* camera = scene.getActiveCamera();
     
-    // ... (Gizmo handling is unchanged) ...
-    if (const auto activeObject = scene.getActiveObject()) {
-        ImGuizmo::Style& style = ImGuizmo::GetStyle();
-        const float scale = std::max(imageSize.x / 1080.0f, 0.5f);
-        style.TranslationLineThickness = 4.0f * scale;
-        style.TranslationLineArrowSize = 6.0f * scale;
-        style.RotationLineThickness = 6.0f * scale;
-        style.RotationOuterLineThickness = 2.0f * scale;
-        style.ScaleLineThickness = 4.0f * scale;
-        style.ScaleLineCircleSize = 8.0f * scale;
-        style.CenterCircleSize = 5.0f * scale;
+    ImGuizmo::Style& style = ImGuizmo::GetStyle();
+    style.TranslationLineThickness = 4.0f * uiScale;
+    style.TranslationLineArrowSize = 6.0f * uiScale;
+    style.RotationLineThickness = 6.0f * uiScale;
+    style.RotationOuterLineThickness = 2.0f * uiScale;
+    style.ScaleLineThickness = 4.0f * uiScale;
+    style.ScaleLineCircleSize = 8.0f * uiScale;
+    style.CenterCircleSize = 5.0f * uiScale;
 
-        ImGuizmo::BeginFrame();
-        ImGuizmo::SetRect(imagePos.x, imagePos.y, imageSize.x, imageSize.y);
-        ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
-        if (isImageHovered) {
-            if (ImGui::IsKeyPressed(ImGuiKey_W))
-                currentOperation = ImGuizmo::TRANSLATE;
-            if (ImGui::IsKeyPressed(ImGuiKey_E))
-                currentOperation = ImGuizmo::ROTATE;
-            if (ImGui::IsKeyPressed(ImGuiKey_R))
-                currentOperation = ImGuizmo::SCALE;
-        }
-        
-        const mat4& view = camera->getViewMatrix();
-        mat4 proj = camera->getProjectionMatrix();
-        mat4 model = activeObject->getWorldTransform().getMatrix();
-        if (ImGuizmo::Manipulate(value_ptr(view), value_ptr(proj), currentOperation, currentMode, value_ptr(model)))
-            activeObject->setWorldTransformFromMatrix(model);
-    }
+    ImGuizmo::BeginFrame();
+    ImGuizmo::SetRect(viewportPos.x, viewportPos.y, viewportSize.x, viewportSize.y);
+    ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
 
-    // Handle All Camera and Picking Input
-    SDL_Window* sdlWindow = context.getWindow();
-
-    // Handle Stopping Camera Movement (triggers on mouse release)
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
-        if (isCapturingMouse) { // Stop either FPS or Arcball mode capture
-            isCapturingMouse = false;
-            SDL_SetWindowRelativeMouseMode(sdlWindow, false);
-            ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-            SDL_WarpMouseInWindow(sdlWindow, oldX, oldY);
-        }
-        if (camera->getArcballActive()) // Stop Arcball mode logic
-            camera->setArcballActive(false);
-    }
-
-    // Handle Starting Camera Movement (triggers on the first frame of a click)
-    if (isImageHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-        if (ImGui::IsKeyDown(ImGuiKey_LeftAlt)) {
-            // --- START ARCBALL ---
-            // Save cursor position and capture mouse
-            SDL_GetMouseState(&oldX, &oldY);
-            isCapturingMouse = true;
-            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
-            SDL_SetWindowRelativeMouseMode(sdlWindow, true);
-
-            // Set pivot and clear initial mouse delta
-            const ImVec2 mousePos = ImGui::GetMousePos();
-            const ImVec2 windowPos = ImGui::GetItemRectMin();
-            const int32_t pixelX = static_cast<int32_t>(std::clamp((mousePos.x - windowPos.x) / imageSize.x, 0.f, 1.f) * static_cast<float>(width));
-            const int32_t pixelY = static_cast<int32_t>(std::clamp((mousePos.y - windowPos.y) / imageSize.y, 0.f, 1.f) * static_cast<float>(height));
-            handlePositionPicking(pixelX, pixelY);
-            (void)SDL_GetRelativeMouseState(nullptr, nullptr);
-        } else {
-            // --- START FPS ---
-            SDL_GetMouseState(&oldX, &oldY);
-            isCapturingMouse = true;
-            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
-            SDL_SetWindowRelativeMouseMode(sdlWindow, true);
-            (void)SDL_GetRelativeMouseState(nullptr, nullptr);
-        }
-    }
-
-    // ..Object picking
-    if (isImageHovered && !ImGuizmo::IsUsing() && !ImViewGuizmo::IsUsing() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const ImVec2 mousePos = ImGui::GetMousePos();
-        const ImVec2 windowPos = ImGui::GetItemRectMin();
-        const int32_t pixelX = static_cast<int32_t>(std::clamp((mousePos.x - windowPos.x) / imageSize.x, 0.f, 1.f) * static_cast<float>(width));
-        const int32_t pixelY = static_cast<int32_t>(std::clamp((mousePos.y - windowPos.y) / imageSize.y, 0.f, 1.f) * static_cast<float>(height));
-        handleObjectPicking(pixelX, pixelY);
+    if (isViewportHovered) {
+        if (ImGui::IsKeyPressed(ImGuiKey_W)) currentOperation = ImGuizmo::TRANSLATE;
+        if (ImGui::IsKeyPressed(ImGuiKey_E)) currentOperation = ImGuizmo::ROTATE;
+        if (ImGui::IsKeyPressed(ImGuiKey_R)) currentOperation = ImGuizmo::SCALE;
     }
     
-    // The camera update is called as long as either mode is active.
-    if (isCapturingMouse)
-        camera->update();
-    
-    // Get the camera's current state
+    const mat4& view = camera->getViewMatrix();
+    mat4 proj = camera->getProjectionMatrix();
+    mat4 model = activeObject->getWorldTransform().getMatrix();
+
+    if (ImGuizmo::Manipulate(value_ptr(view), value_ptr(proj), currentOperation, currentMode, value_ptr(model)))
+        activeObject->setWorldTransformFromMatrix(model);
+}
+
+void ViewportPanel::handleViewGizmo() const {
+    auto* camera = scene.getActiveCamera();
+    if (!camera)
+        return;
+
+    ImViewGuizmo::Style& style = ImViewGuizmo::GetStyle();
+    style.scale = uiScale;
+
     vec3 position = camera->getPosition();
     quat rotation = camera->getRotation();
-    if (ImViewGuizmo::Manipulate(position, rotation,  ImVec2(imagePos.x + imageSize.x, imagePos.y), 256.f))
-    {
+
+    ImViewGuizmo::BeginFrame();
+    bool wasModified = false;
+    
+    ImVec2 gizmoPos = {viewportPos.x + viewportSize.x - 100.f * uiScale, viewportPos.y + 100.f * uiScale};
+    wasModified |= ImViewGuizmo::Rotate(position, rotation, gizmoPos);
+    
+    gizmoPos.x += 30.f * uiScale; gizmoPos.y += 90.f * uiScale;
+    wasModified |= ImViewGuizmo::Zoom(position, rotation, gizmoPos);
+    
+    gizmoPos.y += 60.f * uiScale;
+    wasModified |= ImViewGuizmo::Pan(position, rotation, gizmoPos);
+
+    if (wasModified) {
         camera->setPosition(position);
         camera->setRotation(rotation);
     }
+}
+
+void ViewportPanel::renderToolbar() {
+    const ImVec2 toolbarOffset(10.0f * uiScale, 80.0f * uiScale); 
+    ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x, viewportPos.y + toolbarOffset.y));
+
+    const float buttonSize = 50.0f * uiScale;
+    const ImVec2 buttonVecSize(buttonSize, buttonSize);
+    const float rounding = 10.0f * uiScale;
+    const float spacing = 5.0f * uiScale;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.8f);
+
+    const ImVec4& activeColor = ImGui::GetStyle().Colors[ImGuiCol_ButtonActive];
+    const ImVec4& normalColor = ImGui::GetStyle().Colors[ImGuiCol_Button];
+    
+    // Translate Button
+    ImGui::PushStyleColor(ImGuiCol_Button, (currentOperation == ImGuizmo::TRANSLATE) ? activeColor : normalColor);
+    if (ImGui::Button("T", buttonVecSize))
+        currentOperation = ImGuizmo::TRANSLATE;
+    ImGui::PopStyleColor();
+
+    ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x,  ImGui::GetCursorScreenPos().y + spacing));
+
+    // Rotate Button
+    ImGui::PushStyleColor(ImGuiCol_Button, (currentOperation == ImGuizmo::ROTATE) ? activeColor : normalColor);
+    if (ImGui::Button("R", buttonVecSize))
+        currentOperation = ImGuizmo::ROTATE;
+    ImGui::PopStyleColor();
+
+    ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x, ImGui::GetCursorScreenPos().y + spacing));
+
+    // Scale Button
+    ImGui::PushStyleColor(ImGuiCol_Button, (currentOperation == ImGuizmo::SCALE) ? activeColor : normalColor);
+    if (ImGui::Button("S", buttonVecSize))
+        currentOperation = ImGuizmo::SCALE;
+    ImGui::PopStyleColor();
+
+    ImGui::PopStyleVar(2); // Pop FrameRounding and Alpha
+}
+
+void ViewportPanel::renderUi() {
+    ImGui::Begin(name.c_str());
+
+    updateLayout();
+
+    drawBackground();
+    drawImageAndUpdateState();
+
+    renderToolbar();
+    handleTransformGizmo();
+    handleViewGizmo();
+    handleInput();
+    
+    if (isCapturingMouse)
+        scene.getActiveCamera()->update();
     
     ImGui::End();
 }
 
-void ViewportPanel::handlePositionPicking(const int32_t pixelX, const int32_t pixelY) const {
+void ViewportPanel::handlePositionPicking() const {
+
+    const ivec2 pixelCoords = screenToPixel();
+    
     auto* camera = scene.getActiveCamera();
     if (!camera)
         return;
 
     vk::BufferImageCopy copyRegion{};
     copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.imageOffset = vk::Offset3D{pixelX, pixelY, 0};
+    copyRegion.imageOffset = vk::Offset3D{pixelCoords.x, pixelCoords.y, 0};
     copyRegion.imageExtent = vk::Extent3D{1, 1, 1};
 
     context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
@@ -236,17 +338,19 @@ void ViewportPanel::handlePositionPicking(const int32_t pixelX, const int32_t pi
         position = vec3(f[0], f[1], f[2]);
     }
 
-    std::cout << "Picked Position: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
+    LOG_INFO( "Picked Position: (" << position.x << ", " << position.y << ", " << position.z << ")");
     
     camera->setArcballPivot(position);
     camera->setArcballActive(true);
 }
 
 
-void ViewportPanel::handleObjectPicking(const int32_t pixelX, const int32_t pixelY) const {    
+void ViewportPanel::handleObjectPicking() const {
+    const ivec2 pixel = screenToPixel();
+    
     vk::BufferImageCopy copyRegion{};
     copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.imageOffset = vk::Offset3D{ pixelX, pixelY, 0 };
+    copyRegion.imageOffset = vk::Offset3D{ pixel.x, pixel.y, 0 };
     copyRegion.imageExtent = vk::Extent3D{ 1, 1, 1 };
     
     context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
@@ -259,7 +363,7 @@ void ViewportPanel::handleObjectPicking(const int32_t pixelX, const int32_t pixe
     if (cryptoStagingBufferMappedPtr)
         instanceId = *static_cast<uint32_t*>(cryptoStagingBufferMappedPtr);
 
-    std::cout << "Picked instance ID: " << instanceId << std::endl;
+    LOG_INFO( "Picked instance ID: " << instanceId);
     
     if (instanceId != INVALID_INSTANCE && instanceId < scene.getMeshInstances().size()) {
         const MeshInstance* pickedInstance = scene.getMeshInstances()[instanceId];
@@ -296,16 +400,11 @@ void ViewportPanel::recordCopy(const vk::CommandBuffer cmd, Image& srcImage) {
 
 
 ViewportPanel::~ViewportPanel() {
-    if (cryptoStagingBufferMappedPtr) {
+    if (cryptoStagingBufferMappedPtr)
         context.getDevice().unmapMemory(cryptoStagingBuffer.getMemory());
-        cryptoStagingBufferMappedPtr = nullptr;
-    }
     
     if (positionStagingBufferMappedPtr)
-    {
         context.getDevice().unmapMemory(positionStagingBuffer.getMemory());
-        positionStagingBufferMappedPtr = nullptr;
-    }
 
-    std::cout << "Destroying ViewportPanel" << std::endl;
+    LOG_INFO( "Destroying ViewportPanel");
 }

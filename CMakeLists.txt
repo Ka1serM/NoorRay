@@ -17,7 +17,7 @@ add_subdirectory(external/json)
 # tinygltf (header-only)
 add_library(tinygltf INTERFACE)
 target_include_directories(tinygltf INTERFACE
-    ${PROJECT_SOURCE_DIR}/external/tinygltf
+        ${PROJECT_SOURCE_DIR}/external/tinygltf
 )
 
 # Vulkan (Find Vulkan normally)
@@ -118,21 +118,51 @@ if(APPLE)
             MACOSX_BUNDLE_ICON_FILE "icon.icns"
     )
 
+    # Vulkan loader bundling and @rpath fix
     if(DEFINED ENV{VULKAN_SDK})
         set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/lib/libvulkan.1.dylib")
-        add_custom_command(TARGET NoorRay POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${VULKAN_LOADER_DYLIB}"
-                "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
-                COMMENT "Bundling Vulkan loader for macOS..."
-        )
+        if(EXISTS "${VULKAN_LOADER_DYLIB}")
+            add_custom_command(TARGET NoorRay POST_BUILD
+                    # Ensure Frameworks folder exists
+                    COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks"
+
+                    # Copy the Vulkan loader
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${VULKAN_LOADER_DYLIB}"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
+
+                    # Fix binary to use @rpath/libvulkan.1.dylib
+                    COMMAND /usr/bin/install_name_tool -change
+                    "${VULKAN_LOADER_DYLIB}"
+                    "@rpath/libvulkan.1.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
+
+                    # Add rpath to point to Frameworks folder
+                    COMMAND /usr/bin/install_name_tool -add_rpath
+                    "@executable_path/../Frameworks"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
+
+                    # Fix the dylib's own ID
+                    COMMAND /usr/bin/install_name_tool -id
+                    "@rpath/libvulkan.1.dylib"
+                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
+
+                    COMMENT "Bundling Vulkan loader and fixing @rpath for NoorRay"
+            )
+        else()
+            message(FATAL_ERROR "Vulkan loader not found at ${VULKAN_LOADER_DYLIB}")
+        endif()
     endif()
 
-    target_sources(NoorRay PRIVATE
-            assets/icons/icon.icns
-    )
-    set_source_files_properties(assets/icon.icns PROPERTIES
-            MACOSX_PACKAGE_LOCATION "Resources"
+    # Icon handling: ensure Resources folder exists and copy icon
+    add_custom_command(TARGET NoorRay POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
+            COMMENT "Copying app icon into Resources folder"
     )
 
 endif()

@@ -2,7 +2,7 @@
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_beta.h> //needed for portability subset extension (Apple)
+#include <vulkan/vulkan_beta.h>
 #include <vector>
 #include <functional>
 #include <mutex>
@@ -36,12 +36,10 @@ class Context {
     float dpiScale;
 
     vk::UniqueInstance instance;
-    vk::UniqueDebugUtilsMessengerEXT debugMessenger;
-    vk::UniqueDebugUtilsMessengerEXT debugPrintfMessenger;
+    vk::UniqueDebugUtilsMessengerEXT messenger;
     vk::UniqueSurfaceKHR surface;
     vk::PhysicalDevice physicalDevice;
     vk::UniqueDevice device;
-
     vk::Queue queue;
     uint32_t queueFamilyIndex = UINT32_MAX;
     vk::UniqueCommandPool commandPool;
@@ -50,6 +48,7 @@ class Context {
     bool rtxSupported = false;
 
     void createVulkanInstance();
+    bool checkValidationLayerSupport();
     void pickPhysicalDevice();
     void createLogicalDevice();
 
@@ -63,14 +62,8 @@ public:
     vk::PresentModeKHR chooseSwapPresentMode() const;
     vk::SurfaceFormatKHR chooseSwapSurfaceFormat() const;
 
-    // Static callbacks
+    // Static callback with corrected C++ types
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugUtilsMessengerCallback(
-        vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-        vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
-        const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData);
-
-    static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugPrintfCallback(
         vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
         vk::DebugUtilsMessageTypeFlagsEXT messageTypes,
         const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
@@ -91,7 +84,7 @@ public:
     const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
 
-    bool queryWindowSize();
+    void queryWindowSize();
 
     bool isRtxSupported() const { return rtxSupported; }
 };

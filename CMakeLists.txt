@@ -30,7 +30,7 @@ if(APPLE AND DEFINED ENV{VULKAN_SDK})
         add_library(MoltenVK SHARED IMPORTED)
         set_target_properties(MoltenVK PROPERTIES
                 IMPORTED_LOCATION "${MOLTENVK_DYLIB}"
-                INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/macOS/include"
+                INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include"
         )
     else()
         message(FATAL_ERROR "MoltenVK dylib not found at expected path: ${MOLTENVK_DYLIB}")

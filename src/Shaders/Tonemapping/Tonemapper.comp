@@ -6,7 +6,7 @@
 layout(local_size_x = GROUP_SIZE, local_size_y = GROUP_SIZE) in;
 
 layout(binding = 0, rgba32f) readonly uniform image2D inputImage;
-layout(binding = 1, bgra8) writeonly uniform image2D outputImage;
+layout(binding = 1, rgba8) writeonly uniform image2D outputImage;
 
 // Column-major matrices for GLSL
 const mat3 ACESInputMat = mat3(

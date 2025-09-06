@@ -14,14 +14,14 @@
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1), swapchainFormat({vk::Format::eUndefined}) {
+Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1), swapchainFormat(vk::Format::eUndefined) {
     try {
-        if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
             throw std::runtime_error("Failed to initialize SDL.");
         }
 
-        if (SDL_Vulkan_LoadLibrary(nullptr) < 0) {
+        if (!SDL_Vulkan_LoadLibrary(nullptr)) {
             std::cerr << "[FATAL] Failed to load Vulkan library via SDL: " << SDL_GetError() << std::endl;
             throw std::runtime_error("Failed to load Vulkan library.");
         }

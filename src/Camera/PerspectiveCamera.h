@@ -9,7 +9,6 @@ class Scene;
 
 class PerspectiveCamera : public SceneObject {
 
-private:
     float aspectRatio;
     float sensorWidth;   // mm
     float sensorHeight;  // mm
@@ -21,10 +20,8 @@ private:
 
     bool arcballMode = false;
     vec3 arcballPivot = vec3(0.0f);
+    
 public:
-    void setArcballActive(const bool enabled) { arcballMode = enabled; }
-    void setArcballPivot(const vec3& pivot) { /* arcballPivot = pivot; */ }
-    bool getArcballActive() const { return arcballMode;}
     
     PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
     PerspectiveCamera(const PerspectiveCamera& other);
@@ -38,6 +35,7 @@ public:
     float getSensorWidth() const { return sensorWidth; }
     float getSensorHeight() const { return sensorHeight; }
     CameraData getCameraData() const { return cameraData; }
+    bool getArcballActive() const { return arcballMode;}
 
     mat4 getViewMatrix() const;
     mat4 getProjectionMatrix() const;
@@ -47,6 +45,8 @@ public:
     void setFocusDistance(float val);
     void setBokehBias(float val);
     void setSensorSize(float width, float height);
+    void setArcballActive(const bool enabled) { arcballMode = enabled; }
+    void setArcballPivot(const vec3& pivot) { /* arcballPivot = pivot; */ }
 
     void update();
     void renderUi() override;

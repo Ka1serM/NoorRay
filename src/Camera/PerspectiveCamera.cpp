@@ -10,9 +10,13 @@
 #include "UI/ImGuiManager.h"
 #include "Scene/Scene.h"
 
-static constexpr auto FRONT = vec3(0, 0, 1);
+// We keep WORLD_UP for yaw calculations in the fly-camera to maintain a stable horizon,
+// but we will no longer use it to derive the camera's local orientation.
 static constexpr auto WORLD_UP = vec3(0.0f, -1.0f, 0.0f);
-static constexpr auto VULKAN_Z_PLUS = vec3(0.0f, 0.0f, 1.0f);
+static constexpr auto LOCAL_FORWARD = vec3(0.0f, 0.0f, 1.0f);
+static constexpr auto LOCAL_UP = vec3(0.0f, -1.0f, 0.0f);
+static constexpr auto LOCAL_RIGHT = vec3(1.0f, 0.0f, 0.0f);
+
 
 PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) 
     : SceneObject(scene, name, transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
@@ -45,13 +49,17 @@ std::unique_ptr<SceneObject> PerspectiveCamera::clone() const {
 
 void PerspectiveCamera::updateCameraData() {
     cameraData.position = getPosition();
-    cameraData.direction = normalize(getRotation() * VULKAN_Z_PLUS); // Vulkan +Z;
+    // The world-space direction is the local-space forward vector transformed by the camera's rotation
+    cameraData.direction = normalize(getRotation() * LOCAL_FORWARD);
 }
 
 void PerspectiveCamera::updateHorizontalVertical() {
-    const vec3 direction = cameraData.direction;
-    const vec3 right = normalize(cross(direction, WORLD_UP));
-    const vec3 up = normalize(cross(right, direction));
+    // --- MODIFIED ---
+    // Calculate right and up vectors directly from the quaternion.
+    // This makes them dynamic and avoids dependency on a fixed WORLD_UP.
+    const quat orientation = getRotation();
+    const vec3 right = normalize(orientation * LOCAL_RIGHT);
+    const vec3 up = normalize(orientation * LOCAL_UP);
 
     cameraData.horizontal = right * sensorWidth * 0.001f; // Convert mm to meters
     cameraData.vertical = up * sensorWidth / aspectRatio * 0.001f; // Convert mm to meters
@@ -59,8 +67,12 @@ void PerspectiveCamera::updateHorizontalVertical() {
 
 mat4 PerspectiveCamera::getViewMatrix() const
 {
+    // --- MODIFIED ---
+    // The 'up' vector for lookAt must now be dynamic, calculated from the camera's rotation.
+    // This prevents the view matrix from becoming unstable when looking straight up or down.
+    const vec3 dynamicUp = normalize(getRotation() * LOCAL_UP);
     const vec3 target = getPosition() + cameraData.direction;
-    return lookAt(getPosition(), target, WORLD_UP);
+    return lookAt(getPosition(), target, dynamicUp);
 }
 
 mat4 PerspectiveCamera::getProjectionMatrix() const {
@@ -109,47 +121,48 @@ void PerspectiveCamera::update() {
     if (arcballMode) {
         vec3 position = getPosition();
         quat orientation = getRotation();
-
-        // MOVEMENT LOGIC
-        float moveSpeed = io.DeltaTime * 5.0f; // Base speed for movement
+        
+        float moveSpeed = io.DeltaTime * 5.0f;
         if (ImGui::IsKeyDown(ImGuiKey_LeftShift))
-            moveSpeed *= 10.0f; // Speed up with Shift key
+            moveSpeed *= 10.0f;
 
-        // Zoom (W/S): Move along the vector from the pivot to the camera
         const vec3 directionToCamera = normalize(position - arcballPivot);
         if (ImGui::IsKeyDown(ImGuiKey_W))
             position -= directionToCamera * moveSpeed;
         if (ImGui::IsKeyDown(ImGuiKey_S))
             position += directionToCamera * moveSpeed;
 
-        // 2. Calculate the rotation quaternions from mouse input
         constexpr float sensitivity = 0.004f;
         const float yawAngle = -dx * sensitivity;
         const float pitchAngle = -dy * sensitivity;
         
         const quat yawQuat = angleAxis(yawAngle, WORLD_UP);
-        const vec3 localRight = orientation * vec3(1, 0, 0);
+        const vec3 localRight = orientation * LOCAL_RIGHT;
         const quat pitchQuat = angleAxis(pitchAngle, localRight);
 
-        // 3. Update the camera's position (based on rotation and new zoom/pan)
         vec3 offset = position - arcballPivot;
         offset = yawQuat * pitchQuat * offset;
         setPosition(arcballPivot + offset);
     
-        // 4. Update the camera's orientation
         setRotation(normalize(yawQuat * pitchQuat * orientation));
     }
     else {
+        // Refactored fly-camera controls to be fully quaternion-based and robust.
         constexpr float sensitivity = 0.1f;
         const float yaw = radians(-dx * sensitivity);
         const float pitch = radians(-dy * sensitivity);
 
         quat rot = getRotation();
-        vec3 forward = rot * FRONT;
-        vec3 right = normalize(cross(forward, WORLD_UP));
+        
+        // Yaw around the world's up-axis to keep the horizon stable.
         quat yawQuat = angleAxis(yaw, WORLD_UP);
-        quat pitchQuat = angleAxis(pitch, right);
-        quat newRot = normalize(pitchQuat * yawQuat * rot);
+        
+        // Pitch around the camera's local right-axis. This is key to avoiding gimbal lock.
+        const vec3 rightDir = rot * LOCAL_RIGHT;
+        quat pitchQuat = angleAxis(pitch, rightDir);
+
+        // Combine rotations and apply to the camera. Order matters.
+        quat newRot = normalize(yawQuat * pitchQuat * rot);
         setRotation(newRot);
 
         // Movement
@@ -158,14 +171,16 @@ void PerspectiveCamera::update() {
             speed *= 10.0f;
 
         vec3 position = getPosition();
-        forward = newRot * vec3(0, 0, 1);
-        right = normalize(cross(forward, WORLD_UP));
-        vec3 upDir = WORLD_UP;
+        
+        // Calculate movement vectors directly from the new rotation
+        const vec3 forwardDir = newRot * LOCAL_FORWARD;
+        const vec3 upDir = newRot * LOCAL_UP;
+        const vec3 finalRightDir = normalize(cross(forwardDir, upDir));
 
-        if (ImGui::IsKeyDown(ImGuiKey_W)) position += forward * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_S)) position -= forward * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_A)) position -= right * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_D)) position += right * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_W)) position += forwardDir * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) position -= forwardDir * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) position -= finalRightDir * speed;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) position += finalRightDir * speed;
         if (ImGui::IsKeyDown(ImGuiKey_E)) position += upDir * speed;
         if (ImGui::IsKeyDown(ImGuiKey_Q)) position -= upDir * speed;
 

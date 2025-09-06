@@ -6,6 +6,7 @@
 #include <iostream>
 #include <future>
 
+#include "Log.h"
 #include "Scene/SceneImporter.h"
 
 MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene)
@@ -96,10 +97,9 @@ void MainMenuBar::handleFileImport(const std::string& filePath, const FileType t
             case FileType::OBJ:
                 SceneImporter::ImportObjScene(scene, filePath);
                 break;
-            case FileType::CRTSCENE:
-                SceneImporter::ImportCrtScene(scene, filePath);
+            case FileType::GLTF:
+                SceneImporter::ImportGltfScene(scene, filePath);
                 break;
-        
             case FileType::TEXTURE:
                 scene.add(Texture(context, filePath));
                 break;
@@ -107,7 +107,7 @@ void MainMenuBar::handleFileImport(const std::string& filePath, const FileType t
                 break;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Import failed: " << e.what() << std::endl;
+       LOG_ERROR("Import failed: " << e.what());
     }
 }
 
@@ -134,11 +134,11 @@ void MainMenuBar::renderFileMenu() {
                 pendingFileType = FileType::OBJ;
             }
 
-            if (ImGui::MenuItem("Chaos Camp .crtscene")) {
+            if (ImGui::MenuItem("Khronos .gltf")) {
                 openFuture = std::async(std::launch::async, [] {
-                    return pfd::open_file("Import CrtScene", ".", { "CRT Scene Files", "*.crtscene", "All Files", "*" }).result();
+                    return pfd::open_file("Import GLTF", ".", { "GLTF Files", "*.gltf *.glb","All Files", "*" }).result();
                 });
-                pendingFileType = FileType::CRTSCENE;
+                pendingFileType = FileType::GLTF;
             }
 
             if (ImGui::MenuItem("Bitmap Texture")) {

@@ -11,14 +11,15 @@
 
 class ViewportPanel : public ImGuiComponent {
 public:
-
+    ivec2 screenToPixel() const;
     void renderUi() override;
-    void handleObjectPicking(int32_t pixelX, int32_t pixelY) const;
-    void handlePositionPicking(int32_t pixelX, int32_t pixelY) const;
+    void handleObjectPicking() const;
+    void handlePositionPicking() const;
     void recordCopy(vk::CommandBuffer cmd, Image& srcImage);
     ~ViewportPanel() override;
 
     ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, uint32_t width, uint32_t height);
+    void updateLayout();
 
 private:
     Context& context;
@@ -41,9 +42,27 @@ private:
 
    Buffer positionStagingBuffer; // Staging buffer for picking
    void* positionStagingBufferMappedPtr = nullptr;
-
+    
     bool isCapturingMouse = false;
     float oldX = 0.f, oldY = 0.f;
+
+    ImVec2 viewportPos{};   // Top-left corner of the viewport image on the screen
+    ImVec2 viewportSize{};
+    
+    bool isViewportHovered{false};
+    float uiScale{1.0f};
+
+    void drawBackground() const;
+    void drawImageAndUpdateState();
+
+    void handleInput();
+    void handleTransformGizmo();
+    void handleViewGizmo() const;
+    void renderToolbar();
+
+    void beginMouseCapture();
+    void endMouseCapture();
+    
     ImGuizmo::OPERATION currentOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE currentMode = ImGuizmo::LOCAL;
 };

@@ -9,6 +9,8 @@
 #include "Vulkan/Context.h"
 #include <array>
 
+#include "Log.h"
+
 ImGuiManager::ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages)
     : context(context)
 {
@@ -78,7 +80,7 @@ ImGuiManager::~ImGuiManager() {
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
-    std::cout << "Destroyed ImGuiManager" << std::endl;
+    LOG_INFO( "Destroyed ImGuiManager");
 }
 
 void ImGuiManager::recreateForSwapChain(const std::vector<vk::Image>& swapchainImages)

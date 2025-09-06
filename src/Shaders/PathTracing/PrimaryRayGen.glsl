@@ -154,8 +154,6 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
                 if(sampleIndex == 0) {
                     imageStore(outputCrypto, pixelCoord, uvec4(payload.objectIndex, 0, 0, 0));
                     imageStore(outputPosition, pixelCoord, vec4(payload.position, 0));
-                    debugPrintfEXT("Instance ID = %u\n", payload.objectIndex);
-                    debugPrintfEXT("Position = (%f, %f, %f)\n", payload.position.x, payload.position.y, payload.position.z);
                 }
                 
                 hitAnything = ((payload.flags & ENV_TRANSPARENT) == 0u);

@@ -29,7 +29,7 @@ public:
     ~GpuRaytracer() override
     {
         context.getDevice().waitIdle();
-        std::cout << "Destroying GpuRaytracer" << std::endl;
+        LOG_INFO( "Destroying GpuRaytracer");
     }    
     
     void createDescriptorSet(std::vector<vk::DescriptorSetLayoutBinding> bindings)

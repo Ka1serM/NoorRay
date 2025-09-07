@@ -125,7 +125,7 @@ float fresnelDielectric(float cosThetaI, float etaI, float etaT) {
     return 0.5 * (Rs * Rs + Rp * Rp);
 }
 
-void handleDielectricBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, float roughness, float ior, vec3 transmissionColor, inout Payload payload) {
+void handleDielectricBSDF(vec3 viewDir, vec3 shadingNormal, float roughness, float ior, vec3 transmissionColor, inout Payload payload) {
     payload.flags |= BOUNCE_TRANSMIT;
 
     vec3 Ns_shading = shadingNormal;
@@ -137,7 +137,7 @@ void handleDielectricBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal
     vec3 I = normalize(-viewDir);
     float etaI = 1.0, etaT = ior;
     
-    vec3 N_geo = geometricNormal;
+    vec3 N_geo = shadingNormal;
     bool exiting = dot(I, N_geo) > 0.0;
     if (exiting) {
         N_geo = -N_geo;
@@ -162,17 +162,13 @@ void handleDielectricBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal
     }
 }
 
-void handleOpaqueBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, vec3 albedo, float metallic, float specular, float roughness, inout Payload payload) {
+void handleOpaqueBSDF(vec3 viewDir, vec3 shadingNormal, vec3 albedo, float metallic, float specular, float roughness, inout Payload payload) {
     float NdotV = dot(shadingNormal, viewDir);
 
     vec3 normal = shadingNormal;
     if (NdotV < 0.0)
         normal = -normal;
-
-    vec3 geoNormal = geometricNormal;
-    if (dot(geometricNormal, viewDir) < 0.0)
-            geoNormal = - geoNormal;
-
+    
     float probSpecular = mix(fresnelDielectric(abs(NdotV), 1.0, 1.5), 1.0, metallic);
 
     vec3 sampledDir;
@@ -204,11 +200,9 @@ void handleOpaqueBSDF(vec3 viewDir, vec3 geometricNormal, vec3 shadingNormal, ve
     float combinedPdf = max(probSpecular * pdfSpecular + (1.0 - probSpecular) * pdfDiffuse, EPSILON);
     
     payload.attenuation = combinedBRDF * max(dot(normal, sampledDir), 0.0) / combinedPdf;
-     
-    payload.position += geoNormal * 0.001;
 }
 
-void shadeClosestHit(in vec3 worldPosition, in vec3 geometricNormal, in vec3 shadingNormal, in vec3 interpolatedTangent, in vec2 interpolatedUV, in vec3 worldRayDirection, in Material material, inout Payload payload) {
+void shadeClosestHit(in vec3 worldPosition, in vec3 shadingNormal, in vec3 interpolatedTangent, in vec2 interpolatedUV, in vec3 worldRayDirection, in Material material, inout Payload payload) {
     payload.position = worldPosition;
 
     float opacity = material.opacity;
@@ -262,9 +256,9 @@ void shadeClosestHit(in vec3 worldPosition, in vec3 geometricNormal, in vec3 sha
 
     vec3 viewDir = -worldRayDirection;
     if (rand(payload.rngState) < transmission)
-        handleDielectricBSDF(viewDir, geometricNormal, shadingNormalTextured, roughness, material.ior, material.transmissionColor, payload);
+        handleDielectricBSDF(viewDir, shadingNormalTextured, roughness, material.ior, material.transmissionColor, payload);
     else
-        handleOpaqueBSDF(viewDir, geometricNormal, shadingNormalTextured, albedo, metallic, specular, roughness, payload);
+        handleOpaqueBSDF(viewDir, shadingNormalTextured, albedo, metallic, specular, roughness, payload);
 }
 
 #endif

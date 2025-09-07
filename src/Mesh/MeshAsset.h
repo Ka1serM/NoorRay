@@ -41,8 +41,8 @@ public:
     const Buffer& getFaceBuffer() const { return faceBuffer; }
     const Buffer& getMaterialBuffer() const { return materialBuffer; }
     
-    const Accel& getBlasGpu() const { return blasGpu; }
-    const BVH& getBlasCpu() const { return blasCpu; }
+    const Accel& getBlasGpu() const { return blasRtx; }
+    const BVH& getBlasCpu() const { return blasCompute; }
     
     // Dirty Flag
     bool isDirty() const { return dirty; }
@@ -67,6 +67,6 @@ private:
     Buffer materialBuffer;
 
     // Acceleration structures
-    Accel blasGpu;
-    BVH blasCpu;
+    Accel blasRtx;
+    BVH blasCompute;
 };

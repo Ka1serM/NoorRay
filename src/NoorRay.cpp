@@ -59,14 +59,17 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     scene.add(Texture(context, "HDRI Sky", hdriPixels, imgWidth, imgHeight, vk::Format::eR32G32B32A32Sfloat));
     stbi_image_free(hdriPixels);
 
-    auto sphere = MeshAsset::CreateSphere(scene, "Sphere", {});
+    auto sphereMaterial = Material{};
+    sphereMaterial.metallic = 1.0;
+    sphereMaterial.roughness = 0.2;
+    auto sphere = MeshAsset::CreateSphere(scene, "Sphere", sphereMaterial);
     scene.add(sphere);
     auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
     const uint32_t instanceIndex = scene.add(std::move(instance));
     scene.setActiveObjectIndex(instanceIndex);
     
     float aspectRatio = static_cast<float>(raytracer->getWidth()) / static_cast<float>(raytracer->getHeight());
-    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 0, 5.0f, 2.0f);
+    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 2.8, 5.0f, 2.0f);
     scene.add(std::move(cam));
 }
 

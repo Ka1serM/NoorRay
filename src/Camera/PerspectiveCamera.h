@@ -20,6 +20,14 @@ class PerspectiveCamera : public SceneObject {
 
     bool arcballMode = false;
     vec3 arcballPivot = vec3(0.0f);
+
+    
+    // We keep WORLD_UP for yaw calculations in the fly-camera to maintain a stable horizon,
+    // but we will no longer use it to derive the camera's local orientation.
+    static constexpr auto WORLD_UP = vec3(0.0f, -1.0f, 0.0f);
+    static constexpr auto LOCAL_FORWARD = vec3(0.0f, 0.0f, 1.0f);
+    static constexpr auto LOCAL_UP = vec3(0.0f, -1.0f, 0.0f);
+    static constexpr auto LOCAL_RIGHT = vec3(1.0f, 0.0f, 0.0f);
     
 public:
     

@@ -113,34 +113,47 @@ std::shared_ptr<MeshAsset> MeshAsset::CreatePlane(Scene& scene, const std::strin
 }
 
 std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::string& name, const Material& material, uint32_t latSeg, uint32_t lonSeg) {
+    // Ensure the sphere has enough segments to be properly formed.
     if (latSeg < 2 || lonSeg < 3)
-        throw std::runtime_error("Sphere segments too low.");
+        throw std::runtime_error("Sphere segments too low. Use at least 2 latitude and 3 longitude segments.");
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
     std::vector<Material> materials;
 
-    for (auto lat = 0; lat <= latSeg; ++lat) {
-        float theta = std::numbers::pi_v<float> * lat / latSeg;
+    constexpr float radius = 0.5f;
+
+    // Generate vertices in a grid pattern based on spherical coordinates.
+    // The grid is (lonSeg + 1) vertices wide and (latSeg + 1) vertices tall.
+    for (uint32_t lat = 0; lat <= latSeg; ++lat) {
+        float theta = std::numbers::pi_v<float> * lat / latSeg; // Polar angle from 0 to pi
         float sinTheta = std::sin(theta);
         float cosTheta = std::cos(theta);
 
         for (uint32_t lon = 0; lon <= lonSeg; ++lon) {
-            const float phi = 2.0f * std::numbers::pi_v<float> * lon / lonSeg;
+            float phi = 2.0f * std::numbers::pi_v<float> * lon / lonSeg; // Azimuthal angle from 0 to 2*pi
             float sinPhi = std::sin(phi);
             float cosPhi = std::cos(phi);
 
-            float x = cosPhi * sinTheta;
-            float y = cosTheta;
-            float z = sinPhi * sinTheta;
-
-            vec3 pos = {x * 0.5f, y * 0.5f, z * 0.5f};
-            vec3 normal = normalize(pos);
-
-            vec3 tangent = normalize(vec3{-sinPhi, 0.0f, cosPhi});
-
-            vec2 uv = {lon / static_cast<float>(lonSeg), lat / static_cast<float>(latSeg)};
+            // Calculate vertex attributes
+            vec3 normal = {cosPhi * sinTheta, cosTheta, sinPhi * sinTheta};
+            vec3 pos = normal * radius;
+            vec2 uv = {static_cast<float>(lon) / lonSeg, static_cast<float>(lat) / latSeg};
+            
+            vec3 tangent;
+            // At the poles, the derivative of position with respect to the azimuthal angle 'phi'
+            // is zero, making the tangent undefined. All vertices on the top/bottom rows share
+            // a single position but would get different tangents, causing lighting artifacts.
+            // We assign a fixed, consistent tangent to all vertices at each pole.
+            if (lat == 0) { // North Pole
+                tangent = vec3{1.0f, 0.0f, 0.0f};
+            } else if (lat == latSeg) { // South Pole
+                tangent = vec3{-1.0f, 0.0f, 0.0f};
+            } else {
+                // For all other vertices, the tangent runs along lines of latitude.
+                tangent = normalize(vec3{-sinPhi, 0.0f, cosPhi});
+            }
 
             vertices.push_back(Vertex{
                 pos, 0,
@@ -151,19 +164,22 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::stri
         }
     }
 
+    // Generate indices to form triangles for each quad in the grid
     for (uint32_t lat = 0; lat < latSeg; ++lat) {
         for (uint32_t lon = 0; lon < lonSeg; ++lon) {
-            uint32_t i0 = lat * (lonSeg + 1) + lon;
-            uint32_t i1 = (lat + 1) * (lonSeg + 1) + lon;
-            uint32_t i2 = i0 + 1;
-            uint32_t i3 = i1 + 1;
+            uint32_t i0 = lat * (lonSeg + 1) + lon;      // Top-left
+            uint32_t i1 = (lat + 1) * (lonSeg + 1) + lon; // Bottom-left
+            uint32_t i2 = i0 + 1;                         // Top-right
+            uint32_t i3 = i1 + 1;                         // Bottom-right
 
+            // Create two triangles for the quad. The winding order is CCW (Counter-Clockwise).
             indices.insert(indices.end(), {i0, i2, i1, i2, i3, i1});
         }
     }
 
     materials.push_back(material);
 
+    // Create a Face object for each generated triangle
     for (size_t i = 0; i < indices.size(); i += 3) {
         faces.push_back({0});
     }
@@ -221,13 +237,13 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
 MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
     : scene(scene), path(std::move(name)), vertices(vertices), indices(indices), faces(faces), materials(materials)
 {
-
     // Upload mesh data to GPU from the new member variable copies
     vertexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Vertex) * this->vertices.size(), this->vertices.data()};
     indexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(uint32_t) * this->indices.size(), this->indices.data()};
     faceBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Face) * this->faces.size(), this->faces.data()};
     materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Material) * this->materials.size(), this->materials.data()};
 
+    // Create bottom-level acceleration structure (BLAS)
     if (scene.getContext().isRtxSupported()) {
         vk::AccelerationStructureGeometryTrianglesDataKHR triangleData{};
         triangleData.setVertexFormat(vk::Format::eR32G32B32Sfloat);
@@ -241,18 +257,16 @@ MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>&
         geometry.setGeometryType(vk::GeometryTypeKHR::eTriangles);
         geometry.setGeometry({triangleData});
         geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
-
-        // Create bottom-level acceleration structure (BLAS) on the GPU
-        blasGpu.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
+        blasRtx.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
     }
     else
-        blasCpu.build(scene.getContext(), this->vertices, this->indices);
+        blasCompute.build(scene.getContext(), this->vertices, this->indices);
 }
 
 uint64_t MeshAsset::getBlasAddress() const {
     // Only return a valid GPU BLAS address if RTX is supported
     if (scene.getContext().isRtxSupported())
-        return blasGpu.getBuffer().getDeviceAddress();
+        return blasRtx.getBuffer().getDeviceAddress();
     return 0;
 }
 
@@ -262,7 +276,9 @@ MeshAddresses MeshAsset::getBufferAddresses() const {
         indexBuffer.getDeviceAddress(),
         faceBuffer.getDeviceAddress(),
         materialBuffer.getDeviceAddress(),
-        blasCpu.getBufferAddress()
+        //only used for Compute RT
+        blasCompute.getNodesBufferAddress(),
+        blasCompute.getIndicesBufferAddress()
     };
 }
 

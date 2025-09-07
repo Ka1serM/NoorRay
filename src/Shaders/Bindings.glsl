@@ -21,11 +21,13 @@ layout(set = 0, binding = 6) buffer MeshAddressesBuffer { MeshAddresses meshes[]
 // Binding 3: Global Texture Sampler Array
 layout(set = 0, binding = 7) uniform sampler2D textureSamplers[];
 
-// --- Buffer Reference Type Definitions ---
+// Buffer Reference Type Definitions 
 layout(buffer_reference, scalar) buffer VertexBuffer { Vertex data[]; };
 layout(buffer_reference, scalar) buffer IndexBuffer { uint data[]; };
 layout(buffer_reference, scalar) buffer FaceBuffer { Face data[]; };
 layout(buffer_reference, scalar) buffer MaterialBuffer { Material data[]; };
-layout(buffer_reference, scalar) buffer BVHBuffer { BVHNode data[]; };
+//only Compute RT
+layout(buffer_reference, scalar) buffer BVHNodeBuffer { BVHNode data[]; };
+layout(buffer_reference, scalar) buffer BVHIndexBuffer { uint data[]; };
 
 #endif

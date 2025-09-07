@@ -1,12 +1,9 @@
 name: Release Builder (macOS)
-
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: macos-15
-
     steps:
       - name: Change XCode Version
         uses: maxim-lobanov/setup-xcode@v1
@@ -35,36 +32,60 @@ jobs:
           echo "SDKROOT is set to $SDKROOT"
         shell: bash
 
-      - name: Install Vulkan SDK
+      - name: Cache Vulkan SDK directory
+        id: cache-vulkan
+        uses: actions/cache@v4
+        with:
+          path: ~/vulkan-sdk
+          key: vulkan-sdk-latest-v1-${{ runner.os }}
+
+      - name: Install Vulkan SDK (if not cached)
+        if: steps.cache-vulkan.outputs.cache-hit != 'true'
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           install_runtime: true
-          cache: true
+          cache: false
           stripdown: true
 
-      - name: Print full Vulkan SDK folder structure
+      - name: Set VULKAN_SDK Environment Variable from Cache/Install
         run: |
-          echo "VULKAN_SDK is at: $VULKAN_SDK"
-          find "$VULKAN_SDK"
+          SDK_PATH=$(find ~/vulkan-sdk -type d -name macOS | head -n 1)
+          if [ -z "$SDK_PATH" ]; then
+            echo "::error::Vulkan SDK could not be found in the expected location (~/vulkan-sdk)."
+            exit 1
+          fi
+          echo "Setting VULKAN_SDK to $SDK_PATH"
+          echo "VULKAN_SDK=$SDK_PATH" >> $GITHUB_ENV
+        shell: bash
+
       - name: Compile shaders
         run: |
           export PATH="$VULKAN_SDK/macOS/bin:$PATH"
           cd src/shaders
           chmod +x recompile.sh
           ./recompile.sh
-      - name: Install llvm@20
-        run: |
-          brew update
-          brew install llvm@20
+
+      - name: Get Homebrew Prefix
+        id: brew
+        run: echo "prefix=$(brew --prefix)" >> $GITHUB_OUTPUT
+
+      - name: Cache Homebrew LLVM
+        id: cache-llvm
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.brew.outputs.prefix }}/opt/llvm@20
+          key: llvm20-v1-${{ runner.os }}
+
+      - name: Install llvm@20 if not cached
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: brew install llvm@20
+
       - name: Configure and Build with llvm@20 Clang
         run: |
-          # Use correct LLVM keg path
           export LLVM_PREFIX=$(brew --prefix llvm@20)
           export PATH="$LLVM_PREFIX/bin:$PATH"
-          # Optional: LLVM include/lib flags if needed
           export LDFLAGS="-L$LLVM_PREFIX/lib"
           export CPPFLAGS="-I$LLVM_PREFIX/include"
-          # Clear old CMake cache to avoid wrong compiler paths
           rm -rf build
           export MACOSX_DEPLOYMENT_TARGET=11.0
           export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
@@ -79,12 +100,67 @@ jobs:
             -DCMAKE_OSX_SYSROOT=$SDKROOT
           cmake --build build --config Release
 
+      - name: Launch App, Wait, Capture Screenshot, and Terminate
+        run: |
+          set -e
+          APP_EXECUTABLE="build/NoorRay.app/Contents/MacOS/NoorRay"
+          STDOUT_LOG="stdout.log"
+          STDERR_LOG="stderr.log"
+          SCREENSHOT_PATH="NoorRay-screenshot.png"
+
+          echo "Launching application in background..."
+          # Execute the app, redirect logs, and run in the background (&)
+          # The 'exec' command replaces the shell process, ensuring we get the correct PID.
+          exec "$APP_EXECUTABLE" > "$STDOUT_LOG" 2> "$STDERR_LOG" &
+          APP_PID=$!
+          echo "Application started with PID: $APP_PID"
+
+          echo "Waiting 5 seconds for app to initialize..."
+          sleep 5
+
+          # Check if the process is still running before taking a screenshot
+          if ! ps -p $APP_PID > /dev/null; then
+            echo "::error::Application crashed or failed to start."
+          else
+            echo "Capturing screenshot..."
+            screencapture -x "$SCREENSHOT_PATH"
+            echo "Screenshot saved to $SCREENSHOT_PATH"
+
+            echo "Terminating application (PID: $APP_PID)..."
+            kill $APP_PID
+            echo "Application terminated."
+          fi
+        shell: bash
+
+      - name: Display Logs and Upload Screenshot
+        if: always()
+        run: |
+          echo "--- Standard Output (stdout.log) ---"
+          cat stdout.log || echo "stdout.log not found."
+          echo "--- Standard Error (stderr.log) ---"
+          cat stderr.log || echo "stderr.log not found."
+
+      - name: Upload Screenshot Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoorRay-screenshot
+          path: NoorRay-screenshot.png
+          if-no-files-found: ignore
+
+      - name: Ad-hoc Sign Application
+        run: |
+          echo "Ad-hoc signing the application to improve Gatekeeper compatibility..."
+          codesign --force --deep --sign - "build/NoorRay.app"
+
       - name: Prepare Artifact for Upload
         run: |
           mkdir -p staging/NoorRay
           mv build/NoorRay.app staging/NoorRay/NoorRay.app
+
       - name: Upload macOS Application
         uses: actions/upload-artifact@v4
         with:
           name: NoorRay-macOS
           path: staging/
+

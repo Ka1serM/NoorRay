@@ -19,6 +19,18 @@ target_include_directories(tinygltf INTERFACE
         ${PROJECT_SOURCE_DIR}/external/tinygltf
 )
 
+# tinyobjloader (header-only)
+add_library(tinyobjloader INTERFACE)
+target_include_directories(tinyobjloader INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/tinyobjloader
+)
+
+# stb (header-only)
+add_library(stb INTERFACE)
+target_include_directories(stb INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/stb
+)
+
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
@@ -75,8 +87,6 @@ set_target_properties(NoorRay PROPERTIES PREFIX "")
 
 target_include_directories(NoorRay PRIVATE
         ${PROJECT_SOURCE_DIR}/src
-        ${PROJECT_SOURCE_DIR}/external/tinyobjloader
-        ${PROJECT_SOURCE_DIR}/external/stb
 )
 
 target_link_libraries(NoorRay PRIVATE
@@ -86,6 +96,8 @@ target_link_libraries(NoorRay PRIVATE
         Vulkan::Vulkan
         SDL3::SDL3-static
         tinygltf
+        tinyobjloader
+        stb
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)

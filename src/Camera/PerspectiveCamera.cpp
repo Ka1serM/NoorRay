@@ -10,14 +10,6 @@
 #include "UI/ImGuiManager.h"
 #include "Scene/Scene.h"
 
-// We keep WORLD_UP for yaw calculations in the fly-camera to maintain a stable horizon,
-// but we will no longer use it to derive the camera's local orientation.
-static constexpr auto WORLD_UP = vec3(0.0f, -1.0f, 0.0f);
-static constexpr auto LOCAL_FORWARD = vec3(0.0f, 0.0f, 1.0f);
-static constexpr auto LOCAL_UP = vec3(0.0f, -1.0f, 0.0f);
-static constexpr auto LOCAL_RIGHT = vec3(1.0f, 0.0f, 0.0f);
-
-
 PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) 
     : SceneObject(scene, name, transform), aspectRatio(aspect), sensorWidth(sensorWidth), sensorHeight(sensorHeight)
 {

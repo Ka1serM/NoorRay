@@ -122,9 +122,9 @@ void primaryRayGen(ivec2 pixelCoord, ivec2 screenSize) {
             payload.objectIndex = INVALID_INSTANCE;
 
             #ifdef USE_COMPUTE
-                traceRayCompute(rayOrigin, rayDirection, payload);
+                traceRayCompute(rayOrigin, rayDirection, 0.001, 1000.0, payload);
             #else
-                traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, rayOrigin, 0.00001, rayDirection, 10000.0, 0);
+                traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, rayOrigin, 0.001, rayDirection, 1000.0, 0);
             #endif
 
             rayOrigin = payload.position;

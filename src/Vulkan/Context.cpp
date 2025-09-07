@@ -223,7 +223,7 @@ void Context::pickPhysicalDevice() {
 
     auto best = findBestDevice(allExtensions);
     rtxSupported = best.has_value();
-
+    
     if (!best) {
         best = findBestDevice(RequiredDeviceExtensions);
         rtxSupported = false;

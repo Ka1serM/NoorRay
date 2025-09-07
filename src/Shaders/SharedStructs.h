@@ -1,4 +1,4 @@
-#ifdef __cplusplus //In C++, use glm::
+#ifdef __cplusplus //In C++, use 
     #pragma once
     #include "glm/vec2.hpp"
     #include <glm/vec3.hpp>
@@ -10,34 +10,59 @@
 
 #define INVALID_INSTANCE 0xFFFFFFFFu //max uint32_t
 #define GROUP_SIZE 16
-#define BVH_MAX_DEPTH 128
-#define BVH_MAX_LEAF_SIZE 4
 
-struct AABB {
-    vec3 min;
+#define MAX_LEAF_SIZE 8
+#define SAH_BINS 16
+
+struct AABB
+{
+    vec3 minBounds;
     float _pad0;
-    vec3 max;
+    vec3 maxBounds;
     float _pad1;
+
 #ifdef __cplusplus
-    AABB();
-    void expand(const vec3& point);
-    void expand(const AABB& other);
-    float surfaceArea() const;
-    bool intersect(const vec3& origin, const vec3& invDir, const ivec3& dirIsNeg, float& tNear, float& tFar) const;
+    AABB()
+        : minBounds(std::numeric_limits<float>::max()),
+          _pad0(0.0f),
+          maxBounds(-std::numeric_limits<float>::max()),
+          _pad1(0.0f)
+    {}
+
+    void expand(const vec3& point) {
+        minBounds = min(minBounds, point);
+        maxBounds = max(maxBounds, point);
+    }
+
+    void expand(const AABB& other) {
+        minBounds = min(minBounds, other.minBounds);
+        maxBounds = max(maxBounds, other.maxBounds);
+    }
+
+    float surfaceArea() const {
+        vec3 d = maxBounds - minBounds;
+        return 2.0f * (d.x * d.y + d.x * d.z + d.y * d.z);
+    }
+
+    vec3 centroid() const {
+        return (minBounds + maxBounds) * 0.5f;
+    }
 #endif
 };
 
-struct BVHNode {
-    AABB bbox;
-    int leftChild;
-    int rightChild;
-    int faceCount;
-    int _pad2; // Add padding to align the array
-    int faceIndices[BVH_MAX_LEAF_SIZE];
-
-#ifdef __cplusplus
-    bool isLeaf() const { return faceCount > 0; }
-#endif
+// Node is 64 bytes, aligning perfectly to GPU cache lines.
+struct  BVHNode {
+    AABB leftBounds;  // 32 bytes
+    AABB rightBounds; // 32 bytes
+    // For a leaf node: index of the first primitive in the flat index list.
+    uint rightChildOrPrimIndex;
+    // For an interior node: 0
+    // For a leaf node: number of primitives in the leaf.
+    uint primCount;
+    // For an interior node: split axis (0=x, 1=y, 2=z)
+    // For a leaf node: unused
+    uint splitAxis;
+    uint _pad[7]; // Padding
 };
 
 struct PushData {
@@ -106,7 +131,9 @@ struct MeshAddresses {
     uint64_t indexAddress;
     uint64_t faceAddress;
     uint64_t materialAddress;
-    uint64_t blasAddress;
+    // Compute RT
+    uint64_t bvhNodeAddress;
+    uint64_t bvhIndexAddress;
 };
 
 // Sampler struct to keep track of state for the current pixel.

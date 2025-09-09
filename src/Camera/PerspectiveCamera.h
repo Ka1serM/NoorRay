@@ -55,6 +55,7 @@ public:
     void setSensorSize(float width, float height);
     void setArcballActive(const bool enabled) { arcballMode = enabled; }
     void setArcballPivot(const vec3& pivot) { /* arcballPivot = pivot; */ }
+    vec3 getArcballPivot() const { return arcballPivot; }
 
     void update();
     void renderUi() override;

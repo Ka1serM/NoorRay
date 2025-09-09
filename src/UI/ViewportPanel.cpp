@@ -3,11 +3,11 @@
 #include <ranges>
 
 #include "imgui.h"
-#include "ImGuizmo.h"
+
 #define IMVIEWGUIZMO_IMPLEMENTATION
 #include "ImViewGuizmo.h"
+
 #include "Log.h"
-#include "glm/gtc/type_ptr.hpp"
 #include "SDL3/SDL_mouse.h"
 #include "Camera/PerspectiveCamera.h"
 #include "Scene/MeshInstance.h"
@@ -229,15 +229,18 @@ void ViewportPanel::handleViewGizmo() const {
 
     vec3 position = camera->getPosition();
     quat rotation = camera->getRotation();
-
-    ImViewGuizmo::BeginFrame();
-    bool wasModified = false;
     
+    vec3 pivot = vec3();
+    if (scene.getActiveObjectIndex() != INVALID_INSTANCE)
+        pivot = scene.getActiveObject()->getTransform().getPosition();
+
+    bool wasModified = false;
+    ImViewGuizmo::BeginFrame();
     ImVec2 gizmoPos = {viewportPos.x + viewportSize.x - 110.f * uiScale, viewportPos.y + 110.f * uiScale};
-    wasModified |= ImViewGuizmo::Rotate(position, rotation, gizmoPos);
+    wasModified |= ImViewGuizmo::Rotate(position, rotation, pivot, gizmoPos);
     
     gizmoPos.x += 30.f * uiScale; gizmoPos.y += 90.f * uiScale;
-    wasModified |= ImViewGuizmo::Zoom(position, rotation, gizmoPos);
+    wasModified |= ImViewGuizmo::Dolly(position, rotation, gizmoPos);
     
     gizmoPos.y += 60.f * uiScale;
     wasModified |= ImViewGuizmo::Pan(position, rotation, gizmoPos);

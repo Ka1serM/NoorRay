@@ -34,6 +34,9 @@ target_include_directories(stb INTERFACE
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
+# RML
+find_package(rmlui)
+
 # MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
     set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
@@ -98,6 +101,7 @@ target_link_libraries(NoorRay PRIVATE
         tinygltf
         tinyobjloader
         stb
+        rmlui::rmlui
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)
@@ -199,13 +203,6 @@ if(APPLE)
     )
 
 
-endif()
-
-# Use sanitizers ONLY for Debug builds
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message(STATUS "Enabling Sanitizers for Debug build")
-    add_compile_options(-fsanitize=address -fsanitize=undefined)
-    add_link_options(-fsanitize=address -fsanitize=undefined)
 endif()
 
 if (MINGW)

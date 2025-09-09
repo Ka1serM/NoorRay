@@ -6,8 +6,6 @@
 #define BVH_STACK_DEPTH 512
 
 bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3 v2, inout float t, out vec3 bary, float tMin) {
-    const float EPSILON = 1e-8;
-
     vec3 e1 = v1 - v0;
     vec3 e2 = v2 - v0;
 
@@ -41,8 +39,6 @@ bool intersectTriangle(vec3 rayOrigin, vec3 rayDirection, vec3 v0, vec3 v1, vec3
 }
 
 bool intersectAABB(vec3 rayOrigin, vec3 invDir, AABB box, out float tmin, out float tmax) {
-    const float EPSILON = 1e-6; // small tolerance for numerical precision
-
     vec3 t0s = (box.minBounds - rayOrigin) * invDir;
     vec3 t1s = (box.maxBounds - rayOrigin) * invDir;
 

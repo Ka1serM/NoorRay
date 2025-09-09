@@ -3,8 +3,7 @@
 
 
 const float PI = 3.14159265358979323846;
-const float EPSILON = 0.0001;
-const float AABB_EPSILON  = 1e-5;
+const float EPSILON = 1e-7;
 const float INF = 1.0e30;
 
 // Bounce Types

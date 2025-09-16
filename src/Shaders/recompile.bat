@@ -12,6 +12,10 @@ call :compile_shader "RTX/Miss.glsl" "RTX/Miss.spv" "--target-env=vulkan1.3"
 call :compile_shader "Compute/PathTracer.comp" "Compute/PathTracer.spv" "-DUSE_COMPUTE=1"
 call :compile_shader "Tonemapping/Tonemapper.comp" "Tonemapping/Tonemapper.spv" ""
 
+REM Rml Shaders
+call :compile_shader "Rml/RmlFrag.frag" "Rml/RmlFrag.spv" ""
+call :compile_shader "Rml/RmlVert.vert" "Rml/RmlVert.spv" ""
+
 echo Shader compilation complete.
 exit /b
 

@@ -5,8 +5,8 @@
 #include "Log.h"
 #include "Shaders/SharedStructs.h"
 
-Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage)
-: outputImage(context, width, height, context.getSwapchainFormat().format,  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
+Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t height, const Image& inputImage, const vk::Format outputImageFormat)
+: outputImage(context, width, height, outputImageFormat,  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
 {
     //Load shader
     static constexpr unsigned char code[] = {
@@ -33,7 +33,7 @@ Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const 
     std::vector<vk::DescriptorPoolSize> poolSizes = {{vk::DescriptorType::eStorageImage, 2}};
     
     // Allocate descriptor set (store as UniqueDescriptorSet)
-    vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 1, &descriptorSetLayout.get());
+    const vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 1, &descriptorSetLayout.get());
     auto descriptorSets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     descriptorSet = std::move(descriptorSets.front()); // descriptorSet is vk::UniqueDescriptorSet
 
@@ -43,7 +43,7 @@ Tonemapper::Tonemapper(Context& context, uint32_t width, uint32_t height, const 
         vk::DescriptorImageInfo({}, outputImage.getImageView(), vk::ImageLayout::eGeneral)
     };
 
-    std::vector<vk::WriteDescriptorSet> writes = {
+    const std::vector writes = {
         vk::WriteDescriptorSet()
         .setDstSet(descriptorSet.get())
         .setDstBinding(0)

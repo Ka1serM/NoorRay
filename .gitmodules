@@ -34,3 +34,12 @@
 [submodule "external/tinygltf"]
 	path = external/tinygltf
 	url = https://github.com/syoyo/tinygltf
+[submodule "external/rmlui"]
+	path = external/rmlui
+	url = https://github.com/mikke89/RmlUi
+[submodule "external/freetype"]
+	path = external/freetype
+	url = https://github.com/freetype/freetype.git
+[submodule "external/VulkanMemoryAllocator"]
+	path = external/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator

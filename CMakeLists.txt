@@ -12,6 +12,7 @@ add_subdirectory(external/SDL)
 # External Libraries
 add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
+add_subdirectory(external/VulkanMemoryAllocator)
 
 # tinygltf (header-only)
 add_library(tinygltf INTERFACE)
@@ -34,8 +35,18 @@ target_include_directories(stb INTERFACE
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
+# FreeType
+add_subdirectory(external/freetype)
+# Create an alias for RmlUi's build system to find
+add_library(Freetype::Freetype ALIAS freetype)
+
 # RML
-find_package(rmlui)
+set(BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(RMLUI_SHELL ON CACHE BOOL "Enable shell to build backends" FORCE)
+set(RMLUI_BACKEND "SDL_VK" CACHE STRING "Select the RmlUi backend" FORCE)
+add_subdirectory(external/rmlui)
 
 # MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
@@ -92,6 +103,7 @@ target_include_directories(NoorRay PRIVATE
         ${PROJECT_SOURCE_DIR}/src
 )
 
+# Link against all libraries
 target_link_libraries(NoorRay PRIVATE
         portable_file_dialogs
         glm
@@ -101,7 +113,9 @@ target_link_libraries(NoorRay PRIVATE
         tinygltf
         tinyobjloader
         stb
-        rmlui::rmlui
+
+        RmlUi::Core
+        GPUOpen::VulkanMemoryAllocator
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)
@@ -185,21 +199,21 @@ if(APPLE)
 
     # Resources handling
     add_custom_command(TARGET NoorRay POST_BUILD
-        # Create Resource folder chain
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d"
-    
-        # Copy app icon
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
-        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
-        
-        # Copy MoltenVK_icd.json
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${PROJECT_SOURCE_DIR}/assets/MoltenVK_icd.json"
-        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
-    
-        COMMENT "Copying app icon and MoltenVK ICD JSON into Resources"
+            # Create Resource folder chain
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d"
+
+            # Copy app icon
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
+
+            # Copy MoltenVK_icd.json
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/assets/MoltenVK_icd.json"
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
+
+            COMMENT "Copying app icon and MoltenVK ICD JSON into Resources"
     )
 
 

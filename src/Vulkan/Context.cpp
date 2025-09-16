@@ -14,7 +14,7 @@
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1), swapchainFormat(vk::Format::eUndefined) {
+Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1) {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
@@ -70,12 +70,14 @@ Context::Context(const int width, const int height) : windowWidth(width), window
         createLogicalDevice();
 
         VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
-
-        queue = device->getQueue(queueFamilyIndex, 0);
+        
+        graphicsQueue = device->getQueue(graphicsFamilyIndex, 0);
+        computeQueue = device->getQueue(computeFamilyIndex, 0);
+        presentQueue = device->getQueue(presentFamilyIndex, 0);
 
         vk::CommandPoolCreateInfo commandPoolInfo;
         commandPoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-        commandPoolInfo.setQueueFamilyIndex(queueFamilyIndex);
+        commandPoolInfo.setQueueFamilyIndex(graphicsFamilyIndex);
         commandPool = device->createCommandPoolUnique(commandPoolInfo);
 
         std::vector<vk::DescriptorPoolSize> poolSizes = {
@@ -102,14 +104,40 @@ Context::Context(const int width, const int height) : windowWidth(width), window
         poolInfo.setPoolSizes(poolSizes);
         descriptorPool = device->createDescriptorPoolUnique(poolInfo);
 
+        createAllocator();
+
     } catch (const vk::Error& e) {
         std::cerr << "[FATAL] Vulkan Error in Context constructor: " << e.what() << std::endl;
         throw std::runtime_error("Vulkan initialization failed.");
     } catch (const std::exception& e) {
-        // Log if it's a standard exception that we threw
         std::cerr << "[FATAL] Error in Context constructor: " << e.what() << std::endl;
         throw;
     }
+}
+void Context::createAllocator() {
+    VmaVulkanFunctions vulkanFunctions = {};
+    vulkanFunctions.vkGetInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr;
+    vulkanFunctions.vkGetDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
+
+    VmaAllocatorCreateInfo allocatorCreateInfo = {};
+    allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+    allocatorCreateInfo.physicalDevice = physicalDevice;
+    allocatorCreateInfo.device = device.get();
+    allocatorCreateInfo.instance = instance.get();
+    allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
+            
+    // Enable bufferDeviceAddress feature in VMA if it's supported and enabled
+    vk::PhysicalDeviceVulkan12Features features12{};
+    vk::PhysicalDeviceFeatures2 features2{};
+    features2.pNext = &features12;
+    physicalDevice.getFeatures2(&features2);
+    if(features12.bufferDeviceAddress)
+        allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+
+    if (vmaCreateAllocator(&allocatorCreateInfo, &allocator) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create VMA allocator!");
+    
+    std::cout << "[INFO] VMA Allocator created successfully." << std::endl;
 }
 
 void Context::createVulkanInstance() {
@@ -124,13 +152,9 @@ void Context::createVulkanInstance() {
     std::vector<const char*> layers;
 
     if (EnableValidationLayers) {
-        if (!checkValidationLayerSupport())
-            std::cerr << "[WARN] Validation layers requested, but not available!" << std::endl;
-        else {
-            std::cout << "[INFO] Validation layers are ENABLED." << std::endl;
-            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-            layers.push_back("VK_LAYER_KHRONOS_validation");
-        }
+        std::cout << "[INFO] Validation layers are ENABLED." << std::endl;
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        layers.push_back("VK_LAYER_KHRONOS_validation");
     }
 
 #ifdef __APPLE__
@@ -138,11 +162,11 @@ void Context::createVulkanInstance() {
     extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
 #endif
 
-    vk::ApplicationInfo appInfo("Vulkan Pathtracer", 1, "No Engine", 1, VK_API_VERSION_1_3);
+    constexpr vk::ApplicationInfo appInfo("NoorRay", 1, "No Engine", 1, VK_API_VERSION_1_3);
     vk::InstanceCreateInfo instanceInfo{};
     instanceInfo.setPApplicationInfo(&appInfo)
-                .setPEnabledLayerNames(layers)
-                .setPEnabledExtensionNames(extensions);
+    .setPEnabledLayerNames(layers)
+    .setPEnabledExtensionNames(extensions);
 
 #ifdef __APPLE__ 
     instanceInfo.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
@@ -151,21 +175,8 @@ void Context::createVulkanInstance() {
     instance = vk::createInstanceUnique(instanceInfo);
 }
 
-bool Context::checkValidationLayerSupport() {
-    try {
-        std::vector<vk::LayerProperties> availableLayers = vk::enumerateInstanceLayerProperties();
-        for (const auto& layerProperties : availableLayers)
-            if (strcmp("VK_LAYER_KHRONOS_validation", layerProperties.layerName) == 0)
-                return true;
-        
-    } catch (const vk::Error& e) {
-        std::cerr << "[WARN] Could not enumerate instance layer properties: " << e.what() << std::endl;
-    }
-    return false;
-}
-
 void Context::pickPhysicalDevice() {
-    std::vector<vk::PhysicalDevice> devices = instance->enumeratePhysicalDevices();
+    const std::vector<vk::PhysicalDevice> devices = instance->enumeratePhysicalDevices();
     if (devices.empty()) {
         std::cerr << "[FATAL] Failed to find GPUs with Vulkan support!" << std::endl;
         throw std::runtime_error("Failed to find GPUs with Vulkan support!");
@@ -188,7 +199,7 @@ void Context::pickPhysicalDevice() {
             std::set<std::string> missing(requiredExts.begin(), requiredExts.end());
             for (const auto& ext : device.enumerateDeviceExtensionProperties())
                 missing.erase(ext.extensionName);
-            
+
             const bool hasAllExtensions = missing.empty();
 
             uint64_t vramSize = 0;
@@ -202,31 +213,41 @@ void Context::pickPhysicalDevice() {
                       << ", Extensions OK: " << (hasAllExtensions ? "Yes" : "No") << ")"
                       << std::endl;
 
+            if (!hasAllExtensions) {
+                for (const auto& extName : missing) {
+                    std::cout << "      [MISSING] " << extName << std::endl;
+                }
+            }
+
             if (!hasAllExtensions)
                 continue;
 
             Candidate candidate{device, vramSize};
             if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
-                if (!bestDiscrete || vramSize > bestDiscrete->vram) bestDiscrete = candidate;
+                if (!bestDiscrete || vramSize > bestDiscrete->vram)
+                    bestDiscrete = candidate;
             } else {
-                if (!bestFallback || vramSize > bestFallback->vram) bestFallback = candidate;
+                if (!bestFallback || vramSize > bestFallback->vram)
+                    bestFallback = candidate;
             }
         }
+
         if (bestDiscrete.has_value())
             return bestDiscrete;
-        
         return bestFallback;
     };
 
+    // Try to find a GPU supporting all extensions including RTX
     std::vector<const char*> allExtensions = RequiredDeviceExtensions;
     allExtensions.insert(allExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
 
     auto best = findBestDevice(allExtensions);
     rtxSupported = best.has_value();
-    
+
     if (!best) {
+        // RTX not supported: fall back to GPU with just required device extensions
         best = findBestDevice(RequiredDeviceExtensions);
-        rtxSupported = false;
+        rtxSupported = false; // fallback: RTX disabled
     }
 
     if (!best) {
@@ -235,36 +256,52 @@ void Context::pickPhysicalDevice() {
     }
 
     physicalDevice = best->device;
-    std::cout << "\n[INFO] Picked GPU: " << physicalDevice.getProperties().deviceName << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
-    
-    for (const auto& availableFormat : physicalDevice.getSurfaceFormatsKHR(surface.get()))
-        if (availableFormat.format == vk::Format::eB8G8R8A8Unorm && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-        {
-           swapchainFormat = availableFormat;
-            return;
-        }
-
-    if (swapchainFormat.format == vk::Format::eUndefined)
-        throw std::runtime_error("No suitable swap surface format found! Expected eB8G8R8A8Unorm with SrgbNonlinear color space.");}
+    std::cout << "\n[INFO] Picked GPU: " << physicalDevice.getProperties().deviceName
+              << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
+}
 
 void Context::createLogicalDevice() {
     std::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
-    for (uint32_t i = 0; i < queueFamilies.size(); i++) {
+    std::optional<uint32_t> foundGraphicsFamily, foundComputeFamily, foundPresentFamily;
+    // First pass: find any suitable family for each type
+    for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
         const auto& flags = queueFamilies[i].queueFlags;
-        bool hasGraphics = static_cast<bool>(flags & vk::QueueFlagBits::eGraphics);
-        bool hasCompute = static_cast<bool>(flags & vk::QueueFlagBits::eCompute);
-        bool hasPresent = physicalDevice.getSurfaceSupportKHR(i, surface.get());
+        
+        if (flags & vk::QueueFlagBits::eGraphics)
+            foundGraphicsFamily = i;
+        if (flags & vk::QueueFlagBits::eCompute)
+            foundComputeFamily = i;
+        if (physicalDevice.getSurfaceSupportKHR(i, surface.get()))
+            foundPresentFamily = i;
+        
+        if (foundGraphicsFamily == i && foundComputeFamily == i && foundPresentFamily == i)
+            break; // Stop early if we find a perfect candidate
+    }
 
-        if (hasGraphics && hasCompute && hasPresent) {
-            queueFamilyIndex = i;
+    // Second pass (optional but good for performance): Prioritize a dedicated compute queue
+    for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
+        const auto& flags = queueFamilies[i].queueFlags;
+        // Look for a queue family that has compute but NOT graphics
+        if ((flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics)) {
+            foundComputeFamily = i; // Overwrite with the dedicated async compute queue
             break;
         }
     }
-
-    if (queueFamilyIndex == UINT32_MAX) {
-        std::cerr << "[FATAL] Could not find a suitable queue family!" << std::endl;
-        throw std::runtime_error("Could not find a suitable queue family!");
+    
+    if (!foundGraphicsFamily.has_value() || !foundComputeFamily.has_value() || !foundPresentFamily.has_value()) {
+        std::cerr << "[FATAL] Could not find all required queue families (Graphics, Compute, Present)!" << std::endl;
+        throw std::runtime_error("Could not find all required queue families!");
     }
+
+    graphicsFamilyIndex = foundGraphicsFamily.value();
+    computeFamilyIndex = foundComputeFamily.value();
+    presentFamilyIndex = foundPresentFamily.value();
+    
+    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
+    std::set uniqueQueueFamilies = {graphicsFamilyIndex, computeFamilyIndex, presentFamilyIndex};
+    constexpr float queuePriority = 1.0f;
+    for (uint32_t familyIndex : uniqueQueueFamilies)
+        queueCreateInfos.emplace_back(vk::DeviceQueueCreateFlags{}, familyIndex, 1, &queuePriority);
 
     auto enabledExtensions = RequiredDeviceExtensions;
     if (rtxSupported) {
@@ -272,6 +309,9 @@ void Context::createLogicalDevice() {
         enabledExtensions.insert(enabledExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
     } else
         std::cout << "[INFO] Ray tracing extensions are not supported. Proceeding without them." << std::endl;
+
+    vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{};
+    dynamicRenderingFeatures.sType = vk::StructureType::ePhysicalDeviceDynamicRenderingFeatures;
 
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
     rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
@@ -284,10 +324,11 @@ void Context::createLogicalDevice() {
 
     features12.pNext = &rtFeatures;
     rtFeatures.pNext = &accelFeatures;
+    dynamicRenderingFeatures.pNext = &features12;
 
     vk::PhysicalDeviceFeatures2 features2{};
     features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
-    features2.pNext = &features12;
+    features2.pNext = &dynamicRenderingFeatures;
 
     physicalDevice.getFeatures2(&features2);
 
@@ -309,6 +350,12 @@ void Context::createLogicalDevice() {
     std::cout << "rayTracingPipeline: " << rtFeatures.rayTracingPipeline << std::endl;
     std::cout << "accelerationStructure: " << accelFeatures.accelerationStructure << std::endl;
 
+    if (dynamicRenderingFeatures.dynamicRendering) {
+        dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
+    } else {
+        throw std::runtime_error("Dynamic Rendering feature is not supported on this device!");
+    }
+
     coreFeatures.shaderInt64 = VK_TRUE;
     coreFeatures.samplerAnisotropy = VK_TRUE;
 
@@ -325,15 +372,12 @@ void Context::createLogicalDevice() {
     } else {
         rtFeatures.rayTracingPipeline = VK_FALSE;
         accelFeatures.accelerationStructure = VK_FALSE;
-        if (rtxSupported) {
+        if (rtxSupported)
             std::cout << "[WARN] Ray tracing extensions found, but features not fully supported. Disabling." << std::endl;
-        }
     }
 
-    constexpr float queuePriority = 1.0f;
-    vk::DeviceQueueCreateInfo queueCreateInfo({}, queueFamilyIndex, 1, &queuePriority);
-
-    vk::DeviceCreateInfo deviceCreateInfo({}, 1, &queueCreateInfo);
+    vk::DeviceCreateInfo deviceCreateInfo{};
+    deviceCreateInfo.setQueueCreateInfos(queueCreateInfos);
     deviceCreateInfo.setPEnabledExtensionNames(enabledExtensions);
     deviceCreateInfo.pNext = &features2;
 
@@ -353,7 +397,7 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
 
 void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) {
     try {
-        vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
+        const vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
         vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
 
         commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
@@ -361,8 +405,8 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
         commandBuffer->end();
 
         vk::UniqueFence fence = device->createFenceUnique({});
-        vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
-        queue.submit(submitInfo, *fence);
+        const vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
+        graphicsQueue.submit(submitInfo, *fence);
 
         if (device->waitForFences(*fence, VK_TRUE, UINT64_MAX) != vk::Result::eSuccess)
             std::cerr << "[ERROR] Fence wait failed during one-time submit." << std::endl;

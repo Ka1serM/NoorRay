@@ -15,4 +15,8 @@ $GLSLC Compute/PathTracer.comp -o Compute/PathTracer.spv -DUSE_COMPUTE=1
 # Tonemapper shader
 $GLSLC Tonemapping/Tonemapper.comp -o Tonemapping/Tonemapper.spv
 
+# Rml shader
+$GLSLC Rml/RmlFrag.frag -o Rml/RmlFrag.spv
+$GLSLC Rml/RmlVert.vert -o Rml/RmlVert.spv
+
 echo "Shader compilation complete."

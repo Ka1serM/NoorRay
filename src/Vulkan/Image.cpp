@@ -6,7 +6,7 @@
 
 #include "Log.h"
 
-Image::Image(Context& context, const void* data, int width, int height, vk::Format format)
+Image::Image(Context& context, const void* data, int width, int height, vk::Format format) : width(width), height(height)
 {
     if (width <= 0 || height <= 0) {
         throw std::runtime_error("Image constructor (floatData): Invalid dimensions (W=" + std::to_string(width) + ", H=" + std::to_string(height) + ")");
@@ -104,7 +104,7 @@ Image::Image(Context& context, const void* data, int width, int height, vk::Form
     LOG_INFO( "Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format));
 }
 
-Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight)
+Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight) : width(texWidth), height(texHeight)
 {
     if (texWidth <= 0 || texHeight <= 0)
         throw std::runtime_error("Image constructor (rgbaData): Invalid dimensions (W=" + std::to_string(texWidth) + ", H=" + std::to_string(texHeight) + ")");
@@ -183,7 +183,8 @@ Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight
     LOG_INFO( "Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm");
 }
 
-Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) {
+Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) : width(width), height(height)
+{
     if (width == 0 || height == 0)
         throw std::runtime_error("Image constructor (blank): Invalid dimensions (W=" + std::to_string(width) + ", H=" + std::to_string(height) + ")");
 

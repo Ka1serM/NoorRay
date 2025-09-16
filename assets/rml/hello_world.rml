@@ -1,0 +1,16 @@
+<rml>
+<head>
+    <title>Hello World</title>
+    <link type="text/rcss" href="window.rcss"/>
+</head>
+<body>
+    <div id="header">
+        <h1>Hello World</h1>
+        <p>The quick brown fox jumps over the lazy.</p>
+        <input type="text" class="text" data-value="animal"/>
+    </div>
+
+    <!-- Viewport element replaced with an img -->
+    <img id="viewport" alt="Viewport Image"/>
+</body>
+</rml>

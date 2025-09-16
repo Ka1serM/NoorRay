@@ -13,6 +13,8 @@ private:
     vk::UniqueDeviceMemory memory;
     vk::ImageCreateInfo info;
 
+    uint32_t width, height;
+
 public:
     Image(Context& context, const void* floatData, int texWidth, int texHeight, vk::Format format);
     Image(Context& context, const void* rgbaData, int texWidth, int texHeight);
@@ -29,4 +31,7 @@ public:
     const vk::Image& getImage() const { return image.get(); }
     const vk::ImageCreateInfo& getImageCreateInfo() const { return info; }
     vk::Format getFormat() const { return info.format; }
+
+    uint32_t getWidth() const { return width; }
+    uint32_t getHeight() const { return height; }
 };

@@ -9,8 +9,6 @@
 #include "Vulkan/Accel.h"
 #include "BVH/BVH.h"
 
-class Scene;
-
 class MeshAsset : public ImGuiComponent
 {
 public:

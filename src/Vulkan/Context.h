@@ -1,12 +1,16 @@
 ﻿#pragma once
 
+#define VK_ENABLE_BETA_EXTENSIONS 1
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_beta.h>
 #include <vector>
 #include <functional>
 #include <mutex>
 
+#include "vk_mem_alloc.h"
 #include "SDL3/SDL_video.h"
 
 class Context {
@@ -40,22 +44,28 @@ class Context {
     vk::UniqueSurfaceKHR surface;
     vk::PhysicalDevice physicalDevice;
     vk::UniqueDevice device;
-    vk::Queue queue;
-    uint32_t queueFamilyIndex = UINT32_MAX;
+
+    VmaAllocator allocator;
+    
+    vk::Queue graphicsQueue;
+    vk::Queue computeQueue;
+    vk::Queue presentQueue;
+    uint32_t graphicsFamilyIndex = UINT32_MAX;
+    uint32_t computeFamilyIndex = UINT32_MAX;
+    uint32_t presentFamilyIndex = UINT32_MAX;
+    
     vk::UniqueCommandPool commandPool;
     vk::UniqueDescriptorPool descriptorPool;
-
-    vk::SurfaceFormatKHR swapchainFormat;
-
+    
     bool rtxSupported = false;
 
     void createVulkanInstance();
-    bool checkValidationLayerSupport();
     void pickPhysicalDevice();
     void createLogicalDevice();
 
 public:
     Context(int width, int height);
+    void createAllocator();
     ~Context();
 
     // Helper functions
@@ -75,16 +85,23 @@ public:
     uint32_t getWindowWidth() const { return windowWidth; }
     uint32_t getWindowHeight() const { return windowHeight; }
     float getDPIScale() const { return dpiScale; }
-    const vk::SurfaceFormatKHR& getSwapchainFormat() const { return swapchainFormat; }
-    
+
     const vk::Instance& getInstance() const { return instance.get(); }
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }
     const vk::Device& getDevice() const { return device.get(); }
-    const vk::Queue& getQueue() const { return queue; }
-    uint32_t getQueueFamilyIndex() const { return queueFamilyIndex; }
+    
+    const vk::Queue& getGraphicsQueue() const { return graphicsQueue; }
+    const vk::Queue& getComputeQueue() const { return computeQueue; }
+    const vk::Queue& getPresentQueue() const { return presentQueue; }
+    uint32_t getGraphicsFamilyIndex() const { return graphicsFamilyIndex; }
+    uint32_t getComputeFamilyIndex() const { return computeFamilyIndex; }
+    uint32_t getPresentFamilyIndex() const { return presentFamilyIndex; }
+    
     const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
+
+    VmaAllocator getAllocator() const { return allocator; }
 
     void queryWindowSize();
 

@@ -2,6 +2,7 @@
 #include "UI/ImGuiManager.h"
 #include <memory>
 #include "Scene/Scene.h"
+#include "UI/RmlUiManager.h"
 #include "Vulkan/Renderer.h"
 
 class GpuRaytracer;
@@ -12,6 +13,7 @@ class NoorRay
     Context context;
     Renderer renderer;
     ImGuiManager imGuiManager;
+    RmlUiManager rmlUiManager;
     Scene scene;
 
     std::unique_ptr<GpuRaytracer> raytracer;

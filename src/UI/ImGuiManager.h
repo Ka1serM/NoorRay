@@ -12,15 +12,12 @@ class ImGuiComponent;
 
 class ImGuiManager {
 public:
-    ImGuiManager(Context& context, const std::vector<vk::Image>& swapchainImages);
+    ImGuiManager(Context& context, uint32_t numSwapchainImages, vk::SurfaceFormatKHR swapchainFormat);
     ~ImGuiManager();
     
-    void recreateForSwapChain(const std::vector<vk::Image>& swapchainImages);
+    void render(vk::CommandBuffer commandBuffer, vk::ImageView target_image_view, vk::Extent2D currentExtent);
+    void processEvent(const SDL_Event& event);
 
-    void renderUi();
-    void Draw(vk::CommandBuffer commandBuffer, uint32_t imageIndex);
-
-    // Create and add a component of type T with constructor arguments Args
     template<typename T, typename... Args>
     T* addComponent(Args&&... args) {
         static_assert(std::is_base_of_v<ImGuiComponent, T>, "T must derive from ImGuiComponent");
@@ -33,7 +30,6 @@ public:
     
     ImGuiComponent* getComponent(const std::string& name) const;
 
-    // UI Helpers
     static void tableRowLabel(const char* label);
     static void checkboxRow(const char* label, bool value, const std::function<void(bool)>& setter);
     static void dragFloatRow(const char* label, float value, float speed, float min, float max, const std::function<void(float)>& setter);
@@ -43,16 +39,8 @@ public:
 
 private:
     static void SetBlenderTheme();
-    void setupDockSpace();
-    void CreateRenderPass();
-    void CreateFrameBuffers(const std::vector<vk::Image>& images, uint32_t width, uint32_t height);
-
-    void cleanupSwapChainResources();
 
     Context& context;
-
     std::vector<std::unique_ptr<ImGuiComponent>> components;
-    vk::UniqueRenderPass renderPass;
-    std::vector<vk::UniqueImageView> imageViews;
-    std::vector<vk::UniqueFramebuffer> frameBuffers;
+    VkFormat m_swapchainFormat;
 };

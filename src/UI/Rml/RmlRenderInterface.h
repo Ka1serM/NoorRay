@@ -17,10 +17,10 @@ struct TGAHeader {
 #pragma pack()
 
 static constexpr unsigned char shader_frag[] = {
-    #embed "../Shaders/Rml/RmlFrag.spv"
+    #embed "../../Shaders/Rml/RmlFrag.spv"
 };
 static constexpr unsigned char shader_vert[] = {
-    #embed "../Shaders/Rml/RmlVert.spv"
+    #embed "../../Shaders/Rml/RmlVert.spv"
 };
 
 

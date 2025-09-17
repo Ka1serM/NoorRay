@@ -14,7 +14,7 @@
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1) {
+Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height) {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;

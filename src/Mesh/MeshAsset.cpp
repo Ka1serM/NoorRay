@@ -8,7 +8,7 @@
 #include <numbers>
 #include "imgui.h"
 #include "glm/gtc/type_ptr.inl"
-#include "UI/ImGuiManager.h"
+#include "../UI/ImGui/ImGuiManager.h"
 
 std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string& name, const Material& material) {
     std::vector<Vertex> vertices;

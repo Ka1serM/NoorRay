@@ -1,5 +1,5 @@
 ﻿#include "ImGuiManager.h"
-#include "UI/ImGuiComponent.h"
+#include "ImGuiComponent.h"
 #include <imgui.h>
 #include "imgui_internal.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -33,20 +33,16 @@ ImGuiManager::ImGuiManager(Context& context, uint32_t numSwapchainImages, const 
 #endif
 
     static constexpr unsigned char font[] = {
-        #embed "../../assets/fonts/Inter-Regular.ttf"
+        #embed "../../../assets/fonts/Inter-Regular.ttf"
     };
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
 
-    float content_scale = SDL_GetWindowDisplayScale(context.getWindow());
-    if (content_scale == 0.0f)
-        content_scale = 1.0f; // Fallback to 1.0 if SDL fails
-
-    const float font_size = 18.0f * content_scale;
+    const float font_size = 18.0f * context.getDPIScale();
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), font_size, &font_config);
 
     ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(content_scale);
+    style.ScaleAllSizes(context.getDPIScale());
     
     SetBlenderTheme();
 

@@ -1,0 +1,37 @@
+﻿<rml>
+    <head>
+        <link type="text/rcss" href="Editor.css"/>
+        
+        <link type="text/template" href="MenuBar.html"/>
+        <link type="text/template" href="DetailsPanel.html"/>
+        <link type="text/template" href="SceneGraph.html"/>
+        <link type="text/template" href="Viewport.html"/>
+    </head>
+    <body>
+    <div class="editor-root">
+        <div id="menubar">
+            <template src="MenuBar"></template>
+        </div>
+
+        <div class="dock-layout">
+            <div id="viewport" class="dock-panel">
+                <template src="Viewport"></template>
+            </div>
+
+            <div id="splitter-v" class="splitter-v"></div>
+
+            <div class="right-column">
+                <div id="scene-graph" class="dock-panel">
+                    <template src="SceneGraph"></template>
+                </div>
+
+                <div id="splitter-h" class="splitter-h"></div>
+
+                <div id="details" class="dock-panel">
+                    <template src="DetailsPanel"></template>
+                </div>
+            </div>
+        </div>
+    </div>
+    </body>
+</rml>

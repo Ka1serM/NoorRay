@@ -30,7 +30,6 @@
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
-#include <RmlUi/Core/SystemInterface.h>
 
 SystemInterface_SDL::SystemInterface_SDL()
 {

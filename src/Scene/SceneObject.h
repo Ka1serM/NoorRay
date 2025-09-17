@@ -4,7 +4,7 @@
 #include <vector>
 #include "Scene.h"
 #include "../Mesh/Transform.h"
-#include "UI/ImGuiComponent.h"
+#include "../UI/ImGui/ImGuiComponent.h"
 
 class Scene;
 

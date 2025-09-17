@@ -37,7 +37,7 @@ class Context {
     SDL_Window* window;
     int windowWidth;
     int windowHeight;
-    float dpiScale;
+    float dpiScale = 1;
 
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;

@@ -18,11 +18,7 @@ layout(set = 0, binding = 1) uniform sampler2D textures[];
 
 void main() {
     vec4 color = in_color;
-
     if (push_constants.texture_id >= 0)
         color *= texture(textures[push_constants.texture_id], in_tex_coord);
-
-    // Apply premultiplied alpha
-    color.rgb *= color.a;
     out_color = color;
 }

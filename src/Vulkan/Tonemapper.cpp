@@ -38,7 +38,7 @@ Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t he
     descriptorSet = std::move(descriptorSets.front()); // descriptorSet is vk::UniqueDescriptorSet
 
     // Write descriptors
-    std::vector<vk::DescriptorImageInfo> imageInfos = {
+    std::vector imageInfos = {
         vk::DescriptorImageInfo({}, inputImage.getImageView(), vk::ImageLayout::eGeneral),
         vk::DescriptorImageInfo({}, outputImage.getImageView(), vk::ImageLayout::eGeneral)
     };

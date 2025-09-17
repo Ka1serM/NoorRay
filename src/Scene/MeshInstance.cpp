@@ -2,7 +2,7 @@
 #include <imgui.h>
 #include <utility>
 
-#include "../UI/ImGuiManager.h"
+#include "../UI/ImGui/ImGuiManager.h"
 
 MeshInstance::MeshInstance(Scene& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf) : SceneObject(scene, name, transf), meshAsset(std::move(asset)) {
 

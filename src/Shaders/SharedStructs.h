@@ -76,7 +76,7 @@ struct EnvironmentData {
     int visible, _pad0, _pad1,  _pad2;
 #ifdef __cplusplus
     EnvironmentData()
-    : color(1), intensity(1), textureIndex(0), cdfTextureIndex(-1), rotation(0), exposure(0), visible(0), _pad0(0), _pad1(0), _pad2(0)
+    : color(1), intensity(1), textureIndex(0), cdfTextureIndex(-1), rotation(0), exposure(0), visible(1), _pad0(0), _pad1(0), _pad2(0)
     {}
 #endif
 };

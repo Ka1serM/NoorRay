@@ -7,7 +7,7 @@
 
 #include "glm/gtx/rotate_vector.hpp"
 #include "SDL3/SDL_mouse.h"
-#include "UI/ImGuiManager.h"
+#include "../UI/ImGui/ImGuiManager.h"
 #include "Scene/Scene.h"
 
 PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) 

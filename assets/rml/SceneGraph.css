@@ -1,0 +1,70 @@
+﻿#outliner {
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+}
+
+/* Tree layout */
+.tree,
+.tree ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.tree li {
+    display: block;
+    padding-left: 16px;
+}
+
+/* Expander arrow */
+.expander:before {
+    content: "▶";
+    font-size: 10px;
+    margin-right: 4px;
+    display: inline-block;
+    width: 12px;
+}
+
+/* When li has "open", rotate expander */
+li.open > .item-row > .expander:before {
+    content: "▼";
+}
+
+/* Hide children unless open */
+.tree li > ul {
+    display: none;
+}
+
+.tree li.open > ul {
+    display: block;
+}
+
+/* Item row */
+.item-row {
+    display: block;
+    padding: 2px 4px;
+    cursor: default;
+    white-space: nowrap;
+}
+
+.item-row:hover {
+    background: #4a4a52;
+}
+
+/* Icons */
+.icon {
+    display: inline-block;
+    width: 16px;
+    text-align: center;
+}
+
+/* Controls */
+.controls {
+    float: right;
+    opacity: 0.5;
+}
+
+.item-row:hover .controls {
+    opacity: 1;
+}

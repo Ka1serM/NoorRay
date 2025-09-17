@@ -5,6 +5,8 @@
 #include <RmlUi/Core/Math.h>
 #include <array>
 
+#include "Log.h"
+
 RmlRenderInterface::RmlRenderInterface(
     const vk::Device device,
     const vk::Queue graphics_queue,
@@ -204,6 +206,7 @@ Rml::TextureHandle RmlRenderInterface::CreateTextureHandleForView(const vk::Imag
 
 
 Rml::TextureHandle RmlRenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) {
+    LOG_INFOS("Loading Texture", source);
     if (source.rfind("vulkan://", 0) == 0) {
         const Rml::String texture_name = source.substr(9);
         const auto it = m_registered_textures.find(texture_name);
@@ -212,9 +215,6 @@ Rml::TextureHandle RmlRenderInterface::LoadTexture(Rml::Vector2i& texture_dimens
             texture_dimensions = it->second.second;
             return it->second.first;
         }
-
-        Rml::Log::Message(Rml::Log::LT_WARNING, "Failed to find pre-registered Vulkan texture: %s", texture_name.c_str());
-        return {};
     }
     
     Rml::FileInterface* file_interface = Rml::GetFileInterface();
@@ -251,11 +251,22 @@ Rml::TextureHandle RmlRenderInterface::LoadTexture(Rml::Vector2i& texture_dimens
     for (int y = 0; y < header.height; ++y) {
         for (int x = 0; x < header.width; ++x) {
             const int read_idx = (y * header.width + x) * color_mode;
+            // Correct for TGA's vertical flip if necessary
             const int write_idx = ((!(header.imageDescriptor & 32) ? (header.height - 1 - y) : y) * header.width + x) * 4;
+            // Assign straight RGBA values first
             image_dest[write_idx] = image_src[read_idx + 2];
             image_dest[write_idx + 1] = image_src[read_idx + 1];
             image_dest[write_idx + 2] = image_src[read_idx];
-            image_dest[write_idx + 3] = (color_mode == 4) ? image_src[read_idx + 3] : 255;
+            if (color_mode == 4) // premultiply color by alpha
+            {
+                const Rml::byte alpha = image_src[read_idx + 3];
+                image_dest[write_idx]     = Rml::byte( (image_dest[write_idx]     * alpha) / 255 );
+                image_dest[write_idx + 1] = Rml::byte( (image_dest[write_idx + 1] * alpha) / 255 );
+                image_dest[write_idx + 2] = Rml::byte( (image_dest[write_idx + 2] * alpha) / 255 );
+                image_dest[write_idx + 3] = alpha;
+            }
+            else
+                image_dest[write_idx + 3] = 255;
         }
     }
 
@@ -414,7 +425,7 @@ void RmlRenderInterface::CreatePipelines(vk::Format colorFormat, vk::Format dept
     vk::PipelineViewportStateCreateInfo viewport_state_ci({}, 1, nullptr, 1, nullptr);
     vk::PipelineRasterizationStateCreateInfo rasterization_ci({}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eBack, vk::FrontFace::eCounterClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f);
     vk::PipelineMultisampleStateCreateInfo multisample_ci({}, vk::SampleCountFlagBits::e1, false);
-    vk::PipelineColorBlendAttachmentState color_blend_attachment(true, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+    vk::PipelineColorBlendAttachmentState color_blend_attachment(true, vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
     vk::PipelineColorBlendStateCreateInfo color_blend_ci({}, false, vk::LogicOp::eCopy, color_blend_attachment);
     std::array dynamic_states = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
     vk::PipelineDynamicStateCreateInfo dynamic_state_ci({}, dynamic_states);

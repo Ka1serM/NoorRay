@@ -3,19 +3,19 @@
 #include <iostream>
 #include <stdexcept>
 #include <SDL3/SDL.h>
-#include "UI/DebugPanel.h"
-#include "UI/MainMenuBar.h"
-#include "UI/SceneGraphPanel.h"
-#include "UI/ViewportPanel.h"
+#include "UI/ImGui/ViewportPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "Camera/PerspectiveCamera.h"
 #include "Raytracing/ComputeRaytracer.h"
 #include "Raytracing/RtxRaytracer.h"
-#include "UI/DetailsPanel.h"
-#include "UI/EnvironmentPanel.h"
-#include "UI/RenderPanel.h"
+#include "UI/ImGui/DebugPanel.h"
+#include "UI/ImGui/DetailsPanel.h"
+#include "UI/ImGui/MainMenuBar.h"
+#include "UI/ImGui/EnvironmentPanel.h"
+#include "UI/ImGui/RenderPanel.h"
+#include "UI/ImGui/SceneGraphPanel.h"
 #include "Vulkan/Tonemapper.h"
 
 NoorRay::~NoorRay() = default;
@@ -69,7 +69,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     scene.setActiveObjectIndex(instanceIndex);
     
     float aspectRatio = static_cast<float>(raytracer->getWidth()) / static_cast<float>(raytracer->getHeight());
-    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 2.8, 5.0f, 2.0f);
+    auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 2.8, 10.0f, 2.0f);
     scene.add(std::move(cam));
 }
 

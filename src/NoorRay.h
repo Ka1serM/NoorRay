@@ -1,8 +1,8 @@
 ﻿#pragma once
-#include "UI/ImGuiManager.h"
+#include "UI/ImGui/ImGuiManager.h"
 #include <memory>
 #include "Scene/Scene.h"
-#include "UI/RmlUiManager.h"
+#include "UI/Rml/RmlUiManager.h"
 #include "Vulkan/Renderer.h"
 
 class GpuRaytracer;

@@ -1,13 +1,14 @@
 ﻿#pragma once
 
-#include "UI/RmlRenderInterface.h"
-#include "UI/RmlUi_Platform_SDL.h"
+#include "RmlRenderInterface.h"
+#include "RmlUi_Platform_SDL.h"
 #include "Vulkan/Context.h"
 #include "Vulkan/Renderer.h"
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
 
+#include "RmlEmbeddedFileInterface.h"
 #include "Vulkan/Image.h"
 
 class RmlUiManager {
@@ -22,6 +23,7 @@ public:
     void resize(int width, int height) const;
 
 private:
+    RmlEmbeddedFileInterface rmlFileInterface;
     SystemInterface_SDL rmlSystemInterface;
     RmlRenderInterface rmlRenderInterface;
 

@@ -1,0 +1,70 @@
+﻿<template name="SceneGraph">
+    <head>
+        <link type="text/rcss" href="SceneGraph.css" />
+    </head>
+    <body>
+    <div id="outliner">
+        <ul class="tree">
+            <li class="open">
+                <div class="item-row">
+                    <span class="expander"></span>
+                    <span class="icon">&#128444;</span>
+                    <span class="name">Static Meshes</span>
+                    <span class="controls">&#128065;</span>
+                </div>
+                <ul>
+                    <li>
+                        <div class="item-row">
+                            <span class="expander"></span>
+                            <span class="icon">&#9632;</span>
+                            <span class="name">SM_Cube_01</span>
+                        </div>
+                    </li>
+                    <li>
+                        <div class="item-row">
+                            <span class="expander"></span>
+                            <span class="icon">&#9632;</span>
+                            <span class="name">SM_Floor</span>
+                        </div>
+                    </li>
+                </ul>
+            </li>
+
+            <li>
+                <div class="item-row">
+                    <span class="expander"></span>
+                    <span class="icon">&#128444;</span>
+                    <span class="name">Lights</span>
+                    <span class="controls">&#128065;</span>
+                </div>
+                <ul>
+                    <li>
+                        <div class="item-row">
+                            <span class="expander"></span>
+                            <span class="icon">&#128161;</span>
+                            <span class="name">PointLight_01</span>
+                        </div>
+                        <ul>
+                            <li>
+                                <div class="item-row">
+                                    <span class="expander"></span>
+                                    <span class="icon">&#128295;</span>
+                                    <span class="name">Light Properties</span>
+                                </div>
+                            </li>
+                        </ul>
+                    </li>
+                </ul>
+            </li>
+
+            <li>
+                <div class="item-row">
+                    <span class="expander"></span>
+                    <span class="icon">&#127909;</span>
+                    <span class="name">MainCamera</span>
+                </div>
+            </li>
+        </ul>
+    </div>
+    </body>
+</template>

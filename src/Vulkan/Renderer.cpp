@@ -43,35 +43,17 @@ Renderer::~Renderer() {
 
 void Renderer::notifyResize(const uint32_t width, const uint32_t height) {
     m_framebufferResized = true;
-    
-    if (width > 0 && height > 0) {
+    if (width > 0 && height > 0)
         swapchainExtent = vk::Extent2D{ width, height };
-    }
 }
 
-// You may need these headers for std::clamp and std::numeric_limits
-#include <algorithm>
-#include <limits>
-
 void Renderer::recreateSwapChain() {
-    // Wait until the device is idle before tearing down resources.
     context.getDevice().waitIdle();
     
-    // 1. Get the LATEST surface capabilities directly from the physical device.
-    // This is crucial as they can change (e.g., when the window is minimized).
     const vk::SurfaceCapabilitiesKHR surfaceCapabilities = context.getPhysicalDevice().getSurfaceCapabilitiesKHR(context.getSurface());
-
-    // 2. Handle minimization explicitly. If the surface has no size, we cannot create a
-    // swapchain for it. We abort here, and the m_framebufferResized flag will remain
-    // true, causing us to try again on the next frame.
-    if (surfaceCapabilities.currentExtent.width == 0 || surfaceCapabilities.currentExtent.height == 0) {
-        return;
-    }
-
-    // 3. Determine the actual extent to use for the new swapchain.
+    
+    // Determine the actual extent to use for the new swapchain.
     vk::Extent2D actualExtent;
-    // The special value UINT32_MAX means the window manager allows us to choose an extent.
-    // Otherwise, we MUST use the extent provided in the capabilities.
     if (surfaceCapabilities.currentExtent.width == std::numeric_limits<uint32_t>::max()) {
         actualExtent = vk::Extent2D{
             std::clamp(swapchainExtent.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width),
@@ -80,25 +62,30 @@ void Renderer::recreateSwapChain() {
     } else
         actualExtent = surfaceCapabilities.currentExtent;
 
-    // 4. Update the member variable. This is now the new canonical size for our renderer.
+    // If the window is minimized, the extent will be 0x0.
+    // We update our internal extent to reflect this and return.
+    // We do NOT attempt to create a 0x0 swapchain. The beginFrame() function
+    // will check the extent and skip rendering, preventing a crash.
+    if (actualExtent.width == 0 || actualExtent.height == 0) {
+        swapchainExtent = actualExtent;
+        return;
+    }
+    
     swapchainExtent = actualExtent;
     
-    // Release the old swapchain handle to prepare for creating a new one.
     const vk::SwapchainKHR oldSwapchain = swapchain.release();
 
-    // Choose the number of images in the swapchain.
     uint32_t imageCount = surfaceCapabilities.minImageCount + 1;
     if (surfaceCapabilities.maxImageCount > 0 && imageCount > surfaceCapabilities.maxImageCount) {
         imageCount = surfaceCapabilities.maxImageCount;
     }
     
-    // Create the new swapchain.
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.getSurface());
     swapchainInfo.setMinImageCount(imageCount);
     swapchainInfo.setImageFormat(colorImageFormat);
     swapchainInfo.setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear);
-    swapchainInfo.setImageExtent(actualExtent); // ✔️ Use the validated, current extent
+    swapchainInfo.setImageExtent(actualExtent);
     swapchainInfo.setImageArrayLayers(1);
     swapchainInfo.setImageUsage(vk::ImageUsageFlagBits::eColorAttachment);
     swapchainInfo.setPreTransform(surfaceCapabilities.currentTransform);
@@ -114,7 +101,6 @@ void Renderer::recreateSwapChain() {
         context.getDevice().destroySwapchainKHR(oldSwapchain);
     }
     
-    // Recreate swapchain image views.
     swapchainImages = context.getDevice().getSwapchainImagesKHR(swapchain.get());
     swapchainImageViews.clear();
     swapchainImageViews.resize(swapchainImages.size());
@@ -123,7 +109,6 @@ void Renderer::recreateSwapChain() {
         swapchainImageViews[i] = context.getDevice().createImageViewUnique(viewInfo);
     }
     
-    // Recreate depth buffer resources matching the new swapchain size.
     depthImage.reset();
     depthImageMemory.reset();
     depthImageView.reset();
@@ -143,16 +128,30 @@ void Renderer::recreateSwapChain() {
     
     LOG_INFO("Recreated swapchain with " << swapchainImages.size() << " images at " << swapchainExtent.width << "x" << swapchainExtent.height);
 }
-
 bool Renderer::beginFrame() {
+    // Wait for the fence of the current frame to ensure its resources are free to use.
+    (void)context.getDevice().waitForFences(frames[m_currentFrame].inFlightFence.get(), true, UINT64_MAX);
+
+    // Handle resize events at the start of the frame
     if (m_framebufferResized) {
         recreateSwapChain();
+        // After attempting to recreate, check if the extent is valid.
+        // If the window is still minimized, the extent will be 0x0.
+        // We must skip rendering, but crucially, we leave m_framebufferResized as true
+        // so we will try to recreate again on the next frame.
+        if (swapchainExtent.width == 0 || swapchainExtent.height == 0) {
+            return false;
+        }
+
+        // If we get here, the swapchain was recreated successfully with a valid size.
+        // It is now safe to reset the flag.
         m_framebufferResized = false;
-        return false;
     }
     
-    (void)context.getDevice().waitForFences(frames[m_currentFrame].inFlightFence.get(), true, UINT64_MAX);
-    context.getDevice().resetFences(frames[m_currentFrame].inFlightFence.get());
+    // This check is now redundant because of the logic above, but it's harmless to keep.
+    if (swapchainExtent.width == 0 || swapchainExtent.height == 0) {
+        return false;
+    }
 
     try {
         const vk::ResultValue<uint32_t> result = context.getDevice().acquireNextImageKHR(
@@ -162,19 +161,26 @@ bool Renderer::beginFrame() {
             nullptr
         );
 
-        // 2. Handle non-throwing error codes also inside the try block.
-        if (result.result == vk::Result::eErrorOutOfDateKHR || result.result == vk::Result::eSuboptimalKHR) {
-            m_framebufferResized = true;
+        if (result.result == vk::Result::eErrorOutOfDateKHR) {
+            m_framebufferResized = true; // Signal to recreate on the next frame
             return false;
         }
         
-        // 3. If successful, assign the image index.
+        if (result.result == vk::Result::eSuboptimalKHR) {
+            m_framebufferResized = true; // Signal to recreate for better performance
+        }
+        
         m_imageIndex = result.value;
-    }
-    catch (const vk::OutOfDateKHRError&) {
+
+    } catch (const vk::OutOfDateKHRError&) {
         m_framebufferResized = true;
         return false;
+    } catch (const vk::Error& e) {
+        LOG_ERROR("Failed to acquire swapchain image: %s");
+        return false;
     }
+
+    context.getDevice().resetFences(frames[m_currentFrame].inFlightFence.get());
 
     const vk::CommandBuffer cmd = getCurrentCommandBuffer();
     cmd.reset();
@@ -215,7 +221,6 @@ void Renderer::endFrame() {
     vk::CommandBuffer cmd = getCurrentCommandBuffer();
     cmd.end();
 
-    // The submission logic remains the same
     const vk::Semaphore signalSemaphores[] = { frames[m_currentFrame].renderFinishedSemaphore.get() };
     const vk::Semaphore waitSemaphores[] = { frames[m_currentFrame].imageAcquiredSemaphore.get() };
     constexpr vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
@@ -236,12 +241,15 @@ void Renderer::endFrame() {
     vk::Result result;
     try {
         result = context.getGraphicsQueue().presentKHR(presentInfo);
-    }
-    catch (const vk::OutOfDateKHRError&) {
+    } catch (const vk::OutOfDateKHRError&) {
         result = vk::Result::eErrorOutOfDateKHR;
     }
-    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR)
-        m_framebufferResized = true; // Just flag for resize, don't recreate here.
+
+    // FIX: Check if a resize occurred between beginFrame and endFrame in addition to presentation results.
+    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || m_framebufferResized) {
+        m_framebufferResized = true;
+    } else if (result != vk::Result::eSuccess)
+        LOG_ERROR("Failed to present swap chain image!");
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }

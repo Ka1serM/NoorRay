@@ -1,0 +1,124 @@
+﻿* {
+    box-sizing: border-box;
+    font-size: 15dp;
+}
+
+
+body {
+    display: flex;
+    flex-direction: column;
+    font-family: Roboto;
+    color: #ffffff;
+}
+
+body.window {
+    font-family: Roboto;
+    font-size: 15dp;
+}
+
+h1, h2, h3, h4, h5 {
+    margin: 0 0 6dp 0;
+}
+
+h1 { font-size: 22dp; }
+h2 { font-size: 20dp; }
+h3 { font-size: 18dp; }
+h4 { font-size: 16dp; }
+
+p {
+    margin: 4dp 0;
+    line-height: 1.4;
+}
+
+a {
+    color: #61dafb;
+    text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+ul, ol { margin: 0; padding: 0; }
+li { margin: 0; }
+
+select, option, textarea {
+    background: #FFFFFF0D;
+    text-align: center;
+    justify-content: center;
+    vertical-align: center;
+    padding: 8dp 0dp;
+    border-radius: 9dp;
+}
+
+input[type="text"] {
+    text-align: right;
+}
+
+input[type="number"] {
+    text-align: right;
+    display: block;
+    color: #ffffff;
+    background-color: #FFFFFF08;
+    padding: 6dp;
+    margin: 2dp;
+    border-radius: 9dp;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+input[type="number"]:hover {
+    background-color: #FFFFFF19;
+}
+
+label {
+    vertical-align: center;
+    text-align: left;
+}
+
+button {
+    display: block;
+    color: #ffffff;
+    background-color: #FFFFFF0D;
+    padding: 6dp 15dp;
+    margin: 2dp;
+    border-radius: 9dp;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+button:hover {
+    background-color: #FFFFFF19;
+}
+
+.checkbox {
+    padding: 0;
+    width: 10dp;
+    height: 10dp;
+    border-color: #FFFFFF26;
+    border-radius: 10dp;
+    background-color: #FFFFFF00;
+    cursor: pointer;
+    border-width: 2dp;
+    transition: background-color 0.2s;
+}
+
+.checkbox:checked {
+    background-color: #FFFFFFFF;
+}
+
+.keyframe {
+    padding: 0;
+    width: 14dp;
+    height: 14dp;
+    border-color: #FFFFFF26;
+    border-radius: 10dp;
+    background-color: #FFFFFF;
+    cursor: pointer;
+    border-width: 3dp;
+    transition: background-color 0.2s;
+}
+
+.keyframe:hover {
+    background-color: #cdcdcd;
+}
+
+.keyframe:checked {
+    background-color: #ff4a4a;
+}

@@ -3,9 +3,45 @@
         <link type="text/rcss" href="MenuBar.css" />
     </head>
     <body>
-    <button>File</button>
-    <button>Edit</button>
-    <button>View</button>
-    <button>Help</button>
+    
+    <div class="menu-item">
+        <button>File</button>
+        <ul class="dropdown-menu">
+            <li><button>New Scene</button></li>
+            <li><button>Open Scene...</button></li>
+            <li class="separator"></li>
+            <li><button>Save</button></li>
+            <li><button>Save As...</button></li>
+            <li class="separator"></li>
+            <li><button>Exit</button></li>
+        </ul>
+    </div>
+
+    <div class="menu-item">
+        <button>Edit</button>
+        <ul class="dropdown-menu">
+            <li><button>Undo</button></li>
+            <li><button>Redo</button></li>
+            <li><button>Cut</button></li>
+            <li><button>Copy</button></li>
+            <li><button>Paste</button></li>
+        </ul>
+    </div>
+
+    <div class="menu-item">
+        <button>View</button>
+        <ul class="dropdown-menu">
+            <li><button>Toggle Details Panel</button></li>
+            <li><button>Toggle Scene Graph</button></li>
+        </ul>
+    </div>
+
+    <div class="menu-item">
+        <button>Help</button>
+        <ul class="dropdown-menu">
+            <li><button>About</button></li>
+        </ul>
+    </div>
+    
     </body>
 </template>

@@ -35,18 +35,33 @@ target_include_directories(stb INTERFACE
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
-# FreeType
+# Lua
+file(GLOB LUA_SOURCES
+        "${CMAKE_SOURCE_DIR}/external/lua/l*.c"
+)
+list(FILTER LUA_SOURCES EXCLUDE REGEX ".*lua\\.c$")
+list(FILTER LUA_SOURCES EXCLUDE REGEX ".*luac\\.c$")
+add_library(lua_from_source STATIC ${LUA_SOURCES})
+set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX)
+target_include_directories(lua_from_source PUBLIC
+        "${CMAKE_SOURCE_DIR}/external/lua"
+)
+add_library(Lua::Lua INTERFACE IMPORTED)
+target_link_libraries(Lua::Lua INTERFACE lua_from_source)
+
+
+#  FreeType
 add_subdirectory(external/freetype)
-# Create an alias for RmlUi's build system to find
 add_library(Freetype::Freetype ALIAS freetype)
 
-# RML
-set(BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(RMLUI_SHELL ON CACHE BOOL "Enable shell to build backends" FORCE)
-set(RMLUI_BACKEND "SDL_VK" CACHE STRING "Select the RmlUi backend" FORCE)
+# RmlUi
+set(RMLUI_FONT_ENGINE "freetype" CACHE STRING "Use Freetype" FORCE)
+set(RMLUI_LUA_BINDINGS ON CACHE BOOL "Enable Lua bindings" FORCE)
+set(RMLUI_LUA_BINDINGS_LIBRARY "lua_as_cxx" CACHE STRING "Use Lua built as C++" FORCE)
+set(RMLUI_SAMPLES OFF CACHE BOOL "Do not build samples" FORCE)
+set(RMLUI_TESTS OFF CACHE BOOL "Do not build tests" FORCE)
 add_subdirectory(external/rmlui)
+
 
 # MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
@@ -103,6 +118,12 @@ target_include_directories(NoorRay PRIVATE
         ${PROJECT_SOURCE_DIR}/src
 )
 
+add_custom_target(NoorRay_RunOnly
+        COMMAND NoorRay
+        WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        COMMENT "Running NoorRay without rebuilding"
+)
+
 # Link against all libraries
 target_link_libraries(NoorRay PRIVATE
         portable_file_dialogs
@@ -115,6 +136,7 @@ target_link_libraries(NoorRay PRIVATE
         stb
 
         RmlUi::Core
+        RmlUi::Lua
         GPUOpen::VulkanMemoryAllocator
 )
 

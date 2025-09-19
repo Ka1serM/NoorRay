@@ -206,7 +206,8 @@ Rml::TextureHandle RmlRenderInterface::CreateTextureHandleForView(const vk::Imag
 
 
 Rml::TextureHandle RmlRenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) {
-    LOG_INFOS("Loading Texture", source);
+    LOG_INFO("Loading Texture" + source);
+    
     if (source.rfind("vulkan://", 0) == 0) {
         const Rml::String texture_name = source.substr(9);
         const auto it = m_registered_textures.find(texture_name);
@@ -496,8 +497,4 @@ void RmlRenderInterface::DestroyTexture(const TextureData* texture) {
     //    Registered textures get a unique sampler. Generated textures use the shared `m_linear_sampler`.
     if (texture->sampler && texture->sampler != m_linear_sampler.get())
         m_device.destroySampler(texture->sampler);
-
-    // 4. The `owned_image_view` is a vk::UniqueImageView and will be destroyed automatically
-    //    when its `unique_ptr<TextureData>` is destructed.
-    // 5. We DO NOT touch `image_view_raw`. Its lifetime is managed by the application.
 }

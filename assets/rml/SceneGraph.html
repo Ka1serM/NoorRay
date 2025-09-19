@@ -3,68 +3,63 @@
         <link type="text/rcss" href="SceneGraph.css" />
     </head>
     <body>
-    <div id="outliner">
-        <ul class="tree">
-            <li class="open">
-                <div class="item-row">
-                    <span class="expander"></span>
-                    <span class="icon">&#128444;</span>
-                    <span class="name">Static Meshes</span>
-                    <span class="controls">&#128065;</span>
-                </div>
-                <ul>
-                    <li>
-                        <div class="item-row">
-                            <span class="expander"></span>
-                            <span class="icon">&#9632;</span>
-                            <span class="name">SM_Cube_01</span>
-                        </div>
-                    </li>
-                    <li>
-                        <div class="item-row">
-                            <span class="expander"></span>
-                            <span class="icon">&#9632;</span>
-                            <span class="name">SM_Floor</span>
-                        </div>
-                    </li>
-                </ul>
-            </li>
-
-            <li>
-                <div class="item-row">
-                    <span class="expander"></span>
-                    <span class="icon">&#128444;</span>
-                    <span class="name">Lights</span>
-                    <span class="controls">&#128065;</span>
-                </div>
-                <ul>
-                    <li>
-                        <div class="item-row">
-                            <span class="expander"></span>
-                            <span class="icon">&#128161;</span>
-                            <span class="name">PointLight_01</span>
-                        </div>
-                        <ul>
+            <ul class="tree">
+                <li>
+                    <input type="checkbox" class="toggle" id="toggle-meshes" checked />
+                    <input type="radio" name="outliner-selection" class="selector" id="select-meshes" />
+                    <div class="item-row">
+                        <label for="toggle-meshes" class="expander"></label>
+                        <label for="select-meshes" class="name">Static Mesh</label>
+                    </div>
+    
+                    <ul>
+                        <div class="collapsible-content">
                             <li>
+                                <input type="radio" name="outliner-selection" class="selector" id="select-cube" />
                                 <div class="item-row">
-                                    <span class="expander"></span>
-                                    <span class="icon">&#128295;</span>
-                                    <span class="name">Light Properties</span>
+                                    <span class="expander is-leaf"></span>
+                                    <label for="select-cube" class="name">SM_Cube_01</label>
                                 </div>
                             </li>
-                        </ul>
-                    </li>
-                </ul>
-            </li>
-
-            <li>
-                <div class="item-row">
-                    <span class="expander"></span>
-                    <span class="icon">&#127909;</span>
-                    <span class="name">MainCamera</span>
-                </div>
-            </li>
-        </ul>
-    </div>
+                            <li>
+                                <input type="radio" name="outliner-selection" class="selector" id="select-floor" />
+                                <div class="item-row">
+                                    <span class="expander is-leaf"></span>
+                                    <label for="select-floor" class="name">SM_Floor</label>
+                                </div>
+                            </li>
+                        </div>
+                    </ul>
+                </li>
+    
+                <li>
+                    <input type="checkbox" class="toggle" id="toggle-lights" />
+                    <input type="radio" name="outliner-selection" class="selector" id="select-lights" />
+                    <div class="item-row">
+                        <label for="toggle-lights" class="expander"></label>
+                        <label for="select-lights" class="name">Light</label>
+                    </div>
+                    <ul>
+                        <div class="collapsible-content">
+                            <li>
+                                <input type="checkbox" class="toggle" id="toggle-pointlight" />
+                                <input type="radio" name="outliner-selection" class="selector" id="select-pointlight" />
+                                <div class="item-row">
+                                    <label for="toggle-pointlight" class="expander is-leaf"></label>
+                                    <label for="select-pointlight" class="name">PointLight_01</label>
+                                </div>
+                            </li>
+                        </div>
+                    </ul>
+                </li>
+    
+                <li>
+                    <input type="radio" name="outliner-selection" class="selector" id="select-camera" />
+                    <div class="item-row">
+                        <span class="expander is-leaf"></span>
+                        <label for="select-camera" class="name">MainCamera</label>
+                    </div>
+                </li>
+            </ul>
     </body>
 </template>

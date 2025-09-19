@@ -1,13 +1,62 @@
 ﻿<rml>
     <head>
+        <title>Editor</title>
+        <link type="text/rcss" href="Theme.css"/>
         <link type="text/rcss" href="Editor.css"/>
-        
+
         <link type="text/template" href="MenuBar.html"/>
-        <link type="text/template" href="DetailsPanel.html"/>
+        <link type="text/template" href="Details.html"/>
         <link type="text/template" href="SceneGraph.html"/>
         <link type="text/template" href="Viewport.html"/>
+
+        <script>
+            function Init(document)
+            local right_column = document:GetElementById('right-column')
+            local details = document:GetElementById('details')
+            local splitter_v = document:GetElementById('splitter-v')
+            local splitter_h = document:GetElementById('splitter-h')
+
+            local dragging_v = false
+            local dragging_h = false
+            local start_x = 0
+            local start_y = 0
+            local start_right_width = 0
+            local start_details_height = 0
+
+            splitter_v:AddEventListener('mousedown', function(event)
+            dragging_v = true
+            start_x = event.parameters.mouse_x
+            start_right_width = right_column.offset_width
+            end)
+
+            splitter_h:AddEventListener('mousedown', function(event)
+            dragging_h = true
+            start_y = event.parameters.mouse_y
+            start_details_height = details.offset_height
+            end)
+
+            document:AddEventListener('mousemove', function(event)
+            if dragging_v then
+            local delta_x = event.parameters.mouse_x - start_x
+            local new_width = start_right_width - delta_x
+            right_column.style['flex-basis'] = tostring(new_width) .. 'px'
+            end
+
+            if dragging_h then
+            local delta_y = event.parameters.mouse_y - start_y
+            local new_height = start_details_height - delta_y
+            details.style['flex-basis'] = tostring(new_height) .. 'px'
+            end
+            end)
+
+            document:AddEventListener('mouseup', function(event)
+            dragging_v = false
+            dragging_h = false
+            end)
+            end
+        </script>
     </head>
-    <body>
+    <body onload="Init(document)">
     <div class="editor-root">
         <div id="menubar">
             <template src="MenuBar"></template>
@@ -20,15 +69,15 @@
 
             <div id="splitter-v" class="splitter-v"></div>
 
-            <div class="right-column">
-                <div id="scene-graph" class="dock-panel">
+            <div class="right-column" id="right-column">
+                <div id="scenegraph" class="dock-panel">
                     <template src="SceneGraph"></template>
                 </div>
 
                 <div id="splitter-h" class="splitter-h"></div>
 
                 <div id="details" class="dock-panel">
-                    <template src="DetailsPanel"></template>
+                    <template src="Details"></template>
                 </div>
             </div>
         </div>

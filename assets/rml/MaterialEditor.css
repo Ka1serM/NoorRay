@@ -1,0 +1,138 @@
+﻿body.window {
+    position: absolute;
+    top: 100dp;
+    left: 150dp;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+#title-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16dp;
+    border-radius: 22dp 22dp 0 0;
+    cursor: move;
+    background-color: #131416;
+}
+
+#content {
+    border-radius: 0 0 22dp 22dp;
+    background-color: #131416;
+    padding: 16dp;
+}
+
+#editor-layout {
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    gap: 15dp;
+}
+
+#left-panel {
+    display: flex;
+    flex-direction: column;
+    width: 200dp;
+    gap: 12dp;
+}
+
+#right-panel {
+    display: flex;
+    flex-direction: column;
+    width: 300dp;
+    gap: 12dp;
+}
+
+#material-preview {
+    width: 150dp;
+    height: 150dp;
+    margin: 20dp auto;
+    border-radius: 200dp;
+    background-color: #b3824b;
+}
+
+.property {
+    display: flex;
+    align-items: center;
+}
+
+
+.separator {
+    height: 1px;
+    background-color: #333337;
+    margin: 10dp 0;
+}
+
+#properties-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10dp;
+}
+
+/* --- Selection Logic from SceneGraph --- */
+#properties-list .selector {
+    display: none;
+}
+
+#properties-list .property > label:first-child {
+    flex-grow: 1;
+    color: #a0a0a0;
+}
+
+#properties-list .name {
+    color: #a0a0a0;
+    flex-grow: 1;
+    cursor: pointer;
+    transition: color 0.2s;
+    padding: 2dp 0;
+}
+
+#properties-list .property:hover .name {
+    color: #787878; /* Dim color on hover */
+}
+
+#properties-list input.selector:checked + .name {
+    color: #ffd98d; /* Gold/yellow for selected */
+}
+
+
+#properties-list .property .checkbox {
+    margin-left: auto; /* Pushes checkbox to the far right */
+}
+
+
+#footer-buttons {
+    margin-top: auto; /* Pushes buttons to the bottom */
+    display: flex;
+    justify-content: space-between;
+    gap: 8dp;
+}
+
+#footer-buttons button {
+    flex-grow: 1;
+    padding: 8dp;
+    background-color: #333337;
+    border-radius: 6dp;
+    color: #e0e0e0;
+}
+
+#footer-buttons button:hover {
+    background-color: #444448;
+}
+
+.placeholder {
+    position: relative;
+    background-color: #18191c;
+    border-radius: 8dp;
+}
+
+.placeholder p {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #555;
+    font-size: 1.3em;
+}
+

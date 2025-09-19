@@ -1,5 +1,6 @@
 ﻿#include "RmlUiManager.h"
 #include <RmlUi/Core.h>
+#include <RmlUi/Lua.h>
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include "Vulkan/Image.h"
@@ -16,9 +17,10 @@ RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
         ),
     customImage(context, 1, 1, renderer.getColorImageFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
 {
+#ifdef NDEBUG
     // Register all embedded files
-    static constexpr unsigned char inter_regular_ttf[] = {
-    #embed "../../../assets/fonts/Inter-Regular.ttf"
+    static constexpr unsigned char roboto_ttf[] = {
+    #embed "../../../assets/fonts/Roboto.ttf"
     };
     static constexpr unsigned char editor_html[] = {
     #embed "../../../assets/rml/Editor.html"
@@ -32,11 +34,11 @@ RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
     static constexpr unsigned char menubar_css[] = {
     #embed "../../../assets/rml/MenuBar.css"
     };
-    static constexpr unsigned char details_panel_html[] = {
-    #embed "../../../assets/rml/DetailsPanel.html"
+    static constexpr unsigned char details_html[] = {
+    #embed "../../../assets/rml/Details.html"
     };
-    static constexpr unsigned char details_panel_css[] = {
-    #embed "../../../assets/rml/DetailsPanel.css"
+    static constexpr unsigned char details_css[] = {
+    #embed "../../../assets/rml/Details.css"
     };
     static constexpr unsigned char scene_graph_html[] = {
     #embed "../../../assets/rml/SceneGraph.html"
@@ -51,45 +53,52 @@ RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
     #embed "../../../assets/rml/Viewport.css"
     };
 
-    rmlFileInterface.RegisterFile("Inter-Regular.ttf", inter_regular_ttf, sizeof(inter_regular_ttf));
-    rmlFileInterface.RegisterFile("Editor.html", editor_html, sizeof(editor_html));
-    rmlFileInterface.RegisterFile("Editor.css", editor_css, sizeof(editor_css));
-    rmlFileInterface.RegisterFile("MenuBar.html", menubar_html, sizeof(menubar_html));
-    rmlFileInterface.RegisterFile("MenuBar.css", menubar_css, sizeof(menubar_css));
-    rmlFileInterface.RegisterFile("DetailsPanel.html", details_panel_html, sizeof(details_panel_html));
-    rmlFileInterface.RegisterFile("DetailsPanel.css", details_panel_css, sizeof(details_panel_css));
-    rmlFileInterface.RegisterFile("SceneGraph.html", scene_graph_html, sizeof(scene_graph_html));
-    rmlFileInterface.RegisterFile("SceneGraph.css", scene_graph_css, sizeof(scene_graph_css));
-    rmlFileInterface.RegisterFile("Viewport.html", viewport_html, sizeof(viewport_html));
-    rmlFileInterface.RegisterFile("Viewport.css", viewport_css, sizeof(viewport_css));
-    
+    rmlFileInterface.RegisterFile("../assets/fonts/Inter-Regular.ttf", roboto_ttf, sizeof(roboto_ttf));
+    rmlFileInterface.RegisterFile("../assets/rml/Editor.html", editor_html, sizeof(editor_html));
+    rmlFileInterface.RegisterFile("../assets/rml/Editor.css", editor_css, sizeof(editor_css));
+    rmlFileInterface.RegisterFile("../assets/rml/MenuBar.html", menubar_html, sizeof(menubar_html));
+    rmlFileInterface.RegisterFile("../assets/rml/MenuBar.css", menubar_css, sizeof(menubar_css));
+    rmlFileInterface.RegisterFile("../assets/rml/Details.html", details_html, sizeof(details_html));
+    rmlFileInterface.RegisterFile("../assets/rml/Details.css", details_css, sizeof(details_css));
+    rmlFileInterface.RegisterFile("../assets/rml/SceneGraph.html", scene_graph_html, sizeof(scene_graph_html));
+    rmlFileInterface.RegisterFile("../assets/rml/SceneGraph.css", scene_graph_css, sizeof(scene_graph_css));
+    rmlFileInterface.RegisterFile("../assets/rml/Viewport.html", viewport_html, sizeof(viewport_html));
+    rmlFileInterface.RegisterFile("../assets/rml/Viewport.css", viewport_css, sizeof(viewport_css));
+    Rml::SetFileInterface(&rmlFileInterface);
+#endif
+
     // Setup system interface
     rmlSystemInterface.SetWindow(context.getWindow());
 
     // Initialize RmlUi
-    Rml::SetFileInterface(&rmlFileInterface);
     Rml::SetSystemInterface(&rmlSystemInterface);
     Rml::SetRenderInterface(&rmlRenderInterface);
     Rml::Initialise();
+    Rml::Lua::Initialise();
 
     // Create context
     rmlContext = Rml::CreateContext("main",{static_cast<int>(context.getWindowWidth()), static_cast<int>(context.getWindowHeight())});
     rmlContext->SetDensityIndependentPixelRatio(context.getDPIScale());
 
     // Load font(s)
-    Rml::LoadFontFace("Inter-Regular.ttf");
+    Rml::LoadFontFace("../assets/fonts/Roboto.ttf");
 
     // Load initial document
-    document = rmlContext->LoadDocument("Editor.html");
-    if (document)
-        document->Show();
+    editorDocument = rmlContext->LoadDocument("../assets/rml/Editor.html");
+    if (editorDocument)
+        editorDocument->Show();
+
+    materialEditorDocument =  rmlContext->LoadDocument("../assets/rml/MaterialEditor.html");
+    if (materialEditorDocument)
+        materialEditorDocument->Show();
+    
 }
 
 void RmlUiManager::bindViewportImage(const Image& image) {
     const Rml::String texture_name = "viewport-img";
     rmlRenderInterface.registerVulkanTexture(texture_name,  image.getImageView(),  Rml::Vector2i{static_cast<int>(image.getWidth()), static_cast<int>(image.getHeight())});
 
-    Rml::Element* viewportElem = document->GetElementById("viewport-img");
+    Rml::Element* viewportElem = editorDocument->GetElementById("viewport-img");
     if (viewportElem)
         viewportElem->SetAttribute("src", "vulkan://" + texture_name);
 }
@@ -112,9 +121,9 @@ void RmlUiManager::updateDisplayImage(const vk::CommandBuffer cmd, Image& srcIma
 
 RmlUiManager::~RmlUiManager()
 {
-    if (document) {
-        document->Close();
-        document = nullptr;
+    if (editorDocument) {
+        editorDocument->Close();
+        editorDocument = nullptr;
     }
 
     if (rmlContext) {
@@ -146,4 +155,19 @@ void RmlUiManager::resize(int width, int height) const
         return;
 
     rmlContext->SetDimensions({ width,height });
+}
+
+void RmlUiManager::reload()
+{
+    editorDocument->Close();
+    materialEditorDocument->Close();
+    Rml::Factory::ClearStyleSheetCache();
+
+    editorDocument = rmlContext->LoadDocument("../assets/rml/Editor.html");
+    if (editorDocument)
+        editorDocument->Show();
+
+    editorDocument = rmlContext->LoadDocument("../assets/rml/MaterialEditor.html");
+    if (materialEditorDocument)
+        materialEditorDocument->Show();
 }

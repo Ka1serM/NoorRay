@@ -24,7 +24,7 @@ ImGuiManager::ImGuiManager(Context& context, uint32_t numSwapchainImages, const 
 #ifdef NDEBUG // Release mode: embed ini into binary
     io.IniFilename = nullptr;  // don't use external file
     static constexpr char ini[] = {
-        #embed "../../assets/imgui.ini"
+        #embed "../../../assets/imgui.ini"
     };
     ImGui::LoadIniSettingsFromMemory(ini, sizeof(ini));
 #else

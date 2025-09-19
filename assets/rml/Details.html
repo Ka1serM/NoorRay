@@ -1,0 +1,85 @@
+﻿<template name="Details">
+    <head>
+        <link type="text/rcss" href="Details.css" />
+    </head>
+    <body>
+    <div id="details-panel">
+
+        <div class="transform-column">
+            <h4>Position</h4>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="pos_x" checked/>
+                    <label for="pos_x">X</label>
+                </div>
+                <input type="number" value="0"/>
+            </div>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="pos_y"/>
+                    <label for="pos_y">Y</label>
+                </div>
+                <input type="number" value="0"/>
+            </div>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="pos_z"/>
+                    <label for="pos_z">Z</label>
+                </div>
+                <input type="number" value="0"/>
+            </div>
+        </div>
+
+        <div class="transform-column">
+            <h4>Rotation</h4>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="rot_x"/>
+                    <label for="rot_x">X</label>
+                </div>
+                <input type="number" value="0"/>
+            </div>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="rot_y"/>
+                    <label for="rot_y">Y</label>
+                </div>
+                <input type="number" value="0"/>
+            </div>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="rot_z"/>
+                    <label for="rot_z">Z</label>
+                </div>
+                <input type="number" value="0"/>
+            </div>
+        </div>
+
+        <div class="transform-column">
+            <h4>Scale</h4>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="scale_x"/>
+                    <label for="scale_x">X</label>
+                </div>
+                <input type="number" value="1"/>
+            </div>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="scale_y"/>
+                    <label for="scale_y">Y</label>
+                </div>
+                <input type="number" value="1"/>
+            </div>
+            <div class="property">
+                <div class="property-prefix">
+                    <input type="checkbox" class="keyframe" id="scale_z"/>
+                    <label for="scale_z">Z</label>
+                </div>
+                <input type="number" value="1"/>
+            </div>
+        </div>
+
+    </div>
+    </body>
+</template>

@@ -1,0 +1,37 @@
+#details-panel {
+    display: flex;
+    flex-direction: row;
+    padding: 12px;
+    gap: 24px;
+}
+
+.transform-column {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    gap: 8px;
+    min-width: 100px;
+}
+
+.transform-column h4 {
+    margin: 0 0 6px 0;
+    text-align: center;
+}
+
+.property {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* This new class groups the checkbox and label */
+.property-prefix {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0; /* This is the most important part */
+}
+
+.property input[type="number"] {
+    flex-grow: 1; /* This remains the only stretchy part */
+}

@@ -101,6 +101,8 @@ void NoorRay::run() {
                 renderer.notifyResize(event.window.data1, event.window.data2);
                 rmlUiManager.resize(event.window.data1, event.window.data2);
             }
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_SPACE)
+                rmlUiManager.reload();
         }
 
         if (renderer.beginFrame())
@@ -150,7 +152,7 @@ void NoorRay::run() {
             }
 
             rmlUiManager.render(cmd, renderer.getCurrentColorImageView(), renderer.getDepthImageView(), renderer.getSwapchainExtent(), renderer.getCurrentInFlightFence());
-            imGuiManager.render(cmd, renderer.getCurrentColorImageView(), renderer.getSwapchainExtent());
+            //imGuiManager.render(cmd, renderer.getCurrentColorImageView(), renderer.getSwapchainExtent());
 
             renderer.endFrame();
         }

@@ -1,137 +1,94 @@
-/* === Base Styles === */
+* {
+    box-sizing: border-box;
+    font-size: 15dp;
+}
+
+body.window {
+}
+
 body {
-    width: 100%;
     height: 100%;
-    margin: 0;
-    padding: 0;
-    font-family: Inter;
-    font-size: 14dp;
-    color: #e0e0e0;
-    background: #1e1e1e;
+    width: 100%;
 }
 
-h1, h2, h3, h4, h5 {
-    margin: 0 0 6dp 0;
-    font-weight: 500;
-    color: #ffffff;
-}
-h1 { font-size: 20dp; color: #a01c20; }
-h2 { font-size: 18dp; color: #a01c20; }
-h3 { font-size: 16dp; color: #a01c20; }
-
-p { margin: 4dp 0; line-height: 1.4; }
-
-a {
-    color: #61dafb;
-    text-decoration: none;
-}
-a:hover { text-decoration: underline; }
-
-ul, ol {
-    margin: 4dp 0 4dp 16dp;
-    padding: 0;
-}
-li { margin: 2dp 0; }
-
-input, select, textarea {
-    background: #333333;
-    border: 1dp solid #444444;
-    color: #ffffff;
-    padding: 4dp 6dp;
-    border-radius: 3dp;
-    font-size: 14dp;
-}
-input:focus, select:focus, textarea:focus {
-    border-color: #a01c20;
-    outline: none;
-}
-
-button {
-    background: #333333;
-    color: #ffffff;
-    border: 1dp solid #555555;
-    padding: 4dp 10dp;
-    border-radius: 4dp;
-    cursor: pointer;
-    font-size: 14dp;
-    /* Add this line to enable a smooth transition */
-    transition: background-color 0.2s, border-color 0.2s;
-}
-
-button:hover {
-    background: #444444;
-    border-color: #777777;
-}
-
-button:active {
-    background: #555555;
-    border-color: #999999;
-}
-
-/* === Layout Styles === */
 .editor-root {
     display: flex;
     flex-direction: column;
+    padding: 10dp;
     width: 100%;
     height: 100%;
-}
-
-#menubar {
-    height: 32dp;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    padding: 0 8dp;
-    font-size: 13dp;
-    border-bottom: 1dp solid #444444;
+    background-color: #0E0E10;
 }
 
 .dock-layout {
     flex: 1;
     display: flex;
-    flex-direction: row;
-}
-
-#viewport {
-    flex: 2;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.right-column {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-#scene-graph, #details {
-    flex: 1;
+    /* This will prevent the layout itself from overflowing its parent */
+    overflow: hidden;
 }
 
 .dock-panel {
-    background-color: #252526;
-    border: 1dp solid #333333;
-    overflow: auto;
-    padding: 4dp;
-    box-sizing: border-box;
+    background-color: #131416;
+    border-radius: 14dp;
+    margin: 4dp;
+    overflow: hidden;   /* activate clipping */
+    clip: always;       /* force children to be clipped */
+}
+
+.right-column {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    flex-basis: 33%;
+    min-width: 100dp;
 }
 
 .splitter-v {
     flex-shrink: 0;
     width: 6dp;
-    background-color: #444444;
+    background-color: #00000000;
+    border-radius: 2dp;
     cursor: col-resize;
     transition: background 0.2s;
 }
+
 .splitter-h {
     flex-shrink: 0;
     height: 6dp;
-    background-color: #444444;
+    background-color: #00000000;
     cursor: row-resize;
     transition: background 0.2s;
 }
 
 .splitter-v:hover, .splitter-h:hover {
-    background-color: #a01c20;
+    background-color: #131416;
+}
+
+#menubar {
+    display: flex;
+    align-items: center;
+    margin: 0 0 2dp 0;
+}
+
+#viewport {
+    flex-grow: 1;
+    flex-basis: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 100dp;
+}
+
+#scenegraph {
+    flex-grow: 1;
+    flex-basis: 0;
+    min-height: 100dp;
+    padding: 12dp;
+}
+
+#details {
+    flex-grow: 0;
+    flex-basis: 50%;
+    min-height: 100dp;
+    padding: 12dp;
 }

@@ -1,0 +1,85 @@
+﻿<rml>
+    <head>
+        <link type="text/rcss" href="Theme.css"/>
+        <link type="text/rcss" href="MaterialEditor.css"/>
+        <title>Material Editor</title>
+    </head>
+    <body class="window">
+    <handle move_target="#document" id="title-bar">
+        <span>Material Editor</span>
+        <button onclick="document:Close()" class="close-btn">Close</button>
+    </handle>
+    <div id="content">
+        <!-- Main two-column layout -->
+        <div id="editor-layout">
+
+            <!-- Left Panel -->
+            <div id="left-panel">
+                <div id="material-preview"></div>
+
+                <!-- Material Properties List -->
+                <div id="properties-list">
+
+                    <div class="property">
+                        <label>Name</label>
+                        <input type="text" value="Gold material"/>
+                    </div>
+                    <div class="property">
+                        <label>Type</label>
+                        <select>
+                            <option selected="true">GGX</option>
+                            <option>Diffuse</option>
+                            <option>Transparent</option>
+                        </select>
+                    </div>
+                    
+                    <div class="separator"></div>
+                    
+                    <div class="property">
+                        <input type="radio" name="property-selection" class="selector" id="select-diffuse" checked/>
+                        <label for="select-diffuse" class="name">Diffuse</label>
+                        <input type="checkbox" class="checkbox" checked="true" />
+                    </div>
+                    <div class="property">
+                        <input type="radio" name="property-selection" class="selector" id="select-specular"/>
+                        <label for="select-specular" class="name">Specular</label>
+                        <input type="checkbox" class="checkbox" checked="true" />
+                    </div>
+                    <div class="property">
+                        <input type="radio" name="property-selection" class="selector" id="select-roughness"/>
+                        <label for="select-roughness" class="name">Roughness</label>
+                        <input type="checkbox" class="checkbox" />
+                    </div>
+                    <div class="property">
+                        <input type="radio" name="property-selection" class="selector" id="select-bump"/>
+                        <label for="select-bump" class="name">Bump</label>
+                        <input type="checkbox" class="checkbox" />
+                    </div>
+                    <div class="property">
+                        <input type="radio" name="property-selection" class="selector" id="select-normal"/>
+                        <label for="select-normal" class="name">Normal</label>
+                        <input type="checkbox" class="checkbox" />
+                    </div>
+                    <div class="property">
+                        <input type="radio" name="property-selection" class="selector" id="select-displacement"/>
+                        <label for="select-displacement" class="name">Displacement</label>
+                        <input type="checkbox" class="checkbox" />
+                    </div>
+                </div>
+
+                <div id="footer-buttons">
+                    <button>Node Editor</button>
+                </div>
+            </div>
+
+            <div id="right-panel">
+                <div class="placeholder">
+                    <p>Properties Placeholder</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+    </body>
+</rml>
+

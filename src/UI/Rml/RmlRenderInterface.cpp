@@ -204,7 +204,7 @@ Rml::TextureHandle RmlRenderInterface::CreateTextureHandleForView(const vk::Imag
     texture->bindless_index = id;
 
     vk::DescriptorImageInfo image_info(texture->sampler, texture->getImageView(), vk::ImageLayout::eShaderReadOnlyOptimal);
-    const vk::WriteDescriptorSet write(m_bindless_descriptor_set, 1, texture->bindless_index, vk::DescriptorType::eCombinedImageSampler, image_info);
+    const vk::WriteDescriptorSet write(m_bindless_descriptor_set, 0, texture->bindless_index, vk::DescriptorType::eCombinedImageSampler, image_info);
     m_device.updateDescriptorSets(write, {});
 
     return reinterpret_cast<Rml::TextureHandle>(texture.release());
@@ -334,7 +334,7 @@ Rml::TextureHandle RmlRenderInterface::GenerateTexture(const Rml::Span<const Rml
     texture->owned_image_view = m_device.createImageViewUnique(view_ci); // We own this view
     
     vk::DescriptorImageInfo image_info(texture->sampler, texture->getImageView(), vk::ImageLayout::eShaderReadOnlyOptimal);
-    const vk::WriteDescriptorSet write(m_bindless_descriptor_set, 1, texture->bindless_index, vk::DescriptorType::eCombinedImageSampler, image_info);
+    vk::WriteDescriptorSet write(m_bindless_descriptor_set, 0, texture->bindless_index, vk::DescriptorType::eCombinedImageSampler, image_info);
     m_device.updateDescriptorSets(write, {});
 
     return reinterpret_cast<Rml::TextureHandle>(texture.release());
@@ -403,7 +403,7 @@ void RmlRenderInterface::CreateDescriptors() {
 
     m_linear_sampler = m_device.createSamplerUnique(sampler_ci);
     
-    vk::DescriptorSetLayoutBinding binding(1, vk::DescriptorType::eCombinedImageSampler, kMaxBindlessTextures, vk::ShaderStageFlagBits::eFragment);
+    vk::DescriptorSetLayoutBinding binding(0, vk::DescriptorType::eCombinedImageSampler, kMaxBindlessTextures, vk::ShaderStageFlagBits::eFragment);
     vk::DescriptorBindingFlags binding_flags = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     const vk::DescriptorSetLayoutBindingFlagsCreateInfo flags_ci(binding_flags);
     vk::DescriptorSetLayoutCreateInfo layout_ci(vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool, binding);
@@ -555,18 +555,13 @@ void RmlRenderInterface::CreatePipelines(vk::Format colorFormat, vk::Format dept
 
 void RmlRenderInterface::DestroyTexture(const TextureData* texture) {
     if (!texture) return;
-    
     // 1. Return the bindless index to the pool for reuse.
     if (texture->bindless_index != static_cast<uint32_t>(-1))
         m_free_texture_indices.push_back(texture->bindless_index);
-    
     // 2. Destroy the image and its allocation IF we own it.
-    //    `texture->image` will be non-null only for textures created by GenerateTexture.
     if (texture->image)
         vmaDestroyImage(m_allocator, texture->image, texture->allocation);
-
     // 3. Destroy the sampler IF we own it.
-    //    Registered textures get a unique sampler. Generated textures use the shared `m_linear_sampler`.
     if (texture->sampler && texture->sampler != m_linear_sampler.get())
         m_device.destroySampler(texture->sampler);
 }
@@ -580,80 +575,78 @@ void RmlRenderInterface::EnableClipMask(const bool enable) {
 void RmlRenderInterface::RenderToClipMask(Rml::ClipMaskOperation operation, const Rml::CompiledGeometryHandle handle, const Rml::Vector2f translation) {
     auto* geometry = reinterpret_cast<GeometryData*>(handle);
 
+    // Prepare push constants for the mask geometry.
+    // The mask itself is never textured.
     PushConstants constants{};
     constants.transform = m_projection_matrix * m_transform_matrix;
     constants.translate = translation;
     constants.texture_id = -1;
+
+    // Bind the descriptor set once. All stencil pipelines use the same layout.
+    m_command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_layout.get(), 0, m_bindless_descriptor_set, {});
 
     switch (operation) {
         case Rml::ClipMaskOperation::Set: {
             m_stencil_level = 1;
             m_command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline_stencil_gen.get());
             m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, m_stencil_level);
+
+            // Draw the mask geometry
+            m_command_buffer.pushConstants<PushConstants>(m_pipeline_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, constants);
+            m_command_buffer.bindVertexBuffers(0, geometry->buffer, { geometry->vertex_offset });
+            m_command_buffer.bindIndexBuffer(geometry->buffer, geometry->index_offset, vk::IndexType::eUint32);
+            m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
             break;
         }
+
         case Rml::ClipMaskOperation::SetInverse: {
             m_stencil_level = 1;
-            // Fill stencil with 1
+            
+            // 1. Fill the entire stencil buffer with '1'
             m_command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline_stencil_gen.get());
             m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, m_stencil_level);
 
-            //draw fullscreen quad
-            Rml::Vertex vertices[4];
-            vertices[0].position = { -1.0f, -1.0f };
-            vertices[1].position = {  1.0f, -1.0f };
-            vertices[2].position = {  1.0f,  1.0f };
-            vertices[3].position = { -1.0f,  1.0f };
-            int indices[] = { 0, 1, 2, 0, 2, 3 };
-
-            if (const auto handle2 = CompileGeometry({ vertices, 4 }, { indices, 6 }))
-            {
-                // This quad must be drawn without any transformation or translation.
-                const Rml::Matrix4f old_transform = m_transform_matrix;
-                m_transform_matrix = Rml::Matrix4f::Identity();
-
-                // Push constants with no texture and no translation.
-                const PushConstants pc = { m_projection_matrix, {0,0}, -1 };
-                m_command_buffer.pushConstants<PushConstants>(m_pipeline_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, pc);
-    
-                auto* maskGeo = reinterpret_cast<GeometryData*>(handle2);
-                m_command_buffer.bindVertexBuffers(0, maskGeo->buffer, { maskGeo->vertex_offset });
-                m_command_buffer.bindIndexBuffer(maskGeo->buffer, maskGeo->index_offset, vk::IndexType::eUint32);
-                m_command_buffer.drawIndexed(maskGeo->num_indices, 1, 0, 0, 0);
-
-                ReleaseGeometry(handle2);
-                m_transform_matrix = old_transform; // Restore transform
+            // Draw a fullscreen quad (using an identity matrix for the transform)
+            Rml::Vertex quad_vertices[4] = { {{-1.0f, -1.0f}}, {{1.0f, -1.0f}}, {{1.0f, 1.0f}}, {{-1.0f, 1.0f}} };
+            int quad_indices[6] = {0, 1, 2, 0, 2, 3};
+            if (const auto quad_handle = CompileGeometry({ quad_vertices, 4 }, { quad_indices, 6 })) {
+                PushConstants quad_pc = { Rml::Matrix4f::Identity(), {0,0}, -1 };
+                auto* quad_geo = reinterpret_cast<GeometryData*>(quad_handle);
+                m_command_buffer.pushConstants<PushConstants>(m_pipeline_layout.get(), vk::ShaderStageFlagBits::eVertex, 0, quad_pc);
+                m_command_buffer.bindVertexBuffers(0, quad_geo->buffer, { quad_geo->vertex_offset });
+                m_command_buffer.bindIndexBuffer(quad_geo->buffer, quad_geo->index_offset, vk::IndexType::eUint32);
+                m_command_buffer.drawIndexed(quad_geo->num_indices, 1, 0, 0, 0);
+                ReleaseGeometry(quad_handle);
             }
 
-            // Punch hole (write 0) where geometry is
+            // 2. Punch a hole (write '0') where the user geometry is
             m_command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline_stencil_zero.get());
             m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, 0);
+
+            // Draw the mask geometry
+            m_command_buffer.pushConstants<PushConstants>(m_pipeline_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, constants);
+            m_command_buffer.bindVertexBuffers(0, geometry->buffer, { geometry->vertex_offset });
+            m_command_buffer.bindIndexBuffer(geometry->buffer, geometry->index_offset, vk::IndexType::eUint32);
+            m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
             break;
         }
+
         case Rml::ClipMaskOperation::Intersect: {
-            // Increment stencil for nested mask
             m_command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline_stencil_incr.get());
             m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, m_stencil_level);
             m_stencil_level++;
+
+            // Draw the mask geometry
+            m_command_buffer.pushConstants<PushConstants>(m_pipeline_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, constants);
+            m_command_buffer.bindVertexBuffers(0, geometry->buffer, { geometry->vertex_offset });
+            m_command_buffer.bindIndexBuffer(geometry->buffer, geometry->index_offset, vk::IndexType::eUint32);
+            m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
             break;
         }
     }
-
-    // Push constants and draw geometry
-    m_command_buffer.pushConstants<PushConstants>(m_pipeline_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0 , constants);
-
-    m_command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_layout.get(), 0, m_bindless_descriptor_set, {});
-
-    m_command_buffer.bindVertexBuffers(0, geometry->buffer, { geometry->vertex_offset });
-    m_command_buffer.bindIndexBuffer(geometry->buffer, geometry->index_offset, vk::IndexType::eUint32);
-    m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
 }
 
-
-// =================================================================================================
-// SHADER IMPLEMENTATION (FIXED AND UNCOMMENTED)
-// =================================================================================================
-
+// SHADER IMPLEMENTATION
 Rml::CompiledShaderHandle RmlRenderInterface::CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) {
     auto shader = std::make_unique<CompiledShader>();
     GradientData gradient_data{};

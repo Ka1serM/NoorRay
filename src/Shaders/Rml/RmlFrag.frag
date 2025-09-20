@@ -14,7 +14,7 @@ layout(push_constant) uniform PushConstants {
 } push_constants;
 
 // Your bindless texture array
-layout(set = 0, binding = 1) uniform sampler2D textures[];
+layout(set = 0, binding = 0) uniform sampler2D textures[];
 
 void main() {
     vec4 color = in_color;

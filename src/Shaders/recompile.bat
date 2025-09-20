@@ -15,6 +15,7 @@ call :compile_shader "Tonemapping/Tonemapper.comp" "Tonemapping/Tonemapper.spv" 
 REM Rml Shaders
 call :compile_shader "Rml/RmlFrag.frag" "Rml/RmlFrag.spv" ""
 call :compile_shader "Rml/RmlVert.vert" "Rml/RmlVert.spv" ""
+call :compile_shader "Rml/RmlGradientFrag.frag" "Rml/RmlGradientFrag.spv" ""
 
 echo Shader compilation complete.
 exit /b

@@ -20,6 +20,7 @@
 #content {
     border-radius: 0 0 22dp 22dp;
     background-color: #131416;
+    decorator: linear-gradient(to bottom, #00f3, #0001, #00f3), linear-gradient(to top right, red, blue);
     padding: 16dp;
 }
 

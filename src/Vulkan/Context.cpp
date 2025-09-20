@@ -9,7 +9,7 @@
 #if !defined(NDEBUG)
     constexpr bool EnableValidationLayers = false;
 #else
-    constexpr bool EnableValidationLayers = false;
+    constexpr bool EnableValidationLayers = true;
 #endif
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE

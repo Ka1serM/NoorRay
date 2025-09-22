@@ -13,7 +13,8 @@ RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
           context.getCommandPool(),
           context.getDescriptorPool(),
           renderer.getColorImageFormat(),
-          renderer.getDepthImageFormat()
+          renderer.getDepthImageFormat(),
+          vk::Extent2D{ context.getWindowWidth(), context.getWindowHeight()}
         ),
     customImage(context, 1, 1, renderer.getColorImageFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
 {
@@ -95,12 +96,12 @@ RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
 }
 
 void RmlUiManager::bindViewportImage(const Image& image) {
-    const Rml::String texture_name = "viewport-img";
-    rmlRenderInterface.registerVulkanTexture(texture_name,  image.getImageView(),  Rml::Vector2i{static_cast<int>(image.getWidth()), static_cast<int>(image.getHeight())});
+    //const Rml::String texture_name = "viewport-img";
+    //rmlRenderInterface.registerVulkanTexture(texture_name,  image.getImageView(),  Rml::Vector2i{static_cast<int>(image.getWidth()), static_cast<int>(image.getHeight())});
 
-    Rml::Element* viewportElem = editorDocument->GetElementById("viewport-img");
-    if (viewportElem)
-        viewportElem->SetAttribute("src", "vulkan://" + texture_name);
+    //Rml::Element* viewportElem = editorDocument->GetElementById("viewport-img");
+    //if (viewportElem)
+   //     viewportElem->SetAttribute("src", "vulkan://" + texture_name);
 }
 
 void RmlUiManager::updateDisplayImage(const vk::CommandBuffer cmd, Image& srcImage) {
@@ -134,9 +135,9 @@ RmlUiManager::~RmlUiManager()
     Rml::Shutdown();
 }
 
-void RmlUiManager::render(const vk::CommandBuffer command_buffer, const vk::ImageView target_image_view, const vk::ImageView depthImageView, const vk::Extent2D target_extent, const vk::Fence in_flight_fenc)
+void RmlUiManager::render(const vk::CommandBuffer command_buffer, const vk::Image target_image,  const vk::ImageView target_image_view, const vk::ImageView depthImageView, const vk::Extent2D target_extent, const vk::Fence in_flight_fenc)
 {
-    rmlRenderInterface.beginFrame(command_buffer, target_image_view, depthImageView, target_extent, in_flight_fenc);
+    rmlRenderInterface.beginFrame(command_buffer, target_image, target_image_view, depthImageView, target_extent, in_flight_fenc);
 
     rmlContext->Update();
     rmlContext->Render();

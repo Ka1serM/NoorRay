@@ -151,7 +151,7 @@ void NoorRay::run() {
                 }
             }
 
-            rmlUiManager.render(cmd, renderer.getCurrentColorImageView(), renderer.getDepthImageView(), renderer.getSwapchainExtent(), renderer.getCurrentInFlightFence());
+            rmlUiManager.render(cmd, renderer.getCurrentColorImage(), renderer.getCurrentColorImageView(), renderer.getDepthImageView(), renderer.getSwapchainExtent(), renderer.getCurrentInFlightFence());
             //imGuiManager.render(cmd, renderer.getCurrentColorImageView(), renderer.getSwapchainExtent());
 
             renderer.endFrame();

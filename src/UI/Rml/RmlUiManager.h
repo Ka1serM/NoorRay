@@ -18,7 +18,7 @@ public:
     void updateDisplayImage(vk::CommandBuffer cmd, Image& srcImage);
     ~RmlUiManager();
 
-    void render(vk::CommandBuffer command_buffer, vk::ImageView target_image_view, vk::ImageView depthImageView, vk::Extent2D target_extent, vk::Fence in_flight_fenc);
+    void render(vk::CommandBuffer command_buffer, vk::Image target_image, vk::ImageView target_image_view, vk::ImageView depthImageView, vk::Extent2D target_extent, vk::Fence in_flight_fenc);
     void processEvent(SDL_Window* window, SDL_Event& event) const;
     void resize(int width, int height) const;
     void reload();

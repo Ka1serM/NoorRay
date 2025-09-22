@@ -16,6 +16,10 @@ REM Rml Shaders
 call :compile_shader "Rml/RmlFrag.frag" "Rml/RmlFrag.spv" ""
 call :compile_shader "Rml/RmlVert.vert" "Rml/RmlVert.spv" ""
 call :compile_shader "Rml/RmlGradientFrag.frag" "Rml/RmlGradientFrag.spv" ""
+call :compile_shader "Rml/RmlFilterFrag.frag" "Rml/RmlFilterFrag.spv" ""
+
+call :compile_shader "Rml/RmlPassthroughFrag.frag" "Rml/RmlPassthroughFrag.spv" ""
+call :compile_shader "Rml/RmlPassthroughVert.vert" "Rml/RmlPassthroughVert.spv" ""
 
 echo Shader compilation complete.
 exit /b

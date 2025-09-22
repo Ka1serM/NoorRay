@@ -13,7 +13,7 @@ layout(location = 1) out vec2 out_tex_coord;
 layout(push_constant) uniform PushConsts {
     mat4 transform;
     vec2 translate;
-    int texture_ids; // Unused in vertex shader, but part of the struct
+    int texture_id;
 } push_constants;
 
 void main() {

@@ -90,20 +90,15 @@ public:
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }
     const vk::Device& getDevice() const { return device.get(); }
-    
     const vk::Queue& getGraphicsQueue() const { return graphicsQueue; }
     const vk::Queue& getComputeQueue() const { return computeQueue; }
     const vk::Queue& getPresentQueue() const { return presentQueue; }
     uint32_t getGraphicsFamilyIndex() const { return graphicsFamilyIndex; }
     uint32_t getComputeFamilyIndex() const { return computeFamilyIndex; }
     uint32_t getPresentFamilyIndex() const { return presentFamilyIndex; }
-    
     const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
-
     VmaAllocator getAllocator() const { return allocator; }
-
-    void queryWindowSize();
 
     bool isRtxSupported() const { return rtxSupported; }
 };

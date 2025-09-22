@@ -13,7 +13,6 @@ layout(push_constant) uniform PushConstants {
     int texture_id;
 } push_constants;
 
-// Your bindless texture array
 layout(set = 0, binding = 0) uniform sampler2D textures[];
 
 void main() {

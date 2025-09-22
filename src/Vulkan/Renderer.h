@@ -15,6 +15,7 @@ public:
 
     uint32_t getNumSwapchainImages() const { return swapchainImages.size(); }
     vk::Extent2D getSwapchainExtent() const { return swapchainExtent; }
+    vk::Image getCurrentColorImage() const { return swapchainImages[m_imageIndex]; }
     vk::ImageView getCurrentColorImageView() const { return swapchainImageViews[m_imageIndex].get(); }
     vk::Format getColorImageFormat() const { return colorImageFormat; }
     vk::ImageView getDepthImageView() const { return depthImageView.get(); }

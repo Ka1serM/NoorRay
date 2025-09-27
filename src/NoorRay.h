@@ -11,10 +11,10 @@ class Tonemapper;
 class NoorRay
 {
     Context context;
+    Scene scene;
     Renderer renderer;
     ImGuiManager imGuiManager;
     RmlUiManager rmlUiManager;
-    Scene scene;
 
     std::unique_ptr<GpuRaytracer> raytracer;
     std::unique_ptr<Tonemapper> tonemapper;

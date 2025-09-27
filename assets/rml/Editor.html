@@ -8,53 +8,95 @@
         <link type="text/template" href="Details.html"/>
         <link type="text/template" href="SceneGraph.html"/>
         <link type="text/template" href="Viewport.html"/>
+        <link type="text/template" href="ContentBrowser.html"/>
 
         <script>
             function Init(document)
+            -- Get elements for resizing
+            local dock_layout = document:GetElementById('dock-layout')
             local right_column = document:GetElementById('right-column')
             local details = document:GetElementById('details')
+            local content_drawer = document:GetElementById('content-drawer')
+
             local splitter_v = document:GetElementById('splitter-v')
             local splitter_h = document:GetElementById('splitter-h')
+            local splitter_h_content = document:GetElementById('splitter-h-content')
 
+            -- Dragging state variables
             local dragging_v = false
             local dragging_h = false
+            local dragging_h_content = false
+
             local start_x = 0
             local start_y = 0
+
             local start_right_width = 0
             local start_details_height = 0
+            local start_content_height = 0
 
+            -- Vertical splitter (between left/right columns)
             splitter_v:AddEventListener('mousedown', function(event)
             dragging_v = true
             start_x = event.parameters.mouse_x
             start_right_width = right_column.offset_width
             end)
 
+            -- Horizontal splitter (in right column)
             splitter_h:AddEventListener('mousedown', function(event)
             dragging_h = true
             start_y = event.parameters.mouse_y
             start_details_height = details.offset_height
             end)
 
+            -- Horizontal splitter (for content drawer)
+            splitter_h_content:AddEventListener('mousedown', function(event)
+            dragging_h_content = true
+            start_y = event.parameters.mouse_y
+            start_content_height = content_drawer.offset_height
+            end)
+
             document:AddEventListener('mousemove', function(event)
+            -- Handle vertical splitter drag
             if dragging_v then
+            local max_width = dock_layout.offset_width - splitter_v.offset_width
             local delta_x = event.parameters.mouse_x - start_x
             local new_width = start_right_width - delta_x
+
+            new_width = math.max(0, math.min(new_width, max_width))
             right_column.style['flex-basis'] = tostring(new_width) .. 'px'
             end
 
+            -- Handle right-column horizontal splitter drag
             if dragging_h then
+            local parent_height = right_column.offset_height
+            local max_height = parent_height - splitter_h.offset_height
             local delta_y = event.parameters.mouse_y - start_y
             local new_height = start_details_height - delta_y
+
+            new_height = math.max(0, math.min(new_height, max_height))
             details.style['flex-basis'] = tostring(new_height) .. 'px'
+            end
+
+            -- Handle content drawer horizontal splitter drag
+            if dragging_h_content then
+            local parent_height = content_drawer.offset_parent.offset_height
+            local max_height = parent_height - splitter_h_content.offset_height
+            local delta_y = event.parameters.mouse_y - start_y
+            local new_height = start_content_height - delta_y
+
+            new_height = math.max(0, math.min(new_height, max_height))
+            content_drawer.style['flex-basis'] = tostring(new_height) .. 'px'
             end
             end)
 
             document:AddEventListener('mouseup', function(event)
             dragging_v = false
             dragging_h = false
+            dragging_h_content = false
             end)
             end
         </script>
+
     </head>
     <body onload="Init(document)">
     <div class="editor-root">
@@ -62,18 +104,25 @@
             <template src="MenuBar"></template>
         </div>
 
-        <div class="dock-layout">
-            <div id="viewport" class="dock-panel">
-                <template src="Viewport"></template>
+        <div class="dock-layout" id="dock-layout">
+            <div class="left-column">
+                <div id="viewport" class="dock-panel">
+                    <template src="Viewport"></template>
+                </div>
+
+                <div id="splitter-h-content" class="splitter-h"></div>
+
+                <div id="content-drawer" class="dock-panel">
+                    <template src="ContentBrowser"></template>
+                </div>
             </div>
 
             <div id="splitter-v" class="splitter-v"></div>
 
             <div class="right-column" id="right-column">
                 <div id="scenegraph" class="dock-panel">
-                    <template src="SceneGraph"></template>
+                    <template src="SceneGraph" data-model="scenegraph_vm"></template>
                 </div>
-
                 <div id="splitter-h" class="splitter-h"></div>
 
                 <div id="details" class="dock-panel">

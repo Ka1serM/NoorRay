@@ -45,7 +45,7 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
     
-    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getImageView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getView(), vk::ImageLayout::eShaderReadOnlyOptimal};
     vk::WriteDescriptorSet write{};
     write.dstSet = outputImageDescriptorSet.get();
     write.dstBinding = 0;

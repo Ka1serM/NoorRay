@@ -9,7 +9,8 @@
 class Scene;
 
 class SceneObject : public ImGuiComponent {
-
+    //static counter
+    static int next_id; 
 protected:
     Transform transform;
     Scene& scene;
@@ -18,14 +19,17 @@ protected:
     std::vector<SceneObject*> children;
 
     bool visible;
-
+    const int id;
+    
 public:
     SceneObject(Scene& scene, const std::string& name, const Transform& transform);
-    SceneObject(const SceneObject& other);
+    SceneObject(const SceneObject& other); 
     virtual std::unique_ptr<SceneObject> clone() const;
 
     std::string getType() const override { return "Scene Object"; }
     void renderUi() override;
+
+    int getId() const { return id; }
 
     bool isVisible() const { return visible; }
     void setVisible(const bool v) { visible = v; }

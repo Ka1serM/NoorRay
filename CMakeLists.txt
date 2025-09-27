@@ -54,7 +54,13 @@ target_link_libraries(Lua::Lua INTERFACE lua_from_source)
 add_subdirectory(external/freetype)
 add_library(Freetype::Freetype ALIAS freetype)
 
+# LunaSVG
+set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "Disable LunaSVG examples" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build LunaSVG as static library" FORCE)
+add_subdirectory(external/lunasvg)
+
 # RmlUi
+set(RMLUI_SVG_PLUGIN ON CACHE BOOL "Enable SVG plugin" FORCE)
 set(RMLUI_FONT_ENGINE "freetype" CACHE STRING "Use Freetype" FORCE)
 set(RMLUI_LUA_BINDINGS ON CACHE BOOL "Enable Lua bindings" FORCE)
 set(RMLUI_LUA_BINDINGS_LIBRARY "lua_as_cxx" CACHE STRING "Use Lua built as C++" FORCE)
@@ -134,10 +140,12 @@ target_link_libraries(NoorRay PRIVATE
         tinygltf
         tinyobjloader
         stb
+        GPUOpen::VulkanMemoryAllocator
 
         RmlUi::Core
         RmlUi::Lua
-        GPUOpen::VulkanMemoryAllocator
+        
+        RmlUi::Debugger
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)

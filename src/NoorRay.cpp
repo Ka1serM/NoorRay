@@ -2,6 +2,7 @@
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
+#include <RmlUi/Debugger/Debugger.h>
 #include <SDL3/SDL.h>
 #include "UI/ImGui/ViewportPanel.h"
 #include "portable-file-dialogs.h"
@@ -22,10 +23,10 @@ NoorRay::~NoorRay() = default;
 
 NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int renderWidth, const int renderHeight)
     : context(windowWidth, windowHeight),
+      scene(context),
       renderer(context, context.getWindowWidth(), context.getWindowHeight()),
       imGuiManager(context, renderer.getNumSwapchainImages(), renderer.getColorImageFormat()),
-      rmlUiManager(context, renderer),
-      scene(context)
+      rmlUiManager(context, scene, renderer)
 {
     const float dpiScale = context.getDPIScale();
     int scaledRenderWidth  = static_cast<int>(static_cast<float>(renderWidth)  * dpiScale);
@@ -39,7 +40,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     tonemapper = std::make_unique<Tonemapper>(context, raytracer->getWidth(), raytracer->getHeight(), raytracer->getOutputColor(), renderer.getColorImageFormat());
 
     rmlUiManager.bindViewportImage(tonemapper->getOutputImage());
-    
+
     //imGuiManager.addComponent<MainMenuBar>("Menu", context, scene);
     imGuiManager.addComponent<DebugPanel>("Debug");
     imGuiManager.addComponent<EnvironmentPanel>("Environment", scene);
@@ -101,8 +102,13 @@ void NoorRay::run() {
                 renderer.notifyResize(event.window.data1, event.window.data2);
                 rmlUiManager.resize(event.window.data1, event.window.data2);
             }
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_SPACE)
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_R && event.key.mod & SDL_KMOD_CTRL)
+            {
                 rmlUiManager.reload();
+                rmlUiManager.bindViewportImage(tonemapper->getOutputImage());
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_D && event.key.mod & SDL_KMOD_CTRL)
+                Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible());
         }
 
         if (renderer.beginFrame())
@@ -113,7 +119,6 @@ void NoorRay::run() {
                 debugPanel->onComputeFinished();
                 
                 viewportPanel->updateDisplayImage(cmd, tonemapper->getOutputImage());
-                rmlUiManager.updateDisplayImage(cmd, tonemapper->getOutputImage());
 
                 if (renderPanel->isSaveRequested()) {
                     renderPanel->executeSave();

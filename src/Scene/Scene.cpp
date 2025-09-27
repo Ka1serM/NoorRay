@@ -1,106 +1,136 @@
 ﻿#include "Scene.h"
 #include <algorithm>
 #include <iostream>
+#include <numeric>
 #include "Camera/PerspectiveCamera.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneObject.h"
 
 Scene::Scene(Context& context) : context(context) {}
 
-void Scene::copy(SceneObject* objectToCopy)
-{
+void Scene::setActiveObjectIndex(uint32_t index) {
+    if (activeObjectIndex == index)
+        return;
+
+    std::cout << activeObjectIndex << std::endl;
+    
+    activeObjectIndex = index;
+    // Notify any subscribers (like SceneGraphViewModel) that the selection changed
+    Notify({SceneEvent::SelectionChanged, activeObjectIndex, dirtyFlags}); 
+}
+
+// Definition for selection getter
+SceneObject* Scene::getActiveObject() const {
+    if (activeObjectIndex == INVALID_INSTANCE || activeObjectIndex >= sceneObjects.size()) {
+        return nullptr;
+    }
+    // Return the raw pointer from the unique_ptr at the stored index
+    return sceneObjects[activeObjectIndex].get();
+}
+
+// Definition for dirty flag setter
+void Scene::setDirtyFlag(DirtyFlag flag) {
+    if ((dirtyFlags & flag) != 0)
+        return; // Flag already set
+
+    dirtyFlags |= flag;
+    // Notify any subscribers that the dirty flags changed
+    Notify({SceneEvent::DirtyFlagsChanged, activeObjectIndex, dirtyFlags});
+}
+
+// =========================================================================
+// EXISTING FUNCTION IMPLEMENTATIONS
+// =========================================================================
+
+// Copy an object (for later paste)
+void Scene::copy(SceneObject* objectToCopy) {
     copiedObject = objectToCopy;
 }
 
+// Paste the copied object into the scene
 void Scene::paste() {
-    if (!copiedObject)
-        return; // Nothing to paste
+    if (!copiedObject) return; // Nothing to paste
 
-    //Create a  clone of the copied object and its entire hierarchy.
+    // The stable ID approach would use the object's ID, but we stick to index here.
     SceneObject* newObject = cloneHierarchy(copiedObject);
 
-    //    - If an object is selected, paste as a sibling.
-    //    - Otherwise, paste as a root object.
-    SceneObject* targetParent = nullptr;
-    if (SceneObject* activeObject = getActiveObject())
-        targetParent = activeObject;
-
-    // Reparent the new hierarchy to its correct place in the scene.
+    // Paste as sibling of active object or as root
+    SceneObject* targetParent = getActiveObject();
     reparent(newObject, targetParent);
 
-    // Select the top-level object of the newly pasted hierarchy.
-    const auto it = std::ranges::find_if(sceneObjects,  [newObject](const auto& ptr) { return ptr.get() == newObject; });
+    // Select the newly pasted object
+    auto it = std::ranges::find_if(sceneObjects, [newObject](const auto& ptr) { return ptr.get() == newObject; });
     if (it != sceneObjects.end()) {
-        const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
+        uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
         setActiveObjectIndex(index);
     }
+
+    Notify({SceneEvent::HierarchyChanged});
 }
 
+// Add a new object as root
 uint32_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     SceneObject* newSceneObject = sceneObject.get();
-    
-    // It calls the private helper to handle the actual registration.
-    const uint32_t addedIndex = registerObject(std::move(sceneObject));
-    
-    // Then it completes its job by adding the object to the root.
+    uint32_t index = registerObject(std::move(sceneObject));
     rootObjects.push_back(newSceneObject);
-    
-    return addedIndex;
+    Notify({SceneEvent::HierarchyChanged});
+    return index;
 }
 
+// Register any object in the scene
 uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     if (auto* camera = dynamic_cast<PerspectiveCamera*>(sceneObject.get()))
         activeCamera = camera;
-    else if (auto* meshInstance = dynamic_cast<MeshInstance*>(sceneObject.get()))
-    {
+    else if (auto* meshInstance = dynamic_cast<MeshInstance*>(sceneObject.get())) {
         meshInstances.push_back(meshInstance);
         setDirtyFlag(TLAS);
     }
+
     setDirtyFlag(Accumulation);
 
     sceneObjects.push_back(std::move(sceneObject));
     return static_cast<uint32_t>(sceneObjects.size() - 1);
 }
 
+// Recursively clone a hierarchy
 SceneObject* Scene::cloneHierarchy(const SceneObject* source) {
     std::unique_ptr<SceneObject> newObjectUPtr = source->clone();
     SceneObject* newObjectRawPtr = newObjectUPtr.get();
-
     registerObject(std::move(newObjectUPtr));
+
     for (const SceneObject* childSource : source->getChildren())
-        if (childSource != nullptr)
+        if (childSource)
             if (SceneObject* newChild = cloneHierarchy(childSource))
                 newObjectRawPtr->addChild(newChild);
-    
+
     return newObjectRawPtr;
 }
 
-// Adds a mesh asset to the scene.
+// Add mesh asset
 void Scene::add(const std::shared_ptr<MeshAsset>& meshAsset) {
     meshAsset->setMeshIndex(static_cast<uint32_t>(meshAssets.size()));
     meshAssets.push_back(meshAsset);
     setDirtyFlag(Meshes);
 }
 
-// Adds a texture to the scene.
+// Add texture
 void Scene::add(Texture&& texture) {
     textureNames.push_back(texture.getName());
     textures.push_back(std::move(texture));
     setDirtyFlag(Textures);
 }
 
-// In Scene.cpp
+// Remove object from scene
 bool Scene::remove(SceneObject* objToRemove) {
-    if (!objToRemove || objToRemove == activeCamera)
-        return false;;
-    
+    if (!objToRemove || objToRemove == activeCamera) return false;
+
     // Recursively remove children
     while (!objToRemove->getChildren().empty())
         remove(objToRemove->getChildren().back());
 
-    const SceneObject* previouslyActiveObject = getActiveObject();
-    const bool activeObjectWasRemoved = (objToRemove == previouslyActiveObject);
-    
+    const SceneObject* previouslyActive = getActiveObject();
+    bool activeRemoved = (objToRemove == previouslyActive);
+
     if (objToRemove->getParent())
         objToRemove->getParent()->removeChild(objToRemove);
     else
@@ -109,62 +139,56 @@ bool Scene::remove(SceneObject* objToRemove) {
     if (auto* meshInstance = dynamic_cast<MeshInstance*>(objToRemove))
         std::erase(meshInstances, meshInstance);
 
-    const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) { return ptr.get() == objToRemove; });
+    auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) { return ptr.get() == objToRemove; });
     if (it != sceneObjects.end()) {
-        const uint32_t removedIndex = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
         sceneObjects.erase(it);
 
-        if (activeObjectWasRemoved) {
-            resetActiveObjectIndex();
-        } else if (previouslyActiveObject) {
-            const auto newIt = std::ranges::find_if(sceneObjects, 
-                [previouslyActiveObject](const auto& ptr) { return ptr.get() == previouslyActiveObject; });
-            
-            if (newIt != sceneObjects.end()) {
-                activeObjectIndex = static_cast<uint32_t>(std::distance(sceneObjects.begin(), newIt));
-            } else
-                resetActiveObjectIndex();
+        if (activeRemoved) resetActiveObjectIndex();
+        else if (previouslyActive) {
+            // Recalculate index of previously active object, as sceneObjects was mutated
+            auto newIt = std::ranges::find_if(sceneObjects, [previouslyActive](const auto& ptr) { return ptr.get() == previouslyActive; });
+            activeObjectIndex = (newIt != sceneObjects.end()) ? static_cast<uint32_t>(std::distance(sceneObjects.begin(), newIt)) : INVALID_INSTANCE;
         }
-        
+
         setDirtyFlag(TLAS);
         setDirtyFlag(Accumulation);
+        Notify({SceneEvent::HierarchyChanged});
         return true;
     }
 
     return false;
 }
 
+// Reparent object
 void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {
-    if (!objectToMove || objectToMove == newParent)
-        return;
+    if (!objectToMove || objectToMove == newParent) return;
 
-    // 1. Get the current world transform *before* modifying the parent.
-    const mat4 oldWorldMatrix = objectToMove->getWorldTransform().getMatrix();
+    mat4 oldWorld = objectToMove->getWorldTransform().getMatrix();
 
-    // 2. Unparent the object from its current parent.
+    // Remove from current parent
     if (objectToMove->getParent())
         objectToMove->getParent()->removeChild(objectToMove);
     else
         std::erase(rootObjects, objectToMove);
 
-    // 3. Set the new parent.
     objectToMove->setParent(newParent);
 
-    // 4. Add the object to its new parent's child list or to the root.
     if (newParent)
         newParent->addChild(objectToMove);
     else
         rootObjects.push_back(objectToMove);
 
-    // 5. Calculate and set the new local transform based on the old world transform.
+    // Update local transform
     if (newParent) {
-        const mat4 newParentWorldMatrix = newParent->getWorldTransform().getMatrix();
-        const mat4 newLocalMatrix = inverse(newParentWorldMatrix) * oldWorldMatrix;
-        objectToMove->setLocalTransform(Transform{newLocalMatrix});
+        mat4 newLocal = inverse(newParent->getWorldTransform().getMatrix()) * oldWorld;
+        objectToMove->setLocalTransform(Transform{newLocal});
     } else
-        objectToMove->setLocalTransform(Transform{oldWorldMatrix});
+        objectToMove->setLocalTransform(Transform{oldWorld});
+
+    Notify({SceneEvent::HierarchyChanged});
 }
 
+// Get mesh asset by name
 std::shared_ptr<MeshAsset> Scene::getMeshAsset(const std::string& name) const {
     for (const auto& meshAsset : meshAssets)
         if (meshAsset->getPath() == name)

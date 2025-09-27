@@ -1,0 +1,31 @@
+<rml>
+<head>
+    <title>Test View</title>
+    <link type="text/rcss" href="Theme.css"/>
+</head>
+<body data-model="test_vm">
+    <h2>Player Stats</h2>
+
+    <div>
+        <label>Name:</label>
+        <input type="text" data-value="player_name" />
+    </div>
+
+    <div>
+        <label>Health:</label>
+        <input type="range" min="0" max="100" data-value="health" />
+    </div>
+
+    <div>
+        <label>Magic Enabled:</label>
+        <input type="checkbox" data-checked="magic_enabled" />
+    </div>
+
+    <p>
+        Summary: <strong>{{ player_name }}</strong> currently has 
+        <strong>{{ health }}</strong> health. 
+        Magic is <span data-if="magic_enabled">Enabled</span><span data-if="!magic_enabled">Disabled</span>.
+    </p>
+
+</body>
+</rml>

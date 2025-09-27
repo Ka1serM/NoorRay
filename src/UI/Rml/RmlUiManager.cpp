@@ -3,20 +3,21 @@
 #include <RmlUi/Lua.h>
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Debugger/Debugger.h>
+
+#include "ViewModels/SceneGraphViewModel.h"
 #include "Vulkan/Image.h"
 
-RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
-    : rmlRenderInterface(
-          context.getDevice(),
-          context.getGraphicsQueue(),
-          context.getAllocator(),
-          context.getCommandPool(),
-          context.getDescriptorPool(),
-          renderer.getColorImageFormat(),
-          renderer.getDepthImageFormat(),
-          vk::Extent2D{ context.getWindowWidth(), context.getWindowHeight()}
-        ),
-    customImage(context, 1, 1, renderer.getColorImageFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst)
+RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& renderer)
+: rmlRenderInterface(
+      context.getDevice(),
+      context.getGraphicsQueue(),
+      context.getAllocator(),
+      context.getCommandPool(),
+      context.getDescriptorPool(),
+      renderer.getColorImageFormat(),
+      renderer.getDepthImageFormat()
+    )
 {
 #ifdef NDEBUG
     // Register all embedded files
@@ -84,6 +85,9 @@ RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
     // Load font(s)
     Rml::LoadFontFace("../assets/fonts/Roboto.ttf");
 
+    sceneGraphViewModel = std::make_unique<SceneGraphViewModel>(scene);
+    sceneGraphViewModel->BindToModel("scenegraph_vm", rmlContext);
+
     // Load initial document
     editorDocument = rmlContext->LoadDocument("../assets/rml/Editor.html");
     if (editorDocument)
@@ -93,40 +97,27 @@ RmlUiManager::RmlUiManager(Context& context, const Renderer& renderer)
     if (materialEditorDocument)
         materialEditorDocument->Show();
     
+    //testViewModel = std::make_unique<TestViewModel>();
+    //testViewModel->BindToModel("test_vm", rmlContext);
+
+   // testDocument = rmlContext->LoadDocument("../assets/rml/Test.html");
+   //if (testDocument)
+   //    testDocument->Show();
+
+    Rml::Debugger::Initialise(rmlContext);
 }
 
 void RmlUiManager::bindViewportImage(const Image& image) {
-    //const Rml::String texture_name = "viewport-img";
-    //rmlRenderInterface.registerVulkanTexture(texture_name,  image.getImageView(),  Rml::Vector2i{static_cast<int>(image.getWidth()), static_cast<int>(image.getHeight())});
+    const Rml::String texture_name = "viewport-img";
+    rmlRenderInterface.registerVulkanTexture(texture_name,  image.getView(),  Rml::Vector2i{static_cast<int>(image.getWidth()), static_cast<int>(image.getHeight())});
 
-    //Rml::Element* viewportElem = editorDocument->GetElementById("viewport-img");
-    //if (viewportElem)
-   //     viewportElem->SetAttribute("src", "vulkan://" + texture_name);
+    Rml::Element* viewportElem = editorDocument->GetElementById("viewport-img");
+    if (viewportElem)
+        viewportElem->SetAttribute("src", "vulkan://" + texture_name);
 }
-
-void RmlUiManager::updateDisplayImage(const vk::CommandBuffer cmd, Image& srcImage) {
-    srcImage.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-    customImage.setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
-
-    vk::ImageCopy copyRegion{};
-    copyRegion.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.extent = vk::Extent3D{srcImage.getWidth(), srcImage.getHeight(), 1};
-
-    cmd.copyImage(srcImage.getImage(), vk::ImageLayout::eTransferSrcOptimal, customImage.getImage(), vk::ImageLayout::eTransferDstOptimal, copyRegion);
-
-    srcImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
-    customImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
-}
-
 
 RmlUiManager::~RmlUiManager()
 {
-    if (editorDocument) {
-        editorDocument->Close();
-        editorDocument = nullptr;
-    }
-
     if (rmlContext) {
         Rml::RemoveContext("main");
         rmlContext = nullptr;
@@ -152,23 +143,34 @@ void RmlUiManager::processEvent(SDL_Window* window, SDL_Event& event) const
 
 void RmlUiManager::resize(int width, int height) const
 {
-    if (width == 0 || height == 0)
-        return;
-
-    rmlContext->SetDimensions({ width,height });
+    if (width != 0 && height != 0)
+        rmlContext->SetDimensions({ width,height });
 }
 
 void RmlUiManager::reload()
 {
-    editorDocument->Close();
-    materialEditorDocument->Close();
+    if (editorDocument) {
+        editorDocument->Close();
+        editorDocument = nullptr;
+    }
+
+    if (materialEditorDocument) {
+        materialEditorDocument->Close();
+        materialEditorDocument = nullptr;
+    }
+
+    if (testDocument) {
+        testDocument->Close();
+        testDocument = nullptr;
+    }
+
     Rml::Factory::ClearStyleSheetCache();
 
     editorDocument = rmlContext->LoadDocument("../assets/rml/Editor.html");
     if (editorDocument)
         editorDocument->Show();
 
-    editorDocument = rmlContext->LoadDocument("../assets/rml/MaterialEditor.html");
+    materialEditorDocument = rmlContext->LoadDocument("../assets/rml/MaterialEditor.html");
     if (materialEditorDocument)
         materialEditorDocument->Show();
 }

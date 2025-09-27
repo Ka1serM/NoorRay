@@ -39,8 +39,8 @@ Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t he
 
     // Write descriptors
     std::vector imageInfos = {
-        vk::DescriptorImageInfo({}, inputImage.getImageView(), vk::ImageLayout::eGeneral),
-        vk::DescriptorImageInfo({}, outputImage.getImageView(), vk::ImageLayout::eGeneral)
+        vk::DescriptorImageInfo({}, inputImage.getView(), vk::ImageLayout::eGeneral),
+        vk::DescriptorImageInfo({}, outputImage.getView(), vk::ImageLayout::eGeneral)
     };
 
     const std::vector writes = {
@@ -71,8 +71,8 @@ void Tonemapper::dispatch(const vk::CommandBuffer commandBuffer) {
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0, descriptorSet.get(), {});
-    const uint32_t groupCountX = (outputImage.getImageCreateInfo().extent.width + GROUP_SIZE - 1) / GROUP_SIZE;
-    const uint32_t groupCountY = (outputImage.getImageCreateInfo().extent.height + GROUP_SIZE - 1) / GROUP_SIZE;
+    const uint32_t groupCountX = (outputImage.getWidth() + GROUP_SIZE - 1) / GROUP_SIZE;
+    const uint32_t groupCountY = (outputImage.getHeight() + GROUP_SIZE - 1) / GROUP_SIZE;
     commandBuffer.dispatch(groupCountX, groupCountY, 1);
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }

@@ -1,0 +1,112 @@
+﻿.content-grid {
+    font-size: 0;
+    padding: 8dp;
+    overflow-y: scroll;   /* vertical scrollbar */
+    height: 240dp;        /* constrain height so scrolling can happen */
+    width: 100%;
+    text-align: left;
+}
+
+.grid-item {
+    display: inline-block;
+    vertical-align: top;
+    width: 90dp;
+    margin: 8dp;
+    font-size: 14dp;
+}
+
+.grid-item .selector {
+    display: none;
+}
+
+.item-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8dp;
+    padding: 8dp;
+    border-radius: 8dp;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    background-color: #FFFFFF0D;
+    border-color: #FFFFFF1A;
+    border-width: 1px;
+}
+
+.preview {
+    width: 64dp;
+    height: 64dp;
+    border-radius: 1000dp;
+    background-color: #333;
+    flex-shrink: 0;
+}
+
+.name {
+    color: #cccccc;
+    font-size: 14dp;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.item-wrapper:hover {
+    background-color:  #FFFFFF1A;
+}
+
+.grid-item input.selector:checked + .item-wrapper {
+    background-color: #FFFFFF26;
+}
+
+.grid-item input.selector:checked + .item-wrapper .name {
+    color: #ffd98d;
+    font-weight: bold;
+}
+
+/* --- Scrollbar Styling --- */
+
+/* Vertical scrollbar container */
+scrollbarvertical {
+    width: 14dp;
+    background: #2c2c2c;
+}
+
+/* Horizontal scrollbar container */
+scrollbarhorizontal {
+    height: 14dp;
+    background: #2c2c2c;
+}
+
+/* Track */
+scrollbarvertical slidertrack,
+scrollbarhorizontal slidertrack {
+    background: #444;
+}
+
+/* Draggable thumb */
+scrollbarvertical sliderbar,
+scrollbarhorizontal sliderbar {
+    background: #aaa;
+    border-radius: 6dp;
+    min-height: 20dp; /* ensures thumb doesn't shrink too small */
+}
+
+/* Arrows */
+scrollbarvertical sliderarrowdec,
+scrollbarvertical sliderarrowinc,
+scrollbarhorizontal sliderarrowdec,
+scrollbarhorizontal sliderarrowinc {
+    width: 14dp;
+    height: 14dp;
+    background: #666;
+}
+
+scrollbarvertical sliderarrowdec:hover,
+scrollbarvertical sliderarrowinc:hover,
+scrollbarhorizontal sliderarrowdec:hover,
+scrollbarhorizontal sliderarrowinc:hover {
+    background: #888;
+}
+
+/* Corner where both scrollbars meet */
+scrollbarcorner {
+    background: #333;
+}

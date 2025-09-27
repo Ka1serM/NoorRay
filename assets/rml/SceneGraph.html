@@ -1,65 +1,28 @@
-﻿<template name="SceneGraph">
+<template name="SceneGraph">
     <head>
         <link type="text/rcss" href="SceneGraph.css" />
     </head>
     <body>
-            <ul class="tree">
-                <li>
-                    <input type="checkbox" class="toggle" id="toggle-meshes" checked />
-                    <input type="radio" name="outliner-selection" class="selector" id="select-meshes" />
-                    <div class="item-row">
-                        <label for="toggle-meshes" class="expander"></label>
-                        <label for="select-meshes" class="name">Static Mesh</label>
-                    </div>
+        <div data-model="scenegraph_vm">
+            <div class="tree">
+                <div class="item-container" data-for="node : flat_nodes" data-class-selected="node.id == selected_node_id">
     
-                    <ul>
-                        <div class="collapsible-content">
-                            <li>
-                                <input type="radio" name="outliner-selection" class="selector" id="select-cube" />
-                                <div class="item-row">
-                                    <span class="expander is-leaf"></span>
-                                    <label for="select-cube" class="name">SM_Cube_01</label>
-                                </div>
-                            </li>
-                            <li>
-                                <input type="radio" name="outliner-selection" class="selector" id="select-floor" />
-                                <div class="item-row">
-                                    <span class="expander is-leaf"></span>
-                                    <label for="select-floor" class="name">SM_Floor</label>
-                                </div>
-                            </li>
-                        </div>
-                    </ul>
-                </li>
+                    <div class="item-row"
+                         data-attr-style="'padding-left: ' + (node.depth * 20) + 'px'"
+                         data-event-click="select_node(node.id)">
+                        
+                        <span class="expander"
+                              data-if="node.has_children"
+                              data-class-open="node.is_open"
+                              data-event-click="toggle_node(node.id)">
+                        </span>
     
-                <li>
-                    <input type="checkbox" class="toggle" id="toggle-lights" />
-                    <input type="radio" name="outliner-selection" class="selector" id="select-lights" />
-                    <div class="item-row">
-                        <label for="toggle-lights" class="expander"></label>
-                        <label for="select-lights" class="name">Light</label>
-                    </div>
-                    <ul>
-                        <div class="collapsible-content">
-                            <li>
-                                <input type="checkbox" class="toggle" id="toggle-pointlight" />
-                                <input type="radio" name="outliner-selection" class="selector" id="select-pointlight" />
-                                <div class="item-row">
-                                    <label for="toggle-pointlight" class="expander is-leaf"></label>
-                                    <label for="select-pointlight" class="name">PointLight_01</label>
-                                </div>
-                            </li>
-                        </div>
-                    </ul>
-                </li>
+                        <span class="expander-spacer" data-if="!node.has_children"></span>
     
-                <li>
-                    <input type="radio" name="outliner-selection" class="selector" id="select-camera" />
-                    <div class="item-row">
-                        <span class="expander is-leaf"></span>
-                        <label for="select-camera" class="name">MainCamera</label>
+                        <span class="name">{{ node.name }}</span>
                     </div>
-                </li>
-            </ul>
+                </div>
+            </div>
+        </div>
     </body>
 </template>

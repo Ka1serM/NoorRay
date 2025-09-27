@@ -1,99 +1,56 @@
-﻿#outliner {
-}
-
-/* --- Tree Structure & Lines --- */
-.tree, .tree ul {
-    margin: 0;
-    padding: 0;
-    padding-left: 18px; /* Indentation is applied to nested lists */
-    position: relative;
-}
-.tree li {
-    position: relative; /* Indentation is removed from individual items */
-}
-
-.tree li::before, .tree li::after {
-    position: absolute;
-    left: -12px;
-    border-left-width: 1px;
-    border-left-color: #555;
-}
-.tree li::before {
-    height: 100%;
-}
-.tree li::after {
-    border-bottom-width: 1px;
-    border-bottom-color: #555;
-}
-.tree li:last-child::before {
-    height: 12px;
-}
-
-/* --- Core Functionality --- */
-.toggle, .selector {
-    display: none;
+﻿.tree {
+    width: 100%;
 }
 
 .item-row {
     display: flex;
     align-items: center;
-    white-space: nowrap;
-    border-radius: 3px;
-}
-.item-row:hover .name {
-    color: #b0b0b0;
-}
-
-input.selector:checked + .item-row .name {
-    color: #ffd98d;
-}
-
-.name {
-    flex-grow: 1;
+    height: 28px;
+    border-radius: 9dp;
     cursor: pointer;
-    padding: 5px 0px;
-    transition: color 0.2s;
-    text-align: left;
+    transition: background-color 0.25s;
+    padding: 12dp;
 }
 
-/* --- Expander Icon --- */
+.item-row:hover {
+    background-color: #FFFFFF1A;
+}
+
+.item-container.selected > .item-row {
+    background-color: #FFFFFF1A;
+}
+.item-container.selected .name {
+    color: #ffca8e;
+    font-weight: bold;
+}
+
+.expander, .expander-spacer {
+    display: block;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    margin-right: 4px;
+}
+
 .expander {
-    width: 16px;
-    height: 16px;
-    font-size: 30px;
-    margin: 0 10dp 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16dp;
+    font-weight: 900;
+    color: #ffffff;
+    transition: transform 0.15s;
     decorator: text(">");
-    cursor: pointer;
-    transition: transform 0.2s cubic-out;
 }
-input.selector:checked + .item-row .expander {
-    color: white;
-}
-.expander.is-leaf {
-    decorator: none;
-    cursor: default;
-}
-input.toggle:checked ~ .item-row .expander {
+
+.expander.open {
     transform: rotate(90deg);
 }
 
-/* --- Animation --- */
-.toggle ~ ul {
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.35s cubic-out;
-}
-.toggle:checked ~ ul {
-    max-height: 500px;
+.name {
+    color: #cccccc;
 }
 
-.collapsible-content {
-    opacity: 0;
-    transform: scaleY(0);
-    transform-origin: top;
-    transition: transform opacity 0.3s cubic-out;
-}
-.toggle:checked ~ ul .collapsible-content {
-    opacity: 1;
-    transform: scaleY(1);
+.item-row:hover .expander {
+    color: #ffffff;
 }

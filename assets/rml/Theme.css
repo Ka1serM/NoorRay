@@ -1,19 +1,100 @@
-﻿* {
-    box-sizing: border-box;
-    font-size: 15dp;
+﻿body, div,
+h1, h2, h3, h4,
+h5, h6, p,
+hr, pre,
+tabset tabs
+{
+    display: block;
 }
 
+h1
+{
+    font-size: 2em;
+    margin: .67em 0;
+}
+
+h2
+{
+    font-size: 1.5em;
+    margin: .75em 0;
+}
+
+h3
+{
+    font-size: 1.17em;
+    margin: .83em 0;
+}
+
+h4, p
+{
+    margin: 1.12em 0;
+}
+
+h5
+{
+    font-size: .83em;
+    margin: 1.5em 0;
+}
+
+h6
+{
+    font-size: .75em;
+    margin: 1.67em 0;
+}
+
+strong
+{
+    font-weight: bold;
+}
+
+em
+{
+    font-style: italic;
+}
+
+pre
+{
+    white-space: pre;
+}
+
+hr
+{
+    border-width: 1px;
+}
+
+
+tr
+{
+    box-sizing: border-box;
+    display: table-row;
+}
+td
+{
+    box-sizing: border-box;
+    display: table-cell;
+}
+col
+{
+    box-sizing: border-box;
+    display: table-column;
+}
+colgroup
+{
+    display: table-column-group;
+}
+thead, tbody, tfoot
+{
+    display: table-row-group;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+}
 
 body {
-    display: flex;
-    flex-direction: column;
     font-family: Roboto;
     color: #ffffff;
-}
-
-body.window {
-    font-family: Roboto;
-    font-size: 15dp;
+    font-size: 16dp;
 }
 
 h1, h2, h3, h4, h5 {
@@ -39,14 +120,30 @@ a:hover { text-decoration: underline; }
 ul, ol { margin: 0; padding: 0; }
 li { margin: 0; }
 
-select, option, textarea {
+select, textarea {
     background: #FFFFFF0D;
     text-align: center;
     justify-content: center;
     vertical-align: center;
-    padding: 8dp 0dp;
+    padding: 8dp;
     border-radius: 9dp;
+    border-width: 1px;
+    border-color: #FFFFFF1D;
 }
+
+option {
+    background-color: #191a1c;
+    padding: 8dp;
+}
+
+option:first-child {
+    border-radius: 9dp 9dp 0 0;
+}
+
+option:last-child {
+    border-radius: 0 0 9dp 9dp;
+}
+
 
 input[type="text"] {
     text-align: right;
@@ -58,8 +155,9 @@ input[type="number"] {
     color: #ffffff;
     background-color: #FFFFFF08;
     padding: 6dp;
-    margin: 2dp;
     border-radius: 9dp;
+    border-width: 1px;
+    border-color: #FFFFFF17;
     transition: background-color 0.2s, border-color 0.2s;
 }
 
@@ -121,4 +219,28 @@ button:hover {
 
 .keyframe:checked {
     background-color: #ff4a4a;
+}
+
+slidertrack {
+    background-color: #333337;
+    border-radius: 3dp;
+    height: 10dp;
+}
+
+slidertrack sliderprogress {
+    background-color: #ffd98d;
+    border-radius: 3dp;
+}
+
+sliderbar {
+    width: 1dp;
+    height: 1dp;
+    background-color: rgba(0, 0, 0, 0);
+    cursor: pointer;
+}
+
+* {
+    box-sizing: border-box;
+    font-size: 16dp;
+    font-family: Roboto;
 }

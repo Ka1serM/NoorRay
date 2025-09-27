@@ -1,38 +1,44 @@
-* {
-    box-sizing: border-box;
-    font-size: 15dp;
-}
-
-body.window {
-}
-
-body {
+body, html {
     height: 100%;
     width: 100%;
+    margin: 0;
+    padding: 0;
+    z-index: -1;
+}
+
+body.no-select-v {
+    user-select: none;
+    cursor: col-resize;
+}
+
+body.no-select-h {
+    user-select: none;
+    cursor: row-resize;
 }
 
 .editor-root {
     display: flex;
     flex-direction: column;
-    padding: 10dp;
+    padding: 0 22dp 22dp 22dp;
     width: 100%;
     height: 100%;
-    background-color: #0E0E10;
+    background-color: #FFFFFF00;
 }
 
 .dock-layout {
     flex: 1;
     display: flex;
-    /* This will prevent the layout itself from overflowing its parent */
     overflow: hidden;
 }
 
 .dock-panel {
-    background-color: #131416;
     border-radius: 14dp;
     margin: 4dp;
-    overflow: hidden;   /* activate clipping */
-    clip: always;       /* force children to be clipped */
+    overflow: hidden;
+    clip: always;
+    border-width: 1px;
+    border-color: #FFFFFF0D;
+    background-color: #141517BF;
 }
 
 .right-column {
@@ -40,28 +46,15 @@ body {
     flex-direction: column;
     flex-shrink: 0;
     flex-basis: 33%;
-    min-width: 100dp;
+    min-width: 0dp;
 }
 
-.splitter-v {
-    flex-shrink: 0;
-    width: 6dp;
-    background-color: #00000000;
-    border-radius: 2dp;
-    cursor: col-resize;
-    transition: background 0.2s;
-}
-
-.splitter-h {
-    flex-shrink: 0;
-    height: 6dp;
-    background-color: #00000000;
-    cursor: row-resize;
-    transition: background 0.2s;
-}
-
-.splitter-v:hover, .splitter-h:hover {
-    background-color: #131416;
+.left-column {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    flex-basis: 0;
+    min-width: 0dp;
 }
 
 #menubar {
@@ -76,19 +69,55 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 100dp;
+    min-width: 0dp;
 }
 
 #scenegraph {
     flex-grow: 1;
     flex-basis: 0;
-    min-height: 100dp;
+    min-height: 0dp;
     padding: 12dp;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
 }
 
 #details {
     flex-grow: 0;
     flex-basis: 50%;
-    min-height: 100dp;
+    min-height: 0dp;
     padding: 12dp;
+}
+
+#content-drawer {
+    flex-shrink: 0;
+    flex-basis: 25%;
+    min-height: 0dp; /* Changed */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.splitter-v {
+    flex-shrink: 0;
+    width: 6dp;
+    background-color: #00000000;
+    border-radius: 5dp;
+    cursor: col-resize;
+    transition: background 0.2s;
+    z-index: 10; /* Ensure splitter is always clickable */
+}
+
+.splitter-h {
+    flex-shrink: 0;
+    height: 6dp;
+    background-color: #00000000;
+    border-radius: 5dp;
+    cursor: row-resize;
+    transition: background 0.2s;
+    z-index: 10; /* Ensure splitter is always clickable */
+}
+
+.splitter-v:hover, .splitter-h:hover {
+    background-color: #141517BF;
 }

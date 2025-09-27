@@ -19,7 +19,6 @@ layout(push_constant) uniform PushConsts {
 void main() {
     // Apply translation and then the full transform matrix
     gl_Position = push_constants.transform * vec4(in_pos + push_constants.translate, 0.0, 1.0);
-
     // Pass-through color and texture coordinates
     out_color = in_color;
     out_tex_coord = in_tex_coord;

@@ -1,231 +1,204 @@
 ﻿#include "Image.h"
 #include <stdexcept>
-#include <iostream>
-#include <string>
 #include <cstring>
 
-#include "Log.h"
-
-Image::Image(Context& context, const void* data, int width, int height, vk::Format format) : width(width), height(height)
+// Move Constructor Implementation
+Image::Image(Image&& other) noexcept
+    : device(other.device),
+      allocator(other.allocator),
+      image(other.image),
+      allocation(other.allocation),
+      view(std::move(other.view)), // vk::Unique handles have their own move
+      descImageInfo(other.descImageInfo),
+      layout(other.layout),
+        format(other.format),
+      width(other.width),
+      height(other.height)
 {
-    if (width <= 0 || height <= 0) {
-        throw std::runtime_error("Image constructor (floatData): Invalid dimensions (W=" + std::to_string(width) + ", H=" + std::to_string(height) + ")");
+    // Reset the source object so its destructor does nothing
+    other.image = VK_NULL_HANDLE;
+    other.allocation = VK_NULL_HANDLE;
+    other.device = VK_NULL_HANDLE;
+    other.allocator = VK_NULL_HANDLE;
+}
+
+// Move Assignment Operator Implementation
+Image& Image::operator=(Image&& other) noexcept
+{
+    if (this != &other) {
+        // Clean up existing resources first
+        if (image && allocation)
+            vmaDestroyImage(allocator, image, allocation);
+        view.reset();
+
+        // Pilfer the resources from the other object
+        device = other.device;
+        allocator = other.allocator;
+        image = other.image;
+        allocation = other.allocation;
+        view = std::move(other.view);
+        descImageInfo = other.descImageInfo;
+        layout = other.layout;
+        format = other.format;
+        width = other.width;
+        height = other.height;
+
+        // Reset the source object
+        other.image = VK_NULL_HANDLE;
+        other.allocation = VK_NULL_HANDLE;
+        other.device = VK_NULL_HANDLE;
+        other.allocator = VK_NULL_HANDLE;
     }
+    return *this;
+}
 
-    currentLayout = vk::ImageLayout::eUndefined;
+Image::Image(Context& context, const void* data, int texWidth, int texHeight, vk::Format format)
+    : device(context.getDevice()),
+      allocator(context.getAllocator()),
+      layout(vk::ImageLayout::eUndefined),
+        format(format),
+      width(texWidth),
+      height(texHeight)
+{
+    if (width <= 0 || height <= 0 || !data)
+        throw std::runtime_error("Image: Invalid dimensions or null data pointer provided.");
 
-    size_t pixelSize = 0;
+    // Determine pixel size to calculate total image size
+    size_t pixelSize;
     switch (format) {
-        case vk::Format::eR8Unorm:      case vk::Format::eR8Srgb:           pixelSize = 1; break;
-        case vk::Format::eR8G8Unorm:    case vk::Format::eR8G8Srgb:         pixelSize = 2; break;
-        case vk::Format::eR8G8B8Unorm:  case vk::Format::eR8G8B8Srgb:       pixelSize = 3; break;
-        case vk::Format::eB8G8R8A8Unorm:
         case vk::Format::eR8G8B8A8Unorm:
-        case vk::Format::eR8G8B8A8Srgb:                                     pixelSize = 4; break;
-        case vk::Format::eR16Sfloat:                                        pixelSize = 2; break;
-        case vk::Format::eR16G16Sfloat:                                     pixelSize = 4; break;
-        case vk::Format::eR16G16B16A16Sfloat:                               pixelSize = 8; break;
-        case vk::Format::eR32Sfloat:                                        pixelSize = 4; break;
-        case vk::Format::eR32G32Sfloat:                                     pixelSize = 8; break;
-        case vk::Format::eR32G32B32A32Sfloat:                               pixelSize = 16; break;
+        case vk::Format::eR8G8B8A8Srgb:
+        case vk::Format::eB8G8R8A8Unorm:
+        case vk::Format::eR32Sfloat:          pixelSize = 4; break;
+        case vk::Format::eR32G32Sfloat:       pixelSize = 8; break;
+        case vk::Format::eR32G32B32A32Sfloat: pixelSize = 16; break;
         default:
-            throw std::runtime_error("Unsupported vk::Format in Image constructor (floatData): " + std::to_string(static_cast<int>(format)));
+            throw std::runtime_error("Image: Unsupported vk::Format provided for data upload.");
     }
-
     vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(width) * height * pixelSize;
 
-    vk::BufferCreateInfo bufferInfo{};
-    bufferInfo.setSize(imageSize);
-    bufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
-    bufferInfo.setSharingMode(vk::SharingMode::eExclusive);
-    vk::UniqueBuffer stagingBuffer = context.getDevice().createBufferUnique(bufferInfo);
+    // Create Staging Buffer
+    vk::BufferCreateInfo stagingBufferInfo;
+    stagingBufferInfo.setSize(imageSize);
+    stagingBufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
 
-    vk::MemoryRequirements memRequirements = context.getDevice().getBufferMemoryRequirements(*stagingBuffer);
-    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    vk::MemoryAllocateInfo allocInfo{};
-    allocInfo.setAllocationSize(memRequirements.size);
-    allocInfo.setMemoryTypeIndex(memTypeIndex);
-    vk::UniqueDeviceMemory stagingMemory = context.getDevice().allocateMemoryUnique(allocInfo);
-    context.getDevice().bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
+    VmaAllocationCreateInfo stagingAllocInfo = {};
+    stagingAllocInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY; // We want a buffer on the CPU to copy to.
 
-    void* mapped = context.getDevice().mapMemory(*stagingMemory, 0, imageSize);
-    if (data && imageSize > 0) {
-        std::memcpy(mapped, data, imageSize);
-    } else if (!data && imageSize > 0) {
-        context.getDevice().unmapMemory(*stagingMemory);
-        throw std::runtime_error("Image constructor (floatData): 'data' pointer is null but imageSize is " + std::to_string(imageSize));
-    }
-    context.getDevice().unmapMemory(*stagingMemory);
+    vk::Buffer stagingBuffer;
+    VmaAllocation stagingAllocation;
+    vmaCreateBuffer(allocator, reinterpret_cast<const VkBufferCreateInfo*>(&stagingBufferInfo), &stagingAllocInfo, reinterpret_cast<VkBuffer*>(&stagingBuffer), &stagingAllocation, nullptr);
 
-    vk::ImageCreateInfo imageInfo{};
-    imageInfo.setImageType(vk::ImageType::e2D);
-    imageInfo.setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 });
-    imageInfo.setMipLevels(1);
-    imageInfo.setArrayLayers(1);
-    imageInfo.setFormat(format);
-    imageInfo.setUsage(vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    imageInfo.setInitialLayout(vk::ImageLayout::eUndefined);
-    info = imageInfo;
+    // Map memory, copy data, and unmap
+    void* mappedData;
+    vmaMapMemory(allocator, stagingAllocation, &mappedData);
+    memcpy(mappedData, data, imageSize);
+    vmaUnmapMemory(allocator, stagingAllocation);
 
-    image = context.getDevice().createImageUnique(imageInfo);
+    vk::ImageCreateInfo imageInfo;
+    imageInfo.setImageType(vk::ImageType::e2D)
+             .setExtent({ width, height, 1 })
+             .setMipLevels(1)
+             .setArrayLayers(1)
+             .setFormat(format)
+             .setUsage(vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled)
+             .setInitialLayout(vk::ImageLayout::eUndefined);
 
-    vk::MemoryRequirements imgReqs = context.getDevice().getImageMemoryRequirements(*image);
-    uint32_t imgMemType = context.findMemoryType(imgReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo imgAlloc{};
-    imgAlloc.setAllocationSize(imgReqs.size);
-    imgAlloc.setMemoryTypeIndex(imgMemType);
-    memory = context.getDevice().allocateMemoryUnique(imgAlloc);
-    context.getDevice().bindImageMemory(*image, *memory, 0);
+    VmaAllocationCreateInfo imgAllocInfo = {};
+    imgAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY; // We want this image to live on the GPU for fast sampling.
 
-    vk::ImageViewCreateInfo viewInfo{};
-    viewInfo.setImage(*image);
-    viewInfo.setViewType(vk::ImageViewType::e2D);
-    viewInfo.setFormat(format);
-    viewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
-    view = context.getDevice().createImageViewUnique(viewInfo);
+    vmaCreateImage(allocator, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &imgAllocInfo, reinterpret_cast<VkImage*>(&this->image), &this->allocation, nullptr);
 
+    // 4. Copy data from staging buffer to final image
     context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-        setImageLayout(cmd, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+        setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
 
-        vk::BufferImageCopy region{};
-        region.setBufferOffset(0);
-        region.setBufferRowLength(0);
-        region.setBufferImageHeight(0);
+        vk::BufferImageCopy region;
         region.setImageSubresource({ vk::ImageAspectFlagBits::eColor, 0, 0, 1 });
-        region.setImageExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 });
+        region.setImageExtent({ width, height, 1 });
+        cmd.copyBufferToImage(stagingBuffer, this->image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
 
-        cmd.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
-
-        setImageLayout(cmd, image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+        setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
     });
 
+    // 5. Clean up staging resources
+    vmaDestroyBuffer(allocator, stagingBuffer, stagingAllocation);
+
+    // 6. Create Image View
+    vk::ImageViewCreateInfo viewInfo;
+    viewInfo.setImage(this->image)
+            .setViewType(vk::ImageViewType::e2D)
+            .setFormat(format)
+            .setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
+    this->view = device.createImageViewUnique(viewInfo);
+
     descImageInfo.setImageView(*view);
-    descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    LOG_INFO( "Image (floatData) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format));
+    descImageInfo.setImageLayout(this->layout);
 }
 
-Image::Image(Context& context, const void* rgbaData, int texWidth, int texHeight) : width(texWidth), height(texHeight)
+Image::Image(Context& context, uint32_t w, uint32_t h, vk::Format format, vk::ImageUsageFlags usage)
+    : device(context.getDevice()),
+      allocator(context.getAllocator()),
+      layout(vk::ImageLayout::eUndefined),
+    format(format),
+      width(w),
+      height(h)
 {
-    if (texWidth <= 0 || texHeight <= 0)
-        throw std::runtime_error("Image constructor (rgbaData): Invalid dimensions (W=" + std::to_string(texWidth) + ", H=" + std::to_string(texHeight) + ")");
-
-    currentLayout = vk::ImageLayout::eUndefined;
-
-    vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(texWidth) * texHeight * 4;
-
-    vk::BufferCreateInfo bufferInfo{};
-    bufferInfo.setSize(imageSize);
-    bufferInfo.setUsage(vk::BufferUsageFlagBits::eTransferSrc);
-    bufferInfo.setSharingMode(vk::SharingMode::eExclusive);
-    vk::UniqueBuffer stagingBuffer = context.getDevice().createBufferUnique(bufferInfo);
-
-    vk::MemoryRequirements memRequirements = context.getDevice().getBufferMemoryRequirements(*stagingBuffer);
-    uint32_t memTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    vk::MemoryAllocateInfo allocInfo{};
-    allocInfo.setAllocationSize(memRequirements.size);
-    allocInfo.setMemoryTypeIndex(memTypeIndex);
-    vk::UniqueDeviceMemory stagingMemory = context.getDevice().allocateMemoryUnique(allocInfo);
-    context.getDevice().bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
-
-    void* mappedData = context.getDevice().mapMemory(*stagingMemory, 0, imageSize);
-    if (rgbaData && imageSize > 0) {
-        std::memcpy(mappedData, rgbaData, imageSize);
-    } else if (!rgbaData && imageSize > 0) {
-        context.getDevice().unmapMemory(*stagingMemory);
-        throw std::runtime_error("Image constructor (rgbaData): 'rgbaData' pointer is null but imageSize is " + std::to_string(imageSize));
-    }
-    context.getDevice().unmapMemory(*stagingMemory);
-
+    // Create Final Image with VMA (No staging buffer needed)
     vk::ImageCreateInfo imageInfo;
-    imageInfo.setImageType(vk::ImageType::e2D);
-    imageInfo.setExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
-    imageInfo.setMipLevels(1);
-    imageInfo.setArrayLayers(1);
-    imageInfo.setFormat(vk::Format::eR8G8B8A8Unorm);
-    imageInfo.setUsage(vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled);
-    imageInfo.setInitialLayout(vk::ImageLayout::eUndefined);
-    info = imageInfo;
+    imageInfo.setImageType(vk::ImageType::e2D)
+             .setExtent({ width, height, 1 })
+             .setMipLevels(1)
+             .setArrayLayers(1)
+             .setFormat(format)
+             .setUsage(usage)
+             .setInitialLayout(vk::ImageLayout::eUndefined);
 
-    image = context.getDevice().createImageUnique(imageInfo);
+    VmaAllocationCreateInfo imgAllocInfo = {};
+    imgAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-    vk::MemoryRequirements requirements = context.getDevice().getImageMemoryRequirements(*image);
-    uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo memoryInfo {};
-    memoryInfo.setAllocationSize(requirements.size);
-    memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
-    memory = context.getDevice().allocateMemoryUnique(memoryInfo);
-    context.getDevice().bindImageMemory(*image, *memory, 0);
+    vmaCreateImage(allocator, reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &imgAllocInfo, reinterpret_cast<VkImage*>(&this->image), &this->allocation, nullptr);
 
-    vk::ImageViewCreateInfo imageViewInfo;
-    imageViewInfo.setImage(*image);
-    imageViewInfo.setViewType(vk::ImageViewType::e2D);
-    imageViewInfo.setFormat(vk::Format::eR8G8B8A8Unorm);
-    imageViewInfo.setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
-    view = context.getDevice().createImageViewUnique(imageViewInfo);
+    // Create Image View
+    vk::ImageViewCreateInfo viewInfo;
+    viewInfo.setImage(this->image)
+            .setViewType(vk::ImageViewType::e2D)
+            .setFormat(format)
+            .setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
+    this->view = device.createImageViewUnique(viewInfo);
 
-    context.oneTimeSubmit([&](const vk::CommandBuffer commandBuffer) {
-        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-
-        vk::BufferImageCopy copyRegion{};
-        copyRegion.setBufferOffset(0);
-        copyRegion.setBufferRowLength(0);
-        copyRegion.setBufferImageHeight(0);
-        copyRegion.setImageSubresource({ vk::ImageAspectFlagBits::eColor, 0, 0, 1 });
-        copyRegion.setImageExtent({ static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1 });
-
-        commandBuffer.copyBufferToImage(*stagingBuffer, *image, vk::ImageLayout::eTransferDstOptimal, 1, &copyRegion);
-
-        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    // Transition to a general layout as a sensible default
+    constexpr vk::ImageLayout finalLayout = vk::ImageLayout::eGeneral;
+    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
+        setImageLayout(cmd, finalLayout);
     });
 
     descImageInfo.setImageView(*view);
-    descImageInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-    LOG_INFO( "Image (rgbaData) created for W=" << texWidth << ", H=" << texHeight << ", Format=R8G8B8A8Unorm");
+    descImageInfo.setImageLayout(this->layout);
 }
 
-Image::Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage) : width(width), height(height)
-{
-    if (width == 0 || height == 0)
-        throw std::runtime_error("Image constructor (blank): Invalid dimensions (W=" + std::to_string(width) + ", H=" + std::to_string(height) + ")");
+Image::~Image() {
+    if (image != VK_NULL_HANDLE && allocation != VK_NULL_HANDLE)
+        vmaDestroyImage(allocator, image, allocation);
+}
 
-    currentLayout = vk::ImageLayout::eUndefined;
+void Image::setImageLayout(const vk::CommandBuffer& cmd, const vk::ImageLayout newLayout) {
+    // A vk::ImageMemoryBarrier describes how to change the layout of an image.
+    vk::ImageMemoryBarrier barrier;
 
-    vk::ImageCreateInfo imageInfo;
-    imageInfo.setImageType(vk::ImageType::e2D);
-    imageInfo.setExtent({width, height, 1});
-    imageInfo.setMipLevels(1);
-    imageInfo.setArrayLayers(1);
-    imageInfo.setFormat(format);
-    imageInfo.setUsage(usage);
-    imageInfo.setInitialLayout(vk::ImageLayout::eUndefined);
-    info = imageInfo;
+    // Use the current layout as the old layout
+    barrier.setOldLayout(layout)
+           .setNewLayout(newLayout)
+           .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+           .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+           .setImage(image)
+           .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1})
+           .setSrcAccessMask(toAccessFlags(layout))
+           .setDstAccessMask(toAccessFlags(newLayout));
 
-    image = context.getDevice().createImageUnique(imageInfo);
-
-    vk::MemoryRequirements requirements = context.getDevice().getImageMemoryRequirements(*image);
-    uint32_t memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo memoryInfo {};
-    memoryInfo.setAllocationSize(requirements.size);
-    memoryInfo.setMemoryTypeIndex(memoryTypeIndex);
-    memory = context.getDevice().allocateMemoryUnique(memoryInfo);
-    context.getDevice().bindImageMemory(*image, *memory, 0);
-
-    vk::ImageViewCreateInfo imageViewInfo;
-    imageViewInfo.setImage(*image);
-    imageViewInfo.setViewType(vk::ImageViewType::e2D);
-    imageViewInfo.setFormat(format);
-    imageViewInfo.setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-    view = context.getDevice().createImageViewUnique(imageViewInfo);
-
-    descImageInfo.setImageView(*view);
-    descImageInfo.setImageLayout(vk::ImageLayout::eGeneral);
-    descImageInfo.setSampler(nullptr);
-
-    context.oneTimeSubmit([&](const vk::CommandBuffer commandBuffer) {
-        setImageLayout(commandBuffer, image.get(), vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral);
-    });
-    currentLayout = vk::ImageLayout::eGeneral;
-    LOG_INFO("Image (blank) created for W=" << width << ", H=" << height << ", Format=" << static_cast<int>(format) << ", Usage=" << static_cast<uint32_t>(usage));
+    // Record the barrier command in the command buffer.
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,  {}, nullptr, nullptr, barrier);
+    layout = newLayout;
 }
 
 vk::AccessFlags Image::toAccessFlags(const vk::ImageLayout layout) {
@@ -240,23 +213,4 @@ vk::AccessFlags Image::toAccessFlags(const vk::ImageLayout layout) {
         case vk::ImageLayout::ePresentSrcKHR:           return vk::AccessFlagBits::eMemoryRead;
         default:                                        return {};
     }
-}
-
-void Image::setImageLayout(const vk::CommandBuffer& commandBuffer, vk::ImageLayout newLayout) {
-    setImageLayout(commandBuffer, image.get(), currentLayout, newLayout);
-    currentLayout = newLayout;
-}
-
-void Image::setImageLayout(const vk::CommandBuffer& commandBuffer, const vk::Image& img, vk::ImageLayout oldLayout, const vk::ImageLayout newLayout) {
-    vk::ImageMemoryBarrier barrier;
-    barrier.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
-    barrier.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
-    barrier.setImage(img);
-    barrier.setOldLayout(oldLayout);
-    barrier.setNewLayout(newLayout);
-    barrier.setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
-    barrier.setSrcAccessMask(toAccessFlags(oldLayout));
-    barrier.setDstAccessMask(toAccessFlags(newLayout));
-
-    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,{}, 0, nullptr, 0, nullptr, 1, &barrier);
 }

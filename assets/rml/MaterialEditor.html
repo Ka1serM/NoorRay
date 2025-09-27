@@ -4,13 +4,12 @@
         <link type="text/rcss" href="MaterialEditor.css"/>
         <title>Material Editor</title>
     </head>
-    <body class="window">
-    <handle move_target="#document" id="title-bar">
-        <span>Material Editor</span>
-        <button onclick="document:Close()" class="close-btn">Close</button>
-    </handle>
-    <div id="content">
-        <!-- Main two-column layout -->
+    <body>
+    <div id="container">
+        <handle move_target="#document" id="title-bar">
+            <span>Material Editor</span>
+            <button onclick="document:Close()" class="close-btn">Close</button>
+        </handle>
         <div id="editor-layout">
 
             <!-- Left Panel -->
@@ -32,9 +31,9 @@
                             <option>Transparent</option>
                         </select>
                     </div>
-                    
+
                     <div class="separator"></div>
-                    
+
                     <div class="property">
                         <input type="radio" name="property-selection" class="selector" id="select-diffuse" checked/>
                         <label for="select-diffuse" class="name">Diffuse</label>
@@ -73,8 +72,32 @@
             </div>
 
             <div id="right-panel">
-                <div class="placeholder">
-                    <p>Properties Placeholder</p>
+                <div id="property-editor">
+                    <div class="property-group">
+                        <label>Color</label>
+                        <div class="color-picker-wrapper">
+                            <input type="text" value="#b3824b" class="color-input-hidden"/>
+                            <div class="color-swatch" style="background-color: #b3824b;"></div>
+                            <input type="text" class="hex-input" value="#b3824b"/>
+                        </div>
+                    </div>
+
+                    <div class="property-group">
+                        <label>Texture</label>
+                        <div class="texture-slot">
+                            <span>+</span>
+                        </div>
+                    </div>
+
+                    <div class="separator"></div>
+
+                    <div class="property-group">
+                        <label>Weight</label>
+                        <div class="slider-wrapper">
+                            <input type="range" min="0" max="100" value="1" step="1" class="slider"/>
+                            <input type="number" min="0" max="100" value="1" step="1" class="number-input"/>
+                        </div>
+                    </div>
                 </div>
             </div>
 

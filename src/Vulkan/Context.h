@@ -1,6 +1,5 @@
 ﻿#pragma once
 
-#define VK_ENABLE_BETA_EXTENSIONS 1
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
@@ -20,7 +19,7 @@ class Context {
         VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
         VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
-        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME
 #ifdef __APPLE__
         VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
 #endif
@@ -62,10 +61,9 @@ class Context {
     void createVulkanInstance();
     void pickPhysicalDevice();
     void createLogicalDevice();
-
+    void createAllocator();
 public:
     Context(int width, int height);
-    void createAllocator();
     ~Context();
 
     // Helper functions

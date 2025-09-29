@@ -149,6 +149,7 @@ target_link_libraries(NoorRay PRIVATE
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)
+target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 
 # Platform specific linking and settings
 if(APPLE)

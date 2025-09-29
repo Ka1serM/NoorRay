@@ -3,45 +3,59 @@
         <link type="text/rcss" href="MenuBar.css" />
     </head>
     <body>
-    
-    <div class="menu-item">
-        <button>File</button>
-        <ul class="dropdown-menu">
-            <li><button>New Scene</button></li>
-            <li><button>Open Scene...</button></li>
-            <li class="separator"></li>
-            <li><button>Save</button></li>
-            <li><button>Save As...</button></li>
-            <li class="separator"></li>
-            <li><button>Exit</button></li>
-        </ul>
+    <div data-model="menubar_vm">
+        <div class="menu-item">
+            <button>File</button>
+            <ul class="dropdown-menu">
+                <li><button data-event-click="import_scene()">Open Scene</button></li>
+                <li><button data-event-click="import_obj()">Import Wavefront OBJ</button></li>
+                <li><button data-event-click="import_gltf()">Import Khronos GLTF</button></li>
+                <li><button data-event-click="import_texture()">Import Bitmap Texture</button></li>
+            </ul>
+        </div>
+
+        <!-- Add Menu -->
+        <div class="menu-item">
+            <button>Add</button>
+            <ul class="dropdown-menu">
+                <li><button data-event-click="add_cube()">Cube</button></li>
+                <li><button data-event-click="add_plane()">Plane</button></li>
+                <li><button data-event-click="add_sphere()">Sphere</button></li>
+            </ul>
+        </div>
+
+        <!-- Lights Menu -->
+        <div class="menu-item">
+            <button>Lights</button>
+            <ul class="dropdown-menu">
+                <li><button data-event-click="add_sphere_light()">Sphere Light</button></li>
+                <li><button data-event-click="add_rect_light()">Rect Light</button></li>
+                <li><button data-event-click="add_disk_light()">Disk Light</button></li>
+            </ul>
+        </div>
+
+        <!-- Edit Menu -->
+        <div class="menu-item">
+            <button>Edit</button>
+            <ul class="dropdown-menu">
+                <li><button data-event-click="undo()">Undo</button></li>
+                <li><button data-event-click="redo()">Redo</button></li>
+                <li class="separator"></li>
+                <li><button data-event-click="cut()">Cut</button></li>
+                <li><button data-event-click="copy()">Copy</button></li>
+                <li><button data-event-click="paste()">Paste</button></li>
+            </ul>
+        </div>
+
+        <!-- Help Menu -->
+        <div class="menu-item">
+            <button>Help</button>
+            <ul class="dropdown-menu">
+                <li><button data-event-click="about()">About</button></li>
+                <li><button data-event-click="quit()">Quit</button></li>
+            </ul>
+        </div>
     </div>
 
-    <div class="menu-item">
-        <button>Edit</button>
-        <ul class="dropdown-menu">
-            <li><button>Undo</button></li>
-            <li><button>Redo</button></li>
-            <li><button>Cut</button></li>
-            <li><button>Copy</button></li>
-            <li><button>Paste</button></li>
-        </ul>
-    </div>
-
-    <div class="menu-item">
-        <button>View</button>
-        <ul class="dropdown-menu">
-            <li><button>Toggle Details Panel</button></li>
-            <li><button>Toggle Scene Graph</button></li>
-        </ul>
-    </div>
-
-    <div class="menu-item">
-        <button>Help</button>
-        <ul class="dropdown-menu">
-            <li><button>About</button></li>
-        </ul>
-    </div>
-    
     </body>
 </template>

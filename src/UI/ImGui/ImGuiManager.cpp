@@ -9,10 +9,10 @@
 #include <array>
 #include "Log.h"
 
-ImGuiManager::ImGuiManager(Context& context, uint32_t numSwapchainImages, const vk::SurfaceFormatKHR swapchainFormat)
+ImGuiManager::ImGuiManager(Context& context, uint32_t numImages, const vk::SurfaceFormatKHR targetFormat)
     : context(context)
 {
-    m_swapchainFormat = static_cast<VkFormat>(swapchainFormat.format);
+    renderTargetFormat = static_cast<VkFormat>(targetFormat.format);
     
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -33,7 +33,7 @@ ImGuiManager::ImGuiManager(Context& context, uint32_t numSwapchainImages, const 
 #endif
 
     static constexpr unsigned char font[] = {
-        #embed "../../../assets/fonts/Inter-Regular.ttf"
+        #embed "../../../assets/fonts/Inter.ttf"
     };
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
@@ -56,13 +56,13 @@ ImGuiManager::ImGuiManager(Context& context, uint32_t numSwapchainImages, const 
     init_info.Queue = context.getGraphicsQueue();
     init_info.DescriptorPool = context.getDescriptorPool();
     init_info.MinImageCount = 2;
-    init_info.ImageCount = numSwapchainImages;
+    init_info.ImageCount = numImages;
     init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     
     init_info.UseDynamicRendering = true;
     init_info.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
     init_info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-    init_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &m_swapchainFormat;
+    init_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &renderTargetFormat;
     
     ImGui_ImplVulkan_Init(&init_info);
 }
@@ -74,56 +74,96 @@ ImGuiManager::~ImGuiManager() {
     LOG_INFO( "Destroyed ImGuiManager");
 }
 
-void ImGuiManager::render(const vk::CommandBuffer commandBuffer,  const vk::ImageView target_image_view,  const vk::Extent2D currentExtent)
-{
+// Private helper
+void ImGuiManager::renderInternal(
+    vk::CommandBuffer commandBuffer,
+    vk::ImageView targetImageView,
+    vk::Extent2D textureExtent,
+    vk::Offset2D mouseOffset,
+    vk::Extent2D mouseExtent,
+    vk::Extent2D windowExtent,
+    bool remapMouse
+) {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
-    
+
+    // Optional mouse remapping
+    ImVec2 originalMousePos;
+    if (remapMouse) {
+        auto& io = ImGui::GetIO();
+        originalMousePos = io.MousePos;
+
+        const float scaleX = static_cast<float>(mouseExtent.width) / windowExtent.width;
+        const float scaleY = static_cast<float>(mouseExtent.height) / windowExtent.height;
+
+        io.MousePos.x = (originalMousePos.x - mouseOffset.x) * scaleX;
+        io.MousePos.y = (originalMousePos.y - mouseOffset.y) * scaleY;
+    }
+
     const auto* mainViewport = ImGui::GetMainViewport();
     const float menuBarSize = ImGui::GetFrameHeight();
+
     ImGui::SetNextWindowPos(ImVec2(mainViewport->Pos.x, mainViewport->Pos.y + menuBarSize));
     ImGui::SetNextWindowSize(ImVec2(mainViewport->Size.x, mainViewport->Size.y - menuBarSize));
     ImGui::SetNextWindowViewport(mainViewport->ID);
+
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
-                                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                      ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDecoration;
+                                       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                       ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDecoration;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0)); // fully transparent
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
     ImGui::Begin("DockSpaceHost", nullptr, flags);
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor();
-    ImGui::DockSpace(ImGui::GetID("MyDockSpace"), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-    
+    ImGui::DockSpace(ImGui::GetID("MyDockSpace"), ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+
     for (const auto& component : components)
         component->renderUi();
-    
-    ImGui::End(); // End the DockSpace
 
+    ImGui::End();
+    
     ImGui::Render();
-    
-    // DYNAMIC RENDERING
-    vk::RenderingAttachmentInfo colorAttachmentInfo{};
-    colorAttachmentInfo.setImageView(target_image_view);
-    colorAttachmentInfo.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal); // ImGui backend expects this layout
-    colorAttachmentInfo.setLoadOp(vk::AttachmentLoadOp::eNone);
-    colorAttachmentInfo.setStoreOp(vk::AttachmentStoreOp::eStore);
-    colorAttachmentInfo.setClearValue(vk::ClearValue{std::array{0.0f, 0.0f, 0.0f, 1.0f}});
-    
+
+    // -Vulkan dynamic rendering -
+    vk::RenderingAttachmentInfo colorAttachment{};
+    colorAttachment.setImageView(targetImageView);
+    colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
+    colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear);
+    colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
+    colorAttachment.setClearValue(vk::ClearValue{std::array{0.0f, 0.0f, 0.0f, 0.0f}});
+
     vk::RenderingInfo renderingInfo{};
-    renderingInfo.setRenderArea(vk::Rect2D({0, 0}, currentExtent));
+    renderingInfo.setRenderArea(vk::Rect2D({0, 0}, textureExtent));
     renderingInfo.setLayerCount(1);
-    renderingInfo.setColorAttachments(colorAttachmentInfo);
+    renderingInfo.setColorAttachments(colorAttachment);
 
     commandBuffer.beginRendering(renderingInfo);
-    
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
-    
     commandBuffer.endRendering();
+    
+    // Restore original mouse 
+    if (remapMouse)
+        ImGui::GetIO().MousePos = originalMousePos;
+}
+
+void ImGuiManager::render(const vk::CommandBuffer commandBuffer, const vk::ImageView targetImageView, const vk::Extent2D targetTexExtent) {
+    renderInternal(commandBuffer, targetImageView, targetTexExtent, {}, {}, {}, false);
+}
+
+void ImGuiManager::renderToTarget(
+    vk::CommandBuffer commandBuffer,
+    vk::ImageView targetImageView,
+    vk::Extent2D textureExtent,
+    vk::Offset2D mouseOffset,
+    vk::Extent2D mouseExtent,
+    vk::Extent2D windowExtent
+) {
+    renderInternal(commandBuffer, targetImageView, textureExtent, mouseOffset, mouseExtent, windowExtent, true);
 }
 
 void ImGuiManager::processEvent(const SDL_Event& event)

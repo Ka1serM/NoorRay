@@ -9,15 +9,15 @@
 #include "Interfaces/RmlEmbeddedFileInterface.h"
 #include "Interfaces/RmlRenderInterface.h"
 #include "Scene/Scene.h"
-#include "ViewModels/TestViewModel.h"
+#include "ViewModels/MenuBarViewModel.h"
+#include "ViewModels/ViewportViewModel.h"
 #include "Vulkan/Image.h"
 
 class SceneGraphViewModel;
 
 class RmlUiManager {
 public:
-    RmlUiManager(Context& context, Scene& scene, const Renderer& renderer);
-    void bindViewportImage(const Image& image);
+    RmlUiManager(Context& context, Scene& scene, const Renderer& renderer, const Image& renderImage);
     ~RmlUiManager();
 
     void render(vk::CommandBuffer command_buffer, vk::Image target_image, vk::ImageView target_image_view, vk::ImageView depthImageView, vk::Extent2D target_extent, vk::Fence in_flight_fenc);
@@ -34,8 +34,7 @@ private:
     
     Rml::ElementDocument* editorDocument = nullptr;
     Rml::ElementDocument* materialEditorDocument = nullptr;
-    Rml::ElementDocument* testDocument = nullptr;
 
-    std::unique_ptr<TestViewModel> testViewModel;
-    std::unique_ptr<SceneGraphViewModel> sceneGraphViewModel;
+    std::vector<std::unique_ptr<ViewModelBase>> viewModels;
+    ViewportViewModel* viewportVM = nullptr; // non-owning pointer
 };

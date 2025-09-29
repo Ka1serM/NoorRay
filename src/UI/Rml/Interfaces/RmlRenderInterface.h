@@ -6,15 +6,31 @@
 #include "vk_mem_alloc.h"
 #include <map>
 #include <vector>
+#include "MemoryPool.h"
+
+class GeometryData; 
+class TextureData;
 
 #define RMLUI_VULKAN_ENABLE_CLIPPING 1
 #define RMLUI_VULKAN_ENABLE_SHADERS 1
 
+
 struct GpuResource {
+    enum class GpuResourceType { Texture, StagingBuffer, Geometry, UniformBuffer }; // Add all types
+
+    const GpuResourceType type;
+
+    // Constructor to set the type
+    explicit GpuResource(GpuResourceType res_type) : type(res_type) {}
+
+    GpuResource(const GpuResource&) = delete;
+    GpuResource& operator=(const GpuResource&) = delete;
+
+    GpuResource(GpuResource&&) = default; // Enable default moving
+    GpuResource& operator=(GpuResource&&) = default; // Enable default moving
+
     virtual ~GpuResource() = default;
 };
-
-#include "RingBuffer.h"
 
 // TGA Header struct for texture loading
 #pragma pack(1)
@@ -85,7 +101,8 @@ public:
     
     void beginFrame(vk::CommandBuffer command_buffer, vk::Image target_image, vk::ImageView target_image_view, vk::ImageView depthImageView, vk::Extent2D target_extent, vk::Fence in_flight_fence);
     void endFrame();
-    
+    void renderCall(const GeometryData* geometry);
+
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
     void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) override;
     void ReleaseGeometry(Rml::CompiledGeometryHandle geometry) override;
@@ -167,6 +184,6 @@ private:
 
     Rml::CompiledGeometryHandle m_fullscreen_quad;
 
-    RingBuffer m_ring_buffer;
     std::deque<std::pair<vk::Fence, std::vector<GpuResource*>>> m_destruction_queue;
+    MemoryPool m_geometry_pool;
 };

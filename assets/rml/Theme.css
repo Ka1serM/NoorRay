@@ -88,13 +88,13 @@ thead, tbody, tfoot
 }
 
 *, *::before, *::after {
+    font-family: Inter;
     box-sizing: border-box;
 }
 
 body {
-    font-family: Roboto;
-    color: #ffffff;
     font-size: 16dp;
+    color: #ffffff;
 }
 
 h1, h2, h3, h4, h5 {
@@ -187,13 +187,13 @@ button:hover {
 
 .checkbox {
     padding: 0;
-    width: 10dp;
-    height: 10dp;
+    width: 15dp;
+    height: 15dp;
     border-color: #FFFFFF26;
-    border-radius: 10dp;
+    border-radius: 16dp;
     background-color: #FFFFFF00;
     cursor: pointer;
-    border-width: 2dp;
+    border-width: 3dp;
     transition: background-color 0.2s;
 }
 
@@ -206,7 +206,7 @@ button:hover {
     width: 14dp;
     height: 14dp;
     border-color: #FFFFFF26;
-    border-radius: 10dp;
+    border-radius: 9dp;
     background-color: #FFFFFF;
     cursor: pointer;
     border-width: 3dp;
@@ -218,7 +218,8 @@ button:hover {
 }
 
 .keyframe:checked {
-    background-color: #ff4a4a;
+    background-color: #FF2149;
+    border-color: #BD7B7B26;
 }
 
 slidertrack {
@@ -237,10 +238,4 @@ sliderbar {
     height: 1dp;
     background-color: rgba(0, 0, 0, 0);
     cursor: pointer;
-}
-
-* {
-    box-sizing: border-box;
-    font-size: 16dp;
-    font-family: Roboto;
 }

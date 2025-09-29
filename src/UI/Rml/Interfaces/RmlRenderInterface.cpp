@@ -10,6 +10,7 @@
 #include "UniformBuffer.h"
 #include <array>
 #include <cmath>
+#include "GeometryData.h"
 
 RmlRenderInterface::RmlRenderInterface(
     const vk::Device device, const vk::Queue graphics_queue, const VmaAllocator allocator,
@@ -17,7 +18,7 @@ RmlRenderInterface::RmlRenderInterface(
     const vk::Format colorFormat, const vk::Format depthFormat)
     : m_device(device), m_queue(graphics_queue), m_allocator(allocator),
       m_command_pool(command_pool), m_descriptor_pool(descriptor_pool),
-      m_ring_buffer(m_allocator, m_device, 32 * 1024 * 1024, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer)
+    m_geometry_pool(m_allocator,  16 * 1024 * 1024, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer)
 {
     CreateDescriptors();
     CreatePipelines(colorFormat, depthFormat);
@@ -101,8 +102,7 @@ void RmlRenderInterface::CreatePipelines(vk::Format colorFormat, vk::Format dept
     vk::PipelineDynamicStateCreateInfo dynamic_state_ci({}, dynamic_states);
     vk::PipelineRenderingCreateInfo rendering_ci({}, colorFormat, depthFormat, depthFormat);
 
-    vk::PipelineColorBlendAttachmentState color_blend_attachment(true, vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
-                                                                 vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+    vk::PipelineColorBlendAttachmentState color_blend_attachment(true, vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::BlendFactor::eOne, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
     vk::PipelineColorBlendStateCreateInfo color_blend_ci({}, false, vk::LogicOp::eCopy, color_blend_attachment);
     vk::PipelineColorBlendAttachmentState no_color_write_attachment;
     no_color_write_attachment.colorWriteMask = {};
@@ -237,37 +237,22 @@ RmlRenderInterface::~RmlRenderInterface()
     }
 }
 
-Rml::CompiledGeometryHandle RmlRenderInterface::CompileGeometry(const Rml::Span<const Rml::Vertex> vertices, const Rml::Span<const int> indices)
+Rml::CompiledGeometryHandle RmlRenderInterface::CompileGeometry(
+    const Rml::Span<const Rml::Vertex> vertices,
+    const Rml::Span<const int> indices)
 {
-    // Calculate the size needed for the vertex and index data.
-    const size_t vertex_size_bytes = vertices.size() * sizeof(Rml::Vertex);
-    const size_t index_size_bytes = indices.size() * sizeof(int);
-
-    if (vertex_size_bytes == 0 || index_size_bytes == 0)
-        return {};
-
-    // Allocate a contiguous chunk from the large, pre-mapped ring buffer.
-    Allocation vertex_alloc = m_ring_buffer.allocate(vertex_size_bytes, alignof(Rml::Vertex));
-    Allocation index_alloc = m_ring_buffer.allocate(index_size_bytes, alignof(int));
-
-    // Copy the data directly into the buffer's mapped memory.
-    memcpy(vertex_alloc.mapped_data, vertices.data(), vertex_size_bytes);
-    memcpy(index_alloc.mapped_data, indices.data(), index_size_bytes);
-
-    // Create a new, lightweight handle struct that just contains metadata (offsets and counts).
-    auto* handle = new GeometryData{};
-    handle->vertex_offset_bytes = static_cast<uint32_t>(vertex_alloc.offset);
-    handle->index_offset_bytes = static_cast<uint32_t>(index_alloc.offset);
-    handle->num_indices = static_cast<uint32_t>(indices.size());
-
-    // 5. Return the raw pointer to the handle struct.
-    return reinterpret_cast<Rml::CompiledGeometryHandle>(handle);
+    // Now just create a new GeometryData object that uses the pool.
+    auto* geom = new GeometryData(m_geometry_pool, vertices, indices);
+    return reinterpret_cast<Rml::CompiledGeometryHandle>(geom);
 }
+    
 
-void RmlRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
+void RmlRenderInterface::ReleaseGeometry(const Rml::CompiledGeometryHandle handle)
 {
-    if (handle && m_current_frame_fence)
-        m_destruction_queue.back().second.push_back(reinterpret_cast<GpuResource*>(handle));
+    if (!handle || !m_current_frame_fence) return;
+
+    auto* geom = reinterpret_cast<GeometryData*>(handle);
+    m_destruction_queue.back().second.push_back(geom);
 }
 
 Rml::TextureHandle RmlRenderInterface::GenerateTexture(const Rml::Span<const Rml::byte> source_data, const Rml::Vector2i source_dimensions)
@@ -295,15 +280,11 @@ Rml::TextureHandle RmlRenderInterface::GenerateTexture(const Rml::Span<const Rml
     return reinterpret_cast<Rml::TextureHandle>(texture);
 }
 
-void RmlRenderInterface::ReleaseTexture(Rml::TextureHandle handle)
+void RmlRenderInterface::ReleaseTexture(const Rml::TextureHandle handle)
 {
     if (handle && m_current_frame_fence)
     {
         auto* texture = reinterpret_cast<TextureData*>(handle);
-
-        if (texture->getBindlessIndex() != static_cast<uint32_t>(-1))
-            m_free_texture_indices.push_back(texture->getBindlessIndex());
-
         m_destruction_queue.back().second.push_back(texture);
     }
 }
@@ -429,33 +410,32 @@ void RmlRenderInterface::SetTransform(const Rml::Matrix4f* transform)
 
 void RmlRenderInterface::beginFrame(const vk::CommandBuffer command_buffer, const vk::Image target_image, const vk::ImageView target_image_view, const vk::ImageView depthImageView, vk::Extent2D target_extent, vk::Fence in_flight_fence)
 {
-    m_current_frame_fence = in_flight_fence;
-    m_destruction_queue.emplace_back(m_current_frame_fence, std::vector<GpuResource*>{});
-
     m_command_buffer = command_buffer;
     m_target_extent = target_extent;
     m_target_image_view = target_image_view;
     m_target_image = target_image;
 
-    m_ring_buffer.beginFrame(in_flight_fence);
-
+    // Process destruction queue BEFORE setting up new frame
     while (!m_destruction_queue.empty()) {
         auto& [fence, resources] = m_destruction_queue.front();
 
         if (m_device.getFenceStatus(fence) == vk::Result::eSuccess) {
             for (auto* res : resources) {
-                
-                // recycle bindless index if texture
-                if (auto* tex = dynamic_cast<TextureData*>(res))
+                if (res->type == GpuResource::GpuResourceType::Texture)
+                {
+                    auto* tex = static_cast<TextureData*>(res);
                     if (tex->getBindlessIndex() != static_cast<uint32_t>(-1))
                         m_free_texture_indices.push_back(tex->getBindlessIndex());
-                
-                delete res; // safe to delete now
+                }
+                delete res;
             }
             m_destruction_queue.pop_front();
-        } else
-            break; // stop if oldest fence hasn't signaled yet
+        } else break;
     }
+
+    // Now set up new frame
+    m_current_frame_fence = in_flight_fence;
+    m_destruction_queue.emplace_back(m_current_frame_fence, std::vector<GpuResource*>{});
     
     // Update projection matrix
     const float w = static_cast<float>(target_extent.width);
@@ -497,6 +477,16 @@ void RmlRenderInterface::endFrame()
     m_command_buffer.endRendering();
 }
 
+void RmlRenderInterface::renderCall(const GeometryData* geometry)
+{
+    const vk::Buffer vertexBuffer = m_geometry_pool.getBuffer();
+    const vk::DeviceSize vertexOffset = geometry->getVertexOffset();
+    m_command_buffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexOffset);
+    const vk::DeviceSize indexOffset = geometry->getIndexOffset();
+    m_command_buffer.bindIndexBuffer(vertexBuffer, indexOffset, vk::IndexType::eUint32);
+    m_command_buffer.drawIndexed(geometry->getNumIndices(), 1, 0, 0, 0);
+}
+
 void RmlRenderInterface::RenderGeometry(Rml::CompiledGeometryHandle geometry_handle, Rml::Vector2f translation, Rml::TextureHandle texture)
 {
     auto* geometry = reinterpret_cast<GeometryData*>(geometry_handle);
@@ -520,15 +510,10 @@ void RmlRenderInterface::RenderGeometry(Rml::CompiledGeometryHandle geometry_han
     if (m_clip_mask_enabled)
         m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, m_stencil_level);
 #endif
-
-
+    
     m_command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_textures_layout.get(), 0, m_textures_descriptor_set.get(), {});
-
     m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, pc);
-
-    m_command_buffer.bindVertexBuffers(0, m_ring_buffer.getBuffer(), {geometry->vertex_offset_bytes});
-    m_command_buffer.bindIndexBuffer(m_ring_buffer.getBuffer(), geometry->index_offset_bytes, vk::IndexType::eUint32);
-    m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
+    renderCall(geometry);
 }
 
 void RmlRenderInterface::SetScissorRegion(const Rml::Rectanglei region)
@@ -604,13 +589,10 @@ void RmlRenderInterface::RenderToClipMask(Rml::ClipMaskOperation operation, cons
         {
             m_stencil_level = 1;
             m_command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline_stencil_gen.get());
-
             m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, m_stencil_level);
-            // Draw the mask geometry
             m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, constants);
-            m_command_buffer.bindVertexBuffers(0, m_ring_buffer.getBuffer(), {geometry->vertex_offset_bytes});
-            m_command_buffer.bindIndexBuffer(m_ring_buffer.getBuffer(), geometry->index_offset_bytes, vk::IndexType::eUint32);
-            m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
+            // Draw the mask geometry
+            renderCall(geometry);
             break;
         }
 
@@ -623,33 +605,29 @@ void RmlRenderInterface::RenderToClipMask(Rml::ClipMaskOperation operation, cons
 
             const auto* quad_geo = reinterpret_cast<GeometryData*>(m_fullscreen_quad);
             const PushConstants quad_pc = {Rml::Matrix4f::Identity(), {0, 0}, -1};
-            m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(), vk::ShaderStageFlagBits::eVertex, 0, quad_pc);
-            m_command_buffer.bindVertexBuffers(0, m_ring_buffer.getBuffer(), {quad_geo->vertex_offset_bytes});
-            m_command_buffer.bindIndexBuffer(m_ring_buffer.getBuffer(), quad_geo->index_offset_bytes, vk::IndexType::eUint32);
-            m_command_buffer.drawIndexed(quad_geo->num_indices, 1, 0, 0, 0);
+            // Push quad constants
+            m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(),vk::ShaderStageFlagBits::eVertex,0,quad_pc);
+            // Render quad geometry
+            renderCall(quad_geo);
             // 2. Punch a hole (write '0') where the user geometry is
             m_command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline_stencil_zero.get());
-
             m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, 0);
-            // Draw the mask geometry
-            m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, constants);
-            m_command_buffer.bindVertexBuffers(0, m_ring_buffer.getBuffer(), {geometry->vertex_offset_bytes});
-            m_command_buffer.bindIndexBuffer(m_ring_buffer.getBuffer(), geometry->index_offset_bytes, vk::IndexType::eUint32);
-            m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
+            // Push user geometry constants
+            m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(),vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,0,constants);
+            // Render user geometry
+            renderCall(geometry);
             break;
         }
 
     case Rml::ClipMaskOperation::Intersect:
         {
             m_command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline_stencil_incr.get());
-
             m_command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, m_stencil_level);
             m_stencil_level++;
-            // Draw the mask geometry
-            m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, constants);
-            m_command_buffer.bindVertexBuffers(0, m_ring_buffer.getBuffer(), {geometry->vertex_offset_bytes});
-            m_command_buffer.bindIndexBuffer(m_ring_buffer.getBuffer(), geometry->index_offset_bytes, vk::IndexType::eUint32);
-            m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
+            // Push constants
+            m_command_buffer.pushConstants<PushConstants>(m_pipeline_textures_layout.get(),vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,0,constants);
+            // Render user geometry
+            renderCall(geometry);
             break;
         }
     }
@@ -746,12 +724,8 @@ void RmlRenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle, R
         m_textures_descriptor_set.get()
     };
     m_command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_ubo_textures_layout.get(), 0, sets, {});
-
     m_command_buffer.pushConstants<PushConstants>(m_pipeline_ubo_textures_layout.get(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, pc);
-
-    m_command_buffer.bindVertexBuffers(0, m_ring_buffer.getBuffer(), {geometry->vertex_offset_bytes});
-    m_command_buffer.bindIndexBuffer(m_ring_buffer.getBuffer(), geometry->index_offset_bytes, vk::IndexType::eUint32);
-    m_command_buffer.drawIndexed(geometry->num_indices, 1, 0, 0, 0);
+    renderCall(geometry);
 }
 
 void RmlRenderInterface::ReleaseShader(Rml::CompiledShaderHandle shader_handle)

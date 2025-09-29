@@ -12,10 +12,10 @@ class ImGuiComponent;
 
 class ImGuiManager {
 public:
-    ImGuiManager(Context& context, uint32_t numSwapchainImages, vk::SurfaceFormatKHR swapchainFormat);
+    ImGuiManager(Context& context, uint32_t numImages, vk::SurfaceFormatKHR renderTargetFormat);
     ~ImGuiManager();
-    
-    void render(vk::CommandBuffer commandBuffer, vk::ImageView target_image_view, vk::Extent2D currentExtent);
+    void render(vk::CommandBuffer commandBuffer, vk::ImageView targetImageView, vk::Extent2D currentExtent);
+    void renderToTarget(vk::CommandBuffer commandBuffer, vk::ImageView targetImageView, vk::Extent2D textureExtent, vk::Offset2D mouseOffset, vk::Extent2D mouseExtent, vk::Extent2D windowExtent);
     void processEvent(const SDL_Event& event);
 
     template<typename T, typename... Args>
@@ -38,9 +38,10 @@ public:
     static void colorEdit4Row(const char* label, glm::vec4 value, const std::function<void(glm::vec4)>& setter);
 
 private:
+    void renderInternal(vk::CommandBuffer commandBuffer, vk::ImageView targetImageView, vk::Extent2D textureExtent, vk::Offset2D mouseOffset, vk::Extent2D mouseExtent, vk::Extent2D windowExtent, bool remapMouse);
     static void SetBlenderTheme();
 
     Context& context;
     std::vector<std::unique_ptr<ImGuiComponent>> components;
-    VkFormat m_swapchainFormat;
+    VkFormat renderTargetFormat;
 };

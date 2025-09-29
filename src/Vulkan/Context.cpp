@@ -33,7 +33,7 @@ Context::Context(const int width, const int height) : windowWidth(width), window
             std::cerr << "[FATAL] Failed to create SDL window: " << SDL_GetError() << std::endl;
             throw std::runtime_error("Failed to create SDL window.");
         }
-        
+
         WindowEffects::EnableMica(window);
 
         const auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
@@ -304,7 +304,6 @@ void Context::pickPhysicalDevice() {
 }
 
 void Context::createLogicalDevice() {
-    // --- Queue Family Discovery (Your existing code is good) ---
     std::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
     std::optional<uint32_t> foundGraphicsFamily, foundComputeFamily, foundPresentFamily;
     // First pass: find any suitable family for each type
@@ -343,15 +342,13 @@ void Context::createLogicalDevice() {
     constexpr float queuePriority = 1.0f;
     for (uint32_t familyIndex : uniqueQueueFamilies)
         queueCreateInfos.emplace_back(vk::DeviceQueueCreateFlags{}, familyIndex, 1, &queuePriority);
-
-    // --- Extension Enabling (Your existing code is good) ---
+    
     auto enabledExtensions = RequiredDeviceExtensions;
     if (rtxSupported) {
         std::cout << "[INFO] Ray tracing extensions are supported. Enabling them." << std::endl;
         enabledExtensions.insert(enabledExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
-    } else {
+    } else
         std::cout << "[INFO] Ray tracing extensions are not supported. Proceeding without them." << std::endl;
-    }
     
     vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{};
     vk::PhysicalDeviceVulkan12Features features12{};

@@ -22,7 +22,6 @@ void DebugPanel::onComputeFinished() {
 
 void DebugPanel::renderUi() {
     ImGui::Begin(name.c_str());
-
     if (ImGui::BeginTable("Debug Table", 2, ImGuiTableFlags_SizingStretchProp)) {
 
         ImGuiManager::tableRowLabel("FPS");

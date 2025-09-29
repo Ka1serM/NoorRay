@@ -3,20 +3,21 @@
 #include "vk_mem_alloc.h"
 #include <utility>
 
+#include "RmlRenderInterface.h"
+
 class UniformBuffer : public GpuResource {
 public:
-    ~UniformBuffer()
+    ~UniformBuffer() override
     {
         if (m_allocator && m_buffer != VK_NULL_HANDLE && m_allocation != VK_NULL_HANDLE)
             vmaDestroyBuffer(m_allocator, m_buffer, m_allocation);
     }
 
-    // The class is non-copyable but movable to allow for ownership transfer.
     UniformBuffer(const UniformBuffer&) = delete;
     UniformBuffer& operator=(const UniformBuffer&) = delete;
-
     UniformBuffer(UniformBuffer&& other) noexcept
-        : m_allocator(other.m_allocator),
+        : GpuResource(GpuResourceType::UniformBuffer), // Base is move-constructed
+          m_allocator(other.m_allocator),
           m_device(other.m_device),
           m_buffer(other.m_buffer),
           m_allocation(other.m_allocation),
@@ -103,7 +104,9 @@ public:
 
 private:
     UniformBuffer(VmaAllocator allocator, vk::Device device)
-        : m_allocator(allocator), m_device(device)
+        : GpuResource(GpuResourceType::UniformBuffer),
+          m_allocator(allocator),
+          m_device(device)
     {}
 
     VmaAllocator m_allocator = nullptr;

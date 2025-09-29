@@ -32,7 +32,8 @@ public:
 protected:
     // Method used by concrete classes (like Scene) to trigger the update
     void Notify(const EventT& event) {
-        for (auto* o : observers)
+        auto copy = observers; // Copy to allow safe modification during iteration
+        for (auto* o : copy)
             o->OnNotified(event);
     }
 };

@@ -13,11 +13,10 @@ class NoorRay
     Context context;
     Scene scene;
     Renderer renderer;
-    ImGuiManager imGuiManager;
-    RmlUiManager rmlUiManager;
 
     std::unique_ptr<GpuRaytracer> raytracer;
     std::unique_ptr<Tonemapper> tonemapper;
+    std::unique_ptr<RmlUiManager> rmlUiManager;
 public:
     
     NoorRay(int windowWidth, int windowHeight, int renderWidth, int renderHeight);

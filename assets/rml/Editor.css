@@ -7,12 +7,10 @@ body, html {
 }
 
 body.no-select-v {
-    user-select: none;
     cursor: col-resize;
 }
 
 body.no-select-h {
-    user-select: none;
     cursor: row-resize;
 }
 

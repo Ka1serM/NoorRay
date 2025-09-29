@@ -6,9 +6,10 @@
 #include <RmlUi/Debugger/Debugger.h>
 
 #include "ViewModels/SceneGraphViewModel.h"
+#include "ViewModels/ViewportViewModel.h"
 #include "Vulkan/Image.h"
 
-RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& renderer)
+RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& renderer, const Image& renderImage)
 : rmlRenderInterface(
       context.getDevice(),
       context.getGraphicsQueue(),
@@ -83,37 +84,27 @@ RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& rende
     rmlContext->SetDensityIndependentPixelRatio(context.getDPIScale());
 
     // Load font(s)
-    Rml::LoadFontFace("../assets/fonts/Roboto.ttf");
+    Rml::LoadFontFace("../assets/fonts/Inter.ttf");
 
-    sceneGraphViewModel = std::make_unique<SceneGraphViewModel>(scene);
-    sceneGraphViewModel->BindToModel("scenegraph_vm", rmlContext);
-
+    viewModels.emplace_back(std::make_unique<SceneGraphViewModel>(scene, rmlContext, "scenegraph_vm"));
+    viewModels.emplace_back(std::make_unique<MenuBarViewModel>(scene, rmlContext, "menubar_vm"));
+    
     // Load initial document
     editorDocument = rmlContext->LoadDocument("../assets/rml/Editor.html");
+    editorDocument->SetId("main");
     if (editorDocument)
         editorDocument->Show();
 
+    // Create viewport VM and store pointer
+    auto vpVM = std::make_unique<ViewportViewModel>(context, rmlContext, rmlRenderInterface, renderImage, "viewport-img");
+    viewportVM = vpVM.get();  // non-owning pointer
+    viewModels.emplace_back(std::move(vpVM));
+    
     materialEditorDocument =  rmlContext->LoadDocument("../assets/rml/MaterialEditor.html");
     if (materialEditorDocument)
         materialEditorDocument->Show();
-    
-    //testViewModel = std::make_unique<TestViewModel>();
-    //testViewModel->BindToModel("test_vm", rmlContext);
-
-   // testDocument = rmlContext->LoadDocument("../assets/rml/Test.html");
-   //if (testDocument)
-   //    testDocument->Show();
 
     Rml::Debugger::Initialise(rmlContext);
-}
-
-void RmlUiManager::bindViewportImage(const Image& image) {
-    const Rml::String texture_name = "viewport-img";
-    rmlRenderInterface.registerVulkanTexture(texture_name,  image.getView(),  Rml::Vector2i{static_cast<int>(image.getWidth()), static_cast<int>(image.getHeight())});
-
-    Rml::Element* viewportElem = editorDocument->GetElementById("viewport-img");
-    if (viewportElem)
-        viewportElem->SetAttribute("src", "vulkan://" + texture_name);
 }
 
 RmlUiManager::~RmlUiManager()
@@ -131,7 +122,12 @@ void RmlUiManager::render(const vk::CommandBuffer command_buffer, const vk::Imag
     rmlRenderInterface.beginFrame(command_buffer, target_image, target_image_view, depthImageView, target_extent, in_flight_fenc);
 
     rmlContext->Update();
+    for (const auto& vm : viewModels)
+        vm->Update();
+
     rmlContext->Render();
+    if (viewportVM)
+        viewportVM->Render(command_buffer, target_extent);
 
     rmlRenderInterface.endFrame();
 }
@@ -139,6 +135,8 @@ void RmlUiManager::render(const vk::CommandBuffer command_buffer, const vk::Imag
 void RmlUiManager::processEvent(SDL_Window* window, SDL_Event& event) const
 {
     RmlSDL::InputEventHandler(rmlContext, window, event);
+    //if (viewportVM)
+    //     viewportVM->processEvent(event);
 }
 
 void RmlUiManager::resize(int width, int height) const
@@ -158,12 +156,7 @@ void RmlUiManager::reload()
         materialEditorDocument->Close();
         materialEditorDocument = nullptr;
     }
-
-    if (testDocument) {
-        testDocument->Close();
-        testDocument = nullptr;
-    }
-
+    
     Rml::Factory::ClearStyleSheetCache();
 
     editorDocument = rmlContext->LoadDocument("../assets/rml/Editor.html");

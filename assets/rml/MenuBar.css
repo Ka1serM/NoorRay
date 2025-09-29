@@ -3,6 +3,7 @@
 
 .menu-item {
     position: relative;
+    display: inline-block;
 }
 
 .menu-item > button {

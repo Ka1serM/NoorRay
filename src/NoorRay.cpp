@@ -1,6 +1,5 @@
 #include "NoorRay.h"
 #include <chrono>
-#include <iostream>
 #include <stdexcept>
 #include <RmlUi/Debugger/Debugger.h>
 #include <SDL3/SDL.h>
@@ -11,12 +10,7 @@
 #include "Camera/PerspectiveCamera.h"
 #include "Raytracing/ComputeRaytracer.h"
 #include "Raytracing/RtxRaytracer.h"
-#include "UI/ImGui/DebugPanel.h"
-#include "UI/ImGui/DetailsPanel.h"
-#include "UI/ImGui/MainMenuBar.h"
-#include "UI/ImGui/EnvironmentPanel.h"
 #include "UI/ImGui/RenderPanel.h"
-#include "UI/ImGui/SceneGraphPanel.h"
 #include "Vulkan/Tonemapper.h"
 
 NoorRay::~NoorRay() = default;
@@ -24,9 +18,7 @@ NoorRay::~NoorRay() = default;
 NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int renderWidth, const int renderHeight)
     : context(windowWidth, windowHeight),
       scene(context),
-      renderer(context, context.getWindowWidth(), context.getWindowHeight()),
-      imGuiManager(context, renderer.getNumSwapchainImages(), renderer.getColorImageFormat()),
-      rmlUiManager(context, scene, renderer)
+      renderer(context, context.getWindowWidth(), context.getWindowHeight())
 {
     const float dpiScale = context.getDPIScale();
     int scaledRenderWidth  = static_cast<int>(static_cast<float>(renderWidth)  * dpiScale);
@@ -39,15 +31,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
 
     tonemapper = std::make_unique<Tonemapper>(context, raytracer->getWidth(), raytracer->getHeight(), raytracer->getOutputColor(), renderer.getColorImageFormat());
 
-    rmlUiManager.bindViewportImage(tonemapper->getOutputImage());
-
-    //imGuiManager.addComponent<MainMenuBar>("Menu", context, scene);
-    imGuiManager.addComponent<DebugPanel>("Debug");
-    imGuiManager.addComponent<EnvironmentPanel>("Environment", scene);
-    imGuiManager.addComponent<SceneGraphPanel>("Scene Graph", scene);
-    imGuiManager.addComponent<DetailsPanel>("Details", scene);
-    imGuiManager.addComponent<RenderPanel>("Render", context, *raytracer, renderer, *tonemapper);
-    imGuiManager.addComponent<ViewportPanel>("Viewport", context, scene, tonemapper->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(), raytracer->getWidth(), raytracer->getHeight());
+     rmlUiManager = std::make_unique<RmlUiManager>(context, scene, renderer, tonemapper->getOutputImage());
 
     int imgWidth, imgHeight, channels;
     static constexpr unsigned char hdriData[] = {
@@ -75,11 +59,6 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
 }
 
 void NoorRay::run() {
-    auto* debugPanel = dynamic_cast<DebugPanel*>(imGuiManager.getComponent("Debug"));
-    auto* viewportPanel = dynamic_cast<ViewportPanel*>(imGuiManager.getComponent("Viewport"));
-    const auto* environmentPanel = dynamic_cast<EnvironmentPanel*>(imGuiManager.getComponent("Environment"));
-    auto* renderPanel = dynamic_cast<RenderPanel*>(imGuiManager.getComponent("Render"));
-
     int frame = 0;
     bool isRunning = true;
     bool isFullscreen = false;
@@ -88,8 +67,7 @@ void NoorRay::run() {
         
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
-            imGuiManager.processEvent(event);
-            rmlUiManager.processEvent(context.getWindow(), event);
+            rmlUiManager->processEvent(context.getWindow(), event);
             
             if (event.type == SDL_EVENT_QUIT)
                 isRunning = false;
@@ -100,12 +78,11 @@ void NoorRay::run() {
             if (event.type == SDL_EVENT_WINDOW_RESIZED)
             {
                 renderer.notifyResize(event.window.data1, event.window.data2);
-                rmlUiManager.resize(event.window.data1, event.window.data2);
+                rmlUiManager->resize(event.window.data1, event.window.data2);
             }
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_R && event.key.mod & SDL_KMOD_CTRL)
             {
-                rmlUiManager.reload();
-                rmlUiManager.bindViewportImage(tonemapper->getOutputImage());
+                rmlUiManager->reload();
             }
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_D && event.key.mod & SDL_KMOD_CTRL)
                 Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible());
@@ -116,14 +93,14 @@ void NoorRay::run() {
             const vk::CommandBuffer cmd = renderer.getCurrentCommandBuffer();
 
             if (renderer.isComputeWorkFinished()) {
-                debugPanel->onComputeFinished();
+                //debugPanel->onComputeFinished();
                 
-                viewportPanel->updateDisplayImage(cmd, tonemapper->getOutputImage());
+                //viewportPanel->updateDisplayImage(cmd, tonemapper->getOutputImage());
 
-                if (renderPanel->isSaveRequested()) {
-                    renderPanel->executeSave();
-                }
-                else
+                //if (renderPanel->isSaveRequested()) {
+                //    renderPanel->executeSave();
+                //}
+               // else
                 {
                     if (scene.isAnyDirty()) {
                         if (scene.isDirty(Meshes))
@@ -143,21 +120,20 @@ void NoorRay::run() {
                     renderer.submitCompute([&](const vk::CommandBuffer computeCmd) {
                         PushConstantsData pushConstants{};
                         pushConstants.push.frame = frame;
-                        pushConstants.push.diffuseBounces = renderPanel->getDiffuseBounces();
-                        pushConstants.push.specularBounces = renderPanel->getSpecularBounces();
-                        pushConstants.push.transmissionBounces = renderPanel->getTransmissionBounces();
-                        pushConstants.push.samples  = renderPanel->getSamples();
-                        pushConstants.push.exposure = renderPanel->getExposure();
+                        pushConstants.push.diffuseBounces =3; //renderPanel->getDiffuseBounces();
+                        pushConstants.push.specularBounces = 3;//renderPanel->getSpecularBounces();
+                        pushConstants.push.transmissionBounces = 3;//renderPanel->getTransmissionBounces();
+                        pushConstants.push.samples  = 1;//renderPanel->getSamples();
+                        pushConstants.push.exposure = 1;//renderPanel->getExposure();
                         pushConstants.camera  = scene.getActiveCamera()->getCameraData();
-                        pushConstants.environment = environmentPanel->getEnvironmentData();
+                        pushConstants.environment = EnvironmentData{};//environmentPanel->getEnvironmentData();
                         raytracer->render(computeCmd, pushConstants);
                         tonemapper->dispatch(computeCmd);
                     });
                 }
             }
 
-            rmlUiManager.render(cmd, renderer.getCurrentColorImage(), renderer.getCurrentColorImageView(), renderer.getDepthImageView(), renderer.getSwapchainExtent(), renderer.getCurrentInFlightFence());
-            //imGuiManager.render(cmd, renderer.getCurrentColorImageView(), renderer.getSwapchainExtent());
+            rmlUiManager->render(cmd, renderer.getCurrentColorImage(), renderer.getCurrentColorImageView(), renderer.getDepthImageView(), renderer.getSwapchainExtent(), renderer.getCurrentInFlightFence());
 
             renderer.endFrame();
         }

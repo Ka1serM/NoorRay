@@ -21,19 +21,17 @@ public:
     // Constructor for external views
     TextureData(VmaAllocator allocator, vk::Device device, vk::ImageView external_view);
     
-    ~TextureData();
+    ~TextureData() override;
 
-    // Rule of Five: Non-copyable, Movable 
     TextureData(const TextureData&) = delete;
     TextureData& operator=(const TextureData&) = delete;
     TextureData(TextureData&& other) noexcept;
     TextureData& operator=(TextureData&& other) noexcept;
 
-    // Accessors 
     vk::ImageView getImageView() const { return m_owned_image_view ? m_owned_image_view.get() : m_external_image_view; }
     vk::Sampler getSampler() const { return m_sampler; }
     uint32_t getBindlessIndex() const { return m_bindless_index; }
-    void setBindlessIndex(uint32_t index) { m_bindless_index = index; }
+    void setBindlessIndex(const uint32_t index) { m_bindless_index = index; }
 
     void swap(TextureData& other) noexcept;
 
@@ -82,7 +80,7 @@ TextureData::Create(
     auto staging_buffer_ci = static_cast<VkBufferCreateInfo>(vk::BufferCreateInfo({}, image_size, vk::BufferUsageFlagBits::eTransferSrc));
     VmaAllocationCreateInfo staging_alloc_ci = {VMA_ALLOCATION_CREATE_MAPPED_BIT, VMA_MEMORY_USAGE_CPU_ONLY};
     VmaAllocationInfo staging_alloc_info;
-    vmaCreateBuffer(allocator, &staging_buffer_ci, &staging_alloc_ci, &staging_buffer_ptr->buffer, &staging_buffer_ptr->allocation, &staging_alloc_info);
+    vmaCreateBuffer(allocator, &staging_buffer_ci, &staging_alloc_ci, &staging_buffer_ptr->getBuffer(), &staging_buffer_ptr->getAllocation(), &staging_alloc_info);
     memcpy(staging_alloc_info.pMappedData, data.data(), image_size);
 
     // 2. Create the final GPU image
@@ -96,7 +94,8 @@ TextureData::Create(
     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer, {}, nullptr, nullptr, to_transfer);
     
     vk::BufferImageCopy copy_region(0, 0, 0, { vk::ImageAspectFlagBits::eColor, 0, 0, 1 }, {}, extent);
-    cmd.copyBufferToImage(staging_buffer_ptr->buffer, texture_ptr->m_image, vk::ImageLayout::eTransferDstOptimal, copy_region);
+    vk::Buffer staging_buffer_handle = staging_buffer_ptr->getBuffer();
+    cmd.copyBufferToImage(staging_buffer_handle, texture_ptr->m_image, vk::ImageLayout::eTransferDstOptimal, copy_region);
     
     vk::ImageMemoryBarrier to_shader_read(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, texture_ptr->m_image, { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eFragmentShader, {}, nullptr, nullptr, to_shader_read);
@@ -110,11 +109,13 @@ TextureData::Create(
 }
 
 inline TextureData::TextureData(VmaAllocator allocator, vk::Device device)
-    : m_allocator(allocator), m_device(device)
+    : GpuResource(GpuResourceType::Texture) // <-- The type is correctly set here
+    , m_allocator(allocator), m_device(device)
 {}
 
 inline TextureData::TextureData(VmaAllocator allocator, vk::Device device, vk::Extent2D extent, vk::Format format, vk::Sampler shared_sampler)
-    : m_allocator(allocator), m_device(device), m_sampler(shared_sampler), m_is_sampler_owned(false)
+    : GpuResource(GpuResourceType::Texture) // <-- The type is correctly set here
+   , m_allocator(allocator), m_device(device), m_sampler(shared_sampler)
 {
     vk::ImageCreateInfo image_ci({}, vk::ImageType::e2D, format, vk::Extent3D(extent, 1), 1, 1,
         vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
@@ -127,7 +128,8 @@ inline TextureData::TextureData(VmaAllocator allocator, vk::Device device, vk::E
 }
 
 inline TextureData::TextureData(VmaAllocator allocator, vk::Device device, vk::ImageView external_view)
-    : m_allocator(allocator), m_device(device), m_external_image_view(external_view)
+    : GpuResource(GpuResourceType::Texture) // <-- The type is correctly set here
+    , m_allocator(allocator), m_device(device), m_external_image_view(external_view)
 {
     vk::SamplerCreateInfo sampler_info({}, vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge);
     m_sampler = device.createSampler(sampler_info);
@@ -135,15 +137,14 @@ inline TextureData::TextureData(VmaAllocator allocator, vk::Device device, vk::I
 }
 
 inline TextureData::~TextureData() {
-    if (m_image != VK_NULL_HANDLE) {
+    if (m_image != VK_NULL_HANDLE)
         vmaDestroyImage(m_allocator, m_image, m_allocation);
-    }
-    if (m_sampler != VK_NULL_HANDLE && m_is_sampler_owned) {
+    if (m_sampler != VK_NULL_HANDLE && m_is_sampler_owned)
         m_device.destroySampler(m_sampler);
-    }
 }
-
-inline TextureData::TextureData(TextureData&& other) noexcept {
+    
+inline TextureData::TextureData(TextureData&& other) noexcept: GpuResource(GpuResourceType::Texture) // <-- The type is correctly set here
+{
     swap(other);
 }
 

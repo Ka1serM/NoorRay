@@ -17,7 +17,7 @@ class SceneGraphViewModel;
 
 class RmlUiManager {
 public:
-    RmlUiManager(Context& context, Scene& scene, const Renderer& renderer, const Image& renderImage);
+    RmlUiManager(Context& context, Scene& scene, const Renderer& renderer, Image& renderImage, Image& cryptoImage, Image& positionImage);
     ~RmlUiManager();
 
     void render(vk::CommandBuffer command_buffer, vk::Image target_image, vk::ImageView target_image_view, vk::ImageView depthImageView, vk::Extent2D target_extent, vk::Fence in_flight_fenc);

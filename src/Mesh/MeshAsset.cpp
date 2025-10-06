@@ -8,7 +8,6 @@
 #include <numbers>
 #include "imgui.h"
 #include "glm/gtc/type_ptr.inl"
-#include "../UI/ImGui/ImGuiManager.h"
 
 std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string& name, const Material& material) {
     std::vector<Vertex> vertices;
@@ -288,112 +287,6 @@ uint32_t MeshAsset::getMeshIndex() const {
 
 void MeshAsset::setMeshIndex(uint32_t newIndex) {
     index = newIndex;
-}
-
-
-void MeshAsset::renderUi() {
-    ImGuiManager::tableRowLabel("Source");
-
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-    ImGui::PushItemWidth(-1);
-    ImGui::InputText("##meshPath", const_cast<char*>(path.c_str()), path.size() + 1, ImGuiInputTextFlags_ReadOnly);
-    ImGui::PopItemWidth();
-    ImGui::PopStyleColor();
-
-    if (materials.empty())
-        return;
-    
-    ImGuiManager::tableRowLabel("Materials");
-
-    bool anyMaterialChanged = false;
-    
-    const auto textureNames = scene.getTextureNames();
-
-    // Helper lambda for drawing texture selection combos.
-    auto drawTextureCombo = [&](const char* label, int& texIndex, const int materialIndex) {
-        ImGui::TableNextRow();
-        // The current index for the combo box. We add 1 because index 0 is our "No Texture" option.
-        const int currentComboIndex = texIndex == -1 ? 0 : texIndex + 1;
-
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted(label);
-
-        ImGui::TableNextColumn();
-        // Use a unique ID for each combo box.
-        const std::string comboId = "##" + std::string(label) + std::to_string(materialIndex);
-        
-        const char* previewValue = (currentComboIndex == 0) ? "No Texture" : textureNames[currentComboIndex - 1].c_str();
-        if (ImGui::BeginCombo(comboId.c_str(), previewValue))
-        {
-            if (ImGui::Selectable("No Texture", currentComboIndex == 0)) {
-                if (texIndex != -1) { // Only mark as changed if it was different.
-                    texIndex = -1;
-                    anyMaterialChanged = true;
-                }
-            }
-
-            // Loop through available textures.
-            for (int t = 0; t < static_cast<int>(textureNames.size()); ++t) {
-                if (ImGui::Selectable(textureNames[t].c_str(), texIndex == t)) {
-                    if (texIndex != t) { // Only mark as changed if it was different.
-                        texIndex = t;
-                        anyMaterialChanged = true;
-                    }
-                }
-            }
-            ImGui::EndCombo();
-        }
-    };
-
-       for (auto i = 0; i < materials.size(); ++i) {
-        Material& mat = materials[i];
-        std::string label = "Material " + std::to_string(i);
-        if (ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_Framed)) {
-            if (ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp))
-            {
-                drawTextureCombo("Albedo Texture", mat.albedoIndex, i);
-                ImGuiManager::colorEdit3Row("Albedo Color", mat.albedo, [&](const vec3 v) { mat.albedo = v; anyMaterialChanged = true; });
-
-
-                drawTextureCombo("Specular Texture", mat.specularIndex, i);
-                ImGuiManager::dragFloatRow("Specular", mat.specular, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.specular = v; anyMaterialChanged = true; });
-
-
-                drawTextureCombo("Metallic Texture", mat.metallicIndex, i);
-                ImGuiManager::dragFloatRow("Metallic", mat.metallic, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.metallic = v; anyMaterialChanged = true; });
-
-
-                drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
-                ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.roughness = v; anyMaterialChanged = true; });
-
-                
-                drawTextureCombo("Normal Texture", mat.normalIndex, i);
-
-                
-                ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
-                ImGuiManager::dragFloatRow("Transmission Strength", mat.transmission, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmission = v; anyMaterialChanged = true; });
-                drawTextureCombo("Transmission Texture", mat.transmissionIndex, i);
-                ImGuiManager::colorEdit3Row("Transmission Color", mat.transmissionColor, [&](const vec3 v) { mat.transmissionColor = v; anyMaterialChanged = true; });
-
-                
-                ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
-                drawTextureCombo("Emission Texture", mat.emissionIndex, i);
-                ImGuiManager::colorEdit3Row("Emission Color", mat.emission, [&](const vec3 v) { mat.emission = v; anyMaterialChanged = true; });
-
-
-                ImGuiManager::dragFloatRow("Opacity", mat.opacity, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.opacity = v; anyMaterialChanged = true; });
-                drawTextureCombo("Opacity Texture", mat.opacityIndex, i);
-                
-                ImGui::EndTable();
-            }
-            ImGui::TreePop();
-        }
-    }
-
-    if (anyMaterialChanged) {
-        dirty = true;
-        scene.setDirtyFlag(Meshes);
-    }
 }
 
 //this gets called from the renderer when the scene material flag is dirty

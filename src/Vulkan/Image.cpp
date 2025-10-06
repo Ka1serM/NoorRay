@@ -166,13 +166,7 @@ Image::Image(Context& context, uint32_t w, uint32_t h, vk::Format format, vk::Im
             .setFormat(format)
             .setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
     this->view = device.createImageViewUnique(viewInfo);
-
-    // Transition to a general layout as a sensible default
-    constexpr vk::ImageLayout finalLayout = vk::ImageLayout::eGeneral;
-    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-        setImageLayout(cmd, finalLayout);
-    });
-
+    
     descImageInfo.setImageView(*view);
     descImageInfo.setImageLayout(this->layout);
 }
@@ -183,34 +177,37 @@ Image::~Image() {
 }
 
 void Image::setImageLayout(const vk::CommandBuffer& cmd, const vk::ImageLayout newLayout) {
-    // A vk::ImageMemoryBarrier describes how to change the layout of an image.
-    vk::ImageMemoryBarrier barrier;
+    if (layout == newLayout)
+        return;
 
-    // Use the current layout as the old layout
-    barrier.setOldLayout(layout)
-           .setNewLayout(newLayout)
-           .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-           .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-           .setImage(image)
-           .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1})
-           .setSrcAccessMask(toAccessFlags(layout))
-           .setDstAccessMask(toAccessFlags(newLayout));
+    vk::ImageMemoryBarrier barrier{};
+    barrier.image = image;
+    barrier.subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+    barrier.oldLayout = layout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
-    // Record the barrier command in the command buffer.
-    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,  {}, nullptr, nullptr, barrier);
-    layout = newLayout;
-}
+    vk::PipelineStageFlags srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+    vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eFragmentShader;
 
-vk::AccessFlags Image::toAccessFlags(const vk::ImageLayout layout) {
-    switch (layout) {
-        case vk::ImageLayout::eUndefined:               return {};
-        case vk::ImageLayout::eGeneral:                 return vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite;
-        case vk::ImageLayout::eColorAttachmentOptimal:  return vk::AccessFlagBits::eColorAttachmentWrite;
-        case vk::ImageLayout::eDepthStencilAttachmentOptimal: return vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-        case vk::ImageLayout::eShaderReadOnlyOptimal:   return vk::AccessFlagBits::eShaderRead;
-        case vk::ImageLayout::eTransferSrcOptimal:      return vk::AccessFlagBits::eTransferRead;
-        case vk::ImageLayout::eTransferDstOptimal:      return vk::AccessFlagBits::eTransferWrite;
-        case vk::ImageLayout::ePresentSrcKHR:           return vk::AccessFlagBits::eMemoryRead;
-        default:                                        return {};
+    if (layout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eColorAttachmentOptimal) {
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+        srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+        dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    } else if (layout == vk::ImageLayout::eColorAttachmentOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+    } else if (layout == vk::ImageLayout::eShaderReadOnlyOptimal && newLayout == vk::ImageLayout::eColorAttachmentOptimal) {
+        barrier.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+        barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+        srcStage = vk::PipelineStageFlagBits::eFragmentShader;
+        dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     }
+
+    cmd.pipelineBarrier(srcStage, dstStage, {}, nullptr, nullptr, barrier);
+    layout = newLayout;
 }

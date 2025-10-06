@@ -3,14 +3,12 @@
 #include <stdexcept>
 #include <RmlUi/Debugger/Debugger.h>
 #include <SDL3/SDL.h>
-#include "UI/ImGui/ViewportPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "Camera/PerspectiveCamera.h"
 #include "Raytracing/ComputeRaytracer.h"
 #include "Raytracing/RtxRaytracer.h"
-#include "UI/ImGui/RenderPanel.h"
 #include "Vulkan/Tonemapper.h"
 
 NoorRay::~NoorRay() = default;
@@ -31,7 +29,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
 
     tonemapper = std::make_unique<Tonemapper>(context, raytracer->getWidth(), raytracer->getHeight(), raytracer->getOutputColor(), renderer.getColorImageFormat());
 
-     rmlUiManager = std::make_unique<RmlUiManager>(context, scene, renderer, tonemapper->getOutputImage());
+     rmlUiManager = std::make_unique<RmlUiManager>(context, scene, renderer, tonemapper->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition());
 
     int imgWidth, imgHeight, channels;
     static constexpr unsigned char hdriData[] = {
@@ -51,7 +49,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     scene.add(sphere);
     auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
     const uint32_t instanceIndex = scene.add(std::move(instance));
-    scene.setActiveObjectIndex(instanceIndex);
+    scene.setActiveObject(instanceIndex);
     
     float aspectRatio = static_cast<float>(raytracer->getWidth()) / static_cast<float>(raytracer->getHeight());
     auto cam = std::make_unique<PerspectiveCamera>(scene, "Camera", Transform{vec3(4.15f,-3.25f,-3.75f), vec3(-30.f, -48.f, 0.f), vec3( 1)}, aspectRatio, 36.0f, 24.0f, 45.0f, 2.8, 10.0f, 2.0f);
@@ -67,8 +65,6 @@ void NoorRay::run() {
         
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
-            rmlUiManager->processEvent(context.getWindow(), event);
-            
             if (event.type == SDL_EVENT_QUIT)
                 isRunning = false;
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F11) {
@@ -86,8 +82,10 @@ void NoorRay::run() {
             }
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_D && event.key.mod & SDL_KMOD_CTRL)
                 Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible());
+        
+            rmlUiManager->processEvent(context.getWindow(), event);
         }
-
+        
         if (renderer.beginFrame())
         {
             const vk::CommandBuffer cmd = renderer.getCurrentCommandBuffer();
@@ -95,8 +93,6 @@ void NoorRay::run() {
             if (renderer.isComputeWorkFinished()) {
                 //debugPanel->onComputeFinished();
                 
-                //viewportPanel->updateDisplayImage(cmd, tonemapper->getOutputImage());
-
                 //if (renderPanel->isSaveRequested()) {
                 //    renderPanel->executeSave();
                 //}

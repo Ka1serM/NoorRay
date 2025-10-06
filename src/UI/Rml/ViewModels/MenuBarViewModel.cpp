@@ -129,7 +129,7 @@ void MenuBarViewModel::AddPrimitive(std::shared_ptr<MeshAsset> mesh, const std::
     scene.add(mesh);
     auto instance = std::make_unique<MeshInstance>(scene, instanceName, mesh, Transform(vec3(0,0,0)));
     uint32_t idx = scene.add(std::move(instance));
-    scene.setActiveObjectIndex(idx);
+    scene.setActiveObject(idx);
 }
 
 // Edit menu

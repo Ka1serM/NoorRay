@@ -2,13 +2,17 @@
 #include <map>
 #include <Scene/SceneObject.h>
 
-SceneGraphViewModel::SceneGraphViewModel(Scene& scene, Rml::Context* context, const Rml::String& model_name)
-    : ViewModelBase(context, model_name), scene_model(scene), selected_node_id(-1)
-{
-    // Register as an observer
-    scene_model.AddObserver(this);
+#include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/Event.h"
+#include "RmlUi/Core/EventListener.h"
 
-    // Register FlatNodeData struct
+SceneGraphViewModel::SceneGraphViewModel(Scene& scene, Rml::Context* context, const Rml::String& model_name)
+    : ViewModelBase(context, model_name), sceneModel(scene)
+{
+    // Register as an observer to receive updates from the Scene model.
+    sceneModel.AddObserver(this);
+
+    // Register the FlatNodeData struct for data binding with RmlUi.
     if (auto handle = data_model_.RegisterStruct<FlatNodeData>()) {
         handle.RegisterMember("id", &FlatNodeData::id);
         handle.RegisterMember("name", &FlatNodeData::name);
@@ -17,65 +21,113 @@ SceneGraphViewModel::SceneGraphViewModel(Scene& scene, Rml::Context* context, co
         handle.RegisterMember("is_open", &FlatNodeData::is_open);
     }
 
-    // Register array for ObservableCollection
+    // Register the array type for our observable collection.
     data_model_.RegisterArray<std::vector<FlatNodeData>>();
 
-    // Bind Observables using your base class helpers
-    Bind("flat_nodes", flat_nodes);
-    Bind("selected_node_id", selected_node_id);
+    // Bind the observable properties and collections to the data model.
+    Bind("flat_nodes", flatNodes);
+    Bind("selected_node_id", selectedNodeId);
 
-    // Bind UI actions
-    BindAction("toggle_node", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
-        int node_id = args[0].Get<int>();
-        ToggleNode(node_id);
+    // Bind UI actions to member functions.
+    BindAction("toggle_node", [this](Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& args) {
+        if (!args.empty()) toggleNode(args[0].Get<int>());
+        // Stop the event from bubbling up to the parent's 'select_node' handler.
+        event.StopPropagation();
     });
 
     BindAction("select_node", [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
-        int node_id = args[0].Get<int>();
-        SelectNode(node_id);
+        if (!args.empty()) selectNode(args[0].Get<int>());
     });
 
-    // Initial population
-    RefreshFlatList();
+    // Perform the initial population of the tree view.
+    refreshFlatList();
+    // Sync initial selection state
+    selectedNodeId = sceneModel.getActiveObjectId();
+    
+    context->GetRootElement()->AddEventListener("keydown", this);
 }
 
-void SceneGraphViewModel::OnNotified(const SceneEvent& event) {
-    if (event.type == SceneEvent::HierarchyChanged)
-        RefreshFlatList();
-}
-
-void SceneGraphViewModel::ToggleNode(int node_id) {
-    node_open_states[node_id] = !node_open_states[node_id];
-    RefreshFlatList();
-}
-
-void SceneGraphViewModel::SelectNode(int node_id) {
-    selected_node_id = node_id;
-    scene_model.setActiveObjectIndex(node_id);
-}
-
-void SceneGraphViewModel::RefreshFlatList() {
-    flat_nodes.clear();
-    for (const auto* root_object : scene_model.getRootObjects()) {
-        BuildFlatListRecursive(root_object, 0);
+void SceneGraphViewModel::ProcessEvent(Rml::Event& event) {
+    if (event.GetType() == "keydown") {
+        const int key = event.GetParameter<int>("key_identifier", 0);
+        if (key == Rml::Input::KI_DELETE && selectedNodeId.Get() != INVALID_INSTANCE) {
+            deleteNode(selectedNodeId.Get());
+            event.StopPropagation();
+        }
     }
 }
 
-void SceneGraphViewModel::BuildFlatListRecursive(const SceneObject* node, int depth) {
+void SceneGraphViewModel::deleteNode(int node_id) {
+    if (auto* obj = sceneModel.getObject(node_id)) {
+        sceneModel.remove(obj);  // remove from scene
+
+        // Remove it from the open state map
+        nodeOpenStates.erase(node_id);
+
+        // Refresh UI
+        refreshFlatList();
+
+        // Reset selection if this node was selected
+        if (selectedNodeId.Get() == node_id)
+            selectedNodeId = INVALID_INSTANCE;
+    }
+}
+
+
+void SceneGraphViewModel::OnNotified(const SceneEvent& event) {
+    // This function is called whenever the Scene model changes.
+    switch (event.type) {
+        case SceneEvent::HierarchyChanged:
+            // If objects were added, removed, or reparented, rebuild the entire list.
+            refreshFlatList();
+            break;
+
+        case SceneEvent::SelectionChanged:
+            selectedNodeId = sceneModel.getActiveObjectId();
+            break;
+        
+        default:
+            break;
+    }
+}
+
+void SceneGraphViewModel::toggleNode(const int node_id) {
+    // Flip the open/closed state for the given node and refresh the list.
+    nodeOpenStates[node_id] = !nodeOpenStates[node_id];
+    refreshFlatList();
+}
+
+void SceneGraphViewModel::selectNode(const int node_id) const
+{
+    sceneModel.setActiveObject(node_id);
+}
+
+void SceneGraphViewModel::refreshFlatList() {
+    flatNodes.clear();
+    for (const auto* root_object : sceneModel.getRootObjects())
+        buildFlatListRecursive(root_object, 0);
+}
+
+void SceneGraphViewModel::buildFlatListRecursive(const SceneObject* node, int depth) {
     if (!node) return;
 
     const int id = node->getId();
     const bool has_children = !node->getChildren().empty();
 
+    // Check the open state for this node, defaulting to 'true' if not found.
+    const auto it = nodeOpenStates.find(id);
     bool is_open = true;
-    if (node_open_states.contains(id))
-        is_open = node_open_states.at(id);
-    else
-        node_open_states[id] = true;
+    if (it != nodeOpenStates.end()) {
+        is_open = it->second;
+    } else
+        nodeOpenStates[id] = true; // If the node wasn't in our map, add it with the default open state.
 
-    flat_nodes.push_back({id, node->getName(), depth, has_children, is_open});
+    // Add the node to our flat list for the UI.
+    flatNodes.push_back({id, Rml::String(node->getName()), depth, has_children, is_open});
 
+    // If the node is open and has children, recurse into them.
     if (is_open && has_children)
         for (const auto* child : node->getChildren())
-            BuildFlatListRecursive(child, depth + 1);
+            buildFlatListRecursive(child, depth + 1);
 }
+

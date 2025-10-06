@@ -239,3 +239,18 @@ sliderbar {
     background-color: rgba(0, 0, 0, 0);
     cursor: pointer;
 }
+
+.panel {
+    border-radius: 12dp;
+    margin: 1dp;
+    overflow: hidden;
+    clip: always;
+    border-width: 1dp;
+    border-color: #FFFFFF0D;
+    background-color: #00000040;
+    decorator: radial-gradient(
+            circle farthest-side at 50% 250%,
+            #BDE4FF1A,
+            #FFFFFF00 100%
+    );
+}

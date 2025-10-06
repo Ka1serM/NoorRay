@@ -15,7 +15,7 @@ enum class FileType { NONE, OBJ, GLTF, TEXTURE };
 
 class MenuBarViewModel : public ViewModelBase {
 public:
-    MenuBarViewModel(Scene& scene, Rml::Context* ctx, const Rml::String& name);
+    MenuBarViewModel(Scene& scene, Rml::Context* ctx, const Rml::String& modelName);
 
     // Called every frame to process file dialogs
     void Update();

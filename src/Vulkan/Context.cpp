@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
-#include "UI/WindowEffects.h"
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
@@ -28,13 +27,11 @@ Context::Context(const int width, const int height) : windowWidth(width), window
             windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
         }
         
-        window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_TRANSPARENT);
+        window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
         if (!window) {
             std::cerr << "[FATAL] Failed to create SDL window: " << SDL_GetError() << std::endl;
             throw std::runtime_error("Failed to create SDL window.");
         }
-
-        WindowEffects::EnableMica(window);
 
         const auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
         if (!vkGetInstanceProcAddr) {

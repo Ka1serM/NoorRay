@@ -4,7 +4,6 @@
 #define PI                3.14159265359
 #define MAX_STOPS         16
 
-// Gradient function types
 #define GRADIENT_LINEAR           0
 #define GRADIENT_RADIAL           1
 #define GRADIENT_CONIC            2
@@ -20,7 +19,6 @@ layout(push_constant) uniform PushConstants {
     int texture_id;
 } push_constants;
 
-// Defines a single color stop for a gradient
 struct ColorStop {
     vec4 color;
     float position;

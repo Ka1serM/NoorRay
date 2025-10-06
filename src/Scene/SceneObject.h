@@ -2,15 +2,13 @@
 
 #include <string>
 #include <vector>
+#include <memory>
 #include "Scene.h"
 #include "../Mesh/Transform.h"
-#include "../UI/ImGui/ImGuiComponent.h"
 
 class Scene;
 
-class SceneObject : public ImGuiComponent {
-    //static counter
-    static int next_id; 
+class SceneObject {
 protected:
     Transform transform;
     Scene& scene;
@@ -19,17 +17,24 @@ protected:
     std::vector<SceneObject*> children;
 
     bool visible;
-    const int id;
-    
+    // The ID is now managed by the Scene class. Initialized to -1 for safety.
+    int id = -1;
+
+    std::string name;
 public:
+    virtual ~SceneObject() = default;
+    
     SceneObject(Scene& scene, const std::string& name, const Transform& transform);
     SceneObject(const SceneObject& other); 
     virtual std::unique_ptr<SceneObject> clone() const;
 
-    std::string getType() const override { return "Scene Object"; }
-    void renderUi() override;
+    std::string getType() const { return "Scene Object"; }
+
+    std::string getName() const { return name; }
 
     int getId() const { return id; }
+    // Setter for the Scene to assign a unique ID.
+    void setId(int newId) { id = newId; }
 
     bool isVisible() const { return visible; }
     void setVisible(const bool v) { visible = v; }

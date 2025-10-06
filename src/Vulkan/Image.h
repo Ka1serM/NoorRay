@@ -8,6 +8,7 @@ class Image {
 public:
     Image(Context& context, const void* data, int width, int height, vk::Format format);
     Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage);
+    void setImageLayout(const vk::CommandBuffer& cmd, vk::ImageLayout newLayout);
     ~Image();
 
     // Delete copy operations
@@ -24,12 +25,7 @@ public:
 
     uint32_t getWidth() const { return width; }
     uint32_t getHeight() const { return height; }
-
-    void setImageLayout(const vk::CommandBuffer& cmd, vk::ImageLayout newLayout);
-
 private:
-    static vk::AccessFlags toAccessFlags(vk::ImageLayout layout);
-
     vk::Device device;
     VmaAllocator allocator;
 

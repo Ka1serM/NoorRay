@@ -2,12 +2,11 @@
 #include "RmlUi/Core/DataModelHandle.h"
 #include "RmlUi/Core/Context.h"
 #include <utility>
-
-#include "RmlUi/Core/ElementDocument.h"
+#include "RmlUi/Core/EventListener.h"
 #include "UI/Rml/Observable/ObservableCollection.h"
 #include "UI/Rml/Observable/ObservableProperty.h"
 
-class ViewModelBase {
+class ViewModelBase : public Rml::EventListener {
 protected:
     Rml::DataModelConstructor data_model_;
 
@@ -17,9 +16,9 @@ public:
     }
 
     virtual ~ViewModelBase() = default;
-
-    // Virtual Update function, default does nothing
     virtual void Update() {}
+
+    void ProcessEvent(Rml::Event&) override {}
 
     // Bind an ObservableProperty<T>
     template <typename T>
@@ -28,6 +27,12 @@ public:
             return;
             
         data_model_.Bind(name, prop.Ptr());
+
+        // When the property's value changes, automatically notify the data model
+        auto handle = data_model_.GetModelHandle();
+        prop.OnChange([handle, name_str = Rml::String(name)](const T&) mutable {
+            if (handle) handle.DirtyVariable(name_str);
+        });
     }
 
     // Bind an ObservableCollection<T>
@@ -40,8 +45,8 @@ public:
 
         // Capture the handle by moving into the lambda
         auto handle = data_model_.GetModelHandle(); // rvalue
-        coll.SetOnChanged([handle = std::move(handle), name]() mutable {
-            handle.DirtyVariable(name);
+        coll.SetOnChanged([handle = std::move(handle), name_str = Rml::String(name)]() mutable {
+            if (handle) handle.DirtyVariable(name_str);
         });
     }
     

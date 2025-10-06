@@ -15,29 +15,29 @@ struct FlatNodeData {
     bool is_open = false; // State managed by the ViewModel
 };
 
-class SceneGraphViewModel : 
-    public ViewModelBase, 
-    public IObserver<SceneEvent> 
+class SceneGraphViewModel :  public ViewModelBase,  public IObserver<SceneEvent> 
 {
 public:
-    SceneGraphViewModel(Scene& scene, Rml::Context* context, const Rml::String& model_name);
+    SceneGraphViewModel(Scene& scene, Rml::Context* context, const Rml::String& modelName);
+    void ProcessEvent(Rml::Event& event);
+    void deleteNode(int node_id);
 
     void OnNotified(const SceneEvent& event) override;
 
     // UI actions
-    void ToggleNode(int node_id);
-    void SelectNode(int node_id);
+    void toggleNode(int nodeId);
+    void selectNode(int nodeId) const;
 
 private:
-    Scene& scene_model;
+    Scene& sceneModel;
 
-    void RefreshFlatList();
-    void BuildFlatListRecursive(const SceneObject* node, int depth);
+    void refreshFlatList();
+    void buildFlatListRecursive(const SceneObject* node, int depth);
 
     // ViewModel state
-    std::map<int, bool> node_open_states;
+    std::map<int, bool> nodeOpenStates;
 
-    // Observable properties
-    ObservableCollection<FlatNodeData> flat_nodes;
-    ObservableProperty<int> selected_node_id;
+    // Observable properties (bound to UI)
+    ObservableCollection<FlatNodeData> flatNodes;
+    ObservableProperty<int> selectedNodeId{-1};
 };

@@ -9,7 +9,7 @@
 #include "ViewModels/ViewportViewModel.h"
 #include "Vulkan/Image.h"
 
-RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& renderer, const Image& renderImage)
+RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& renderer, Image& renderImage, Image& cryptoImage, Image& positionImage)
 : rmlRenderInterface(
       context.getDevice(),
       context.getGraphicsQueue(),
@@ -96,7 +96,7 @@ RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& rende
         editorDocument->Show();
 
     // Create viewport VM and store pointer
-    auto vpVM = std::make_unique<ViewportViewModel>(context, rmlContext, rmlRenderInterface, renderImage, "viewport-img");
+    auto vpVM = std::make_unique<ViewportViewModel>(context, scene, rmlContext, rmlRenderInterface, renderImage, cryptoImage, positionImage, "viewport");
     viewportVM = vpVM.get();  // non-owning pointer
     viewModels.emplace_back(std::move(vpVM));
     
@@ -126,17 +126,18 @@ void RmlUiManager::render(const vk::CommandBuffer command_buffer, const vk::Imag
         vm->Update();
 
     rmlContext->Render();
-    if (viewportVM)
-        viewportVM->Render(command_buffer, target_extent);
 
     rmlRenderInterface.endFrame();
+
+    if (viewportVM)
+        viewportVM->render(command_buffer);
 }
 
 void RmlUiManager::processEvent(SDL_Window* window, SDL_Event& event) const
 {
     RmlSDL::InputEventHandler(rmlContext, window, event);
-    //if (viewportVM)
-    //     viewportVM->processEvent(event);
+    if (viewportVM)
+        viewportVM->processEvent(event);
 }
 
 void RmlUiManager::resize(int width, int height) const

@@ -7,7 +7,6 @@
 
 #include "glm/gtx/rotate_vector.hpp"
 #include "SDL3/SDL_mouse.h"
-#include "../UI/ImGui/ImGuiManager.h"
 #include "Scene/Scene.h"
 
 PerspectiveCamera::PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias) 
@@ -185,46 +184,6 @@ void PerspectiveCamera::update() {
         updateHorizontalVertical();
         scene.setDirtyFlag(Accumulation);
     }
-}
-
-void PerspectiveCamera::renderUi() {
-    SceneObject::renderUi();
-
-    ImGui::SeparatorText("Camera Lens");
-
-    bool anyChanged = false;
-    ImGuiManager::dragFloatRow("Focal Length", getFocalLength(), 0.1f, 10.0f, 500.0f, [&](const float v) {
-        setFocalLength(v);
-        anyChanged = true;
-    });
-
-    ImGuiManager::dragFloatRow("Aperture", getAperture(), 0.01f, 0.0f, 16.0f, [&](const float v) {
-        setAperture(v);
-        anyChanged = true;
-    });
-
-    ImGuiManager::dragFloatRow("Focus Distance", getFocusDistance(), 0.01f, 0.01f, 1000.0f, [&](const float v) {
-        setFocusDistance(v);
-        anyChanged = true;
-    });
-
-    ImGuiManager::dragFloatRow("Bokeh Bias", getBokehBias(), 0.01f, 0.0f, 10.0f, [&](const float v) {
-        setBokehBias(v);
-        anyChanged = true;
-    });
-
-    ImGuiManager::dragFloatRow("Sensor Width", getSensorWidth(), 0.1f, 1.0f, 100.0f, [&](const float v) {
-        setSensorSize(v, sensorHeight);
-        anyChanged = true;
-    });
-
-    ImGuiManager::dragFloatRow("Sensor Height", getSensorHeight(), 0.1f, 1.0f, 100.0f, [&](const float v) {
-        setSensorSize(sensorWidth, v);
-        anyChanged = true;
-    });
-    
-    if (anyChanged)
-       scene.setDirtyFlag(Accumulation);
 }
 
 void PerspectiveCamera::onTransformUpdated() {

@@ -58,7 +58,6 @@ public:
     vec3 getArcballPivot() const { return arcballPivot; }
 
     void update();
-    void renderUi() override;
 
     void onTransformUpdated() override;
 private:

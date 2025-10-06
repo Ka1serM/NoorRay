@@ -32,6 +32,12 @@ target_include_directories(stb INTERFACE
         ${PROJECT_SOURCE_DIR}/external/stb
 )
 
+# ImViewGuizmo (header-only)
+add_library(ImViewGuizmo INTERFACE)
+target_include_directories(ImViewGuizmo INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/ImViewGuizmo
+)
+
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
@@ -140,6 +146,7 @@ target_link_libraries(NoorRay PRIVATE
         tinygltf
         tinyobjloader
         stb
+        ImViewGuizmo
         GPUOpen::VulkanMemoryAllocator
 
         RmlUi::Core

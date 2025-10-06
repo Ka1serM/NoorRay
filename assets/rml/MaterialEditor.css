@@ -8,11 +8,21 @@
 }
 
 #container {
-    border-radius: 22dp;
+    border-radius: 12dp;
     padding: 16dp;
-    border-width: 1px;
+    border-width: 1dp;
     border-color: #FFFFFF0D;
-    background-color: #131617F9;
+    background-color: #0f1012;
+    decorator: radial-gradient(
+            circle farthest-side at 50% -5%,
+            #1a202e 0%,
+            #FFFFFF00 100%
+    ),
+    radial-gradient(
+            circle farthest-side at 50% 105%,
+            #1a202e 0%,
+            #FFFFFF00 100%
+    );
 }
 
 #title-bar {

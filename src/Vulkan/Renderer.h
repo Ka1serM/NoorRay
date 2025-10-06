@@ -5,6 +5,8 @@
 
 class Renderer {
 public:
+    static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
+    
     explicit Renderer(Context& context, uint32_t initial_width, uint32_t initial_height);
     ~Renderer();
 

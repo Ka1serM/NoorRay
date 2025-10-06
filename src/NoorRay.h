@@ -1,5 +1,4 @@
 ﻿#pragma once
-#include "UI/ImGui/ImGuiManager.h"
 #include <memory>
 #include "Scene/Scene.h"
 #include "UI/Rml/RmlUiManager.h"

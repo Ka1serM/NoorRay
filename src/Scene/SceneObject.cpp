@@ -1,23 +1,28 @@
 ﻿#include "SceneObject.h"
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui.h>
 #include "MeshInstance.h"
 #include "Scene.h"
-#include "../UI/ImGui/ImGuiManager.h"
 
-int SceneObject::next_id = 0; 
-
-SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : transform(transform), scene(scene), visible(true), ImGuiComponent(name), id(next_id++)
+SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) 
+    : transform(transform), scene(scene), visible(true), name(name)
 {
+    // ID is initialized to -1 in the header. It will be set by Scene::add().
 }
 
+// Copy constructor for cloning.
 SceneObject::SceneObject(const SceneObject& other)
-    : ImGuiComponent(other.name + " Copy"),
-      scene(other.scene), visible(other.visible),
-      transform(other.transform), id(next_id++)
-{}
+    :name( other.name + " Copy"),
+      scene(other.scene), 
+      visible(other.visible),
+      transform(other.transform)
+{
+    // The new, cloned object has no valid ID yet. 
+    // It will get a new unique ID when it's added to the scene.
+    // Do NOT copy the ID from 'other'.
+}
 
 std::unique_ptr<SceneObject> SceneObject::clone() const {
+    // Use std::make_unique with the copy constructor.
     return std::make_unique<SceneObject>(*this);
 }
 
@@ -51,41 +56,11 @@ void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
         const mat4 parentWorld = parent->getWorldTransform().getMatrix();
         const mat4 localMatrix = inverse(parentWorld) * worldMatrix;
         transform.setFromMatrix(localMatrix);
-    } else
+    } else {
         transform.setFromMatrix(worldMatrix);
+    }
 
     onTransformUpdated();
-}
-
-
-void SceneObject::renderUi() {
-    bool anyChanged = false;
-
-    // Name
-    ImGuiManager::tableRowLabel("Name");
-    ImGui::TextUnformatted(name.c_str());
-    
-    // Position
-    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const vec3 v) {
-        setPosition(v); anyChanged = true;
-    });
-
-    // Rotation
-    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const vec3 v) {
-          setRotationEuler(v);
-        anyChanged = true;
-    });
-
-    // Scale
-    ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const vec3 v) {
-        setScale(v); anyChanged = true;
-    });
-
-    if (anyChanged)
-    {
-        onTransformUpdated();
-       scene.setDirtyFlag(Accumulation);
-    }
 }
 
 Transform SceneObject::getWorldTransform() const {
@@ -104,6 +79,13 @@ Transform SceneObject::getWorldTransform() const {
 
 void SceneObject::onTransformUpdated() {
     scene.setDirtyFlag(Accumulation);
+
+    // Also mark the TLAS dirty if this object is a mesh instance,
+    // as its bounding box will have moved.
+    if (dynamic_cast<const MeshInstance*>(this)) {
+        scene.setDirtyFlag(TLAS);
+    }
+
     for (SceneObject* child : children)
         child->onTransformUpdated();
 }

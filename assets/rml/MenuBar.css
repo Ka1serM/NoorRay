@@ -16,6 +16,7 @@
     left: 0;
     z-index: 100;
     min-width: 200px;
+    width: auto;
     background-color: #141517BF;
     border-radius: 18dp;
     padding: 6dp;

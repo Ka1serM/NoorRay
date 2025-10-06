@@ -5,11 +5,10 @@
 #include <vector>
 #include "Scene/Scene.h"
 #include "../Shaders/SharedStructs.h"
-#include "../UI/ImGui/ImGuiComponent.h"
 #include "Vulkan/Accel.h"
 #include "BVH/BVH.h"
 
-class MeshAsset : public ImGuiComponent
+class MeshAsset
 {
 public:
     static std::shared_ptr<MeshAsset> CreateCube(Scene& scene, const std::string& name, const Material& material);
@@ -19,10 +18,9 @@ public:
     
     MeshAsset(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials);
 
-    void renderUi() override;
     void updateMaterials();
 
-    // Getters & Setters-
+    // Getters & Setters
     const std::string& getPath() const { return path; }
     uint64_t getBlasAddress() const;
     MeshAddresses getBufferAddresses() const;
@@ -46,6 +44,7 @@ public:
     bool isDirty() const { return dirty; }
     void clearDirtyFlag() { dirty = false; }
 
+    std::string getName() const { return path; }
 private:
     Scene& scene;
     std::string path;

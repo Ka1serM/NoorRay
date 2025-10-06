@@ -3,9 +3,6 @@
 #include <vector>
 #include <algorithm>
 #include "Log.h"
-
-constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
-
 Renderer::Renderer(Context& context, const uint32_t initial_width, const uint32_t initial_height)
     : context(context)
 {
@@ -70,16 +67,14 @@ void Renderer::recreateSwapChain() {
         swapchainExtent = actualExtent;
         return;
     }
-    
+
     swapchainExtent = actualExtent;
     
-    const vk::SwapchainKHR oldSwapchain = swapchain.release();
-
+    // Determine the number of images for the swapchain
     uint32_t imageCount = surfaceCapabilities.minImageCount + 1;
-    if (surfaceCapabilities.maxImageCount > 0 && imageCount > surfaceCapabilities.maxImageCount) {
+    if (surfaceCapabilities.maxImageCount > 0 && imageCount > surfaceCapabilities.maxImageCount)
         imageCount = surfaceCapabilities.maxImageCount;
-    }
-    
+
     vk::SwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.setSurface(context.getSurface());
     swapchainInfo.setMinImageCount(imageCount);
@@ -92,15 +87,18 @@ void Renderer::recreateSwapChain() {
     swapchainInfo.setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque);
     swapchainInfo.setPresentMode(context.chooseSwapPresentMode());
     swapchainInfo.setClipped(true);
-    std::vector queueFamilyIndices{context.getGraphicsFamilyIndex()};
-    swapchainInfo.setQueueFamilyIndices(queueFamilyIndices);
-    swapchainInfo.setOldSwapchain(oldSwapchain);
 
+    // Use the raw handle of the existing swapchain for recreation.
+    // This allows the driver to reuse resources if possible.
+    swapchainInfo.setOldSwapchain(swapchain.get());
+
+    const uint32_t queueFamilyIndex = context.getGraphicsFamilyIndex();
+    swapchainInfo.setQueueFamilyIndices(queueFamilyIndex);
+
+    // Reassigning the UniqueHandle automatically destroys the old swapchain
+    // and takes ownership of the new one. No manual release/destroy is needed.
     swapchain = context.getDevice().createSwapchainKHRUnique(swapchainInfo);
-    if(oldSwapchain) {
-        context.getDevice().destroySwapchainKHR(oldSwapchain);
-    }
-    
+
     swapchainImages = context.getDevice().getSwapchainImagesKHR(swapchain.get());
     swapchainImageViews.clear();
     swapchainImageViews.resize(swapchainImages.size());

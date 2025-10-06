@@ -1,20 +1,28 @@
-﻿#viewport-container {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+html, body {
     width: 100%;
     height: 100%;
-    border-radius: 14dp;
-    overflow: hidden;
-    clip: always;
+    margin: 0;
+    padding: 0;
 }
 
-#viewport-img {
+#viewport-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+#viewport-img, #viewport-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     max-width: 100%;
     max-height: 100%;
     width: auto;
     height: auto;
-    flex-shrink: 0;
-    flex-grow: 0;
+}
+
+ #viewport-overlay {
+    z-index: 10;
 }

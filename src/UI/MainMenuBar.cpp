@@ -7,14 +7,17 @@
 #include "Scene/SceneImporter.h"
 #include <memory>
 
-MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene)
-    : ImGuiComponent(std::move(name)), scene(scene), context(context)
+#include "ImGuiManager.h"
+
+MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene, ImGuiManager& imGuiManager)
+    : ImGuiComponent(std::move(name)), scene(scene), context(context), imGuiManager(imGuiManager)
 {}
 
 void MainMenuBar::renderUi() {
     if (ImGui::BeginMainMenuBar()) {
         renderFileMenu();
         renderAddMenu();
+        renderViewMenu();
         ImGui::EndMainMenuBar();
     }
 }
@@ -120,12 +123,10 @@ void MainMenuBar::renderFileMenu() {
         pendingFileType = FileType::NONE;
     }
 
-    if (ImGui::BeginMenu("File")) {
-        ImGui::Separator();
-
+    if (ImGui::BeginMenu("File"))
+    {
         if (ImGui::BeginMenu("Import")) {
             // Disable menu items if a dialog is currently running.
-            // A dialog is running if the unique_ptr is not null.
             ImGui::BeginDisabled(static_cast<bool>(openDialog));
             
             if (ImGui::MenuItem("Wavefront .obj")) {
@@ -144,7 +145,7 @@ void MainMenuBar::renderFileMenu() {
             }
             
             ImGui::EndDisabled();
-            ImGui::EndMenu();
+            ImGui::EndMenu(); // Correctly ends the "Import" menu
         }
 
         ImGui::Separator();
@@ -154,6 +155,26 @@ void MainMenuBar::renderFileMenu() {
             quitEvent.type = SDL_EVENT_QUIT;
             SDL_PushEvent(&quitEvent);
         }
+
         ImGui::EndMenu();
+    }
+}
+
+void MainMenuBar::renderViewMenu() const
+{
+    if (ImGui::BeginMenu("View")) {
+        if (ImGui::BeginMenu("Theme")) {
+            const bool isDarkTheme = (imGuiManager.GetCurrentTheme() == ImGuiManager::Theme::Dark);
+            
+            if (ImGui::MenuItem("Dark", nullptr, isDarkTheme))
+                imGuiManager.SetTheme(ImGuiManager::Theme::Dark);
+            
+            if (ImGui::MenuItem("Light", nullptr, !isDarkTheme))
+                imGuiManager.SetTheme(ImGuiManager::Theme::Light);
+            
+            ImGui::EndMenu(); // Ends "Theme"
+        }
+    
+        ImGui::EndMenu(); // Ends "View"
     }
 }

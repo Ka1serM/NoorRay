@@ -1,5 +1,4 @@
 #version 460
-#pragma shader_stage(compute)
 
 #include "../SharedStructs.h"
 

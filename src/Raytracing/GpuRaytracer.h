@@ -80,7 +80,7 @@ public:
 
         // Output Color (binding = 1)
         vk::DescriptorImageInfo colorInfo{};
-        colorInfo.setImageView(outputColor.getImageView());
+        colorInfo.setImageView(outputColor.getView());
         colorInfo.setImageLayout(vk::ImageLayout::eGeneral);
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
@@ -91,7 +91,7 @@ public:
 
         // Output Albedo (binding = 2)
         vk::DescriptorImageInfo albedoInfo{};
-        albedoInfo.setImageView(outputAlbedo.getImageView());
+        albedoInfo.setImageView(outputAlbedo.getView());
         albedoInfo.setImageLayout(vk::ImageLayout::eGeneral);
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
@@ -102,7 +102,7 @@ public:
 
         // Output Normal (binding = 3)
         vk::DescriptorImageInfo normalInfo{};
-        normalInfo.setImageView(outputNormal.getImageView());
+        normalInfo.setImageView(outputNormal.getView());
         normalInfo.setImageLayout(vk::ImageLayout::eGeneral);
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
@@ -113,7 +113,7 @@ public:
 
         // Output Crypto/Object ID (binding = 4)
         vk::DescriptorImageInfo cryptoInfo{};
-        cryptoInfo.setImageView(outputCrypto.getImageView());
+        cryptoInfo.setImageView(outputCrypto.getView());
         cryptoInfo.setImageLayout(vk::ImageLayout::eGeneral);
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                                    .setDstSet(descriptorSet.get())
@@ -125,7 +125,7 @@ public:
 
         // Output Position (binding = 5)
         vk::DescriptorImageInfo positionInfo{};
-        positionInfo.setImageView(outputPosition.getImageView());
+        positionInfo.setImageView(outputPosition.getView());
         positionInfo.setImageLayout(vk::ImageLayout::eGeneral);
         descriptorWrites.push_back(vk::WriteDescriptorSet{}
                            .setDstSet(descriptorSet.get())
@@ -151,7 +151,7 @@ public:
         {
             vk::DescriptorImageInfo info{};
             info.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-            info.setImageView(texture.getImage().getImageView());
+            info.setImageView(texture.getImage().getView());
             info.setSampler(texture.getSampler());
             textureImageInfos.push_back(info);
         }

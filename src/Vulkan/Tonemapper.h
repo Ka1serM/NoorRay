@@ -5,7 +5,7 @@
 
 class Tonemapper {
 public:
-    Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage);
+    Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage, vk::Format outputImageFormat);
     ~Tonemapper();
 
     void dispatch(vk::CommandBuffer commandBuffer);

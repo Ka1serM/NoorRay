@@ -12,6 +12,7 @@ add_subdirectory(external/SDL)
 # External Libraries
 add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
+add_subdirectory(external/VulkanMemoryAllocator)
 
 # tinygltf (header-only)
 add_library(tinygltf INTERFACE)
@@ -31,8 +32,16 @@ target_include_directories(stb INTERFACE
         ${PROJECT_SOURCE_DIR}/external/stb
 )
 
+# ImViewGuizmo (header-only)
+add_library(ImViewGuizmo INTERFACE)
+target_include_directories(ImViewGuizmo INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/ImViewGuizmo
+)
+
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
+
+
 
 # MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
@@ -89,6 +98,7 @@ target_include_directories(NoorRay PRIVATE
         ${PROJECT_SOURCE_DIR}/src
 )
 
+# Link against all libraries
 target_link_libraries(NoorRay PRIVATE
         portable_file_dialogs
         glm
@@ -98,9 +108,12 @@ target_link_libraries(NoorRay PRIVATE
         tinygltf
         tinyobjloader
         stb
+        ImViewGuizmo
+        GPUOpen::VulkanMemoryAllocator
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)
+target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 
 # Platform specific linking and settings
 if(APPLE)
@@ -181,31 +194,24 @@ if(APPLE)
 
     # Resources handling
     add_custom_command(TARGET NoorRay POST_BUILD
-        # Create Resource folder chain
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d"
-    
-        # Copy app icon
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
-        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
-        
-        # Copy MoltenVK_icd.json
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${PROJECT_SOURCE_DIR}/assets/MoltenVK_icd.json"
-        "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
-    
-        COMMENT "Copying app icon and MoltenVK ICD JSON into Resources"
+            # Create Resource folder chain
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d"
+
+            # Copy app icon
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
+
+            # Copy MoltenVK_icd.json
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/assets/MoltenVK_icd.json"
+            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
+
+            COMMENT "Copying app icon and MoltenVK ICD JSON into Resources"
     )
 
 
-endif()
-
-# Use sanitizers ONLY for Debug builds
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message(STATUS "Enabling Sanitizers for Debug build")
-    add_compile_options(-fsanitize=address -fsanitize=undefined)
-    add_link_options(-fsanitize=address -fsanitize=undefined)
 endif()
 
 if (MINGW)

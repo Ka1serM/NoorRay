@@ -4,7 +4,7 @@
 #include "Scene/Scene.h"
 #include "Vulkan/Renderer.h"
 
-class GpuRaytracer;
+class Raytracer;
 class Tonemapper;
 
 class NoorRay
@@ -14,7 +14,7 @@ class NoorRay
     ImGuiManager imGuiManager;
     Scene scene;
 
-    std::unique_ptr<GpuRaytracer> raytracer;
+    std::unique_ptr<Raytracer> raytracer;
     std::unique_ptr<Tonemapper> tonemapper;
 public:
     

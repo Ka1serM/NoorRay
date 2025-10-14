@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "Context.h"
+#include <vk_mem_alloc.h>
 
 class Buffer {
 public:
@@ -14,16 +15,27 @@ public:
     };
 
     Buffer();
+    ~Buffer();
+
     Buffer(const Context& context, Type type, vk::DeviceSize size, const void* data = nullptr, vk::BufferUsageFlags usage = {}, vk::MemoryPropertyFlags memoryProps = {});
+
+    // Move Semantics
+    Buffer(const Buffer&) = delete;
+    Buffer& operator=(const Buffer&) = delete;
+    Buffer(Buffer&& other) noexcept;
+    Buffer& operator=(Buffer&& other) noexcept;
 
     vk::DeviceAddress getDeviceAddress() const { return deviceAddress; }
     const vk::DescriptorBufferInfo& getDescriptorInfo() const { return descBufferInfo; }
-    const vk::Buffer& getBuffer() const { return buffer.get(); }
-    const vk::DeviceMemory & getMemory() const { return memory.get(); }
+    const vk::Buffer& getBuffer() const { return buffer; }
+    const vk::DeviceMemory& getMemory() const { return memory; }
 
 private:
-    vk::UniqueBuffer buffer;
-    vk::UniqueDeviceMemory memory;
-    vk::DescriptorBufferInfo descBufferInfo{};
-    vk::DeviceAddress deviceAddress{};
+    VmaAllocator allocator;
+    vk::Buffer buffer;
+    VmaAllocation allocation;
+
+    vk::DeviceMemory memory;
+    vk::DescriptorBufferInfo descBufferInfo;
+    vk::DeviceAddress deviceAddress;
 };

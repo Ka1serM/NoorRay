@@ -45,7 +45,7 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
     
-    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getImageView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getView(), vk::ImageLayout::eShaderReadOnlyOptimal};
     vk::WriteDescriptorSet write{};
     write.dstSet = outputImageDescriptorSet.get();
     write.dstBinding = 0;
@@ -230,14 +230,18 @@ void ViewportPanel::handleViewGizmo() const {
     vec3 position = camera->getPosition();
     quat rotation = camera->getRotation();
 
+    vec3 pivot {};
+    if (scene.getActiveObject())
+        pivot = scene.getActiveObject()->getPosition();
+
     ImViewGuizmo::BeginFrame();
     bool wasModified = false;
     
     ImVec2 gizmoPos = {viewportPos.x + viewportSize.x - 110.f * uiScale, viewportPos.y + 110.f * uiScale};
-    wasModified |= ImViewGuizmo::Rotate(position, rotation, gizmoPos);
+    wasModified |= ImViewGuizmo::Rotate(position, rotation, pivot, gizmoPos);
     
     gizmoPos.x += 30.f * uiScale; gizmoPos.y += 90.f * uiScale;
-    wasModified |= ImViewGuizmo::Zoom(position, rotation, gizmoPos);
+    wasModified |= ImViewGuizmo::Dolly(position, rotation, gizmoPos);
     
     gizmoPos.y += 60.f * uiScale;
     wasModified |= ImViewGuizmo::Pan(position, rotation, gizmoPos);
@@ -380,7 +384,7 @@ void ViewportPanel::handleObjectPicking() const {
         scene.resetActiveObjectIndex();
 }
 
-void ViewportPanel::updateDisplayImage(const vk::CommandBuffer cmd, Image& srcImage) {
+void ViewportPanel::onComputeFinished(const vk::CommandBuffer cmd, Image& srcImage) {
     srcImage.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
     displayImage.setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
 

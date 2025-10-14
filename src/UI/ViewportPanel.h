@@ -15,7 +15,7 @@ public:
     void renderUi() override;
     void handleObjectPicking() const;
     void handlePositionPicking() const;
-    void updateDisplayImage(vk::CommandBuffer cmd, Image& srcImage);
+    void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
     ~ViewportPanel() override;
 
     ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, uint32_t width, uint32_t height);
@@ -40,8 +40,8 @@ private:
     void* cryptoStagingBufferMappedPtr = nullptr;
     bool  pickingRequested = false;
 
-   Buffer positionStagingBuffer; // Staging buffer for picking
-   void* positionStagingBufferMappedPtr = nullptr;
+    Buffer positionStagingBuffer; // Staging buffer for picking
+    void* positionStagingBufferMappedPtr = nullptr;
     
     bool isCapturingMouse = false;
     float oldX = 0.f, oldY = 0.f;

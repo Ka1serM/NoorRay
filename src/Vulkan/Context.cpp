@@ -6,15 +6,9 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
-#if !defined(NDEBUG)
-    constexpr bool EnableValidationLayers = false;
-#else
-    constexpr bool EnableValidationLayers = false;
-#endif
-
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height), dpiScale(1), swapchainFormat(vk::Format::eUndefined) {
+Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height) {
     try {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
@@ -39,25 +33,34 @@ Context::Context(const int width, const int height) : windowWidth(width), window
             throw std::runtime_error("Failed to create SDL window.");
         }
 
-        auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+        const auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
         if (!vkGetInstanceProcAddr) {
             std::cerr << "[FATAL] Failed to get vkGetInstanceProcAddr: " << SDL_GetError() << std::endl;
             throw std::runtime_error("Failed to get vkGetInstanceProcAddr.");
         }
 
+        // Initialize the dispatcher with the function pointer loader. This is needed to find vkCreateInstance.
         VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
         createVulkanInstance();
 
         VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
-        if (EnableValidationLayers) {
-            vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
-            messengerInfo.setMessageSeverity(vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning);
-            messengerInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
-            messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
-            messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
-        }
+#ifdef DEBUG
+        vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
+        messengerInfo.setMessageSeverity(
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
+        );
+        messengerInfo.setMessageType(
+            vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+            vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+            vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+        );
+        messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
+        messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
+#endif
 
         VkSurfaceKHR _surface;
         if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &_surface)) {
@@ -69,13 +72,14 @@ Context::Context(const int width, const int height) : windowWidth(width), window
         pickPhysicalDevice();
         createLogicalDevice();
 
+        // This final init call loads all device-level functions, including extensions.
         VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
-
-        queue = device->getQueue(queueFamilyIndex, 0);
+        
+        graphicsQueue = device->getQueue(graphicsFamilyIndex, 0);
 
         vk::CommandPoolCreateInfo commandPoolInfo;
         commandPoolInfo.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-        commandPoolInfo.setQueueFamilyIndex(queueFamilyIndex);
+        commandPoolInfo.setQueueFamilyIndex(graphicsFamilyIndex);
         commandPool = device->createCommandPoolUnique(commandPoolInfo);
 
         std::vector<vk::DescriptorPoolSize> poolSizes = {
@@ -102,70 +106,115 @@ Context::Context(const int width, const int height) : windowWidth(width), window
         poolInfo.setPoolSizes(poolSizes);
         descriptorPool = device->createDescriptorPoolUnique(poolInfo);
 
+        createAllocator();
+
     } catch (const vk::Error& e) {
         std::cerr << "[FATAL] Vulkan Error in Context constructor: " << e.what() << std::endl;
         throw std::runtime_error("Vulkan initialization failed.");
     } catch (const std::exception& e) {
-        // Log if it's a standard exception that we threw
         std::cerr << "[FATAL] Error in Context constructor: " << e.what() << std::endl;
         throw;
     }
 }
 
-void Context::createVulkanInstance() {
-    unsigned int sdlExtensionCount = 0;
-    const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-    if (!sdlExtensions) {
-        std::cerr << "[FATAL] Failed to get Vulkan instance extensions from SDL: " << SDL_GetError() << std::endl;
-        throw std::runtime_error("Failed to get Vulkan instance extensions.");
-    }
+void Context::createAllocator() {
+    VmaVulkanFunctions vulkanFunctions = {};
+    vulkanFunctions.vkGetInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr;
+    vulkanFunctions.vkGetDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
 
-    std::vector extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
-    std::vector<const char*> layers;
+    VmaAllocatorCreateInfo allocatorCreateInfo = {};
+    allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+    allocatorCreateInfo.physicalDevice = physicalDevice;
+    allocatorCreateInfo.device = device.get();
+    allocatorCreateInfo.instance = instance.get();
+    allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
+            
+    // Enable bufferDeviceAddress feature in VMA if it's supported and enabled
+    vk::PhysicalDeviceVulkan12Features features12{};
+    vk::PhysicalDeviceFeatures2 features2{};
+    features2.pNext = &features12;
+    physicalDevice.getFeatures2(&features2);
+    if(features12.bufferDeviceAddress)
+        allocatorCreateInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
-    if (EnableValidationLayers) {
-        if (!checkValidationLayerSupport())
-            std::cerr << "[WARN] Validation layers requested, but not available!" << std::endl;
-        else {
-            std::cout << "[INFO] Validation layers are ENABLED." << std::endl;
-            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-            layers.push_back("VK_LAYER_KHRONOS_validation");
-        }
-    }
-
-#ifdef __APPLE__
-    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-#endif
-
-    vk::ApplicationInfo appInfo("Vulkan Pathtracer", 1, "No Engine", 1, VK_API_VERSION_1_3);
-    vk::InstanceCreateInfo instanceInfo{};
-    instanceInfo.setPApplicationInfo(&appInfo)
-                .setPEnabledLayerNames(layers)
-                .setPEnabledExtensionNames(extensions);
-
-#ifdef __APPLE__ 
-    instanceInfo.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
-#endif
-
-    instance = vk::createInstanceUnique(instanceInfo);
+    if (vmaCreateAllocator(&allocatorCreateInfo, &allocator) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create VMA allocator!");
+    
+    std::cout << "[INFO] VMA Allocator created successfully." << std::endl;
 }
 
-bool Context::checkValidationLayerSupport() {
-    try {
-        std::vector<vk::LayerProperties> availableLayers = vk::enumerateInstanceLayerProperties();
-        for (const auto& layerProperties : availableLayers)
-            if (strcmp("VK_LAYER_KHRONOS_validation", layerProperties.layerName) == 0)
-                return true;
-        
-    } catch (const vk::Error& e) {
-        std::cerr << "[WARN] Could not enumerate instance layer properties: " << e.what() << std::endl;
-    }
-    return false;
+void Context::createVulkanInstance() {
+unsigned int sdlExtensionCount = 0;
+const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
+if (!sdlExtensions) {
+    std::cerr << "[FATAL] Failed to get Vulkan instance extensions from SDL: " << SDL_GetError() << std::endl;
+    throw std::runtime_error("Failed to get Vulkan instance extensions.");
+}
+
+std::vector extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
+std::vector<const char*> layers;
+
+// --- Create the Debug Messenger Info ---
+// We will chain this to both the instance creation and create a persistent one later.
+vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
+
+#ifdef DEBUG
+std::cout << "[INFO] Enabling Vulkan validation layers." << std::endl;
+layers.push_back("VK_LAYER_KHRONOS_validation");
+extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+messengerInfo.setMessageSeverity(
+    vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
+    vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+    vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
+);
+messengerInfo.setMessageType(
+    vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
+    vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+    vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+);
+messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
+#endif
+
+#ifdef __APPLE__
+extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
+
+constexpr vk::ApplicationInfo appInfo("NoorRay", 1, "No Engine", 1, VK_API_VERSION_1_3);
+vk::InstanceCreateInfo instanceInfo{};
+instanceInfo.setPApplicationInfo(&appInfo)
+    .setPEnabledLayerNames(layers)
+    .setPEnabledExtensionNames(extensions);
+
+#ifdef __APPLE__ 
+instanceInfo.flags |= vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+#endif
+
+#if DEBUG
+vk::ValidationFeaturesEXT validationFeatures{};
+std::vector<vk::ValidationFeatureEnableEXT> enabledFeatures = {
+    // Catches shader-based out-of-bounds access and other GPU errors. CRITICAL for DeviceLostError.
+    vk::ValidationFeatureEnableEXT::eGpuAssisted,
+    // Reserves a binding slot for the validation layer's own use, important for bindless.
+    vk::ValidationFeatureEnableEXT::eGpuAssistedReserveBindingSlot,
+    // Checks for non-optimal but still valid API usage.
+    vk::ValidationFeatureEnableEXT::eBestPractices,
+    // Enables the use of printf() in your GLSL shaders for debugging.
+    vk::ValidationFeatureEnableEXT::eDebugPrintf,
+    // Adds extra, more intensive checks for synchronization bugs (race conditions).
+    vk::ValidationFeatureEnableEXT::eSynchronizationValidation
+};
+validationFeatures.setEnabledValidationFeatures(enabledFeatures);
+validationFeatures.pNext = &messengerInfo;
+instanceInfo.pNext = &validationFeatures;
+#endif
+
+instance = vk::createInstanceUnique(instanceInfo);
 }
 
 void Context::pickPhysicalDevice() {
-    std::vector<vk::PhysicalDevice> devices = instance->enumeratePhysicalDevices();
+    const std::vector<vk::PhysicalDevice> devices = instance->enumeratePhysicalDevices();
     if (devices.empty()) {
         std::cerr << "[FATAL] Failed to find GPUs with Vulkan support!" << std::endl;
         throw std::runtime_error("Failed to find GPUs with Vulkan support!");
@@ -188,7 +237,7 @@ void Context::pickPhysicalDevice() {
             std::set<std::string> missing(requiredExts.begin(), requiredExts.end());
             for (const auto& ext : device.enumerateDeviceExtensionProperties())
                 missing.erase(ext.extensionName);
-            
+
             const bool hasAllExtensions = missing.empty();
 
             uint64_t vramSize = 0;
@@ -202,31 +251,41 @@ void Context::pickPhysicalDevice() {
                       << ", Extensions OK: " << (hasAllExtensions ? "Yes" : "No") << ")"
                       << std::endl;
 
+            if (!hasAllExtensions) {
+                for (const auto& extName : missing) {
+                    std::cout << "      [MISSING] " << extName << std::endl;
+                }
+            }
+
             if (!hasAllExtensions)
                 continue;
 
             Candidate candidate{device, vramSize};
             if (props.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
-                if (!bestDiscrete || vramSize > bestDiscrete->vram) bestDiscrete = candidate;
+                if (!bestDiscrete || vramSize > bestDiscrete->vram)
+                    bestDiscrete = candidate;
             } else {
-                if (!bestFallback || vramSize > bestFallback->vram) bestFallback = candidate;
+                if (!bestFallback || vramSize > bestFallback->vram)
+                    bestFallback = candidate;
             }
         }
+
         if (bestDiscrete.has_value())
             return bestDiscrete;
-        
         return bestFallback;
     };
 
+    // Try to find a GPU supporting all extensions including RTX
     std::vector<const char*> allExtensions = RequiredDeviceExtensions;
     allExtensions.insert(allExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
 
     auto best = findBestDevice(allExtensions);
     rtxSupported = best.has_value();
-    
+
     if (!best) {
+        // RTX not supported: fall back to GPU with just required device extensions
         best = findBestDevice(RequiredDeviceExtensions);
-        rtxSupported = false;
+        rtxSupported = false; // fallback: RTX disabled
     }
 
     if (!best) {
@@ -235,125 +294,116 @@ void Context::pickPhysicalDevice() {
     }
 
     physicalDevice = best->device;
-    std::cout << "\n[INFO] Picked GPU: " << physicalDevice.getProperties().deviceName << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
-    
-    for (const auto& availableFormat : physicalDevice.getSurfaceFormatsKHR(surface.get()))
-        if (availableFormat.format == vk::Format::eB8G8R8A8Unorm && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-        {
-           swapchainFormat = availableFormat;
-            return;
-        }
-
-    if (swapchainFormat.format == vk::Format::eUndefined)
-        throw std::runtime_error("No suitable swap surface format found! Expected eB8G8R8A8Unorm with SrgbNonlinear color space.");}
+    std::cout << "\n[INFO] Picked GPU: " << physicalDevice.getProperties().deviceName
+              << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
+}
 
 void Context::createLogicalDevice() {
     std::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
-    for (uint32_t i = 0; i < queueFamilies.size(); i++) {
+    std::optional<uint32_t> foundGraphicsFamily, foundComputeFamily, foundPresentFamily;
+    // First pass: find any suitable family for each type
+    for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
         const auto& flags = queueFamilies[i].queueFlags;
-        bool hasGraphics = static_cast<bool>(flags & vk::QueueFlagBits::eGraphics);
-        bool hasCompute = static_cast<bool>(flags & vk::QueueFlagBits::eCompute);
-        bool hasPresent = physicalDevice.getSurfaceSupportKHR(i, surface.get());
-
-        if (hasGraphics && hasCompute && hasPresent) {
-            queueFamilyIndex = i;
+        
+        if (flags & vk::QueueFlagBits::eGraphics)
+            foundGraphicsFamily = i;
+        if (flags & vk::QueueFlagBits::eCompute)
+            foundComputeFamily = i;
+        if (physicalDevice.getSurfaceSupportKHR(i, surface.get()))
+            foundPresentFamily = i;
+        
+        if (foundGraphicsFamily == i && foundComputeFamily == i && foundPresentFamily == i)
+            break;
+    }
+    // Second pass: Prioritize a dedicated compute queue
+    for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
+        const auto& flags = queueFamilies[i].queueFlags;
+        if ((flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics)) {
+            foundComputeFamily = i;
             break;
         }
     }
-
-    if (queueFamilyIndex == UINT32_MAX) {
-        std::cerr << "[FATAL] Could not find a suitable queue family!" << std::endl;
-        throw std::runtime_error("Could not find a suitable queue family!");
+    
+    if (!foundGraphicsFamily.has_value() || !foundComputeFamily.has_value() || !foundPresentFamily.has_value()) {
+        throw std::runtime_error("Could not find all required queue families!");
     }
 
+    graphicsFamilyIndex = foundGraphicsFamily.value();
+    
+    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
+    constexpr float queuePriority = 1.0f;
+    queueCreateInfos.emplace_back(vk::DeviceQueueCreateFlags{}, graphicsFamilyIndex, 1, &queuePriority);
+    
     auto enabledExtensions = RequiredDeviceExtensions;
     if (rtxSupported) {
         std::cout << "[INFO] Ray tracing extensions are supported. Enabling them." << std::endl;
         enabledExtensions.insert(enabledExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
     } else
         std::cout << "[INFO] Ray tracing extensions are not supported. Proceeding without them." << std::endl;
-
-    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
-    rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
-
-    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelFeatures{};
-    accelFeatures.sType = vk::StructureType::ePhysicalDeviceAccelerationStructureFeaturesKHR;
-
+    
+    vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{};
     vk::PhysicalDeviceVulkan12Features features12{};
+    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
+    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelFeatures{};
+
+    // Build the pNext chain. This creates a linked list of feature structs.
+    void** nextFeature = nullptr;
+
     features12.sType = vk::StructureType::ePhysicalDeviceVulkan12Features;
+    nextFeature = &features12.pNext;
 
-    features12.pNext = &rtFeatures;
-    rtFeatures.pNext = &accelFeatures;
+    dynamicRenderingFeatures.sType = vk::StructureType::ePhysicalDeviceDynamicRenderingFeatures;
+    *nextFeature = &dynamicRenderingFeatures;
+    nextFeature = &dynamicRenderingFeatures.pNext;
 
+    if (rtxSupported) {
+        accelFeatures.sType = vk::StructureType::ePhysicalDeviceAccelerationStructureFeaturesKHR;
+        *nextFeature = &accelFeatures;
+        nextFeature = &accelFeatures.pNext;
+
+        rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
+        *nextFeature = &rtFeatures;
+        nextFeature = &rtFeatures.pNext;
+    }
+
+    // Put the chain head into the main features2 struct to query for support
     vk::PhysicalDeviceFeatures2 features2{};
     features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
     features2.pNext = &features12;
-
     physicalDevice.getFeatures2(&features2);
 
-    auto& coreFeatures = features2.features;
-
-    std::cout << "=== Core Features ===" << std::endl;
-    std::cout << "shaderInt64: " << coreFeatures.shaderInt64 << std::endl;
-    std::cout << "samplerAnisotropy: " << coreFeatures.samplerAnisotropy << std::endl;
-
-    std::cout << "\n=== Vulkan 1.2 Features ===" << std::endl;
-    std::cout << "bufferDeviceAddress: " << features12.bufferDeviceAddress << std::endl;
-    std::cout << "descriptorIndexing: " << features12.descriptorIndexing << std::endl;
-    std::cout << "runtimeDescriptorArray: " << features12.runtimeDescriptorArray << std::endl;
-    std::cout << "descriptorBindingPartiallyBound: " << features12.descriptorBindingPartiallyBound << std::endl;
-    std::cout << "descriptorBindingSampledImageUpdateAfterBind: " << features12.descriptorBindingSampledImageUpdateAfterBind << std::endl;
-    std::cout << "descriptorBindingVariableDescriptorCount: " << features12.descriptorBindingVariableDescriptorCount << std::endl;
-
-    std::cout << "\n=== Ray Tracing Features ===" << std::endl;
-    std::cout << "rayTracingPipeline: " << rtFeatures.rayTracingPipeline << std::endl;
-    std::cout << "accelerationStructure: " << accelFeatures.accelerationStructure << std::endl;
-
-    coreFeatures.shaderInt64 = VK_TRUE;
-    coreFeatures.samplerAnisotropy = VK_TRUE;
-
+    // After querying, explicitly enable the features
+    dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
     features12.bufferDeviceAddress = VK_TRUE;
     features12.descriptorIndexing = VK_TRUE;
     features12.runtimeDescriptorArray = VK_TRUE;
-    features12.descriptorBindingPartiallyBound = VK_TRUE;
-    features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-    features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
-    
-    if (rtxSupported && rtFeatures.rayTracingPipeline && accelFeatures.accelerationStructure) {
-        rtFeatures.rayTracingPipeline = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    if (rtxSupported) {
         accelFeatures.accelerationStructure = VK_TRUE;
-    } else {
-        rtFeatures.rayTracingPipeline = VK_FALSE;
-        accelFeatures.accelerationStructure = VK_FALSE;
-        if (rtxSupported) {
-            std::cout << "[WARN] Ray tracing extensions found, but features not fully supported. Disabling." << std::endl;
-        }
+        rtFeatures.rayTracingPipeline = VK_TRUE;
     }
 
-    constexpr float queuePriority = 1.0f;
-    vk::DeviceQueueCreateInfo queueCreateInfo({}, queueFamilyIndex, 1, &queuePriority);
-
-    vk::DeviceCreateInfo deviceCreateInfo({}, 1, &queueCreateInfo);
-    deviceCreateInfo.setPEnabledExtensionNames(enabledExtensions);
-    deviceCreateInfo.pNext = &features2;
-
-    device = physicalDevice.createDeviceUnique(deviceCreateInfo);
+    // Create the logical device, pass the head of the feature chain.
+    vk::DeviceCreateInfo createInfo;
+    createInfo.pNext = &features2;
+    createInfo.setQueueCreateInfos(queueCreateInfos);
+    createInfo.setPEnabledExtensionNames(enabledExtensions);
+    
+    device = physicalDevice.createDeviceUnique(createInfo);
 }
 
 uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) const {
     const vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i)
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
             return i;
-        }
-    }
     std::cerr << "[FATAL] Failed to find suitable memory type!" << std::endl;
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
 void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) {
     try {
-        vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
+        const vk::CommandBufferAllocateInfo allocInfo(commandPool.get(), vk::CommandBufferLevel::ePrimary, 1);
         vk::UniqueCommandBuffer commandBuffer = std::move(device->allocateCommandBuffersUnique(allocInfo).front());
 
         commandBuffer->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
@@ -361,8 +411,8 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
         commandBuffer->end();
 
         vk::UniqueFence fence = device->createFenceUnique({});
-        vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
-        queue.submit(submitInfo, *fence);
+        const vk::SubmitInfo submitInfo({}, {}, *commandBuffer);
+        graphicsQueue.submit(submitInfo, *fence);
 
         if (device->waitForFences(*fence, VK_TRUE, UINT64_MAX) != vk::Result::eSuccess)
             std::cerr << "[ERROR] Fence wait failed during one-time submit." << std::endl;
@@ -400,26 +450,18 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
     std::string severity;
     if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError)
         severity = "[VULKAN ERROR]";
-    else if (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
-        severity = "[VULKAN WARN]";
     else
-        return vk::False; // Don't log info or verbose messages for brevity
+        severity = "[VULKAN WARN]";
     
     std::cerr << severity << ": " << pCallbackData->pMessage << std::endl;
     return vk::False;
 }
 
-void Context::queryWindowSize()
-{
-    SDL_GetWindowSizeInPixels(window, &windowWidth, &windowHeight);
-}
-
 Context::~Context() {
     std::cout << "[INFO] Destroying Context..." << std::endl;
     try {
-        if (device) {
+        if (device)
             device->waitIdle();
-        }
     } catch (const vk::Error& e) {
         std::cerr << "[ERROR] Vulkan error during device->waitIdle(): " << e.what() << std::endl;
     }

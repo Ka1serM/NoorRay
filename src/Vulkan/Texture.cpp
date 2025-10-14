@@ -17,7 +17,7 @@ Texture::Texture(Context& context, const std::string& filepath)
             stbi_image_free(rawPixels);
             throw std::runtime_error("Loaded texture has invalid dimensions (W=" + std::to_string(texWidth) + ", H=" + std::to_string(texHeight) + "). File: " + filepath);
         }
-
+        
         this->width = texWidth;
         this->height = texHeight;
         
@@ -54,7 +54,7 @@ void Texture::createSampler(const Context& context)
     samplerInfo.setAddressModeW(vk::SamplerAddressMode::eRepeat);
 
     sampler = context.getDevice().createSamplerUnique(samplerInfo);
-    descriptorInfo.setImageView(image.getImageView());
+    descriptorInfo.setImageView(image.getView());
     descriptorInfo.setSampler(*sampler);
     descriptorInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 }

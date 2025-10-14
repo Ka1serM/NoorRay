@@ -30,7 +30,6 @@ void SceneGraphPanel::renderUi() {
     }
 
     // Handle Copy, Paste, and Delete when the outliner is focused
-    if (ImGui::IsWindowFocused()) {
         const bool isCtrlDown = ImGui::IsKeyDown(ImGuiMod_Ctrl);
         SceneObject* activeObject = scene.getActiveObject();
 
@@ -47,7 +46,6 @@ void SceneGraphPanel::renderUi() {
         // Paste (Ctrl+V) - can happen even if no object is selected
         if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_V))
             scene.paste();
-    }
 
     ImGui::End();
 }

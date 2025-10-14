@@ -2,7 +2,6 @@
 
 #include "Context.h"
 #include "Buffer.h"
-#include <vulkan/vulkan.hpp>
 
 class Accel {
     Buffer buffer;

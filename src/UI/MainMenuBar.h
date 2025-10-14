@@ -4,12 +4,14 @@
 #include "portable-file-dialogs.h"
 #include <string>
 
+#include "ImGuiManager.h"
+
 class Scene;
 class Context;
 
 class MainMenuBar : public ImGuiComponent {
 public:
-    MainMenuBar(std::string name, Context& context, Scene& scene);
+    MainMenuBar(std::string name, Context& context, Scene& scene, ImGuiManager& manager);
     void renderUi() override;
 
 private:
@@ -22,11 +24,13 @@ private:
     };
 
     void renderFileMenu();
+    void renderViewMenu() const;
     void renderAddMenu() const;
     void handleFileImport(const std::string& filePath, FileType type) const;
 
     Scene& scene;
     Context& context;
+    ImGuiManager& imGuiManager;
 
     std::unique_ptr<pfd::open_file> openDialog;
     FileType pendingFileType = FileType::NONE;

@@ -43,6 +43,27 @@ void BVH::build(const Context& context, const std::vector<Vertex>& inputVertices
     if (orderedFaceIndices.empty()) throw std::runtime_error("BVH build resulted in no indices.");
         indicesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(uint32_t) * orderedFaceIndices.size(), orderedFaceIndices.data()};
 }
+void BVH::build(const Context& context, const AABB& aabb) {
+    nodes.clear();
+    orderedFaceIndices.clear();
+
+    // Only one primitive
+    orderedFaceIndices.push_back(0);
+
+    // Create a single leaf node
+    BVHNode leaf{};
+    leaf.leftBounds = aabb;
+    leaf.rightBounds = {};          // Not used
+    leaf.rightChildOrPrimIndex = 0; // Index into orderedFaceIndices
+    leaf.primCount = 1;             // One primitive
+    leaf.splitAxis = 3;             // 3 = leaf
+
+    nodes.push_back(leaf);
+
+    // Upload to GPU
+    nodesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(BVHNode) * nodes.size(), nodes.data()};
+    indicesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(uint32_t) * orderedFaceIndices.size(), orderedFaceIndices.data()};
+}
 
 uint32_t BVH::recursiveBuild(std::vector<PrimitiveInfo>& primitiveInfo, uint32_t start, uint32_t end) {
     uint32_t nodeIndex = static_cast<uint32_t>(nodes.size());

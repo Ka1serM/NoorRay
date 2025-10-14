@@ -9,6 +9,7 @@ class BVH
 {
 public:
     void build(const Context& context, const std::vector<Vertex>& inputVertices, const std::vector<uint32_t>& inputIndices);
+    void build(const Context& context, const AABB& aabb);
     uint64_t getNodesBufferAddress() const { return nodesBuffer.getDeviceAddress(); }
     uint64_t getIndicesBufferAddress() const { return indicesBuffer.getDeviceAddress(); }
 

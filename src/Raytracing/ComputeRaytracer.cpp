@@ -69,14 +69,14 @@ void ComputeRaytracer::updateTLAS()
         instances.push_back({
             .transform = transform,
             .inverseTransform = inverse(transform),
-            .meshId = meshInstance->getMeshAsset().getMeshIndex()
+            .assetIndex = meshInstance->getMeshAsset().getMeshIndex()
         });
     }
 
     if (instances.empty())
     {
         auto emptyInstance = ComputeInstance{};
-        emptyInstance.meshId = UINT32_MAX; // invalid instance
+        emptyInstance.assetIndex = UINT32_MAX; // invalid instance
         instancesBuffer = Buffer{context, Buffer::Type::Storage, sizeof(ComputeInstance), &emptyInstance};
     }
     else

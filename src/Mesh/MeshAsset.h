@@ -24,10 +24,9 @@ public:
     void renderUi() override;
     void updateMaterials();
 
-    // Getters & Setters-
+    // Getters & Setters
     const std::string& getPath() const { return path; }
     uint64_t getBlasAddress() const;
-    MeshAddresses getBufferAddresses() const;
     uint32_t getMeshIndex() const;
     void setMeshIndex(uint32_t newIndex);
     
@@ -40,6 +39,8 @@ public:
     const Buffer& getIndexBuffer() const { return indexBuffer; }
     const Buffer& getFaceBuffer() const { return faceBuffer; }
     const Buffer& getMaterialBuffer() const { return materialBuffer; }
+
+    const Buffer& getDataBuffer() const { return dataBuffer; }
     
     const Accel& getBlasGpu() const { return blasRtx; }
     const BVH& getBlasCpu() const { return blasCompute; }
@@ -69,4 +70,6 @@ private:
     // Acceleration structures
     Accel blasRtx;
     BVH blasCompute;
+
+    Buffer dataBuffer;
 };

@@ -125,8 +125,13 @@ struct Material {
 #endif
 };
 
+struct AssetData {
+    uint type;
+    uint64_t bufferDeviceAddress;
+};
+
 //Vulkan Only
-struct MeshAddresses {
+struct MeshData {
     uint64_t vertexAddress;
     uint64_t indexAddress;
     uint64_t faceAddress;
@@ -134,6 +139,10 @@ struct MeshAddresses {
     // Compute RT
     uint64_t bvhNodeAddress;
     uint64_t bvhIndexAddress;
+};
+
+struct VolumeData {
+    uint64_t voxelBufferAddress;   // Device address of 3D image / SSBO
 };
 
 // Sampler struct to keep track of state for the current pixel.
@@ -165,5 +174,5 @@ struct HitInfo {
 struct ComputeInstance {
     mat4 transform;
     mat4 inverseTransform;
-    uint meshId, pad1, pad2, pad3; 
+    uint assetIndex, pad1, pad2, pad3; 
 };

@@ -240,9 +240,21 @@ MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>&
     // Upload mesh data to GPU from the new member variable copies
     vertexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Vertex) * this->vertices.size(), this->vertices.data()};
     indexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(uint32_t) * this->indices.size(), this->indices.data()};
-    faceBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Face) * this->faces.size(), this->faces.data()};
-    materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Material) * this->materials.size(), this->materials.data()};
+    faceBuffer = Buffer{scene.getContext(), Buffer::Type::Storage , sizeof(Face) * this->faces.size(), this->faces.data()};
+    materialBuffer = Buffer{scene.getContext(), Buffer::Type::Storage , sizeof(Material) * this->materials.size(), this->materials.data()};
 
+    MeshData meshData{};
+    meshData.vertexAddress = vertexBuffer.getDeviceAddress();
+    meshData.indexAddress = indexBuffer.getDeviceAddress();
+    meshData.faceAddress = faceBuffer.getDeviceAddress();
+    meshData.materialAddress = materialBuffer.getDeviceAddress();
+    // For non-RTX, provide CPU BVH addresses
+    if (!scene.getContext().isRtxSupported()) {
+        meshData.bvhNodeAddress  = blasCompute.getNodesBufferAddress();
+        meshData.bvhIndexAddress  = blasCompute.getIndicesBufferAddress();
+    }
+    dataBuffer = Buffer{scene.getContext(), Buffer::Type::Storage, sizeof(MeshData), &meshData};
+    
     // Create bottom-level acceleration structure (BLAS)
     if (scene.getContext().isRtxSupported()) {
         vk::AccelerationStructureGeometryTrianglesDataKHR triangleData{};
@@ -270,23 +282,11 @@ uint64_t MeshAsset::getBlasAddress() const {
     return 0;
 }
 
-MeshAddresses MeshAsset::getBufferAddresses() const {
-    return MeshAddresses{
-        vertexBuffer.getDeviceAddress(),
-        indexBuffer.getDeviceAddress(),
-        faceBuffer.getDeviceAddress(),
-        materialBuffer.getDeviceAddress(),
-        //only used for Compute RT
-        blasCompute.getNodesBufferAddress(),
-        blasCompute.getIndicesBufferAddress()
-    };
-}
-
 uint32_t MeshAsset::getMeshIndex() const {
     return index;
 }
 
-void MeshAsset::setMeshIndex(uint32_t newIndex) {
+void MeshAsset::setMeshIndex(const uint32_t newIndex) {
     index = newIndex;
 }
 

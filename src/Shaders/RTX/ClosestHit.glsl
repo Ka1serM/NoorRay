@@ -1,5 +1,4 @@
 #version 460
-#pragma shader_stage(closest)
 
 #extension GL_EXT_ray_tracing : enable
 #extension GL_EXT_nonuniform_qualifier : enable
@@ -15,7 +14,9 @@ layout(location = 0) rayPayloadInEXT Payload payload;
 hitAttributeEXT vec3 attribs;
 
 void main() {
-   const MeshAddresses mesh = meshes[gl_InstanceCustomIndexEXT];
+   const AssetData asset = assets[gl_InstanceCustomIndexEXT];
+   const MeshData mesh = MeshBuffer(asset.bufferDeviceAddress).data;
+   
    VertexBuffer vertexBuf = VertexBuffer(mesh.vertexAddress);
    IndexBuffer indexBuf = IndexBuffer(mesh.indexAddress);
    FaceBuffer faceBuf = FaceBuffer(mesh.faceAddress);

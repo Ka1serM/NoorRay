@@ -56,7 +56,7 @@ bool intersectAABB(vec3 rayOrigin, vec3 invDir, AABB box, out float tmin, out fl
     return tmin <= tmax + EPSILON && tmax >= 0.0;
 }
 
-void traverseBVH(vec3 rayOrigin, vec3 rayDirection, MeshAddresses mesh, inout HitInfo hit, float tMin) {
+void traverseBVH(vec3 rayOrigin, vec3 rayDirection, MeshData mesh, inout HitInfo hit, float tMin) {
     vec3 invDir = 1.0 / rayDirection;
 
     // Construct buffer references from the 64-bit addresses using your new names.
@@ -136,7 +136,7 @@ HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection, float tMin, float tMax) {
     for (int i = 0; i < instances.length(); ++i) {
         ComputeInstance inst = instances[i];
         
-        if (inst.meshId == 0xFFFFFFFF)
+        if (inst.assetIndex == 0xFFFFFFFF)
             continue;
 
         // Transform ray into local space
@@ -153,7 +153,8 @@ HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection, float tMin, float tMax) {
         localHit.t = bestHit.t * tScale;
         localHit.primitiveIndex = INVALID_INSTANCE;
 
-        MeshAddresses mesh = meshes[inst.meshId];
+        const AssetData asset = assets[inst.assetIndex];
+        const MeshData mesh = MeshBuffer(asset.bufferDeviceAddress).data;
         traverseBVH(localOrigin, localDir, mesh, localHit, tMin * tScale);
 
         if (localHit.primitiveIndex != INVALID_INSTANCE) {
@@ -180,7 +181,9 @@ void traceRayCompute(vec3 rayOrigin, vec3 rayDirection, float tMin, float tMax, 
         shadeMiss(rayDirection, pushConstants.environment, payload);
     else {
         const ComputeInstance inst = instances[hit.instanceIndex];
-        const MeshAddresses mesh = meshes[inst.meshId];
+        const AssetData asset = assets[inst.assetIndex];
+        const MeshData mesh = MeshBuffer(asset.bufferDeviceAddress).data;
+
         const Face face = FaceBuffer(mesh.faceAddress).data[hit.primitiveIndex];
         const Material material = MaterialBuffer(mesh.materialAddress).data[face.materialIndex];
 

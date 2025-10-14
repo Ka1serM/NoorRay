@@ -1,5 +1,4 @@
 #version 460
-#pragma shader_stage(compute)
 
 #extension GL_EXT_debug_printf : enable
 #extension GL_EXT_nonuniform_qualifier: enable

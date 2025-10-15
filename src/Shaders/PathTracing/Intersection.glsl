@@ -153,7 +153,9 @@ HitInfo traceScene(vec3 rayOrigin, vec3 rayDirection, float tMin, float tMax) {
         localHit.t = bestHit.t * tScale;
         localHit.primitiveIndex = INVALID_INSTANCE;
 
-        MeshAddresses mesh = meshes[inst.meshId];
+        const AssetData asset = assets[inst.meshId];
+        const MeshAddresses mesh = MeshBuffer(asset.bufferAddress).data;
+
         traverseBVH(localOrigin, localDir, mesh, localHit, tMin * tScale);
 
         if (localHit.primitiveIndex != INVALID_INSTANCE) {
@@ -180,7 +182,10 @@ void traceRayCompute(vec3 rayOrigin, vec3 rayDirection, float tMin, float tMax, 
         shadeMiss(rayDirection, pushConstants.environment, payload);
     else {
         const ComputeInstance inst = instances[hit.instanceIndex];
-        const MeshAddresses mesh = meshes[inst.meshId];
+        
+        const AssetData asset = assets[inst.meshId];
+        const MeshAddresses mesh = MeshBuffer(asset.bufferAddress).data;
+        
         const Face face = FaceBuffer(mesh.faceAddress).data[hit.primitiveIndex];
         const Material material = MaterialBuffer(mesh.materialAddress).data[face.materialIndex];
 

@@ -18,7 +18,7 @@ protected:
     vk::UniquePipelineLayout pipelineLayout;
 
     Buffer instancesBuffer; // RTX: VkAccelerationStructureInstanceKHR, Compute: ComputeInstance
-    Buffer meshBuffer;
+    Buffer assetBuffer;
     
 public:
 
@@ -48,11 +48,11 @@ public:
         // Make sure descriptorCount is set correctly
         bindings[variableBindingIndex].descriptorCount = MAX_TEXTURES;
 
-        // Step 2: Create binding flags info structure
+        // Create binding flags info structure
         vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
         bindingFlagsInfo.setBindingFlags(bindingFlags);
 
-        // Step 3: Create descriptor set layout
+        // Create descriptor set layout
         vk::DescriptorSetLayoutCreateInfo descSetLayoutInfo{};
         descSetLayoutInfo.setBindings(bindings);
         descSetLayoutInfo.setPNext(&bindingFlagsInfo);
@@ -60,7 +60,7 @@ public:
 
         descSetLayout = context.getDevice().createDescriptorSetLayoutUnique(descSetLayoutInfo);
 
-        // Step 4: Allocate descriptor set with variable descriptor count
+        // Allocate descriptor set with variable descriptor count
         vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountAllocInfo{};
         variableCountAllocInfo.descriptorSetCount = 1;
         variableCountAllocInfo.pDescriptorCounts = &MAX_TEXTURES;
@@ -171,28 +171,29 @@ public:
 
     void updateMeshes() override
     {
-        std::vector<MeshAddresses> meshAddresses;
+        std::vector<AssetData> assetDatas;
         const auto& meshAssets = scene.getMeshAssets();
-        meshAddresses.reserve(meshAssets.size());
         for (const auto& meshAsset : meshAssets)
         {
             meshAsset->updateMaterials();
-            meshAddresses.push_back(meshAsset->getBufferAddresses());
+            AssetData data{};
+            data.bufferAddress = meshAsset->getAddressBuffer().getDeviceAddress();
+            assetDatas.push_back(data);
         }
 
-        if (meshAddresses.empty())
+        if (assetDatas.empty())
         {
-            auto emptyMeshAddresses = MeshAddresses{};
-            meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses), &emptyMeshAddresses};
+            auto emptyAssetData = AssetData{};
+            assetBuffer = {context, Buffer::Type::Storage, sizeof(AssetData), &emptyAssetData};
         }
         else
-            meshBuffer = {context, Buffer::Type::Storage, sizeof(MeshAddresses) * meshAddresses.size(), meshAddresses.data()};
+            assetBuffer = {context, Buffer::Type::Storage, sizeof(AssetData) * assetDatas.size(), assetDatas.data()};
 
-        vk::DescriptorBufferInfo bufferInfo = meshBuffer.getDescriptorInfo();
+        vk::DescriptorBufferInfo bufferInfo = assetBuffer.getDescriptorInfo();
 
         vk::WriteDescriptorSet write{};
         write.setDstSet(descriptorSet.get());
-        write.setDstBinding(6); // DstBinding 6 is for meshes
+        write.setDstBinding(6); // DstBinding 6 is for assets
         write.setDescriptorType(vk::DescriptorType::eStorageBuffer);
         write.setDescriptorCount(1); // Always 1 for a single buffer binding
         write.setBufferInfo(bufferInfo); 

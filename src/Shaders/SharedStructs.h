@@ -125,7 +125,14 @@ struct Material {
 #endif
 };
 
-//Vulkan Only
+// an array of this struct is passed to the shaders
+// we use the CustomInstanceIndex to index into this array and then get the actual buffer address based on type
+struct AssetData {
+    uint64_t bufferAddress; // device address of the asset's GPU data
+    uint type;              // 0 = mesh, 1 = SDF, 2 = volume, etc.
+    uint _pad[2];           // padding for alignment
+};
+
 struct MeshAddresses {
     uint64_t vertexAddress;
     uint64_t indexAddress;

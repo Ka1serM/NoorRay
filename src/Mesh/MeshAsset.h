@@ -27,7 +27,6 @@ public:
     // Getters & Setters-
     const std::string& getPath() const { return path; }
     uint64_t getBlasAddress() const;
-    MeshAddresses getBufferAddresses() const;
     uint32_t getMeshIndex() const;
     void setMeshIndex(uint32_t newIndex);
     
@@ -40,9 +39,11 @@ public:
     const Buffer& getIndexBuffer() const { return indexBuffer; }
     const Buffer& getFaceBuffer() const { return faceBuffer; }
     const Buffer& getMaterialBuffer() const { return materialBuffer; }
-    
+
     const Accel& getBlasGpu() const { return blasRtx; }
     const BVH& getBlasCpu() const { return blasCompute; }
+
+    const Buffer& getAddressBuffer() const { return addressBuffer; }
     
     // Dirty Flag
     bool isDirty() const { return dirty; }
@@ -65,6 +66,8 @@ private:
     Buffer indexBuffer;
     Buffer faceBuffer;
     Buffer materialBuffer;
+
+    Buffer addressBuffer;
 
     // Acceleration structures
     Accel blasRtx;

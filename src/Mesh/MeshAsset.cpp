@@ -243,6 +243,16 @@ MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>&
     faceBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Face) * this->faces.size(), this->faces.data()};
     materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Material) * this->materials.size(), this->materials.data()};
 
+    auto addresses = MeshAddresses{
+        vertexBuffer.getDeviceAddress(),
+        indexBuffer.getDeviceAddress(),
+        faceBuffer.getDeviceAddress(),
+        materialBuffer.getDeviceAddress(),
+        blasCompute.getNodesBufferAddress(),
+        blasCompute.getIndicesBufferAddress()
+    };
+    addressBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(MeshAddresses), &addresses};
+
     // Create bottom-level acceleration structure (BLAS)
     if (scene.getContext().isRtxSupported()) {
         vk::AccelerationStructureGeometryTrianglesDataKHR triangleData{};
@@ -268,18 +278,6 @@ uint64_t MeshAsset::getBlasAddress() const {
     if (scene.getContext().isRtxSupported())
         return blasRtx.getBuffer().getDeviceAddress();
     return 0;
-}
-
-MeshAddresses MeshAsset::getBufferAddresses() const {
-    return MeshAddresses{
-        vertexBuffer.getDeviceAddress(),
-        indexBuffer.getDeviceAddress(),
-        faceBuffer.getDeviceAddress(),
-        materialBuffer.getDeviceAddress(),
-        //only used for Compute RT
-        blasCompute.getNodesBufferAddress(),
-        blasCompute.getIndicesBufferAddress()
-    };
 }
 
 uint32_t MeshAsset::getMeshIndex() const {
@@ -399,6 +397,18 @@ void MeshAsset::renderUi() {
 //this gets called from the renderer when the scene material flag is dirty
 void MeshAsset::updateMaterials() {
     materialBuffer = Buffer{scene.getContext(), Buffer::Type::Storage, sizeof(Material) * materials.size(), materials.data()};
+  
+    //Re-create the addressBuffer to upload the updated addresses to the GPU.
+    auto addresses = MeshAddresses{
+        vertexBuffer.getDeviceAddress(),
+        indexBuffer.getDeviceAddress(),
+        faceBuffer.getDeviceAddress(),
+        materialBuffer.getDeviceAddress(),
+        blasCompute.getNodesBufferAddress(),
+        blasCompute.getIndicesBufferAddress()
+    };
+    addressBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput, sizeof(MeshAddresses), &addresses};
+    
     dirty = false; // Reset dirty flag after updating
     scene.setDirtyFlag(Accumulation);
 }

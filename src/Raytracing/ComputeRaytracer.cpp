@@ -25,13 +25,13 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
         {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output normal image
         {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output crypto image
         {5, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output position image
-        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh buffer
+        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Assets buffer
         {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute}, // Textures
     };
 
     createDescriptorSet(bindings);
 
-    // 4. Create the pipeline layout
+    // Create the pipeline layout
     vk::PushConstantRange pushRange{};
     pushRange.setSize(sizeof(PushConstantsData));
     pushRange.setStageFlags(vk::ShaderStageFlagBits::eCompute);
@@ -41,7 +41,7 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
     pipelineLayoutInfo.setPushConstantRanges(pushRange);
     pipelineLayout = context.getDevice().createPipelineLayoutUnique(pipelineLayoutInfo);
 
-    // 5. Create the compute pipeline
+    // Create the compute pipeline
     vk::ComputePipelineCreateInfo computePipelineInfo{};
     computePipelineInfo.setStage(shaderStageInfo);
     computePipelineInfo.setLayout(pipelineLayout.get());

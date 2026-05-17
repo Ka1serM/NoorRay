@@ -8,7 +8,7 @@
 
 #include "../SharedStructs.h"
 #include "../Bindings.glsl"
-#include "../Pathtracing/ShadeClosestHit.glsl"
+#include "../PathTracing/ShadeClosestHit.glsl"
 
 // Payload and Attributes
 layout(location = 0) rayPayloadInEXT Payload payload;

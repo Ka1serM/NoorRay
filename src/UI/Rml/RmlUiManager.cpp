@@ -22,8 +22,11 @@ RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& rende
 {
 #ifdef NDEBUG
     // Register all embedded files
-    static constexpr unsigned char roboto_ttf[] = {
-    #embed "../../../assets/fonts/Roboto.ttf"
+    static constexpr unsigned char inter_ttf[] = {
+    #embed "../../../assets/fonts/Inter.ttf"
+    };
+    static constexpr unsigned char theme_css[] = {
+    #embed "../../../assets/rml/Theme.css"
     };
     static constexpr unsigned char editor_html[] = {
     #embed "../../../assets/rml/Editor.html"
@@ -55,8 +58,21 @@ RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& rende
     static constexpr unsigned char viewport_css[] = {
     #embed "../../../assets/rml/Viewport.css"
     };
+    static constexpr unsigned char content_browser_html[] = {
+    #embed "../../../assets/rml/ContentBrowser.html"
+    };
+    static constexpr unsigned char content_browser_css[] = {
+    #embed "../../../assets/rml/ContentBrowser.css"
+    };
+    static constexpr unsigned char material_editor_html[] = {
+    #embed "../../../assets/rml/MaterialEditor.html"
+    };
+    static constexpr unsigned char material_editor_css[] = {
+    #embed "../../../assets/rml/MaterialEditor.css"
+    };
 
-    rmlFileInterface.RegisterFile("../assets/fonts/Inter-Regular.ttf", roboto_ttf, sizeof(roboto_ttf));
+    rmlFileInterface.RegisterFile("../assets/fonts/Inter.ttf", inter_ttf, sizeof(inter_ttf));
+    rmlFileInterface.RegisterFile("../assets/rml/Theme.css", theme_css, sizeof(theme_css));
     rmlFileInterface.RegisterFile("../assets/rml/Editor.html", editor_html, sizeof(editor_html));
     rmlFileInterface.RegisterFile("../assets/rml/Editor.css", editor_css, sizeof(editor_css));
     rmlFileInterface.RegisterFile("../assets/rml/MenuBar.html", menubar_html, sizeof(menubar_html));
@@ -67,6 +83,10 @@ RmlUiManager::RmlUiManager(Context& context, Scene& scene, const Renderer& rende
     rmlFileInterface.RegisterFile("../assets/rml/SceneGraph.css", scene_graph_css, sizeof(scene_graph_css));
     rmlFileInterface.RegisterFile("../assets/rml/Viewport.html", viewport_html, sizeof(viewport_html));
     rmlFileInterface.RegisterFile("../assets/rml/Viewport.css", viewport_css, sizeof(viewport_css));
+    rmlFileInterface.RegisterFile("../assets/rml/ContentBrowser.html", content_browser_html, sizeof(content_browser_html));
+    rmlFileInterface.RegisterFile("../assets/rml/ContentBrowser.css", content_browser_css, sizeof(content_browser_css));
+    rmlFileInterface.RegisterFile("../assets/rml/MaterialEditor.html", material_editor_html, sizeof(material_editor_html));
+    rmlFileInterface.RegisterFile("../assets/rml/MaterialEditor.css", material_editor_css, sizeof(material_editor_css));
     Rml::SetFileInterface(&rmlFileInterface);
 #endif
 

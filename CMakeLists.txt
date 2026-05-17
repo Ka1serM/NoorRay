@@ -41,6 +41,67 @@ target_include_directories(ImViewGuizmo INTERFACE
 # Vulkan (Find Vulkan normally)
 find_package(Vulkan REQUIRED)
 
+find_program(GLSLC_EXECUTABLE
+        NAMES glslc
+        HINTS
+        "$ENV{VULKAN_SDK}/bin"
+        "$ENV{VULKAN_SDK}/Bin"
+        REQUIRED
+)
+
+set(SHADER_DIR "${PROJECT_SOURCE_DIR}/src/Shaders")
+set(SHADER_OUTPUTS
+        "${SHADER_DIR}/RTX/RayGeneration.spv"
+        "${SHADER_DIR}/RTX/ClosestHit.spv"
+        "${SHADER_DIR}/RTX/Miss.spv"
+        "${SHADER_DIR}/Compute/PathTracer.spv"
+        "${SHADER_DIR}/Tonemapping/Tonemapper.spv"
+        "${SHADER_DIR}/Rml/RmlFrag.spv"
+        "${SHADER_DIR}/Rml/RmlVert.spv"
+        "${SHADER_DIR}/Rml/RmlGradientFrag.spv"
+        "${SHADER_DIR}/Rml/RmlFilterFrag.spv"
+        "${SHADER_DIR}/Rml/RmlPassthroughFrag.spv"
+        "${SHADER_DIR}/Rml/RmlPassthroughVert.spv"
+)
+
+add_custom_command(
+        OUTPUT ${SHADER_OUTPUTS}
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/RTX/RayGeneration.glsl" -o "${SHADER_DIR}/RTX/RayGeneration.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/RTX/ClosestHit.glsl" -o "${SHADER_DIR}/RTX/ClosestHit.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/RTX/Miss.glsl" -o "${SHADER_DIR}/RTX/Miss.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Compute/PathTracer.comp" -o "${SHADER_DIR}/Compute/PathTracer.spv" -DUSE_COMPUTE=1 --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Tonemapping/Tonemapper.comp" -o "${SHADER_DIR}/Tonemapping/Tonemapper.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Rml/RmlFrag.frag" -o "${SHADER_DIR}/Rml/RmlFrag.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Rml/RmlVert.vert" -o "${SHADER_DIR}/Rml/RmlVert.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Rml/RmlGradientFrag.frag" -o "${SHADER_DIR}/Rml/RmlGradientFrag.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Rml/RmlFilterFrag.frag" -o "${SHADER_DIR}/Rml/RmlFilterFrag.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Rml/RmlPassthroughFrag.frag" -o "${SHADER_DIR}/Rml/RmlPassthroughFrag.spv" --target-env=vulkan1.3
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Rml/RmlPassthroughVert.vert" -o "${SHADER_DIR}/Rml/RmlPassthroughVert.spv" --target-env=vulkan1.3
+        DEPENDS
+        "${SHADER_DIR}/RTX/RayGeneration.glsl"
+        "${SHADER_DIR}/RTX/ClosestHit.glsl"
+        "${SHADER_DIR}/RTX/Miss.glsl"
+        "${SHADER_DIR}/Compute/PathTracer.comp"
+        "${SHADER_DIR}/Tonemapping/Tonemapper.comp"
+        "${SHADER_DIR}/Bindings.glsl"
+        "${SHADER_DIR}/Common.glsl"
+        "${SHADER_DIR}/SharedStructs.h"
+        "${SHADER_DIR}/PathTracing/Intersection.glsl"
+        "${SHADER_DIR}/PathTracing/PrimaryRayGen.glsl"
+        "${SHADER_DIR}/PathTracing/ShadeClosestHit.glsl"
+        "${SHADER_DIR}/PathTracing/ShadeMiss.glsl"
+        "${SHADER_DIR}/Rml/RmlFrag.frag"
+        "${SHADER_DIR}/Rml/RmlVert.vert"
+        "${SHADER_DIR}/Rml/RmlGradientFrag.frag"
+        "${SHADER_DIR}/Rml/RmlFilterFrag.frag"
+        "${SHADER_DIR}/Rml/RmlPassthroughFrag.frag"
+        "${SHADER_DIR}/Rml/RmlPassthroughVert.vert"
+        COMMENT "Compiling Vulkan shaders"
+        VERBATIM
+)
+
+add_custom_target(NoorRayShaders DEPENDS ${SHADER_OUTPUTS})
+
 # Lua
 file(GLOB LUA_SOURCES
         "${CMAKE_SOURCE_DIR}/external/lua/l*.c"
@@ -97,7 +158,7 @@ add_library(imgui STATIC
         external/imgui/imgui_tables.cpp
         external/imgui/imgui_widgets.cpp
         external/imgui/backends/imgui_impl_vulkan.cpp
-        external/imgui/backends/imgui_impl_SDL3.cpp
+        external/imgui/backends/imgui_impl_sdl3.cpp
         external/ImGuizmo/ImGuizmo.cpp
 )
 target_include_directories(imgui PUBLIC
@@ -125,6 +186,7 @@ endif()
 # Executable target
 add_executable(NoorRay WIN32 ${SRC_FILES})
 set_target_properties(NoorRay PROPERTIES PREFIX "")
+add_dependencies(NoorRay NoorRayShaders)
 
 target_include_directories(NoorRay PRIVATE
         ${PROJECT_SOURCE_DIR}/src

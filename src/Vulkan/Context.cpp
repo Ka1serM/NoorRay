@@ -3,6 +3,7 @@
 #include <set>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdlib>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -10,6 +11,15 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height) {
     try {
+#ifdef __linux__
+        SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
+        SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
+
+        if (std::getenv("WAYLAND_DISPLAY") && !std::getenv("SDL_VIDEO_DRIVER")) {
+            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
+        }
+#endif
+
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
             throw std::runtime_error("Failed to initialize SDL.");

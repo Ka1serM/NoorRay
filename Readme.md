@@ -66,21 +66,7 @@ cd VulkanToyPathtracer
 
 ### Shader Compilation
 
-The shaders are compiled using `glslc` from the Vulkan SDK. A `recompile.bat` script is provided in the `src/Shaders` directory to automate this process.
-
-1.  Navigate to the shader directory:
-
-    ```bash
-    cd src/Shaders
-    ```
-
-2.  Run the script:
-
-    ```bash
-    recompile.bat
-    ```
-
-    This script compiles GLSL shaders to SPIR-V bytecode using `glslc`.
+Shaders are compiled automatically by CMake using `glslc` from the Vulkan SDK. No separate shader recompilation script is needed; building the `NoorRay` target regenerates the SPIR-V files when shader sources change.
 
 
 ### Dependencies

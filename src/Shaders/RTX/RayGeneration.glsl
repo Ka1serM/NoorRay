@@ -17,7 +17,7 @@ layout (push_constant) uniform PushConstants {
 
 layout (location = 0) rayPayloadEXT Payload payload;
 
-#include "../Pathtracing/PrimaryRayGen.glsl"
+#include "../PathTracing/PrimaryRayGen.glsl"
 
 void main() {
     const ivec2 pixelCoord = ivec2(gl_LaunchIDEXT.xy);

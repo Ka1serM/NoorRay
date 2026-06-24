@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NoorRay VERSION 0.1.0)
+project(NoorRay VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
@@ -38,47 +38,125 @@ target_include_directories(ImViewGuizmo INTERFACE
         ${PROJECT_SOURCE_DIR}/external/ImViewGuizmo
 )
 
-# Vulkan (Find Vulkan normally)
+# Vulkan
+if(DEFINED ENV{VULKAN_SDK})
+    set(VULKAN_SDK_ROOT "$ENV{VULKAN_SDK}")
+    if(NOT EXISTS "${VULKAN_SDK_ROOT}/include")
+        get_filename_component(VULKAN_SDK_PARENT "${VULKAN_SDK_ROOT}" DIRECTORY)
+        if(EXISTS "${VULKAN_SDK_PARENT}/include")
+            set(VULKAN_SDK_ROOT "${VULKAN_SDK_PARENT}")
+        endif()
+    endif()
+
+    set(Vulkan_INCLUDE_DIR "${VULKAN_SDK_ROOT}/include")
+    if(EXISTS "${VULKAN_SDK_ROOT}/lib/VulkanLoader/lib/libvulkan.so")
+        set(Vulkan_LIBRARY "${VULKAN_SDK_ROOT}/lib/VulkanLoader/lib/libvulkan.so")
+    elseif(EXISTS "${VULKAN_SDK_ROOT}/lib/libvulkan.so")
+        set(Vulkan_LIBRARY "${VULKAN_SDK_ROOT}/lib/libvulkan.so")
+    endif()
+endif()
 find_package(Vulkan REQUIRED)
 
-find_program(GLSLC_EXECUTABLE
-        NAMES glslc
+find_program(SLANGC_EXECUTABLE
+        NAMES slangc
         HINTS
+        "${VULKAN_SDK_ROOT}/bin"
         "$ENV{VULKAN_SDK}/bin"
-        "$ENV{VULKAN_SDK}/Bin"
         REQUIRED
 )
 
-set(SHADER_DIR "${PROJECT_SOURCE_DIR}/src/Shaders")
+set(SHADER_DIR     "${PROJECT_SOURCE_DIR}/src/Shaders")
+set(WAVEFRONT_DIR  "${SHADER_DIR}/Wavefront")
+
+# Shared Slang source dependencies (all UU shader files)
+set(SLANG_DEPS
+        "${SHADER_DIR}/Shared.h"
+        "${SHADER_DIR}/Bindings.slang"
+        "${SHADER_DIR}/Bxdfs/Brdf.slang"
+        "${SHADER_DIR}/Bxdfs/IBxdf.slang"
+        "${SHADER_DIR}/Bxdfs/PbrBxdf.slang"
+        "${SHADER_DIR}/Cameras/FisheyeCamera.slang"
+        "${SHADER_DIR}/Cameras/ICamera.slang"
+        "${SHADER_DIR}/Cameras/OrthographicCamera.slang"
+        "${SHADER_DIR}/Cameras/PerspectiveCamera.slang"
+        "${SHADER_DIR}/Cameras/RealisticCamera.slang"
+        "${SHADER_DIR}/Cameras/ThinLensCamera.slang"
+        "${SHADER_DIR}/Core/Accumulation.slang"
+        "${SHADER_DIR}/Core/AdaptiveSampling.slang"
+        "${SHADER_DIR}/Core/Core.slang"
+        "${SHADER_DIR}/Core/Payload.slang"
+        "${SHADER_DIR}/Core/RenderPolicy.slang"
+        "${SHADER_DIR}/Geometry/Intersection.slang"
+        "${SHADER_DIR}/Geometry/SurfaceData.slang"
+        "${SHADER_DIR}/Lights/DirectionalLight.slang"
+        "${SHADER_DIR}/Lights/EnvironmentLight.slang"
+        "${SHADER_DIR}/Lights/ILight.slang"
+        "${SHADER_DIR}/Lights/SceneLight.slang"
+        "${SHADER_DIR}/Materials/PbrMaterial.slang"
+        "${SHADER_DIR}/Samplers/HaltonSampler.slang"
+        "${SHADER_DIR}/Samplers/ISampler.slang"
+        "${SHADER_DIR}/Samplers/R2Sampler.slang"
+        "${SHADER_DIR}/Common.slang"
+        "${SHADER_DIR}/Integrators.slang"
+        "${WAVEFRONT_DIR}/Generate.slang"
+        "${WAVEFRONT_DIR}/Extend.slang"
+        "${WAVEFRONT_DIR}/Shade.slang"
+        "${WAVEFRONT_DIR}/Connect.slang"
+        "${WAVEFRONT_DIR}/Finalize.slang"
+        "${WAVEFRONT_DIR}/Advance.slang"
+)
+
+# Base slangc flags (software BVH, no USE_RAY_QUERY)
+set(SLANGC_BASE
+        -target spirv
+        -profile spirv_1_5
+        -emit-spirv-directly
+        -matrix-layout-column-major
+        -fvk-use-entrypoint-name
+        -Wno-30081
+)
+
+# RTX variant adds USE_RAY_QUERY and the ray-query capability
+set(SLANGC_RTX ${SLANGC_BASE} -DUSE_RAY_QUERY=1 -capability rayquery)
+
 set(SHADER_OUTPUTS
-        "${SHADER_DIR}/RTX/RayGeneration.spv"
-        "${SHADER_DIR}/RTX/ClosestHit.spv"
-        "${SHADER_DIR}/RTX/Miss.spv"
-        "${SHADER_DIR}/Compute/PathTracer.spv"
         "${SHADER_DIR}/Tonemapping/Tonemapper.spv"
+        "${WAVEFRONT_DIR}/Generate.spv"
+        "${WAVEFRONT_DIR}/Extend.spv"
+        "${WAVEFRONT_DIR}/Shade.spv"
+        "${WAVEFRONT_DIR}/Connect.spv"
+        "${WAVEFRONT_DIR}/Finalize.spv"
+        "${WAVEFRONT_DIR}/Advance.spv"
+        "${WAVEFRONT_DIR}/GenerateRtx.spv"
+        "${WAVEFRONT_DIR}/ExtendRtx.spv"
+        "${WAVEFRONT_DIR}/ShadeRtx.spv"
+        "${WAVEFRONT_DIR}/ConnectRtx.spv"
+        "${WAVEFRONT_DIR}/FinalizeRtx.spv"
+        "${WAVEFRONT_DIR}/AdvanceRtx.spv"
 )
 
 add_custom_command(
         OUTPUT ${SHADER_OUTPUTS}
-        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/RTX/RayGeneration.glsl" -o "${SHADER_DIR}/RTX/RayGeneration.spv" --target-env=vulkan1.3
-        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/RTX/ClosestHit.glsl" -o "${SHADER_DIR}/RTX/ClosestHit.spv" --target-env=vulkan1.3
-        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/RTX/Miss.glsl" -o "${SHADER_DIR}/RTX/Miss.spv" --target-env=vulkan1.3
-        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Compute/PathTracer.comp" -o "${SHADER_DIR}/Compute/PathTracer.spv" -DUSE_COMPUTE=1 --target-env=vulkan1.3
-        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_DIR}/Tonemapping/Tonemapper.comp" -o "${SHADER_DIR}/Tonemapping/Tonemapper.spv" --target-env=vulkan1.3
+        # Tonemapper
+        COMMAND "${SLANGC_EXECUTABLE}" "${SHADER_DIR}/Tonemapping/Tonemapper.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Tonemapping/Tonemapper.spv"
+        # Compute wavefront passes (software BVH, no USE_RAY_QUERY)
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Generate.slang" -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Generate.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Extend.slang"   -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Extend.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Shade.slang"    -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Shade.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Connect.slang"  -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Connect.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Finalize.slang" -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Finalize.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Advance.slang"  -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Advance.spv"
+        # RTX wavefront passes (inline RayQuery, USE_RAY_QUERY=1)
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Generate.slang" -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/GenerateRtx.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Extend.slang"   -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/ExtendRtx.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Shade.slang"    -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/ShadeRtx.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Connect.slang"  -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/ConnectRtx.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Finalize.slang" -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/FinalizeRtx.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Advance.slang"  -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/AdvanceRtx.spv"
         DEPENDS
-        "${SHADER_DIR}/RTX/RayGeneration.glsl"
-        "${SHADER_DIR}/RTX/ClosestHit.glsl"
-        "${SHADER_DIR}/RTX/Miss.glsl"
-        "${SHADER_DIR}/Compute/PathTracer.comp"
-        "${SHADER_DIR}/Tonemapping/Tonemapper.comp"
-        "${SHADER_DIR}/Bindings.glsl"
-        "${SHADER_DIR}/Common.glsl"
-        "${SHADER_DIR}/SharedStructs.h"
-        "${SHADER_DIR}/PathTracing/Intersection.glsl"
-        "${SHADER_DIR}/PathTracing/PrimaryRayGen.glsl"
-        "${SHADER_DIR}/PathTracing/ShadeClosestHit.glsl"
-        "${SHADER_DIR}/PathTracing/ShadeMiss.glsl"
-        COMMENT "Compiling Vulkan shaders"
+        "${SHADER_DIR}/Tonemapping/Tonemapper.slang"
+        ${SLANG_DEPS}
+        COMMENT "Compiling Slang shaders (Tonemapper + 12 wavefront variants)"
         VERBATIM
 )
 

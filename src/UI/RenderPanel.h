@@ -28,11 +28,12 @@ public:
     int getDiffuseBounces() const { return diffuseBounces; }
     int getSpecularBounces() const { return specularBounces; }
     int getTransmissionBounces() const { return transmissionBounces; }
+    int getPixelSizePercent() const { return pixelSizePercent; }
     float getExposure() const { return exposure; }
     
 private:
     // Render Settings
-    int samples, diffuseBounces, specularBounces, transmissionBounces;
+    int samples, diffuseBounces, specularBounces, transmissionBounces, pixelSizePercent;
     float exposure;
     
     // State machine for the save process

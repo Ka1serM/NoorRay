@@ -210,7 +210,7 @@ std::vector<vk::ValidationFeatureEnableEXT> enabledFeatures = {
     vk::ValidationFeatureEnableEXT::eGpuAssistedReserveBindingSlot,
     // Checks for non-optimal but still valid API usage.
     vk::ValidationFeatureEnableEXT::eBestPractices,
-    // Enables the use of printf() in your GLSL shaders for debugging.
+    // Enables the use of printf() in shaders for debugging.
     vk::ValidationFeatureEnableEXT::eDebugPrintf,
     // Adds extra, more intensive checks for synchronization bugs (race conditions).
     vk::ValidationFeatureEnableEXT::eSynchronizationValidation
@@ -353,8 +353,8 @@ void Context::createLogicalDevice() {
     
     vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{};
     vk::PhysicalDeviceVulkan12Features features12{};
-    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelFeatures{};
+    vk::PhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{};
 
     // Build the pNext chain. This creates a linked list of feature structs.
     void** nextFeature = nullptr;
@@ -371,9 +371,9 @@ void Context::createLogicalDevice() {
         *nextFeature = &accelFeatures;
         nextFeature = &accelFeatures.pNext;
 
-        rtFeatures.sType = vk::StructureType::ePhysicalDeviceRayTracingPipelineFeaturesKHR;
-        *nextFeature = &rtFeatures;
-        nextFeature = &rtFeatures.pNext;
+        rayQueryFeatures.sType = vk::StructureType::ePhysicalDeviceRayQueryFeaturesKHR;
+        *nextFeature = &rayQueryFeatures;
+        nextFeature = &rayQueryFeatures.pNext;
     }
 
     // Put the chain head into the main features2 struct to query for support
@@ -390,7 +390,7 @@ void Context::createLogicalDevice() {
     features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     if (rtxSupported) {
         accelFeatures.accelerationStructure = VK_TRUE;
-        rtFeatures.rayTracingPipeline = VK_TRUE;
+        rayQueryFeatures.rayQuery           = VK_TRUE;
     }
 
     // Create the logical device, pass the head of the feature chain.

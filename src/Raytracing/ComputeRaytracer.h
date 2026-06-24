@@ -1,11 +1,10 @@
-﻿#pragma once
+#pragma once
+#include "WavefrontRaytracer.h"
 
-#include "GpuRaytracer.h"
-
-class ComputeRaytracer : public GpuRaytracer {
+// Software-BVH wavefront path tracer (no RT hardware required)
+class ComputeRaytracer : public WavefrontRaytracer {
 public:
-    
-    void render(const vk::CommandBuffer& commandBuffer, const PushConstantsData& pushConstants) override;
-    void updateTLAS() override;
     ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height);
+    void updateTLAS()     override;
+    void updateTextures() override;
 };

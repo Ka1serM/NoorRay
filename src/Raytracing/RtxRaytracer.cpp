@@ -1,183 +1,227 @@
-﻿#include "RtxRaytracer.h"
-
-#include <iostream>
-#include <ranges>
-#include <algorithm>
-
+#include "RtxRaytracer.h"
 #include "Globals.h"
 #include "Scene/MeshInstance.h"
 
-RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height) : GpuRaytracer(scene, width, height)
+static constexpr unsigned char GenSpv[] = {
+#embed "../Shaders/Wavefront/GenerateRtx.spv"
+};
+static constexpr unsigned char ExtSpv[] = {
+#embed "../Shaders/Wavefront/ExtendRtx.spv"
+};
+static constexpr unsigned char ShdSpv[] = {
+#embed "../Shaders/Wavefront/ShadeRtx.spv"
+};
+static constexpr unsigned char ConSpv[] = {
+#embed "../Shaders/Wavefront/ConnectRtx.spv"
+};
+static constexpr unsigned char FinSpv[] = {
+#embed "../Shaders/Wavefront/FinalizeRtx.spv"
+};
+static constexpr unsigned char AdvSpv[] = {
+#embed "../Shaders/Wavefront/AdvanceRtx.spv"
+};
+
+void RtxRaytracer::createTlasSet()
 {
-    static constexpr unsigned char RayGeneration[] = {
-        #embed "../Shaders/RTX/RayGeneration.spv"
+    const vk::DescriptorSetLayoutBinding tlasBinding{
+        0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eCompute
     };
-    static constexpr unsigned char PathTracingMiss[] = {
-        #embed "../Shaders/RTX/Miss.spv"
-    };
-    static constexpr unsigned char PathTracingClosestHit[] = {
-        #embed "../Shaders/RTX/ClosestHit.spv"
-    };
+    vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.setBindings(tlasBinding);
+    tlasSetLayout = context.getDevice().createDescriptorSetLayoutUnique(layoutInfo);
 
-    constexpr const unsigned char* shaders[] = {
-        RayGeneration,
-        PathTracingMiss,
-        PathTracingClosestHit,
-    };
-
-    constexpr size_t shaderSizes[] = {
-        sizeof(RayGeneration),
-        sizeof(PathTracingMiss),
-        sizeof(PathTracingClosestHit),
-    };
-
-    constexpr vk::ShaderStageFlagBits shaderStages[] = {
-        vk::ShaderStageFlagBits::eRaygenKHR,
-        vk::ShaderStageFlagBits::eMissKHR,
-        vk::ShaderStageFlagBits::eClosestHitKHR,
-    };
-
-    std::vector<vk::UniqueShaderModule> shaderModules;
-    std::vector<vk::PipelineShaderStageCreateInfo> shaderStagesVector;
-    std::vector<vk::RayTracingShaderGroupCreateInfoKHR> shaderGroups;
-
-    uint32_t raygenCount = 0;
-    uint32_t missCount = 0;
-    uint32_t hitCount = 0;
-
-    for (size_t i = 0; i < std::size(shaders); ++i)
-    {
-        shaderModules.emplace_back(context.getDevice().createShaderModuleUnique({{}, shaderSizes[i], reinterpret_cast<const uint32_t*>(shaders[i])}));
-
-        shaderStagesVector.push_back({{}, shaderStages[i], *shaderModules.back(), "main"});
-
-        if (shaderStages[i] == vk::ShaderStageFlagBits::eRaygenKHR)
-        {
-            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
-            raygenCount++;
-        }
-        else if (shaderStages[i] == vk::ShaderStageFlagBits::eMissKHR)
-        {
-            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eGeneral, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
-            missCount++;
-        }
-        else if (shaderStages[i] == vk::ShaderStageFlagBits::eClosestHitKHR)
-        {
-            shaderGroups.emplace_back(vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup, VK_SHADER_UNUSED_KHR, i, VK_SHADER_UNUSED_KHR, VK_SHADER_UNUSED_KHR);
-            hitCount++;
-        }
-    }
-
-    std::vector<vk::DescriptorSetLayoutBinding> bindings{
-        {0, vk::DescriptorType::eAccelerationStructureKHR, 1, vk::ShaderStageFlagBits::eRaygenKHR},
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output emission image
-        {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output albedo image
-        {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output normal image
-        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output crypto image
-        {5, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR}, // Output position image
-        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR}, // Mesh instances buffer
-        {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR}, // Textures
-    };
-
-    createDescriptorSet(bindings);
-
-    vk::PushConstantRange pushRange{};
-    pushRange.setOffset(0);
-    pushRange.setSize(sizeof(PushConstantsData));
-    pushRange.setStageFlags(vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR);
-
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.setSetLayouts(descSetLayout.get());
-    pipelineLayoutInfo.setPushConstantRanges(pushRange);
-
-    pipelineLayout = context.getDevice().createPipelineLayoutUnique(pipelineLayoutInfo);
-
-    vk::RayTracingPipelineCreateInfoKHR rtPipelineInfo{};
-    rtPipelineInfo.setStages(shaderStagesVector);
-    rtPipelineInfo.setGroups(shaderGroups);
-    rtPipelineInfo.setMaxPipelineRayRecursionDepth(1);
-    rtPipelineInfo.setLayout(pipelineLayout.get());
-
-    auto pipelineResult = context.getDevice().createRayTracingPipelineKHRUnique({}, {}, rtPipelineInfo);
-    if (pipelineResult.result != vk::Result::eSuccess)
-        throw std::runtime_error("failed to create ray tracing pipeline.");
-
-    pipeline = std::move(pipelineResult.value);
-
-    auto properties = context.getPhysicalDevice().getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-    auto rtProperties = properties.get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-
-    uint32_t handleSizeAligned = rtProperties.shaderGroupHandleAlignment;
-    uint32_t groupCount = static_cast<uint32_t>(shaderGroups.size());
-    uint32_t sbtSize = groupCount * handleSizeAligned;
-
-    std::vector<uint8_t> handleStorage(sbtSize);
-    if (context.getDevice().getRayTracingShaderGroupHandlesKHR(pipeline.get(), 0, groupCount, sbtSize, handleStorage.data()) != vk::Result::eSuccess)
-        throw std::runtime_error("failed to get ray tracing shader group handles.");
-
-    uint32_t raygenSize = raygenCount * handleSizeAligned;
-    uint32_t missSize = missCount * handleSizeAligned;
-    uint32_t hitSize = hitCount * handleSizeAligned;
-
-    raygenSBT = Buffer{context, Buffer::Type::ShaderBindingTable, raygenSize, handleStorage.data()};
-    missSBT = Buffer{context, Buffer::Type::ShaderBindingTable, missSize, handleStorage.data() + raygenSize};
-    hitSBT = Buffer{context, Buffer::Type::ShaderBindingTable, hitSize, handleStorage.data() + raygenSize + missSize};
-
-    raygenRegion = vk::StridedDeviceAddressRegionKHR{raygenSBT.getDeviceAddress(), handleSizeAligned, raygenSize};
-    missRegion = vk::StridedDeviceAddressRegionKHR{missSBT.getDeviceAddress(), handleSizeAligned, missSize};
-    hitRegion = vk::StridedDeviceAddressRegionKHR{hitSBT.getDeviceAddress(), handleSizeAligned, hitSize};
-    
-    bindOutputImages();
+    vk::DescriptorSetAllocateInfo allocInfo{};
+    allocInfo.setDescriptorPool(context.getDescriptorPool());
+    allocInfo.setSetLayouts(tlasSetLayout.get());
+    tlasDescSet = std::move(context.getDevice().allocateDescriptorSetsUnique(allocInfo).front());
 }
 
+void RtxRaytracer::buildPipelineLayout()
+{
+    // 3 descriptor sets: scene resources, wavefront queues, TLAS
+    std::array<vk::DescriptorSetLayout, 3> setLayouts {
+        descSetLayout.get(), wavefrontSetLayout.get(), tlasSetLayout.get()
+    };
+
+    vk::PushConstantRange pcRange{};
+    pcRange.setStageFlags(vk::ShaderStageFlagBits::eCompute);
+    pcRange.setSize(sizeof(PushData));
+
+    vk::PipelineLayoutCreateInfo info{};
+    info.setSetLayouts(setLayouts);
+    info.setPushConstantRanges(pcRange);
+    pipelineLayout = context.getDevice().createPipelineLayoutUnique(info);
+}
+
+void RtxRaytracer::bindAllDescriptorSets(const vk::CommandBuffer& cmd) const
+{
+    std::array<vk::DescriptorSet, 3> sets{
+        descriptorSet.get(),
+        wavefrontDescSet.get(),
+        tlasDescSet.get()
+    };
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                           pipelineLayout.get(), 0, sets, {});
+}
+
+RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height)
+    : WavefrontRaytracer(scene, width, height)
+{
+    // Set 0: instances(0) + outputColor(1) + outputAlbedo(2) + outputNormal(3) + outputCrypto(4)
+    //        + outputPosition(5) + outputMaterial(6) + meshes(7) + sceneSettings(8)
+    //        + sceneLights(9) + textures(10, LAST variable-count)
+    // Set 2: TLAS at binding 0 (separate set, NOT in set 0)
+    createSceneDescriptorSet({
+        {0,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {1,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {2,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {3,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {4,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {5,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {6,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {7,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {8,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {9,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {10, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute},
+    });
+
+    createWavefrontSet();
+    createTlasSet();
+    buildPipelineLayout();
+
+    buildPipelines({{
+        {GenSpv, sizeof(GenSpv)},
+        {ExtSpv, sizeof(ExtSpv)},
+        {ShdSpv, sizeof(ShdSpv)},
+        {ConSpv, sizeof(ConSpv)},
+        {FinSpv, sizeof(FinSpv)},
+        {AdvSpv, sizeof(AdvSpv)},
+    }});
+
+    writeWavefrontDescriptors();
+    bindOutputImages();
+
+    // Initialize sceneSettings with defaults
+    SceneSettings dummy{};
+    sceneSettingsBuffer = Buffer{context, Buffer::Type::Storage, sizeof(SceneSettings), &dummy};
+    {
+        vk::DescriptorBufferInfo info = sceneSettingsBuffer.getDescriptorInfo();
+        vk::WriteDescriptorSet write{};
+        write.setDstSet(descriptorSet.get()).setDstBinding(8)
+             .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+             .setDescriptorCount(1).setBufferInfo(info);
+        context.getDevice().updateDescriptorSets(write, {});
+    }
+
+    // Initialize sceneLights with a dummy (no lights)
+    LightGpu dummyLight{};
+    sceneLightsBuffer = Buffer{context, Buffer::Type::Storage, sizeof(LightGpu), &dummyLight};
+    {
+        vk::DescriptorBufferInfo info = sceneLightsBuffer.getDescriptorInfo();
+        vk::WriteDescriptorSet write{};
+        write.setDstSet(descriptorSet.get()).setDstBinding(9)
+             .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+             .setDescriptorCount(1).setBufferInfo(info);
+        context.getDevice().updateDescriptorSets(write, {});
+    }
+}
 
 void RtxRaytracer::updateTLAS()
 {
-    std::vector<vk::AccelerationStructureInstanceKHR> instances;
-        const auto& meshInstances = scene.getMeshInstances();
-        instances.reserve(meshInstances.size());
-        
-        for (const auto* meshInstance : meshInstances)
-            if (meshInstance)
-                instances.push_back(meshInstance->getInstanceData());
+    const auto& meshInstances = scene.getMeshInstances();
 
-        if (instances.empty())
-        {
-            auto emptyInstance = vk::AccelerationStructureInstanceKHR{};
-            instancesBuffer = Buffer(context, Buffer::Type::AccelInput,sizeof(vk::AccelerationStructureInstanceKHR),&emptyInstance);
-        }
-        else
-            instancesBuffer = Buffer{context, Buffer::Type::AccelInput, sizeof(vk::AccelerationStructureInstanceKHR) * instances.size(), instances.data()};
+    std::vector<vk::AccelerationStructureInstanceKHR> accelInstances;
+    std::vector<Instance> gpuInstances;
+    accelInstances.reserve(meshInstances.size());
+    gpuInstances.reserve(meshInstances.size());
+    for (const auto* mi : meshInstances) {
+        if (!mi)
+            continue;
 
-        vk::AccelerationStructureGeometryInstancesDataKHR instancesData;
-        instancesData.setArrayOfPointers(false);
-        instancesData.setData(instancesBuffer.getDeviceAddress());
+        const uint32_t instanceIndex = static_cast<uint32_t>(gpuInstances.size());
 
-        vk::AccelerationStructureGeometryKHR instanceGeometry;
-        instanceGeometry.setGeometryType(vk::GeometryTypeKHR::eInstances);
-        instanceGeometry.setGeometry({instancesData});
-        instanceGeometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+        auto accelInstance = mi->getInstanceData();
+        accelInstance.setInstanceCustomIndex(instanceIndex);
+        accelInstances.push_back(accelInstance);
 
-        tlas.build(context, instanceGeometry, static_cast<uint32_t>(instances.size()), vk::AccelerationStructureTypeKHR::eTopLevel);
+        const mat4 T  = mi->getWorldTransform().getMatrix();
+        const mat4 IT = inverse(T);
+        gpuInstances.push_back({T, IT, transpose(IT), mi->getMeshAsset().getMeshIndex()});
+    }
 
-        vk::WriteDescriptorSetAccelerationStructureKHR accelInfo{};
-        accelInfo.setAccelerationStructureCount(1);
-        accelInfo.setPAccelerationStructures(&tlas.getAccelerationStructure());
+    if (accelInstances.empty()) {
+        vk::AccelerationStructureInstanceKHR emptyInst{};
+        instancesBuffer = Buffer{context, Buffer::Type::AccelInput,
+                                 sizeof(vk::AccelerationStructureInstanceKHR), &emptyInst};
+    } else {
+        instancesBuffer = Buffer{context, Buffer::Type::AccelInput,
+                                 sizeof(vk::AccelerationStructureInstanceKHR) * accelInstances.size(),
+                                 accelInstances.data()};
+    }
 
-        vk::WriteDescriptorSet accelWrite{};
-        accelWrite.setDstSet(descriptorSet.get());
-        accelWrite.setDstBinding(0);
-        accelWrite.setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR);
-        accelWrite.setDescriptorCount(1);
-        accelWrite.setPNext(&accelInfo);
+    vk::AccelerationStructureGeometryInstancesDataKHR instData{};
+    instData.setArrayOfPointers(false);
+    instData.setData(instancesBuffer.getDeviceAddress());
 
-        context.getDevice().updateDescriptorSets(accelWrite, {});
+    vk::AccelerationStructureGeometryKHR geom{};
+    geom.setGeometryType(vk::GeometryTypeKHR::eInstances);
+    geom.setGeometry({instData});
+    geom.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+
+    tlas.build(context, geom, static_cast<uint32_t>(accelInstances.size()),
+               vk::AccelerationStructureTypeKHR::eTopLevel);
+
+    // Write TLAS to set 2 binding 0 (NOT set 0)
+    vk::WriteDescriptorSetAccelerationStructureKHR accelInfo{};
+    accelInfo.setAccelerationStructureCount(1);
+    accelInfo.setPAccelerationStructures(&tlas.getAccelerationStructure());
+
+    vk::WriteDescriptorSet accelWrite{};
+    accelWrite.setDstSet(tlasDescSet.get()).setDstBinding(0)
+              .setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR)
+              .setDescriptorCount(1).setPNext(&accelInfo);
+    context.getDevice().updateDescriptorSets(accelWrite, {});
+
+    // Also write the per-instance data buffer to set 0 binding 0.
+    // RayQuery::CommittedInstanceID returns the TLAS custom index, so the
+    // custom index must match this buffer rather than the shared mesh index.
+    if (gpuInstances.empty()) {
+        Instance dummy{}; dummy.meshId = UINT32_MAX;
+        instancesBuffer = Buffer{context, Buffer::Type::Storage, sizeof(Instance), &dummy};
+    } else {
+        instancesBuffer = Buffer{context, Buffer::Type::Storage,
+                                 sizeof(Instance) * gpuInstances.size(), gpuInstances.data()};
+    }
+
+    vk::DescriptorBufferInfo instInfo = instancesBuffer.getDescriptorInfo();
+    vk::WriteDescriptorSet instWrite{};
+    instWrite.setDstSet(descriptorSet.get()).setDstBinding(0)
+             .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+             .setDescriptorCount(1).setBufferInfo(instInfo);
+    context.getDevice().updateDescriptorSets(instWrite, {});
 }
 
-void RtxRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstantsData& pushConstants)
+void RtxRaytracer::updateTextures()
 {
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, pipeline.get());
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR, pipelineLayout.get(), 0, descriptorSet.get(), {});
-    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR | vk::ShaderStageFlagBits::eMissKHR, 0, sizeof(PushConstantsData), &pushConstants);
-    commandBuffer.traceRaysKHR(raygenRegion, missRegion, hitRegion, {}, width, height, 1);
+    const auto& textures = scene.getTextures();
+    if (textures.empty()) return;
+
+    std::vector<vk::DescriptorImageInfo> imageInfos;
+    imageInfos.reserve(textures.size());
+    for (const auto& tex : textures) {
+        vk::DescriptorImageInfo info{};
+        info.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+        info.setImageView(tex.getImage().getView());
+        info.setSampler(tex.getSampler());
+        imageInfos.push_back(info);
+    }
+
+    // Binding 10: textures (variable count, last binding)
+    const vk::WriteDescriptorSet write{
+        descriptorSet.get(), 10, 0,
+        static_cast<uint32_t>(imageInfos.size()),
+        vk::DescriptorType::eCombinedImageSampler,
+        imageInfos.data()
+    };
+    context.getDevice().updateDescriptorSets(write, {});
 }

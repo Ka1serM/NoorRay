@@ -25,7 +25,7 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 -   **Vulkan SDK:** Ensure the Vulkan SDK is installed and the `VULKAN_SDK` environment variable is set.
 -   **CMake:** Version 3.10 or higher.
--   **Compiler:** A C++23-compatible compiler. **MinGW is recommended** (on Windows) due to usage of the `#embed` directive in the source code.
+-   **Compiler:** A GCC 15-compatible C++26 compiler. **MinGW is recommended** (on Windows) due to usage of the `#embed` directive in the source code.
 
 
 #### Clone the Repository
@@ -66,7 +66,7 @@ cd VulkanToyPathtracer
 
 ### Shader Compilation
 
-Shaders are compiled automatically by CMake using `glslc` from the Vulkan SDK. No separate shader recompilation script is needed; building the `NoorRay` target regenerates the SPIR-V files when shader sources change.
+Shaders are compiled automatically by CMake using `slangc` from the Vulkan SDK. No separate shader recompilation script is needed; building the `NoorRay` target regenerates the SPIR-V files when shader sources change.
 
 
 ### Dependencies

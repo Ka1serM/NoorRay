@@ -2,7 +2,7 @@
 
 #include <vector>
 #include <glm/glm.hpp>
-#include "Shaders/SharedStructs.h"
+#include "Shaders/Shared.h"
 #include "Vulkan/Buffer.h"
 
 class BVH

@@ -22,12 +22,14 @@ Buffer::Buffer(Buffer&& other) noexcept
       allocation(other.allocation),
       memory(other.memory),
       descBufferInfo(other.descBufferInfo),
-      deviceAddress(other.deviceAddress)
+      deviceAddress(other.deviceAddress),
+      mappedData(other.mappedData)
 {
     // Nullify the other object so its destructor does nothing
     other.allocator = VK_NULL_HANDLE;
     other.buffer = VK_NULL_HANDLE;
     other.allocation = VK_NULL_HANDLE;
+    other.mappedData = nullptr;
 }
 
 Buffer& Buffer::operator=(Buffer&& other) noexcept {
@@ -43,11 +45,13 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
         memory = other.memory;
         descBufferInfo = other.descBufferInfo;
         deviceAddress = other.deviceAddress;
+        mappedData = other.mappedData;
         
         // Nullify the other object
         other.allocator = VK_NULL_HANDLE;
         other.buffer = VK_NULL_HANDLE;
         other.allocation = VK_NULL_HANDLE;
+        other.mappedData = nullptr;
     }
     return *this;
 }
@@ -120,6 +124,7 @@ Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, con
     }
 
     this->memory = allocationResultInfo.deviceMemory;
+    this->mappedData = allocationResultInfo.pMappedData;
 
     if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
         vk::BufferDeviceAddressInfo addressInfo{buffer};

@@ -2,7 +2,7 @@
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
-#include "Shaders/SharedStructs.h"
+#include "Shaders/Shared.h"
 #include "Vulkan/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
@@ -59,13 +59,12 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         material.roughness = static_cast<float>(pbr.roughnessFactor);
         material.emission = make_vec3(mat.emissiveFactor.data());
         material.emissionStrength = (length2(material.emission) > 1e-6f) ? 1.0f : 0.0f;
+        material.transmission = 0.0f;
 
         if (mat.alphaMode == "BLEND") {
-             material.transmission = 1.0f - static_cast<float>(pbr.baseColorFactor[3]);
              material.opacity = static_cast<float>(pbr.baseColorFactor[3]);
         } else {
              material.opacity = 1.0f;
-             material.transmission = 0.0f;
         }
 
         if (mat.extensions.contains("KHR_materials_transmission")) {
@@ -136,10 +135,11 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
             vertices.resize(vertexCount);
             for (size_t v = 0; v < vertexCount; ++v) {
-                vertices[v].position = make_vec3(&positions[v * 3]);
-                vertices[v].normal   = normals ? normalize(make_vec3(&normals[v * 3])) : vec3(0, 1, 0);
-                vertices[v].uv       = texcoords ? vec2(texcoords[v * 2], 1.0f - texcoords[v * 2 + 1]) : vec2(0); // Flip V
-                vertices[v].tangent  = tangents ? normalize(vec3(make_vec3(&tangents[v * 4]))) : vec3(0);
+                vertices[v].position    = make_vec3(&positions[v * 3]);
+                vertices[v].normal      = normals ? normalize(make_vec3(&normals[v * 3])) : vec3(0, 1, 0);
+                vertices[v].uv          = texcoords ? vec2(texcoords[v * 2], 1.0f - texcoords[v * 2 + 1]) : vec2(0);
+                vertices[v].tangent     = tangents ? normalize(vec3(make_vec3(&tangents[v * 4]))) : vec3(1, 0, 0);
+                vertices[v].tangentSign = tangents ? tangents[v * 4 + 3] : 1.0f;
             }
 
             const auto& indexAccessor = model.accessors[primitive.indices];
@@ -418,17 +418,16 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
             indexOffset += fv;
         }
 
-        // Finalize vertices by normalizing the accumulated tangents 
+        // Finalize vertices by normalizing the accumulated tangents
         for (auto& v : vertices) {
             if (length2(v.tangent) > 1e-8f) {
-                // Gram-Schmidt orthogonalize tangent with respect to the normal
                 v.tangent = normalize(v.tangent - v.normal * dot(v.normal, v.tangent));
             } else {
-                // Create an arbitrary but valid tangent if calculation failed (e.g., degenerate UVs)
                 vec3 t1 = cross(v.normal, vec3(0.0, 0.0, 1.0));
                 vec3 t2 = cross(v.normal, vec3(0.0, 1.0, 0.0));
                 v.tangent = normalize((length2(t1) > length2(t2)) ? t1 : t2);
             }
+            v.tangentSign = 1.0f;
         }
 
         // Compute mesh pivot and center the vertex positions 

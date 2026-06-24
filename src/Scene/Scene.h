@@ -7,12 +7,12 @@
 #include "Vulkan/Texture.h"
 #include <vulkan/vulkan.hpp>
 
-#include "Shaders/SharedStructs.h"
+#include "Shaders/Shared.h"
 
 class SceneObject;
 class MeshInstance;
 class MeshAsset;
-class PerspectiveCamera;
+class CameraBase;
 class Buffer;
 
 // Dirty flags as bitfield
@@ -36,7 +36,7 @@ class Scene {
     std::vector<SceneObject*> rootObjects;
 
     std::vector<MeshInstance*> meshInstances;
-    PerspectiveCamera* activeCamera = nullptr;
+    CameraBase* activeCamera = nullptr;
     uint32_t activeObjectIndex = INVALID_INSTANCE;
     uint8_t dirtyFlags = 0;
 
@@ -55,10 +55,11 @@ public:
     void add(const std::shared_ptr<MeshAsset>& meshAsset);
     void add(Texture&& texture);
     bool remove(SceneObject* objToRemove);
+    bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
     void reparent(SceneObject* objectToMove, SceneObject* newParent);
 
     // Getters for scene content
-    PerspectiveCamera* getActiveCamera() const { return activeCamera; }
+    CameraBase* getActiveCamera() const { return activeCamera; }
     const std::vector<std::unique_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
     const std::vector<SceneObject*>& getRootObjects() const { return rootObjects; }
 

@@ -1,4 +1,5 @@
 ﻿#include "ViewportPanel.h"
+#include <cmath>
 #include <iostream>
 #include <ranges>
 
@@ -9,7 +10,7 @@
 #include "Log.h"
 #include "glm/gtc/type_ptr.hpp"
 #include "SDL3/SDL_mouse.h"
-#include "Camera/PerspectiveCamera.h"
+#include "Camera/CameraBase.h"
 #include "Scene/MeshInstance.h"
 
 ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, const uint32_t width, const uint32_t height)
@@ -45,14 +46,7 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     outputImageDescriptorSet = std::move(sets.front());
     
-    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-    vk::WriteDescriptorSet write{};
-    write.dstSet = outputImageDescriptorSet.get();
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.pImageInfo = &imageInfo;
-    context.getDevice().updateDescriptorSets(write, nullptr);
+    updateDisplayDescriptor();
 
     // ImGizmo Style
     ImGuizmo::Style& style = ImGuizmo::GetStyle();
@@ -73,6 +67,30 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     // Rotation circles usually more saturated
     style.Colors[ImGuizmo::ROTATION_USING_BORDER] = ImVec4(1.0f, 0.8f, 0.2f, 1.0f); // golden ring
     style.Colors[ImGuizmo::ROTATION_USING_FILL] = ImVec4(1.0f, 0.8f, 0.2f, 0.3f); // subtle fill
+}
+
+void ViewportPanel::updateDisplayDescriptor()
+{
+    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getView(), vk::ImageLayout::eShaderReadOnlyOptimal};
+    vk::WriteDescriptorSet write{};
+    write.dstSet = outputImageDescriptorSet.get();
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    write.pImageInfo = &imageInfo;
+    context.getDevice().updateDescriptorSets(write, nullptr);
+}
+
+void ViewportPanel::resize(const uint32_t newWidth, const uint32_t newHeight, const vk::Format imageFormat)
+{
+    if (newWidth == 0 || newHeight == 0 || (newWidth == width && newHeight == height && displayImage.getFormat() == imageFormat))
+        return;
+
+    context.getDevice().waitIdle();
+    width = newWidth;
+    height = newHeight;
+    displayImage = Image(context, width, height, imageFormat, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst);
+    updateDisplayDescriptor();
 }
 
 void ViewportPanel::updateLayout() {
@@ -137,6 +155,15 @@ void ViewportPanel::drawImageAndUpdateState() {
     ImGui::Image(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get()), viewportSize);
     isViewportHovered = ImGui::IsItemHovered();
     uiScale = std::max(viewportSize.x / 1080.0f, 0.5f);
+}
+
+int ViewportPanel::getViewportPixelSizePercent() const {
+    if (viewportSize.x <= 1.0f || viewportSize.y <= 1.0f)
+        return 100;
+
+    const float xPercent = static_cast<float>(width) * 100.0f / viewportSize.x;
+    const float yPercent = static_cast<float>(height) * 100.0f / viewportSize.y;
+    return std::max(100, static_cast<int>(std::ceil(std::max(xPercent, yPercent))));
 }
 
 void ViewportPanel::beginMouseCapture() {

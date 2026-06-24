@@ -1,7 +1,7 @@
 ﻿#include "Scene.h"
 #include <algorithm>
 #include <iostream>
-#include "Camera/PerspectiveCamera.h"
+#include "Camera/CameraBase.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneObject.h"
 
@@ -19,11 +19,11 @@ void Scene::paste() {
     //Create a  clone of the copied object and its entire hierarchy.
     SceneObject* newObject = cloneHierarchy(copiedObject);
 
-    //    - If an object is selected, paste as a sibling.
+    //    - If an object is selected, paste as a sibling (same parent).
     //    - Otherwise, paste as a root object.
     SceneObject* targetParent = nullptr;
     if (SceneObject* activeObject = getActiveObject())
-        targetParent = activeObject;
+        targetParent = activeObject->getParent();
 
     // Reparent the new hierarchy to its correct place in the scene.
     reparent(newObject, targetParent);
@@ -38,18 +38,18 @@ void Scene::paste() {
 
 uint32_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     SceneObject* newSceneObject = sceneObject.get();
-    
+
     // It calls the private helper to handle the actual registration.
     const uint32_t addedIndex = registerObject(std::move(sceneObject));
-    
+
     // Then it completes its job by adding the object to the root.
     rootObjects.push_back(newSceneObject);
-    
+
     return addedIndex;
 }
 
 uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
-    if (auto* camera = dynamic_cast<PerspectiveCamera*>(sceneObject.get()))
+    if (auto* camera = dynamic_cast<CameraBase*>(sceneObject.get()))
         activeCamera = camera;
     else if (auto* meshInstance = dynamic_cast<MeshInstance*>(sceneObject.get()))
     {
@@ -71,7 +71,7 @@ SceneObject* Scene::cloneHierarchy(const SceneObject* source) {
         if (childSource != nullptr)
             if (SceneObject* newChild = cloneHierarchy(childSource))
                 newObjectRawPtr->addChild(newChild);
-    
+
     return newObjectRawPtr;
 }
 
@@ -93,14 +93,14 @@ void Scene::add(Texture&& texture) {
 bool Scene::remove(SceneObject* objToRemove) {
     if (!objToRemove || objToRemove == activeCamera)
         return false;;
-    
+
     // Recursively remove children
     while (!objToRemove->getChildren().empty())
         remove(objToRemove->getChildren().back());
 
     const SceneObject* previouslyActiveObject = getActiveObject();
     const bool activeObjectWasRemoved = (objToRemove == previouslyActiveObject);
-    
+
     if (objToRemove->getParent())
         objToRemove->getParent()->removeChild(objToRemove);
     else
@@ -117,21 +117,65 @@ bool Scene::remove(SceneObject* objToRemove) {
         if (activeObjectWasRemoved) {
             resetActiveObjectIndex();
         } else if (previouslyActiveObject) {
-            const auto newIt = std::ranges::find_if(sceneObjects, 
+            const auto newIt = std::ranges::find_if(sceneObjects,
                 [previouslyActiveObject](const auto& ptr) { return ptr.get() == previouslyActiveObject; });
-            
+
             if (newIt != sceneObjects.end()) {
                 activeObjectIndex = static_cast<uint32_t>(std::distance(sceneObjects.begin(), newIt));
             } else
                 resetActiveObjectIndex();
         }
-        
+
         setDirtyFlag(TLAS);
         setDirtyFlag(Accumulation);
         return true;
     }
 
     return false;
+}
+
+bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject)
+{
+    if (!oldObject || !newObject)
+        return false;
+
+    const auto it = std::ranges::find_if(sceneObjects, [oldObject](const auto& ptr) {
+        return ptr.get() == oldObject;
+    });
+    if (it == sceneObjects.end())
+        return false;
+
+    SceneObject* parent = oldObject->getParent();
+    const bool wasRoot = parent == nullptr;
+    const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
+
+    if (parent) {
+        parent->removeChild(oldObject);
+    } else {
+        std::erase(rootObjects, oldObject);
+    }
+
+    SceneObject* rawNewObject = newObject.get();
+    if (auto* camera = dynamic_cast<CameraBase*>(rawNewObject))
+        activeCamera = camera;
+    if (auto* meshInstance = dynamic_cast<MeshInstance*>(oldObject))
+        std::erase(meshInstances, meshInstance);
+    if (auto* meshInstance = dynamic_cast<MeshInstance*>(rawNewObject))
+        meshInstances.push_back(meshInstance);
+
+    *it = std::move(newObject);
+
+    if (parent)
+        parent->addChild(rawNewObject);
+    else if (wasRoot)
+        rootObjects.push_back(rawNewObject);
+
+    if (activeObjectIndex == index)
+        activeObjectIndex = index;
+
+    setDirtyFlag(TLAS);
+    setDirtyFlag(Accumulation);
+    return true;
 }
 
 void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {

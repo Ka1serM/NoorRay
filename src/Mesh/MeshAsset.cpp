@@ -58,7 +58,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string
                 corners[i], 0,
                 normal, 0,
                 tangent, 0,
-                uvs[i], 0, 0
+                1.0f, uvs[i], 0
             });
         }
 
@@ -99,7 +99,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreatePlane(Scene& scene, const std::strin
             positions[i], 0,
             normal, 0,
             tangent, 0,
-            uvs[i], 0, 0
+            1.0f, uvs[i], 0
         });
     }
 
@@ -159,7 +159,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::stri
                 pos, 0,
                 normal, 0,
                 tangent, 0,
-                uv, 0, 0
+                1.0f, uv, 0
             });
         }
     }
@@ -203,7 +203,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
         {0.0f, 0.0f, 0.0f}, 0,
         normal, 0,
         {1.0f, 0.0f, 0.0f}, 0,
-        {0.5f, 0.5f}, 0, 0
+        1.0f, {0.5f, 0.5f}, 0
     }); // center vertex with tangent along +X
 
     for (uint32_t i = 0; i <= segments; ++i) {
@@ -220,7 +220,7 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
             pos, 0,
             normal, 0,
             tangent, 0,
-            uv, 0, 0
+            1.0f, uv, 0
         });
     }
 

@@ -3,15 +3,15 @@
 #include "ImGuiComponent.h"
 #include <string>
 #include "Scene/Scene.h"
-#include "Shaders/SharedStructs.h"
+#include "Shaders/Shared.h"
 
 class EnvironmentPanel : public ImGuiComponent {
     Scene& scene;
-    EnvironmentData enviromentData{};
+    EnvironmentSettings enviromentData{};
 
 public:
     EnvironmentPanel(std::string name, Scene& scene);
     void renderUi() override;
     
-    const EnvironmentData& getEnvironmentData() const { return enviromentData; }
+    const EnvironmentSettings& getEnvironmentData() const { return enviromentData; }
 };

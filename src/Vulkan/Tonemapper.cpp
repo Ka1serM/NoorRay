@@ -3,10 +3,11 @@
 
 #include "Globals.h"
 #include "Log.h"
-#include "Shaders/SharedStructs.h"
+#include "Shaders/Shared.h"
 
 Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t height, const Image& inputImage, const vk::Format outputImageFormat)
-: outputImage(context, width, height, outputImageFormat,  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
+: context(context),
+  outputImage(context, width, height, outputImageFormat,  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
 {
     //Load shader
     static constexpr unsigned char code[] = {
@@ -37,7 +38,11 @@ Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t he
     auto descriptorSets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
     descriptorSet = std::move(descriptorSets.front()); // descriptorSet is vk::UniqueDescriptorSet
 
-    // Write descriptors
+    writeDescriptors(inputImage);
+}
+
+void Tonemapper::writeDescriptors(const Image& inputImage)
+{
     std::vector imageInfos = {
         vk::DescriptorImageInfo({}, inputImage.getView(), vk::ImageLayout::eGeneral),
         vk::DescriptorImageInfo({}, outputImage.getView(), vk::ImageLayout::eGeneral)
@@ -75,4 +80,15 @@ void Tonemapper::dispatch(const vk::CommandBuffer commandBuffer) {
     const uint32_t groupCountY = (outputImage.getHeight() + GROUP_SIZE - 1) / GROUP_SIZE;
     commandBuffer.dispatch(groupCountX, groupCountY, 1);
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+void Tonemapper::resize(const uint32_t width, const uint32_t height, const Image& inputImage, const vk::Format outputImageFormat)
+{
+    if (width == 0 || height == 0)
+        return;
+
+    context.getDevice().waitIdle();
+    if (outputImage.getWidth() != width || outputImage.getHeight() != height || outputImage.getFormat() != outputImageFormat)
+        outputImage = Image(context, width, height, outputImageFormat, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
+    writeDescriptors(inputImage);
 }

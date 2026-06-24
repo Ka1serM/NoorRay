@@ -8,7 +8,7 @@ MeshInstance::MeshInstance(Scene& scene, const std::string& name, std::shared_pt
 
     instanceData = vk::AccelerationStructureInstanceKHR{};
     instanceData.setTransform(getWorldTransform().getVkTransformMatrix());
-    instanceData.setInstanceCustomIndex(meshAsset->getMeshIndex()); // Use in Shader to access correct Buffer for Mesh
+    instanceData.setInstanceCustomIndex(meshAsset->getMeshIndex());
     instanceData.setMask(0xFF);
     instanceData.setInstanceShaderBindingTableRecordOffset(0);
     instanceData.setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);

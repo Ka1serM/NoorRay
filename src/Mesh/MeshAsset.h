@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include "Scene/Scene.h"
-#include "../Shaders/SharedStructs.h"
+#include "../Shaders/Shared.h"
 #include "UI/ImGuiComponent.h"
 #include "Vulkan/Accel.h"
 #include "BVH/BVH.h"

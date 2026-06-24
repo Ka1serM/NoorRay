@@ -29,6 +29,7 @@ public:
     const vk::DescriptorBufferInfo& getDescriptorInfo() const { return descBufferInfo; }
     const vk::Buffer& getBuffer() const { return buffer; }
     const vk::DeviceMemory& getMemory() const { return memory; }
+    void* getMappedData() const { return mappedData; }
 
 private:
     VmaAllocator allocator;
@@ -38,4 +39,5 @@ private:
     vk::DeviceMemory memory;
     vk::DescriptorBufferInfo descBufferInfo;
     vk::DeviceAddress deviceAddress;
+    void* mappedData = nullptr;
 };

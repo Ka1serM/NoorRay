@@ -1,105 +1,135 @@
-﻿#include "ComputeRaytracer.h"
-
+#include "ComputeRaytracer.h"
 #include "Globals.h"
 #include "Scene/MeshInstance.h"
 
+static constexpr unsigned char GenSpv[] = {
+#embed "../Shaders/Wavefront/Generate.spv"
+};
+static constexpr unsigned char ExtSpv[] = {
+#embed "../Shaders/Wavefront/Extend.spv"
+};
+static constexpr unsigned char ShdSpv[] = {
+#embed "../Shaders/Wavefront/Shade.spv"
+};
+static constexpr unsigned char ConSpv[] = {
+#embed "../Shaders/Wavefront/Connect.spv"
+};
+static constexpr unsigned char FinSpv[] = {
+#embed "../Shaders/Wavefront/Finalize.spv"
+};
+static constexpr unsigned char AdvSpv[] = {
+#embed "../Shaders/Wavefront/Advance.spv"
+};
+
 ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height)
-    : GpuRaytracer(scene, width, height)
+    : WavefrontRaytracer(scene, width, height)
 {
-    static constexpr unsigned char ComputeShader[] = {
-        #embed "../Shaders/Compute/PathTracer.spv"
-    };
+    // Set 0: instances(0) + outputColor(1) + outputAlbedo(2) + outputNormal(3) + outputCrypto(4)
+    //        + outputPosition(5) + outputMaterial(6) + meshes(7) + sceneSettings(8)
+    //        + sceneLights(9) + textures(10, LAST variable-count)
+    createSceneDescriptorSet({
+        {0,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {1,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {2,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {3,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {4,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {5,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {6,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
+        {7,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {8,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {9,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {10, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute},
+    });
 
-    vk::UniqueShaderModule computeShaderModule = context.getDevice().createShaderModuleUnique({{}, sizeof(ComputeShader), reinterpret_cast<const uint32_t*>(ComputeShader)});
+    createWavefrontSet();
+    buildPipelineLayout();
 
-    vk::PipelineShaderStageCreateInfo shaderStageInfo{};
-    shaderStageInfo.setStage(vk::ShaderStageFlagBits::eCompute);
-    shaderStageInfo.setModule(*computeShaderModule);
-    shaderStageInfo.setPName("main");
+    buildPipelines({{
+        {GenSpv, sizeof(GenSpv)},
+        {ExtSpv, sizeof(ExtSpv)},
+        {ShdSpv, sizeof(ShdSpv)},
+        {ConSpv, sizeof(ConSpv)},
+        {FinSpv, sizeof(FinSpv)},
+        {AdvSpv, sizeof(AdvSpv)},
+    }});
 
-    // Define the descriptor set layout bindings.
-    const std::vector<vk::DescriptorSetLayoutBinding> bindings{
-        {0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh instances buffer
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output color image
-        {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output albedo image
-        {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output normal image
-        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output crypto image
-        {5, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // Output position image
-        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // Mesh buffer
-        {7, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute}, // Textures
-    };
+    writeWavefrontDescriptors();
+    bindOutputImages();
 
-    createDescriptorSet(bindings);
+    // Initialize sceneSettings with defaults
+    SceneSettings dummy{};
+    sceneSettingsBuffer = Buffer{context, Buffer::Type::Storage, sizeof(SceneSettings), &dummy};
+    {
+        vk::DescriptorBufferInfo info = sceneSettingsBuffer.getDescriptorInfo();
+        vk::WriteDescriptorSet write{};
+        write.setDstSet(descriptorSet.get()).setDstBinding(8)
+             .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+             .setDescriptorCount(1).setBufferInfo(info);
+        context.getDevice().updateDescriptorSets(write, {});
+    }
 
-    // 4. Create the pipeline layout
-    vk::PushConstantRange pushRange{};
-    pushRange.setSize(sizeof(PushConstantsData));
-    pushRange.setStageFlags(vk::ShaderStageFlagBits::eCompute);
-
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.setSetLayouts(descSetLayout.get());
-    pipelineLayoutInfo.setPushConstantRanges(pushRange);
-    pipelineLayout = context.getDevice().createPipelineLayoutUnique(pipelineLayoutInfo);
-
-    // 5. Create the compute pipeline
-    vk::ComputePipelineCreateInfo computePipelineInfo{};
-    computePipelineInfo.setStage(shaderStageInfo);
-    computePipelineInfo.setLayout(pipelineLayout.get());
-
-    auto pipelineResult = context.getDevice().createComputePipelineUnique({}, computePipelineInfo);
-    if (pipelineResult.result != vk::Result::eSuccess)
-        throw std::runtime_error("failed to create compute pipeline.");
-
-    pipeline = std::move(pipelineResult.value);
-    
-    bindOutputImages();    
+    // Initialize sceneLights with a dummy (no lights)
+    LightGpu dummyLight{};
+    sceneLightsBuffer = Buffer{context, Buffer::Type::Storage, sizeof(LightGpu), &dummyLight};
+    {
+        vk::DescriptorBufferInfo info = sceneLightsBuffer.getDescriptorInfo();
+        vk::WriteDescriptorSet write{};
+        write.setDstSet(descriptorSet.get()).setDstBinding(9)
+             .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+             .setDescriptorCount(1).setBufferInfo(info);
+        context.getDevice().updateDescriptorSets(write, {});
+    }
 }
-
 
 void ComputeRaytracer::updateTLAS()
 {
-    std::vector<ComputeInstance> instances;
-
     const auto& meshInstances = scene.getMeshInstances();
-    instances.reserve(meshInstances.size());
+    std::vector<Instance> gpuInstances;
+    gpuInstances.reserve(meshInstances.size());
 
-    for (const auto* meshInstance : meshInstances)
-    {
-        const mat4 transform = meshInstance->getWorldTransform().getMatrix();
-        instances.push_back({
-            .transform = transform,
-            .inverseTransform = inverse(transform),
-            .meshId = meshInstance->getMeshAsset().getMeshIndex()
-        });
+    for (const auto* mi : meshInstances) {
+        const mat4 T  = mi->getWorldTransform().getMatrix();
+        const mat4 IT = inverse(T);
+        gpuInstances.push_back({T, IT, transpose(IT), mi->getMeshAsset().getMeshIndex()});
     }
 
-    if (instances.empty())
-    {
-        auto emptyInstance = ComputeInstance{};
-        emptyInstance.meshId = UINT32_MAX; // invalid instance
-        instancesBuffer = Buffer{context, Buffer::Type::Storage, sizeof(ComputeInstance), &emptyInstance};
+    if (gpuInstances.empty()) {
+        Instance dummy{}; dummy.meshId = UINT32_MAX;
+        instancesBuffer = Buffer{context, Buffer::Type::Storage, sizeof(Instance), &dummy};
+    } else {
+        instancesBuffer = Buffer{context, Buffer::Type::Storage,
+                                 sizeof(Instance) * gpuInstances.size(), gpuInstances.data()};
     }
-    else
-        instancesBuffer = Buffer{context, Buffer::Type::Storage, sizeof(ComputeInstance) * instances.size(), instances.data()};
 
-    vk::DescriptorBufferInfo bufferInfo = instancesBuffer.getDescriptorInfo();
+    vk::DescriptorBufferInfo info = instancesBuffer.getDescriptorInfo();
     vk::WriteDescriptorSet write{};
-    write.setDstSet(descriptorSet.get());
-    write.setDstBinding(0);
-    write.setDescriptorType(vk::DescriptorType::eStorageBuffer);
-    write.setDescriptorCount(1);
-    write.setBufferInfo(bufferInfo);
+    write.setDstSet(descriptorSet.get()).setDstBinding(0)
+         .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+         .setDescriptorCount(1).setBufferInfo(info);
     context.getDevice().updateDescriptorSets(write, {});
 }
 
-
-void ComputeRaytracer::render(const vk::CommandBuffer& commandBuffer, const PushConstantsData& pushConstants)
+void ComputeRaytracer::updateTextures()
 {
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.get());
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout.get(), 0, descriptorSet.get(), {});
-    commandBuffer.pushConstants(pipelineLayout.get(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(PushConstantsData), &pushConstants);
+    const auto& textures = scene.getTextures();
+    if (textures.empty()) return;
 
-    const uint32_t groupCountX = (width + GROUP_SIZE - 1) / GROUP_SIZE;
-    const uint32_t groupCountY = (height + GROUP_SIZE - 1) / GROUP_SIZE;
-    commandBuffer.dispatch(groupCountX, groupCountY, 1);
+    std::vector<vk::DescriptorImageInfo> imageInfos;
+    imageInfos.reserve(textures.size());
+    for (const auto& tex : textures) {
+        vk::DescriptorImageInfo info{};
+        info.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+        info.setImageView(tex.getImage().getView());
+        info.setSampler(tex.getSampler());
+        imageInfos.push_back(info);
+    }
+
+    // Binding 10: textures (variable count, last binding)
+    const vk::WriteDescriptorSet write{
+        descriptorSet.get(), 10, 0,
+        static_cast<uint32_t>(imageInfos.size()),
+        vk::DescriptorType::eCombinedImageSampler,
+        imageInfos.data()
+    };
+    context.getDevice().updateDescriptorSets(write, {});
 }

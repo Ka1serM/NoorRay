@@ -54,7 +54,7 @@ RenderPanel::RenderPanel(
     Renderer& renderer,
     Tonemapper& tonemapper
 )
-    : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(8), specularBounces(12), transmissionBounces(24), exposure(0),
+    : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(3), specularBounces(3), transmissionBounces(3), pixelSizePercent(100), exposure(0),
       context(context),
       raytracer(raytracer),
       renderer(renderer),
@@ -100,6 +100,8 @@ void RenderPanel::renderUi() {
         ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](const float v) { exposure = v; });
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Samples Per Pixel");
         ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##SamplesDrag", &samples, 0.1f, 1, 64, "%d");
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Pixel Size");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##PixelSizePercent", &pixelSizePercent, 1.0f, 100, 800, "%d%%");
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Diffuse Bounces");
         ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##DiffuseBounces", &diffuseBounces, 0.1f, 1, 64, "%d");
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Specular Bounces");

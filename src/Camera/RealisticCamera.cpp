@@ -7,6 +7,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <imgui.h>
 #include <limits>
 #include <regex>
@@ -376,10 +377,17 @@ bool RealisticCamera::getPreferredRenderSize(uint32_t& width, uint32_t& height) 
     return true;
 }
 
+mat4 RealisticCamera::getProjectionMatrix() const
+{
+    const float aspectRatio = static_cast<float>(std::max(1u, renderWidth)) / static_cast<float>(std::max(1u, renderHeight));
+    const float fovY = 2.0f * std::atan(sensorHeightM / (2.0f * std::max(effectiveFocalLengthM, 0.001f)));
+    return perspective(fovY, aspectRatio, cameraData.nearPlane, cameraData.farPlane);
+}
+
 void RealisticCamera::computeProjectionData(const vec3&, const vec3& up, const vec3& right, float aspectRatio)
 {
     const float sensorWidth = std::max(sensorWidthM, 0.001f);
-    const float focalLength = std::max(settings.focalLengthMm * 0.001f, 0.001f);
+    const float focalLength = std::max(effectiveFocalLengthM, 0.001f);
     const float halfWidth = sensorWidth / (2.0f * focalLength);
     const float halfHeight = halfWidth / aspectRatio;
 
@@ -388,7 +396,7 @@ void RealisticCamera::computeProjectionData(const vec3&, const vec3& up, const v
     cameraData.focalLength = focalLength;
     cameraData.orthoHeight = 0.0f;
     cameraData.fisheyeFov = 0.0f;
-    applyDepthOfField(settings.focalLengthMm);
+    applyDepthOfField(effectiveFocalLengthM * 1000.0f);
 }
 
 void RealisticCamera::renderUi()
@@ -641,6 +649,7 @@ bool RealisticCamera::loadLensAndSensor()
         apertureIndex = -1;
         focusSurfaceOffsetM = 0.0f;
         loadStatus = "Thin lens fallback";
+        std::cout << "[INFO] RealisticCamera: no lens/sensor file loaded, using thin lens fallback" << std::endl;
         return true;
     }
 
@@ -660,6 +669,9 @@ bool RealisticCamera::loadLensAndSensor()
     if (lensOk && sensorOk) {
         rebuildExitPupilBounds();
         loadStatus = std::to_string(lensElements.size()) + " surfaces";
+        std::cout << "[INFO] RealisticCamera: loaded " << lensElements.size() << " surfaces"
+                  << ", pupil bounds: " << pupilBounds.size()
+                  << ", effective focal length: " << effectiveFocalLengthM * 1000.0f << " mm" << std::endl;
         return true;
     }
 
@@ -669,6 +681,7 @@ bool RealisticCamera::loadLensAndSensor()
     apertureIndex = -1;
     focusSurfaceOffsetM = 0.0f;
     loadStatus = !lensOk ? lensError : sensorError;
+    std::cerr << "[ERROR] RealisticCamera: " << loadStatus << std::endl;
     return false;
 }
 
@@ -826,14 +839,17 @@ bool RealisticCamera::parseZmxFile(const std::string& text, std::vector<Realisti
     for (const ZmxSurface& surface : surfaces) {
         if (surface.diameter <= 0.0f)
             continue;
+        if (std::abs(surface.curvature) < 1e-8f && surface.thickness == 0.0f && !surface.stop && std::abs(surface.ior - 1.0f) < 1e-6f)
+            continue;
         RealisticLensElement element{};
         element.radius = std::abs(surface.curvature) > 1e-8f ? 1.0f / surface.curvature : 0.0f;
         element.thickness = surface.thickness;
         element.ior = surface.stop ? 0.0f : surface.ior;
         element.apertureRadius = surface.diameter * 0.5f;
-        element.isAperture = (surface.stop || std::abs(element.radius) < 1e-6f || element.ior <= 0.0f) ? 1 : 0;
+        element.isAperture = (surface.stop || element.ior <= 0.0f) ? 1 : 0;
         elements.push_back(element);
     }
+
 
     if (elements.empty()) {
         error = "No ZMX surfaces";
@@ -918,12 +934,19 @@ void RealisticCamera::rebuildLensMetadata()
     if (!traceFromFilmRoss(lensElements, 0.0f, filmProbe, sceneOut))
         return;
 
+    std::cout << "[DEBUG FL] sceneRay O=(" << sceneRay.origin.x << "," << sceneRay.origin.y << "," << sceneRay.origin.z << ") D=(" << sceneRay.direction.x << "," << sceneRay.direction.y << "," << sceneRay.direction.z << ")" << std::endl;
+    std::cout << "[DEBUG FL] filmRay O=(" << filmRay.origin.x << "," << filmRay.origin.y << "," << filmRay.origin.z << ") D=(" << filmRay.direction.x << "," << filmRay.direction.y << "," << filmRay.direction.z << ")" << std::endl;
+    std::cout << "[DEBUG FL] filmProbe O=(" << filmProbe.origin.x << "," << filmProbe.origin.y << "," << filmProbe.origin.z << ") D=(" << filmProbe.direction.x << "," << filmProbe.direction.y << "," << filmProbe.direction.z << ")" << std::endl;
+    std::cout << "[DEBUG FL] sceneOut O=(" << sceneOut.origin.x << "," << sceneOut.origin.y << "," << sceneOut.origin.z << ") D=(" << sceneOut.direction.x << "," << sceneOut.direction.y << "," << sceneOut.direction.z << ")" << std::endl;
+
     float pz0 = 0.0f;
     float fz0 = 0.0f;
     float pz1 = 0.0f;
     float fz1 = 0.0f;
     computeCardinalPoints(sceneRay, filmRay, pz0, fz0);
+    std::cout << "[DEBUG FL] pz0=" << pz0 << " fz0=" << fz0 << std::endl;
     computeCardinalPoints(filmProbe, sceneOut, pz1, fz1);
+    std::cout << "[DEBUG FL] pz1=" << pz1 << " fz1=" << fz1 << std::endl;
     const float focalLength = fz0 - pz0;
     if (std::isfinite(focalLength) && focalLength > 0.0f)
         effectiveFocalLengthM = focalLength;

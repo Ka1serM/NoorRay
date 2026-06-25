@@ -175,15 +175,8 @@ struct RealisticCamera<TSampler> : ICamera<TSampler>
         filmRay.direction = normalize(float3(pupilPos - filmPos, lens.rearElementZ));
 
         LocalRay tracedRay;
-        if (!traceFromFilmRoss(lens, filmRay, tracedRay)) {
-            float2 centerPupil = sampleExitPupil(lens, filmPos, float2(0.5));
-            filmRay.direction = normalize(float3(centerPupil - filmPos, lens.rearElementZ));
-            if (!traceFromFilmRoss(lens, filmRay, tracedRay)) {
-                ThinLensCamera<TSampler> fallbackCamera;
-                fallbackCamera.generateRay(pixelCoord, screenSize, samplerState, sampler, deterministicSample, rayOrigin, rayDirection);
-                return;
-            }
-        }
+        if (!traceFromFilmRoss(lens, filmRay, tracedRay))
+            tracedRay = filmRay;
 
         float3 lensU = normalize(camera.horizontal);
         float3 lensV = normalize(camera.vertical);

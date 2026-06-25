@@ -15,6 +15,7 @@ public:
     CameraProjectionType getProjectionType() const override { return CameraProjectionType::Realistic; }
     const char* getProjectionName() const override { return "Realistic"; }
     bool getPreferredRenderSize(uint32_t& width, uint32_t& height) const override;
+    mat4 getProjectionMatrix() const override;
     void renderUi() override;
     void populateRealisticCameraSettings(RealisticCameraSettings& realisticSettings) const override;
 

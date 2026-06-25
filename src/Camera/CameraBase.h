@@ -58,7 +58,7 @@ public:
     CameraSettings& getSettings() { return settings; }
 
     mat4 getViewMatrix() const;
-    mat4 getProjectionMatrix() const;
+    virtual mat4 getProjectionMatrix() const;
 
     void setRenderSize(uint32_t width, uint32_t height);
     bool isDataEquivalent(const CameraData& other) const;

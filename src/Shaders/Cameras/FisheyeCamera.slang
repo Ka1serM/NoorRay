@@ -18,7 +18,7 @@ struct FisheyeCamera<TSampler> : ICamera<TSampler>
         out float3 rayOrigin,
         out float3 rayDirection)
     {
-        CameraData camera = pushConstants.camera;
+        CameraData camera = sceneSettings.camera;
         float2 uv = deterministicSample
             ? (float2(pixelCoord) + 0.5) / float2(screenSize)
             : (float2(pixelCoord) + sampler.get2D(samplerState)) / float2(screenSize);
@@ -33,11 +33,12 @@ struct FisheyeCamera<TSampler> : ICamera<TSampler>
         float maxTheta = camera.fisheyeFov * 0.5;
         float theta    = min((r / maxR) * maxTheta, PI * 0.5);
 
-        float3 forward = normalize(camera.direction);
-        float3 right   = normalize(camera.horizontal);
-        float3 up      = normalize(camera.vertical);
+        float3 right   = pushConstants.cameraToWorld[0].xyz;
+        float3 up      = pushConstants.cameraToWorld[1].xyz;
+        float3 forward = pushConstants.cameraToWorld[2].xyz;
+        float3 pos     = pushConstants.cameraToWorld[3].xyz;
 
-        rayOrigin = camera.position;
+        rayOrigin = pos;
         if (r > 1e-6) {
             float phi = atan2(uvCentered.y, uvCentered.x);
             rayDirection = normalize(
@@ -51,7 +52,7 @@ struct FisheyeCamera<TSampler> : ICamera<TSampler>
         if (!deterministicSample && !isInteractiveFrame() && camera.aperture > 1e-6) {
             float2 lensSample = bokehDisk(sampler.get2D(samplerState), camera.bokehBias) * camera.aperture;
             float3 focusPoint = rayOrigin + rayDirection * camera.focusDistance;
-            rayOrigin    = camera.position + right * lensSample.x + up * lensSample.y;
+            rayOrigin    = pos + right * lensSample.x + up * lensSample.y;
             rayDirection = normalize(focusPoint - rayOrigin);
         }
     }

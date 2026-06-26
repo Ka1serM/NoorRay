@@ -18,6 +18,7 @@ public:
     mat4 getProjectionMatrix() const override;
     void renderUi() override;
     void populateRealisticCameraSettings(RealisticCameraSettings& realisticSettings) const override;
+    std::string getRayLutCacheFolder() const override { return rayLutCacheFolder; }
 
 protected:
     void computeProjectionData(const vec3& direction, const vec3& up, const vec3& right, float aspectRatio) override;
@@ -26,6 +27,7 @@ private:
     std::string lensPath;
     std::string sensorPath;
     std::string glassCatalogPaths;
+    std::string rayLutCacheFolder;
     std::vector<RealisticLensElement> lensElements;
     std::vector<RealisticLensElement> maximumLensElements;
     std::vector<RealisticPupilBound> pupilBounds;
@@ -40,6 +42,7 @@ private:
     std::unique_ptr<pfd::open_file> lensDialog;
     std::unique_ptr<pfd::open_file> sensorDialog;
     std::unique_ptr<pfd::open_file> glassCatalogDialog;
+    std::unique_ptr<pfd::select_folder> rayLutCacheDialog;
 
     bool loadLensAndSensor();
     bool parseLensFile(const std::string& path, std::vector<RealisticLensElement>& elements, std::string& error) const;

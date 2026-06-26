@@ -66,6 +66,8 @@ public:
     }
 
     virtual void render(const vk::CommandBuffer& commandBuffer, const PushData& pushConstants) = 0;
+    virtual bool prepareCameraRayLut(PushData&, const SceneSettings&) { return false; }
+    virtual void invalidateCameraRayLut() {}
     virtual void updateTLAS()     = 0;
     virtual void updateTextures() = 0;
     virtual void updateMeshes()   = 0;

@@ -53,7 +53,9 @@ public:
     virtual bool getPreferredRenderSize(uint32_t& width, uint32_t& height) const { return false; }
 
     CameraData getCameraData() const { return cameraData; }
+    mat4 getCameraToWorld() const { return cameraToWorldMatrix; }
     virtual void populateRealisticCameraSettings(RealisticCameraSettings& realisticSettings) const;
+    virtual std::string getRayLutCacheFolder() const { return {}; }
     const CameraSettings& getSettings() const { return settings; }
     CameraSettings& getSettings() { return settings; }
 
@@ -71,6 +73,7 @@ public:
 protected:
     CameraSettings settings;
     CameraData cameraData{};
+    mat4 cameraToWorldMatrix{1.0f};
     vec3 arcballPivot{};
     bool arcballMode = false;
     uint32_t renderWidth = 1;

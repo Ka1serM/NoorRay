@@ -15,19 +15,21 @@ struct OrthographicCamera<TSampler> : ICamera<TSampler>
         out float3 rayOrigin,
         out float3 rayDirection)
     {
-        CameraData camera = pushConstants.camera;
+        CameraData camera = sceneSettings.camera;
         float2 uv = deterministicSample
             ? (float2(pixelCoord) + 0.5) / float2(screenSize)
             : (float2(pixelCoord) + sampler.get2D(samplerState)) / float2(screenSize);
         float2 sensorOffset = float2(uv.x - 0.5, 0.5 - uv.y);
 
-        // Horizontal and Vertical store half-extents of the orthographic view volume.
-        // sensorOffset maps [-0.5, 0.5] across the image, so the ray origin
-        // sweeps across the full view rectangle.
-        rayOrigin = camera.position
-            + camera.horizontal * sensorOffset.x
-            + camera.vertical * sensorOffset.y;
-        rayDirection = normalize(camera.direction);
+        float3 right   = pushConstants.cameraToWorld[0].xyz;
+        float3 up      = pushConstants.cameraToWorld[1].xyz;
+        float3 forward = pushConstants.cameraToWorld[2].xyz;
+        float3 pos     = pushConstants.cameraToWorld[3].xyz;
+
+        rayOrigin = pos
+            + right * camera.sensorScaleX * sensorOffset.x
+            + up    * camera.sensorScaleY * sensorOffset.y;
+        rayDirection = forward;
     }
 };
 

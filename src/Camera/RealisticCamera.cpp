@@ -348,6 +348,7 @@ RealisticCamera::RealisticCamera(const RealisticCamera& other)
       lensPath(other.lensPath),
       sensorPath(other.sensorPath),
       glassCatalogPaths(other.glassCatalogPaths),
+      rayLutCacheFolder(other.rayLutCacheFolder),
       lensElements(other.lensElements),
       maximumLensElements(other.maximumLensElements),
       pupilBounds(other.pupilBounds),
@@ -391,8 +392,8 @@ void RealisticCamera::computeProjectionData(const vec3&, const vec3& up, const v
     const float halfWidth = sensorWidth / (2.0f * focalLength);
     const float halfHeight = halfWidth / aspectRatio;
 
-    cameraData.horizontal = right * (2.0f * halfWidth);
-    cameraData.vertical = up * (2.0f * halfHeight);
+    cameraData.sensorScaleX = 2.0f * halfWidth;
+    cameraData.sensorScaleY = 2.0f * halfHeight;
     cameraData.focalLength = focalLength;
     cameraData.orthoHeight = 0.0f;
     cameraData.fisheyeFov = 0.0f;
@@ -447,13 +448,23 @@ void RealisticCamera::renderUi()
         }
         glassCatalogDialog.reset();
     }
+    if (rayLutCacheDialog && rayLutCacheDialog->ready(0)) {
+        const auto selection = rayLutCacheDialog->result();
+        if (!selection.empty()) {
+            rayLutCacheFolder = selection;
+            changed = true;
+        }
+        rayLutCacheDialog.reset();
+    }
 
     std::array<char, 512> lensBuffer{};
     std::array<char, 512> sensorBuffer{};
     std::array<char, 1024> glassCatalogBuffer{};
+    std::array<char, 512> rayLutCacheBuffer{};
     std::snprintf(lensBuffer.data(), lensBuffer.size(), "%s", lensPath.c_str());
     std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensorPath.c_str());
     std::snprintf(glassCatalogBuffer.data(), glassCatalogBuffer.size(), "%s", glassCatalogPaths.c_str());
+    std::snprintf(rayLutCacheBuffer.data(), rayLutCacheBuffer.size(), "%s", rayLutCacheFolder.c_str());
 
     ImGuiManager::dragFloatRow("Sensor Width", sensorWidthM * 1000.0f, 0.01f, 0.001f, 500.0f, [&](float v) {
         sensorWidthM = std::max(v, 0.001f) * 0.001f;
@@ -526,6 +537,23 @@ void RealisticCamera::renderUi()
             "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs",
             std::vector<std::string>{"Glass Catalogs", "*.agf *.AGF", "All Files", "*"},
             pfd::opt::multiselect);
+    }
+    ImGui::EndDisabled();
+
+    ImGuiManager::tableRowLabel("RayLUT Cache");
+    const float rayLutButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - rayLutButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::InputText("##RealisticRayLutCacheFolder", rayLutCacheBuffer.data(), rayLutCacheBuffer.size())) {
+        rayLutCacheFolder = rayLutCacheBuffer.data();
+        changed = true;
+    }
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(rayLutCacheDialog != nullptr);
+    if (ImGui::Button("Select##RealisticRayLutCache", ImVec2(rayLutButtonWidth, 0))) {
+        rayLutCacheDialog = std::make_unique<pfd::select_folder>(
+            "Select RayLUT Cache Folder",
+            rayLutCacheFolder.empty() ? "." : rayLutCacheFolder);
     }
     ImGui::EndDisabled();
 
@@ -607,6 +635,7 @@ void RealisticCamera::renderUi()
     if (changed) {
         rebuildCameraData();
         scene.setDirtyFlag(Accumulation);
+        scene.setDirtyFlag(RayLut);
     }
 }
 
@@ -934,19 +963,12 @@ void RealisticCamera::rebuildLensMetadata()
     if (!traceFromFilmRoss(lensElements, 0.0f, filmProbe, sceneOut))
         return;
 
-    std::cout << "[DEBUG FL] sceneRay O=(" << sceneRay.origin.x << "," << sceneRay.origin.y << "," << sceneRay.origin.z << ") D=(" << sceneRay.direction.x << "," << sceneRay.direction.y << "," << sceneRay.direction.z << ")" << std::endl;
-    std::cout << "[DEBUG FL] filmRay O=(" << filmRay.origin.x << "," << filmRay.origin.y << "," << filmRay.origin.z << ") D=(" << filmRay.direction.x << "," << filmRay.direction.y << "," << filmRay.direction.z << ")" << std::endl;
-    std::cout << "[DEBUG FL] filmProbe O=(" << filmProbe.origin.x << "," << filmProbe.origin.y << "," << filmProbe.origin.z << ") D=(" << filmProbe.direction.x << "," << filmProbe.direction.y << "," << filmProbe.direction.z << ")" << std::endl;
-    std::cout << "[DEBUG FL] sceneOut O=(" << sceneOut.origin.x << "," << sceneOut.origin.y << "," << sceneOut.origin.z << ") D=(" << sceneOut.direction.x << "," << sceneOut.direction.y << "," << sceneOut.direction.z << ")" << std::endl;
-
     float pz0 = 0.0f;
     float fz0 = 0.0f;
     float pz1 = 0.0f;
     float fz1 = 0.0f;
     computeCardinalPoints(sceneRay, filmRay, pz0, fz0);
-    std::cout << "[DEBUG FL] pz0=" << pz0 << " fz0=" << fz0 << std::endl;
     computeCardinalPoints(filmProbe, sceneOut, pz1, fz1);
-    std::cout << "[DEBUG FL] pz1=" << pz1 << " fz1=" << fz1 << std::endl;
     const float focalLength = fz0 - pz0;
     if (std::isfinite(focalLength) && focalLength > 0.0f)
         effectiveFocalLengthM = focalLength;

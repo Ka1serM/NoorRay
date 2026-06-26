@@ -2,13 +2,9 @@
 #define REALISTIC_CAMERA_SLANG
 
 #include "ICamera.slang"
+#ifndef RAY_LUT_GENERATION_SHADER
 #include "ThinLensCamera.slang"
-
-struct LocalRay
-{
-    float3 origin;
-    float3 direction;
-};
+#endif
 
 bool intersectRossSphere(RealisticLensElement element, float surfaceOffset, LocalRay ray, out float t, out float3 normal)
 {
@@ -142,6 +138,35 @@ float2 sampleExitPupil(RealisticCameraSettings lens, float2 filmPos, float2 u)
                   sinTheta * p.x + cosTheta * p.y);
 }
 
+bool generateRealisticLocalRay(
+    int2 pixelCoord,
+    int2 screenSize,
+    float2 rasterSample,
+    float2 lensSample,
+    out LocalRay localRay)
+{
+    RealisticCameraSettings lens = sceneSettings.realisticCamera;
+    localRay.origin = float3(0.0);
+    localRay.direction = float3(0.0, 0.0, 1.0);
+    if (lens.elementCount <= 0 || lens.pupilBoundCount <= 0)
+        return false;
+
+    float2 uv = (float2(pixelCoord) + rasterSample) / float2(screenSize);
+    float2 sensor = float2(uv.x - 0.5, 0.5 - uv.y) * float2(lens.sensorWidth, lens.sensorHeight);
+    // ROSS/PBRT negate film X relative to raster/sensor X.
+    float2 filmPos = float2(-sensor.x, -sensor.y);
+    float2 pupilPos = sampleExitPupil(lens, filmPos, lensSample);
+
+    LocalRay filmRay;
+    filmRay.origin = float3(filmPos, 0.0);
+    filmRay.direction = normalize(float3(pupilPos - filmPos, lens.rearElementZ));
+
+    if (!traceFromFilmRoss(lens, filmRay, localRay))
+        localRay = filmRay;
+    return true;
+}
+
+#ifndef RAY_LUT_GENERATION_SHADER
 struct RealisticCamera<TSampler> : ICamera<TSampler>
     where TSampler : ISampler
 {
@@ -161,32 +186,17 @@ struct RealisticCamera<TSampler> : ICamera<TSampler>
             return;
         }
 
-        CameraData camera = pushConstants.camera;
-        float2 jitter = deterministicSample ? float2(0.0) : (sampler.get2D(samplerState) - 0.5);
-        float2 uv = (float2(pixelCoord) + jitter) / float2(screenSize);
-        float2 sensor = float2(uv.x - 0.5, 0.5 - uv.y) * float2(lens.sensorWidth, lens.sensorHeight);
-        // ROSS/PBRT negate film X relative to raster/sensor X.
-        float2 filmPos = float2(-sensor.x, sensor.y);
+        float2 rasterSample = deterministicSample ? float2(0.0) : (sampler.get2D(samplerState) - 0.5);
         float2 lensSample = deterministicSample ? float2(0.5) : sampler.get2D(samplerState);
-        float2 pupilPos = sampleExitPupil(lens, filmPos, lensSample);
-
-        LocalRay filmRay;
-        filmRay.origin = float3(filmPos, 0.0);
-        filmRay.direction = normalize(float3(pupilPos - filmPos, lens.rearElementZ));
-
         LocalRay tracedRay;
-        if (!traceFromFilmRoss(lens, filmRay, tracedRay))
-            tracedRay = filmRay;
-
-        float3 lensU = normalize(camera.horizontal);
-        float3 lensV = normalize(camera.vertical);
-        // Noor camera.direction is the world-space forward vector. It maps to
-        // +Z in this realistic-lens local space even though the camera object's
-        // model-space forward is -Z.
-        float3 lensW = normalize(camera.direction);
-        rayOrigin = camera.position + lensU * tracedRay.origin.x + lensV * tracedRay.origin.y + lensW * tracedRay.origin.z;
-        rayDirection = normalize(lensU * tracedRay.direction.x + lensV * tracedRay.direction.y + lensW * tracedRay.direction.z);
+        if (!generateRealisticLocalRay(pixelCoord, screenSize, rasterSample, lensSample, tracedRay)) {
+            ThinLensCamera<TSampler> fallbackCamera;
+            fallbackCamera.generateRay(pixelCoord, screenSize, samplerState, sampler, deterministicSample, rayOrigin, rayDirection);
+            return;
+        }
+        transformCameraLocalRayToWorld(tracedRay, rayOrigin, rayDirection);
     }
 };
+#endif
 
 #endif // REALISTIC_CAMERA_SLANG

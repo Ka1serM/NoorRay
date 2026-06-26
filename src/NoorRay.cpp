@@ -159,10 +159,9 @@ void NoorRay::run() {
     int frame = 0;
     bool isRunning = true;
     bool isFullscreen = false;
-    CameraData prevCameraData{};
+    mat4 prevCameraData{1.0f};
     bool isMoving = false;
-    bool hasLastRenderSettings = false;
-    SceneSettings lastSceneSettings{};
+    bool firstFrame = true;
 
     while (isRunning) {
 
@@ -194,7 +193,7 @@ void NoorRay::run() {
                         tonemapper->resize(raytracer->getWidth(), raytracer->getHeight(), raytracer->getOutputColor(), renderer.getColorImageFormat());
                         viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(), tonemapper->getOutputImage().getFormat());
                         frame = 0;
-                        hasLastRenderSettings = false;
+                        firstFrame = true;
                     }
                 }
 
@@ -237,32 +236,31 @@ void NoorRay::run() {
                     push.pixelSizePercent = currentPixelSizePercent;
                     auto* activeCamera = scene.getActiveCamera();
                     activeCamera->setRenderSize(raytracer->getWidth(), raytracer->getHeight());
-                    push.camera           = activeCamera->getCameraData();
+                    push.cameraToWorld    = activeCamera->getCameraToWorld();
+                    sceneSettings.camera  = activeCamera->getCameraData();
                     activeCamera->populateRealisticCameraSettings(sceneSettings.realisticCamera);
+                    if (scene.isDirty(RayLut))
+                        raytracer->invalidateCameraRayLut();
+                    const bool rayLutChanged = raytracer->prepareCameraRayLut(push, sceneSettings);
 
-                    const bool renderSettingsChanged =
-                        !hasLastRenderSettings ||
-                        std::memcmp(&sceneSettings, &lastSceneSettings, sizeof(SceneSettings)) != 0;
-
-                    if (scene.isDirty(Accumulation) || renderSettingsChanged)
+                    const bool renderChanged = renderPanel->consumeChanged();
+                    if (firstFrame || scene.isDirty(Accumulation) || renderChanged || rayLutChanged)
                         frame = 0;
                     else
                         frame++;
 
                     push.frame = frame;
                     scene.clearDirtyFlags();
+                    firstFrame = false;
 
                     // Detect camera movement for thin-lens / jitter switching
                     isMoving = (frame == 0) ||
-                               memcmp(&push.camera, &prevCameraData, sizeof(CameraData)) != 0;
-                    prevCameraData = push.camera;
+                               memcmp(&push.cameraToWorld, &prevCameraData, sizeof(mat4)) != 0;
+                    prevCameraData = push.cameraToWorld;
                     push.isMoving = isMoving ? 1 : 0;
 
                     if (frame == 0)
                         raytracer->updateSceneSettings(sceneSettings);
-
-                    lastSceneSettings = sceneSettings;
-                    hasLastRenderSettings = true;
 
                     renderer.submitCompute([&](const vk::CommandBuffer computeCmd) {
                         raytracer->render(computeCmd, push);

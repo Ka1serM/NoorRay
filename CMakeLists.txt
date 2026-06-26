@@ -104,6 +104,7 @@ set(SLANG_DEPS
         "${WAVEFRONT_DIR}/Connect.slang"
         "${WAVEFRONT_DIR}/Finalize.slang"
         "${WAVEFRONT_DIR}/Advance.slang"
+        "${WAVEFRONT_DIR}/GenerateRayLut.slang"
 )
 
 # Base slangc flags (software BVH, no USE_RAY_QUERY)
@@ -127,6 +128,7 @@ set(SHADER_OUTPUTS
         "${WAVEFRONT_DIR}/Connect.spv"
         "${WAVEFRONT_DIR}/Finalize.spv"
         "${WAVEFRONT_DIR}/Advance.spv"
+        "${WAVEFRONT_DIR}/GenerateRayLut.spv"
         "${WAVEFRONT_DIR}/GenerateRtx.spv"
         "${WAVEFRONT_DIR}/ExtendRtx.spv"
         "${WAVEFRONT_DIR}/ShadeRtx.spv"
@@ -146,6 +148,7 @@ add_custom_command(
         COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Connect.slang"  -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Connect.spv"
         COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Finalize.slang" -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Finalize.spv"
         COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Advance.slang"  -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Advance.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/GenerateRayLut.slang" -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/GenerateRayLut.spv"
         # RTX wavefront passes (inline RayQuery, USE_RAY_QUERY=1)
         COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Generate.slang" -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/GenerateRtx.spv"
         COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Extend.slang"   -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/ExtendRtx.spv"
@@ -156,7 +159,7 @@ add_custom_command(
         DEPENDS
         "${SHADER_DIR}/Tonemapping/Tonemapper.slang"
         ${SLANG_DEPS}
-        COMMENT "Compiling Slang shaders (Tonemapper + 12 wavefront variants)"
+        COMMENT "Compiling Slang shaders (Tonemapper + wavefront variants + RayLUT generator)"
         VERBATIM
 )
 

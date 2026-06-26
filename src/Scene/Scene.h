@@ -21,6 +21,7 @@ enum DirtyFlag : uint8_t {
     Meshes       = 1 << 1,
     Textures     = 1 << 2,
     Accumulation = 1 << 3,
+    RayLut       = 1 << 4,
 };
 
 class Scene {

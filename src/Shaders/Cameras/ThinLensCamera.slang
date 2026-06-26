@@ -20,16 +20,17 @@ struct ThinLensCamera<TSampler> : ICamera<TSampler>
         out float3 rayOrigin,
         out float3 rayDirection)
     {
-        CameraData camera = pushConstants.camera;
+        CameraData camera = sceneSettings.camera;
         float2 jitter = deterministicSample ? float2(0.0) : (sampler.get2D(samplerState) - 0.5);
         perspectiveBaseRay(pixelCoord, screenSize, jitter, rayOrigin, rayDirection);
 
         if (!deterministicSample && !isInteractiveFrame() && camera.aperture > 1e-6) {
             float2 lensSample = bokehDisk(sampler.get2D(samplerState), camera.bokehBias) * camera.aperture;
-            float3 lensU      = normalize(camera.horizontal);
-            float3 lensV      = normalize(camera.vertical);
+            float3 lensU      = pushConstants.cameraToWorld[0].xyz;
+            float3 lensV      = pushConstants.cameraToWorld[1].xyz;
+            float3 pos        = pushConstants.cameraToWorld[3].xyz;
             float3 focusPoint = rayOrigin + rayDirection * camera.focusDistance;
-            rayOrigin    = camera.position + lensU * lensSample.x + lensV * lensSample.y;
+            rayOrigin    = pos + lensU * lensSample.x + lensV * lensSample.y;
             rayDirection = normalize(focusPoint - rayOrigin);
         }
     }

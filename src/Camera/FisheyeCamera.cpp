@@ -21,8 +21,8 @@ std::unique_ptr<SceneObject> FisheyeCamera::clone() const
 
 void FisheyeCamera::computeProjectionData(const vec3&, const vec3& up, const vec3& right, float)
 {
-    cameraData.horizontal = right;
-    cameraData.vertical = up;
+    cameraData.sensorScaleX = 0.0f;
+    cameraData.sensorScaleY = 0.0f;
     cameraData.focalLength = settings.focalLengthMm * 0.001f;
     cameraData.orthoHeight = 0.0f;
     cameraData.fisheyeFov = radians(std::clamp(settings.fieldOfView, 1.0f, 179.0f));

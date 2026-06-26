@@ -3,6 +3,7 @@
 #include "UI/ImGuiComponent.h"
 #include "portable-file-dialogs.h"
 #include <string>
+#include <utility>
 #include <future>
 #include <vector>
 #include <functional>
@@ -30,11 +31,13 @@ public:
     int getTransmissionBounces() const { return transmissionBounces; }
     int getPixelSizePercent() const { return pixelSizePercent; }
     float getExposure() const { return exposure; }
+    bool consumeChanged() { return std::exchange(changed, false); }
     
 private:
     // Render Settings
     int samples, diffuseBounces, specularBounces, transmissionBounces, pixelSizePercent;
     float exposure;
+    bool changed = false;
     
     // State machine for the save process
     enum class SaveState {

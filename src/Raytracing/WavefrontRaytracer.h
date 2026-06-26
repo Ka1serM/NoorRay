@@ -1,9 +1,12 @@
 #pragma once
 
 #include "Raytracer.h"
+#include "RayLutGenerator.h"
 #include "Vulkan/Buffer.h"
 #include "Globals.h"
 #include <array>
+#include <memory>
+#include <string>
 
 class WavefrontRaytracer : public Raytracer {
 protected:
@@ -24,6 +27,13 @@ protected:
     Buffer meshBuffer;
     Buffer sceneSettingsBuffer;
     Buffer sceneLightsBuffer;
+    Buffer cameraRayLutBuffer;
+    std::unique_ptr<RayLutGenerator> rayLutGenerator;
+    bool cameraRayLutValid = false;
+    bool cameraRayLutNeedsGeneration = false;
+    int lastLutPixelSizePercent = -1;
+    int lastLutCameraType = -1;
+    int currentCameraType = CAMERA_PERSPECTIVE;
 
     // Wavefront queue buffers (set 1)
     Buffer countersBuffer;    // 4 ints: activeCount, nextCount, hitCount, shadowCount
@@ -44,6 +54,7 @@ protected:
 
     void bindOutputImages();
     void writeWavefrontDescriptors();
+    void writeCameraRayLutDescriptor();
 
     void computeBarrier(const vk::CommandBuffer& cmd) const;
     virtual void bindAllDescriptorSets(const vk::CommandBuffer& cmd) const;
@@ -60,6 +71,8 @@ public:
     void resize(uint32_t newWidth, uint32_t newHeight) override;
     void updateMeshes() override;
     void updateSceneSettings(const SceneSettings& ss) override;
+    bool prepareCameraRayLut(PushData& pc, const SceneSettings& sceneSettings) override;
+    void invalidateCameraRayLut() override { cameraRayLutValid = false; }
 
     void updateTLAS()     override = 0;
     void updateTextures() override = 0;

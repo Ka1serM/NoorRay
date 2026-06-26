@@ -78,8 +78,14 @@ void CameraBase::rebuildCameraData()
     const vec3 up = normalize(rotation * LocalUp);
     const vec3 right = normalize(cross(direction, up));
 
-    cameraData.position = getPosition();
-    cameraData.direction = direction;
+    // GLM is column-major; Slang m[i] is row i (HLSL semantics). Transpose so
+    // m[0..3].xyz = right, up, forward, position in the shader.
+    cameraToWorldMatrix = glm::transpose(mat4(
+        vec4(right,          0.0f),
+        vec4(up,             0.0f),
+        vec4(direction,      0.0f),
+        vec4(getPosition(),  1.0f)));
+
     cameraData.cameraType = static_cast<int>(getProjectionType());
     cameraData.nearPlane = 0.01f;
     cameraData.farPlane = 10000.0f;
@@ -116,7 +122,8 @@ void CameraBase::populateRealisticCameraSettings(RealisticCameraSettings& realis
 mat4 CameraBase::getViewMatrix() const
 {
     const vec3 dynamicUp = normalize(getRotation() * LocalUp);
-    return lookAt(getPosition(), getPosition() + cameraData.direction, dynamicUp);
+    const vec3 direction = normalize(getRotation() * LocalForward);
+    return lookAt(getPosition(), getPosition() + direction, dynamicUp);
 }
 
 mat4 CameraBase::getProjectionMatrix() const

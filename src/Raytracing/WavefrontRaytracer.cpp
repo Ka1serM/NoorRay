@@ -1,26 +1,25 @@
 #include "WavefrontRaytracer.h"
 
+#include "Camera/CameraBase.h"
 #include "Mesh/MeshAsset.h"
+#include "RayLUT.h"
 #include "Scene/MeshInstance.h"
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
-// 128 threads per wavefront dispatch group (QUEUE_GROUP_SIZE from Common.slang)
 constexpr uint32_t WavefrontGroupSize = 128u;
-
-uint32_t ceilDiv(uint32_t numerator, uint32_t denominator)
-{
-    return (numerator + std::max(denominator, 1u) - 1u) / std::max(denominator, 1u);
-}
 }
 
 WavefrontRaytracer::WavefrontRaytracer(Scene& scene, uint32_t width, uint32_t height)
     : Raytracer(scene, width, height)
 {
+    rayLutGenerator = std::make_unique<RayLutGenerator>(context);
     updateDispatchCounts();
 }
 
@@ -191,6 +190,22 @@ void WavefrontRaytracer::bindOutputImages()
     context.getDevice().updateDescriptorSets(writes, {});
 }
 
+void WavefrontRaytracer::writeCameraRayLutDescriptor()
+{
+    if (!cameraRayLutBuffer.getBuffer()) {
+        RayLutEntry dummy{};
+        dummy.direction = float3(0.0f, 0.0f, 1.0f);
+        cameraRayLutBuffer = Buffer(context, Buffer::Type::Storage, sizeof(RayLutEntry), &dummy);
+    }
+
+    vk::DescriptorBufferInfo info = cameraRayLutBuffer.getDescriptorInfo();
+    vk::WriteDescriptorSet write{};
+    write.setDstSet(descriptorSet.get()).setDstBinding(10)
+         .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+         .setDescriptorCount(1).setBufferInfo(info);
+    context.getDevice().updateDescriptorSets(write, {});
+}
+
 // ── updateMeshes ─────────────────────────────────────────────────────────────
 
 void WavefrontRaytracer::updateMeshes()
@@ -239,6 +254,72 @@ void WavefrontRaytracer::updateSceneSettings(const SceneSettings& ss)
     }
 }
 
+bool WavefrontRaytracer::prepareCameraRayLut(PushData& pc, const SceneSettings& sceneSettings)
+{
+    pc.rayLutEnabled = 0;
+    currentCameraType = sceneSettings.camera.cameraType;
+    if (sceneSettings.camera.cameraType != CAMERA_REALISTIC)
+        return false;
+
+    if (pc.pixelSizePercent != lastLutPixelSizePercent || sceneSettings.camera.cameraType != lastLutCameraType) {
+        cameraRayLutValid = false;
+        lastLutPixelSizePercent = pc.pixelSizePercent;
+        lastLutCameraType = sceneSettings.camera.cameraType;
+    }
+
+    if (cameraRayLutValid) {
+        pc.rayLutEnabled = 1;
+        return false;
+    }
+
+    cameraRayLutNeedsGeneration = true;
+
+    const CameraBase* activeCamera = scene.getActiveCamera();
+    const std::string cacheFolder = activeCamera ? activeCamera->getRayLutCacheFolder() : std::string{};
+
+    const size_t entryCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+    std::vector<RayLutEntry> entries(entryCount);
+    for (RayLutEntry& entry : entries) {
+        entry.direction = float3(0.0f, 0.0f, 1.0f);
+        entry.originValid = 0.0f;
+    }
+
+    bool loadedFromFile = false;
+    if (!cacheFolder.empty() && std::filesystem::is_directory(cacheFolder)) {
+        RayLUTFileReader reader;
+        for (const auto& dirEntry : std::filesystem::directory_iterator(cacheFolder)) {
+            if (!dirEntry.is_regular_file() || dirEntry.path().extension() != ".raylut")
+                continue;
+
+            try {
+                const RayLUT lut = reader.read(dirEntry.path());
+                if (lut.rasterWidth != width || lut.rasterHeight != height || lut.empty())
+                    continue;
+
+                const float wavelength = lut.wavelengths.front();
+                for (uint32_t y = 0; y < height; ++y) {
+                    for (uint32_t x = 0; x < width; ++x) {
+                        if (auto ray = lut.lookupInterpolated(static_cast<float>(x), static_cast<float>(y), wavelength))
+                            entries[x + y * width] = *ray;
+                    }
+                }
+                loadedFromFile = true;
+                break;
+            } catch (const std::exception&) {
+                continue;
+            }
+        }
+    }
+
+    cameraRayLutBuffer = Buffer(context, Buffer::Type::Storage, sizeof(RayLutEntry) * entryCount,
+                                loadedFromFile ? entries.data() : nullptr);
+    writeCameraRayLutDescriptor();
+    cameraRayLutValid = true;
+    cameraRayLutNeedsGeneration = !loadedFromFile;
+    pc.rayLutEnabled = 1;
+    return true;
+}
+
 // ── Dispatch counts ───────────────────────────────────────────────────────────
 
 void WavefrontRaytracer::updateDispatchCounts()
@@ -257,6 +338,7 @@ void WavefrontRaytracer::resize(const uint32_t newWidth, const uint32_t newHeigh
 
     context.getDevice().waitIdle();
     Raytracer::resize(newWidth, newHeight);
+    invalidateCameraRayLut();
 
     const vk::DeviceSize n = maxPixels();
     countersBuffer = Buffer(context, Buffer::Type::Storage, 4 * sizeof(int32_t));
@@ -316,6 +398,14 @@ void WavefrontRaytracer::render(const vk::CommandBuffer& cmd, const PushData& pc
     }
 
     bindAllDescriptorSets(cmd);
+
+    if (currentCameraType == CAMERA_REALISTIC && pc.rayLutEnabled != 0 && cameraRayLutNeedsGeneration) {
+        rayLutGenerator->writeDescriptors(sceneSettingsBuffer, cameraRayLutBuffer);
+        rayLutGenerator->dispatch(cmd, width, height);
+        computeBarrier(cmd);
+        cameraRayLutNeedsGeneration = false;
+        bindAllDescriptorSets(cmd);
+    }
 
     // Generate: write primary rays into outputRayQueue, init path states
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipelines[Generate].get());

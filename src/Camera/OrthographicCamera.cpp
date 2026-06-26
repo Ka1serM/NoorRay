@@ -27,8 +27,8 @@ void OrthographicCamera::computeProjectionData(const vec3&, const vec3& up, cons
     const float halfHeight = orthoHeight * 0.5f;
     const float halfWidth = halfHeight * aspectRatio;
 
-    cameraData.horizontal = right * halfWidth;
-    cameraData.vertical = up * halfHeight;
+    cameraData.sensorScaleX = halfWidth;
+    cameraData.sensorScaleY = halfHeight;
     cameraData.focalLength = settings.focalLengthMm * 0.001f;
     cameraData.orthoHeight = orthoHeight;
     cameraData.fisheyeFov = 0.0f;

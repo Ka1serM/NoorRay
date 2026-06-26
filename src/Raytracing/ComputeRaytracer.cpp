@@ -26,7 +26,7 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
 {
     // Set 0: instances(0) + outputColor(1) + outputAlbedo(2) + outputNormal(3) + outputCrypto(4)
     //        + outputPosition(5) + outputMaterial(6) + meshes(7) + sceneSettings(8)
-    //        + sceneLights(9) + textures(10, LAST variable-count)
+    //        + sceneLights(9) + rayLUT(10) + textures(11, LAST variable-count)
     createSceneDescriptorSet({
         {0,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
         {1,  vk::DescriptorType::eStorageImage,         1,            vk::ShaderStageFlagBits::eCompute},
@@ -38,7 +38,8 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
         {7,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
         {8,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
         {9,  vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
-        {10, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute},
+        {10, vk::DescriptorType::eStorageBuffer,        1,            vk::ShaderStageFlagBits::eCompute},
+        {11, vk::DescriptorType::eCombinedImageSampler, MAX_TEXTURES, vk::ShaderStageFlagBits::eCompute},
     });
 
     createWavefrontSet();
@@ -55,6 +56,7 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
 
     writeWavefrontDescriptors();
     bindOutputImages();
+    writeCameraRayLutDescriptor();
 
     // Initialize sceneSettings with defaults
     SceneSettings dummy{};
@@ -124,9 +126,9 @@ void ComputeRaytracer::updateTextures()
         imageInfos.push_back(info);
     }
 
-    // Binding 10: textures (variable count, last binding)
+    // Binding 11: textures (variable count, last binding)
     const vk::WriteDescriptorSet write{
-        descriptorSet.get(), 10, 0,
+        descriptorSet.get(), 11, 0,
         static_cast<uint32_t>(imageInfos.size()),
         vk::DescriptorType::eCombinedImageSampler,
         imageInfos.data()

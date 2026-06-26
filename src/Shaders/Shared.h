@@ -218,23 +218,26 @@ struct EnvironmentSettings
 
 struct CameraData
 {
-    float3 position;
-    float _pad0;
-    float3 direction;
-    float _pad1;
-    float3 horizontal;
-    float _pad2;
-    float3 vertical;
-    float _pad3;
+    int cameraType;
     float focalLength;
     float focusDistance;
     float aperture;
     float bokehBias;
-    int cameraType;
     float orthoHeight;
     float fisheyeFov;
     float nearPlane;
     float farPlane;
+    float sensorScaleX;
+    float sensorScaleY;
+    int _pad0;
+};
+
+struct RayLutEntry
+{
+    float3 origin;
+    float originValid;
+    float3 direction;
+    float _pad0;
 };
 
 struct RealisticLensElement
@@ -274,6 +277,7 @@ struct SceneSettings
     RenderSettings renderSettings;
     EnvironmentSettings environment;
     RealisticCameraSettings realisticCamera;
+    CameraData camera;
 };
 
 struct PushData
@@ -281,8 +285,8 @@ struct PushData
     int frame;
     int isMoving;
     int pixelSizePercent;
-    int _pushPad0;
-    CameraData camera;
+    int rayLutEnabled;
+    float4x4 cameraToWorld;
 };
 
 struct LightGpu

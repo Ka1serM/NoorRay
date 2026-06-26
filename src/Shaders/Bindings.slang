@@ -13,7 +13,8 @@
 [[vk::binding(8, 0)]] StructuredBuffer<SceneSettings, ScalarDataLayout> sceneSettingsBuffer;
 #define sceneSettings sceneSettingsBuffer[0]
 [[vk::binding(9, 0)]] StructuredBuffer<LightGpu, Std430DataLayout> sceneLightsBuffer;
-[[vk::binding(10, 0)]] Sampler2D textureSamplers[];
+[[vk::binding(10, 0)]] StructuredBuffer<RayLutEntry, Std430DataLayout> cameraRayLut;
+[[vk::binding(11, 0)]] Sampler2D textureSamplers[];
 
 // Pointer wrappers
 struct VertexBuffer { Vertex data[]; };

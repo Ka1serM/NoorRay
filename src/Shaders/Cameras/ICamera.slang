@@ -2,8 +2,15 @@
 #define ICAMERA_SLANG
 
 #include "../Shared.h"
-#include "../Bindings.slang"
 #include "../Samplers/ISampler.slang"
+
+struct LocalRay
+{
+    float3 origin;
+    float3 direction;
+};
+
+#ifndef RAY_LUT_GENERATION_SHADER
 
 // Maps a pixel coordinate to a perspective ray via the CameraData image-plane
 // parameterisation. Shared by PerspectiveCamera and ThinLensCamera.
@@ -14,18 +21,41 @@ void perspectiveBaseRay(
     out float3 rayOrigin,
     out float3 rayDirection)
 {
-    CameraData camera = pushConstants.camera;
+    CameraData camera = sceneSettings.camera;
     float2 uv = (float2(pixelCoord) + jitter) / float2(screenSize);
     float2 sensorOffset = float2(uv.x - 0.5, 0.5 - uv.y);
 
-    float3 imagePlanePoint = camera.position
-        + camera.direction  * camera.focalLength
-        + camera.horizontal * camera.focalLength * sensorOffset.x
-        + camera.vertical   * camera.focalLength * sensorOffset.y;
+    float3 right   = pushConstants.cameraToWorld[0].xyz;
+    float3 up      = pushConstants.cameraToWorld[1].xyz;
+    float3 forward = pushConstants.cameraToWorld[2].xyz;
+    float3 pos     = pushConstants.cameraToWorld[3].xyz;
 
-    rayOrigin    = camera.position;
-    rayDirection = normalize(imagePlanePoint - rayOrigin);
+    float3 imagePlanePoint = pos
+        + forward * camera.focalLength
+        + right   * camera.focalLength * camera.sensorScaleX * sensorOffset.x
+        + up      * camera.focalLength * camera.sensorScaleY * sensorOffset.y;
+
+    rayOrigin    = pos;
+    rayDirection = normalize(imagePlanePoint - pos);
 }
+
+void transformCameraLocalRayToWorld(LocalRay localRay, out float3 rayOrigin, out float3 rayDirection)
+{
+    float3 right   = pushConstants.cameraToWorld[0].xyz;
+    float3 up      = pushConstants.cameraToWorld[1].xyz;
+    float3 forward = pushConstants.cameraToWorld[2].xyz;
+    float3 pos     = pushConstants.cameraToWorld[3].xyz;
+    rayOrigin = pos
+        + right   * localRay.origin.x
+        + up      * localRay.origin.y
+        + forward * localRay.origin.z;
+    rayDirection = normalize(
+        right   * localRay.direction.x
+        + up      * localRay.direction.y
+        + forward * localRay.direction.z);
+}
+
+#endif // RAY_LUT_GENERATION_SHADER
 
 // Concentric disk sample with a radial power bias for bokeh shape control.
 // edgeBias > 1 → rounder disk, < 1 → softer edge.

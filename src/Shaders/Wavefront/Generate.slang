@@ -29,7 +29,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
 
     int2 blockCenterPixel = clamp((blockStart + (blockEnd - int2(1))) / 2, int2(0), screenSize - 1);
-    int  cameraType       = pushConstants.camera.cameraType;
+    int  cameraType       = sceneSettings.camera.cameraType;
     uint sampleCount      = integratorSampleCount();
 
     for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex) {
@@ -44,7 +44,19 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         bool   deterministicSample = pushConstants.frame == 0 && sampleIndex == 0u;
         float3 rayOrigin, rayDirection;
 
-        if (cameraType == CAMERA_THINLENS) {
+        if (cameraType == CAMERA_REALISTIC && pushConstants.rayLutEnabled != 0) {
+            uint lutIndex = uint(blockCenterPixel.x + blockCenterPixel.y * screenSize.x);
+            RayLutEntry entry = cameraRayLut[lutIndex];
+            if (entry.originValid != 0.0) {
+                LocalRay localRay;
+                localRay.origin = entry.origin;
+                localRay.direction = entry.direction;
+                transformCameraLocalRayToWorld(localRay, rayOrigin, rayDirection);
+            } else {
+                RealisticCamera<R2Sampler> camera;
+                camera.generateRay(blockCenterPixel, screenSize, samplerState, sampler, deterministicSample, rayOrigin, rayDirection);
+            }
+        } else if (cameraType == CAMERA_THINLENS) {
             ThinLensCamera<R2Sampler> camera;
             camera.generateRay(blockCenterPixel, screenSize, samplerState, sampler, deterministicSample, rayOrigin, rayDirection);
         } else if (cameraType == CAMERA_REALISTIC) {

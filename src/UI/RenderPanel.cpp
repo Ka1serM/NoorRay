@@ -97,17 +97,17 @@ void RenderPanel::renderUi() {
     if (ImGui::BeginTable("RenderSettingsTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableSetupColumn("Label");
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
-        ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](const float v) { exposure = v; });
+        ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](const float v) { exposure = v; changed = true; });
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Samples Per Pixel");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##SamplesDrag", &samples, 0.1f, 1, 64, "%d");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##SamplesDrag", &samples, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Pixel Size");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##PixelSizePercent", &pixelSizePercent, 1.0f, 100, 800, "%d%%");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##PixelSizePercent", &pixelSizePercent, 1.0f, 100, 800, "%d%%")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Diffuse Bounces");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##DiffuseBounces", &diffuseBounces, 0.1f, 1, 64, "%d");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##DiffuseBounces", &diffuseBounces, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Specular Bounces");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##SpecularBounces", &specularBounces, 0.1f, 1, 64, "%d");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##SpecularBounces", &specularBounces, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Transmission Bounces");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); ImGui::DragInt("##TransmissionBounces", &transmissionBounces, 0.1f, 1, 64, "%d");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##TransmissionBounces", &transmissionBounces, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::EndTable();
     }
     

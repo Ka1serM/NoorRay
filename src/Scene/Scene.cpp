@@ -175,6 +175,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 
     setDirtyFlag(TLAS);
     setDirtyFlag(Accumulation);
+    setDirtyFlag(RayLut);
     return true;
 }
 

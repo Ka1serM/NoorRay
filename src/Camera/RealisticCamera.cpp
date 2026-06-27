@@ -352,10 +352,6 @@ RealisticCamera::RealisticCamera(const RealisticCamera& other)
       lensElements(other.lensElements),
       maximumLensElements(other.maximumLensElements),
       pupilBounds(other.pupilBounds),
-      sensorWidthM(other.sensorWidthM),
-      sensorHeightM(other.sensorHeightM),
-      sensorResolutionWidth(other.sensorResolutionWidth),
-      sensorResolutionHeight(other.sensorResolutionHeight),
       effectiveFocalLengthM(other.effectiveFocalLengthM),
       focusSurfaceOffsetM(other.focusSurfaceOffsetM),
       apertureIndex(other.apertureIndex),
@@ -371,23 +367,23 @@ std::unique_ptr<SceneObject> RealisticCamera::clone() const
 
 bool RealisticCamera::getPreferredRenderSize(uint32_t& width, uint32_t& height) const
 {
-    if (lensElements.empty() || sensorResolutionWidth == 0 || sensorResolutionHeight == 0)
+    if (lensElements.empty() || sensor.resolutionWidth == 0 || sensor.resolutionHeight == 0)
         return false;
-    width = sensorResolutionWidth;
-    height = sensorResolutionHeight;
+    width = sensor.resolutionWidth;
+    height = sensor.resolutionHeight;
     return true;
 }
 
 mat4 RealisticCamera::getProjectionMatrix() const
 {
     const float aspectRatio = static_cast<float>(std::max(1u, renderWidth)) / static_cast<float>(std::max(1u, renderHeight));
-    const float fovY = 2.0f * std::atan(sensorHeightM / (2.0f * std::max(effectiveFocalLengthM, 0.001f)));
+    const float fovY = 2.0f * std::atan((sensor.heightMm * 0.001f) / (2.0f * std::max(effectiveFocalLengthM, 0.001f)));
     return perspective(fovY, aspectRatio, cameraData.nearPlane, cameraData.farPlane);
 }
 
 void RealisticCamera::computeProjectionData(const vec3&, const vec3& up, const vec3& right, float aspectRatio)
 {
-    const float sensorWidth = std::max(sensorWidthM, 0.001f);
+    const float sensorWidth = std::max(sensor.widthMm * 0.001f, 0.001f);
     const float focalLength = std::max(effectiveFocalLengthM, 0.001f);
     const float halfWidth = sensorWidth / (2.0f * focalLength);
     const float halfHeight = halfWidth / aspectRatio;
@@ -466,16 +462,16 @@ void RealisticCamera::renderUi()
     std::snprintf(glassCatalogBuffer.data(), glassCatalogBuffer.size(), "%s", glassCatalogPaths.c_str());
     std::snprintf(rayLutCacheBuffer.data(), rayLutCacheBuffer.size(), "%s", rayLutCacheFolder.c_str());
 
-    ImGuiManager::dragFloatRow("Sensor Width", sensorWidthM * 1000.0f, 0.01f, 0.001f, 500.0f, [&](float v) {
-        sensorWidthM = std::max(v, 0.001f) * 0.001f;
+    ImGuiManager::dragFloatRow("Sensor Width", sensor.widthMm, 0.01f, 0.001f, 500.0f, [&](float v) {
+        sensor.widthMm = std::max(v, 0.001f);
         rebuildLensMetadata();
         applyAperture();
         applyFocus();
         rebuildExitPupilBounds();
         changed = true;
     });
-    ImGuiManager::dragFloatRow("Sensor Height", sensorHeightM * 1000.0f, 0.01f, 0.001f, 500.0f, [&](float v) {
-        sensorHeightM = std::max(v, 0.001f) * 0.001f;
+    ImGuiManager::dragFloatRow("Sensor Height", sensor.heightMm, 0.01f, 0.001f, 500.0f, [&](float v) {
+        sensor.heightMm = std::max(v, 0.001f);
         rebuildLensMetadata();
         applyAperture();
         applyFocus();
@@ -495,11 +491,22 @@ void RealisticCamera::renderUi()
         changed = true;
     });
 
-    ImGuiManager::tableRowLabel("Output Size");
-    if (sensorResolutionWidth > 0 && sensorResolutionHeight > 0)
-        ImGui::Text("%u x %u", sensorResolutionWidth, sensorResolutionHeight);
-    else
-        ImGui::TextUnformatted("No sensor resolution");
+    ImGuiManager::tableRowLabel("Resolution");
+    {
+        int w = static_cast<int>(sensor.resolutionWidth);
+        int h = static_cast<int>(sensor.resolutionHeight);
+        ImGui::PushItemWidth((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("x").x - ImGui::GetStyle().ItemSpacing.x * 2.0f) * 0.5f);
+        if (ImGui::DragInt("##ResW", &w, 1.0f, 0, 16384, w == 0 ? "auto" : "%d"))
+            changed = true;
+        ImGui::SameLine();
+        ImGui::TextUnformatted("x");
+        ImGui::SameLine();
+        if (ImGui::DragInt("##ResH", &h, 1.0f, 0, 16384, h == 0 ? "auto" : "%d"))
+            changed = true;
+        ImGui::PopItemWidth();
+        sensor.resolutionWidth  = static_cast<uint32_t>(std::max(w, 0));
+        sensor.resolutionHeight = static_cast<uint32_t>(std::max(h, 0));
+    }
 
     ImGuiManager::tableRowLabel("Lens File");
     const float lensButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -650,9 +657,9 @@ void RealisticCamera::populateRealisticCameraSettings(RealisticCameraSettings& r
         realisticSettings.pupilBounds[i] = pupilBounds[static_cast<size_t>(i)];
     realisticSettings.elementCount = count;
     realisticSettings.pupilBoundCount = pupilCount;
-    realisticSettings.sensorWidth = sensorWidthM;
-    realisticSettings.sensorHeight = sensorHeightM;
-    realisticSettings.filmDiagonal = std::sqrt(sensorWidthM * sensorWidthM + sensorHeightM * sensorHeightM);
+    realisticSettings.sensorWidth = sensor.widthMm * 0.001f;
+    realisticSettings.sensorHeight = sensor.heightMm * 0.001f;
+    realisticSettings.filmDiagonal = std::sqrt(realisticSettings.sensorWidth * realisticSettings.sensorWidth + realisticSettings.sensorHeight * realisticSettings.sensorHeight);
     realisticSettings.rearElementZ = count > 0 ? lensElements.back().vertexZ + focusSurfaceOffsetM : 0.0f;
     realisticSettings.apertureRadius = 0.0f;
     realisticSettings.surfaceOffset = focusSurfaceOffsetM;
@@ -673,8 +680,8 @@ bool RealisticCamera::loadLensAndSensor()
         lensElements.clear();
         maximumLensElements.clear();
         pupilBounds.clear();
-        sensorResolutionWidth = 0;
-        sensorResolutionHeight = 0;
+        sensor.resolutionWidth = 0;
+        sensor.resolutionHeight = 0;
         apertureIndex = -1;
         focusSurfaceOffsetM = 0.0f;
         loadStatus = "Thin lens fallback";
@@ -889,8 +896,8 @@ bool RealisticCamera::parseZmxFile(const std::string& text, std::vector<Realisti
 
 bool RealisticCamera::parseSensorFile(const std::string& path, std::string& error)
 {
-    sensorResolutionWidth = 0;
-    sensorResolutionHeight = 0;
+    sensor.resolutionWidth = 0;
+    sensor.resolutionHeight = 0;
 
     const std::string text = readTextFile(path);
     if (text.empty()) {
@@ -912,10 +919,10 @@ bool RealisticCamera::parseSensorFile(const std::string& path, std::string& erro
         return false;
     }
 
-    sensorWidthM = std::max(widthMm, 0.001f) * 0.001f;
-    sensorHeightM = std::max(heightMm, 0.001f) * 0.001f;
-    sensorResolutionWidth = resolutionWidth;
-    sensorResolutionHeight = resolutionHeight;
+    sensor.widthMm = std::max(widthMm, 0.001f);
+    sensor.heightMm = std::max(heightMm, 0.001f);
+    sensor.resolutionWidth = resolutionWidth;
+    sensor.resolutionHeight = resolutionHeight;
     return true;
 }
 
@@ -953,7 +960,7 @@ void RealisticCamera::rebuildLensMetadata()
     if (lensElements.size() < 2)
         return;
 
-    const float x = 0.001f * std::sqrt(sensorWidthM * sensorWidthM + sensorHeightM * sensorHeightM);
+    const float x = 0.001f * std::sqrt(sensor.widthMm * sensor.widthMm + sensor.heightMm * sensor.heightMm) * 0.001f;
     CpuRay sceneRay{{x, 0.0f, lensElements.front().vertexZ + 1.0f}, {0.0f, 0.0f, -1.0f}};
     CpuRay filmRay{};
     CpuRay filmProbe{{x, 0.0f, lensElements.back().vertexZ - 1.0f}, {0.0f, 0.0f, 1.0f}};
@@ -994,7 +1001,7 @@ void RealisticCamera::applyFocus()
     if (lensElements.size() < 2)
         return;
 
-    const float x = 0.001f * std::sqrt(sensorWidthM * sensorWidthM + sensorHeightM * sensorHeightM);
+    const float x = 0.001f * std::sqrt(sensor.widthMm * sensor.widthMm + sensor.heightMm * sensor.heightMm) * 0.001f;
     CpuRay sceneRay{{x, 0.0f, lensElements.front().vertexZ + 1.0f}, {0.0f, 0.0f, -1.0f}};
     CpuRay filmRay{};
     CpuRay filmProbe{{x, 0.0f, lensElements.back().vertexZ - 1.0f}, {0.0f, 0.0f, 1.0f}};
@@ -1030,7 +1037,7 @@ void RealisticCamera::rebuildExitPupilBounds()
 
     constexpr int boundsCount = MAX_REALISTIC_EXIT_PUPIL_BOUNDS;
     constexpr int samplesPerDimension = 48;
-    const float filmDiagonal = std::sqrt(sensorWidthM * sensorWidthM + sensorHeightM * sensorHeightM);
+    const float filmDiagonal = std::sqrt(sensor.widthMm * sensor.widthMm + sensor.heightMm * sensor.heightMm) * 0.001f;
     const float rearRadius = lensElements.back().apertureRadius;
     const float rearZ = lensElements.back().vertexZ + focusSurfaceOffsetM;
     if (filmDiagonal <= 0.0f || rearRadius <= 0.0f || rearZ <= 0.0f)

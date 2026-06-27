@@ -109,8 +109,8 @@ Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, con
         }
     }
 
-    // Persistently map the buffer if initial data is provided
-    if (data && (memoryProps & vk::MemoryPropertyFlagBits::eHostVisible))
+    // Persistently map all host-visible buffers (zero-cost on modern drivers).
+    if (memoryProps & vk::MemoryPropertyFlagBits::eHostVisible)
         allocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
     
     VmaAllocationInfo allocationResultInfo;

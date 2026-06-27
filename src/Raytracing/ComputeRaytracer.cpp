@@ -85,11 +85,11 @@ ComputeRaytracer::ComputeRaytracer(Scene& scene, uint32_t width, uint32_t height
 
 void ComputeRaytracer::updateTLAS()
 {
-    const auto& meshInstances = scene.getMeshInstances();
+    const auto meshInstances = scene.getMeshInstances();
     std::vector<Instance> gpuInstances;
     gpuInstances.reserve(meshInstances.size());
 
-    for (const auto* mi : meshInstances) {
+    for (const auto& mi : meshInstances) {
         const mat4 T  = mi->getWorldTransform().getMatrix();
         const mat4 IT = inverse(T);
         gpuInstances.push_back({T, IT, transpose(IT), mi->getMeshAsset().getMeshIndex()});

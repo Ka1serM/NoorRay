@@ -1,5 +1,6 @@
-﻿#pragma once
+#pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 #include <string>
@@ -8,6 +9,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "Shaders/Shared.h"
+#include "Scene/Environment.h"
 
 class SceneObject;
 class MeshInstance;
@@ -15,7 +17,6 @@ class MeshAsset;
 class CameraBase;
 class Buffer;
 
-// Dirty flags as bitfield
 enum DirtyFlag : uint8_t {
     TLAS         = 1 << 0,
     Meshes       = 1 << 1,
@@ -30,74 +31,73 @@ class Scene {
     std::vector<Texture> textures;
     std::vector<std::string> textureNames;
     std::vector<std::shared_ptr<MeshAsset>> meshAssets;
+    Environment environment{};
 
-    // Owns ALL objects in the scene.
-    std::vector<std::unique_ptr<SceneObject>> sceneObjects;
-    // Non-owning pointers to top-level objects for the hierarchy.
-    std::vector<SceneObject*> rootObjects;
+    std::vector<std::shared_ptr<SceneObject>> sceneObjects;
 
-    std::vector<MeshInstance*> meshInstances;
-    CameraBase* activeCamera = nullptr;
-    uint32_t activeObjectIndex = INVALID_INSTANCE;
+    std::weak_ptr<CameraBase> activeCamera;
+    uint64_t activeObjectId = 0;
+    uint64_t nextObjectId = 1;
     uint8_t dirtyFlags = 0;
 
-    SceneObject* copiedObject = nullptr;
+    std::weak_ptr<SceneObject> copiedObject;
+
+    std::shared_ptr<SceneObject> findObjectPtr(const SceneObject* object) const;
+    std::shared_ptr<SceneObject> findObjectPtr(uint64_t objectId) const;
+
+    uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
+    bool remove(SceneObject* objToRemove);
+    void reparent(SceneObject* objectToMove, SceneObject* newParent);
+    std::shared_ptr<SceneObject> cloneHierarchy(const SceneObject* source);
+    void notifyGeometryChanged();
 
 public:
-    uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
-    
     Scene(Context& context);
 
-    void copy(SceneObject* objectToCopy);
-    SceneObject* cloneHierarchy(const SceneObject* source);
-    void paste();
-    
-    uint32_t add(std::unique_ptr<SceneObject> sceneObject);
+    // Object lifetime
+    uint64_t add(std::unique_ptr<SceneObject> sceneObject);
     void add(const std::shared_ptr<MeshAsset>& meshAsset);
     void add(Texture&& texture);
-    bool remove(SceneObject* objToRemove);
+    bool removeObject(uint64_t objectId);
     bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
-    void reparent(SceneObject* objectToMove, SceneObject* newParent);
 
-    // Getters for scene content
-    CameraBase* getActiveCamera() const { return activeCamera; }
-    const std::vector<std::unique_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
-    const std::vector<SceneObject*>& getRootObjects() const { return rootObjects; }
+    // Hierarchy
+    bool reparentObject(uint64_t objectId, uint64_t newParentId = 0);
 
-    SceneObject* getObject(const uint32_t index) const {
-        if (index < static_cast<uint32_t>(sceneObjects.size()))
-            return sceneObjects[index].get();
-        return nullptr;
-    }
-    
-    // Index-based selection
-    void setActiveObjectIndex(const uint32_t index) { activeObjectIndex = index; }
-    // Delete signed integer overloads to forbid implicit conversions
-    void setActiveObjectIndex(int) = delete;
-    void setActiveObjectIndex(long) = delete;
-    void setActiveObjectIndex(long long) = delete;
-    void setActiveObjectIndex(short) = delete;
-    void setActiveObjectIndex(char) = delete;
-    void resetActiveObjectIndex() { activeObjectIndex = INVALID_INSTANCE; }
-    
-    uint32_t getActiveObjectIndex() const { return activeObjectIndex; }
-    SceneObject* getActiveObject() const {
-        if (activeObjectIndex < sceneObjects.size())
-            return sceneObjects[activeObjectIndex].get();
-        return nullptr;
-    }
-    
-    const std::vector<MeshInstance*>& getMeshInstances() const { return meshInstances; }
+    // Clipboard
+    void copyObject(uint64_t objectId);
+    void paste();
+
+    // Lookup
+    SceneObject* getObject(uint64_t objectId) const { return findObjectPtr(objectId).get(); }
+    std::shared_ptr<SceneObject> getObjectPtr(uint64_t objectId) const { return findObjectPtr(objectId); }
+    const std::vector<std::shared_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
+    std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
+    std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
     std::shared_ptr<MeshAsset> getMeshAsset(const std::string& name) const;
     const std::vector<std::shared_ptr<MeshAsset>>& getMeshAssets() const { return meshAssets; }
     const std::vector<Texture>& getTextures() const { return textures; }
-    Context& getContext() const { return context; }
     std::vector<std::string> getTextureNames() const { return textureNames; }
 
-    // Dirty flag management
-    void setDirtyFlag(const DirtyFlag flag) { dirtyFlags |= flag; }
-    void clearDirtyFlag(const DirtyFlag flag) { dirtyFlags &= ~flag; }
-    bool isDirty(const DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
+    // Active object
+    void setActiveObjectId(uint64_t objectId) { activeObjectId = objectId; }
+    void clearActiveObject() { activeObjectId = 0; }
+    uint64_t getActiveObjectId() const { return activeObjectId; }
+    SceneObject* getActiveObject() const { return findObjectPtr(activeObjectId).get(); }
+    std::shared_ptr<SceneObject> getActiveObjectPtr() const { return findObjectPtr(activeObjectId); }
+
+    // Camera
+    CameraBase* getActiveCamera() const { return activeCamera.lock().get(); }
+
+    // Context
+    Context& getContext() const { return context; }
+    Environment& getEnvironment() { return environment; }
+    const Environment& getEnvironment() const { return environment; }
+
+    // Dirty flags
+    void setDirtyFlag(DirtyFlag flag) { dirtyFlags |= flag; }
+    void clearDirtyFlag(DirtyFlag flag) { dirtyFlags &= ~flag; }
+    bool isDirty(DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
     bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }

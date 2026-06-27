@@ -130,13 +130,13 @@ RtxRaytracer::RtxRaytracer(Scene& scene, uint32_t width, uint32_t height)
 
 void RtxRaytracer::updateTLAS()
 {
-    const auto& meshInstances = scene.getMeshInstances();
+    const auto meshInstances = scene.getMeshInstances();
 
     std::vector<vk::AccelerationStructureInstanceKHR> accelInstances;
     std::vector<Instance> gpuInstances;
     accelInstances.reserve(meshInstances.size());
     gpuInstances.reserve(meshInstances.size());
-    for (const auto* mi : meshInstances) {
+    for (const auto& mi : meshInstances) {
         if (!mi)
             continue;
 

@@ -20,6 +20,4 @@
 
 ## Misc
 
-- **`NoorRay.cpp` has hardcoded asset/lens paths**: The scene, lens file, sensor file, and glass catalogs are all hardcoded in the constructor. Add a simple config file or command-line argument parser.
-
 - **`Scene::replaceObject` always sets `TLAS` dirty even for camera swaps**: Cameras don't affect the TLAS. Distinguish camera replacements from mesh instance replacements.

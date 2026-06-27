@@ -11,36 +11,36 @@ void SceneGraphPanel::renderUi() {
     ImGui::Begin(name.c_str());
 
     // Recursively draw all root-level objects
-    for (SceneObject* rootObject : scene.getRootObjects())
+    for (const auto& rootObject : scene.getRootObjects())
         drawNode(rootObject);
 
     // Drop target for unparenting that fills the remaining space.
     ImGui::Dummy(ImGui::GetContentRegionAvail());
     if (ImGui::IsItemClicked())
-        scene.resetActiveObjectIndex();
+        scene.clearActiveObject();
 
     // The Dummy also serves as the drop target.
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT")) {
-            IM_ASSERT(payload->DataSize == sizeof(SceneObject*));
-            SceneObject* payload_node = *static_cast<SceneObject**>(payload->Data);
-            scene.reparent(payload_node, nullptr);
+            IM_ASSERT(payload->DataSize == sizeof(uint64_t));
+            const uint64_t objectId = *static_cast<const uint64_t*>(payload->Data);
+            scene.reparentObject(objectId);
         }
         ImGui::EndDragDropTarget();
     }
 
     // Handle Copy, Paste, and Delete when the outliner is focused
         const bool isCtrlDown = ImGui::IsKeyDown(ImGuiMod_Ctrl);
-        SceneObject* activeObject = scene.getActiveObject();
+        const uint64_t activeObjectId = scene.getActiveObjectId();
 
-        if (activeObject) {
+        if (activeObjectId != 0) {
             // Copy (Ctrl+C)
             if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_C))
-                scene.copy(activeObject);
+                scene.copyObject(activeObjectId);
             
             // Deletion (Delete key)
             if (ImGui::IsKeyPressed(ImGuiKey_Delete))
-                scene.remove(activeObject);
+                scene.removeObject(activeObjectId);
         }
 
         // Paste (Ctrl+V) - can happen even if no object is selected
@@ -50,30 +50,30 @@ void SceneGraphPanel::renderUi() {
     ImGui::End();
 }
 
-void SceneGraphPanel::drawNode(SceneObject* node) {
+void SceneGraphPanel::drawNode(const std::shared_ptr<SceneObject>& node) {
+    if (!node)
+        return;
+
+    const uint64_t objectId = node->getId();
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     
-    if (node == scene.getActiveObject())
+    if (objectId == scene.getActiveObjectId())
         flags |= ImGuiTreeNodeFlags_Selected;
     
     if (node->getChildren().empty())
         flags |= ImGuiTreeNodeFlags_Leaf;
 
-    const bool node_open = ImGui::TreeNodeEx(node, flags, "%s", node->getName().c_str());
+    const std::string label = node->getName() + "##SceneObject" + std::to_string(objectId);
+    const bool node_open = ImGui::TreeNodeEx(label.c_str(), flags);
 
     // Handle selection by finding the object's index
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
-        const auto& allObjects = scene.getSceneObjects();
-        const auto it = std::ranges::find_if(allObjects, [node](const auto& ptr) { return ptr.get() == node; });
-        if (it != allObjects.end()) {
-            const uint32_t index = std::distance(allObjects.begin(), it);
-            scene.setActiveObjectIndex(index);
-        }
+        scene.setActiveObjectId(objectId);
     }
     
     // Drag & Drop Source
     if (ImGui::BeginDragDropSource()) {
-        ImGui::SetDragDropPayload("SCENE_OBJECT", &node, sizeof(SceneObject*));
+        ImGui::SetDragDropPayload("SCENE_OBJECT", &objectId, sizeof(objectId));
         ImGui::Text("Reparent %s", node->getName().c_str());
         ImGui::EndDragDropSource();
     }
@@ -81,16 +81,16 @@ void SceneGraphPanel::drawNode(SceneObject* node) {
     // Drag & Drop Target
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT")) {
-            IM_ASSERT(payload->DataSize == sizeof(SceneObject*));
-            SceneObject* payload_node = *static_cast<SceneObject**>(payload->Data);
-            scene.reparent(payload_node, node);
+            IM_ASSERT(payload->DataSize == sizeof(uint64_t));
+            const uint64_t childId = *static_cast<const uint64_t*>(payload->Data);
+            scene.reparentObject(childId, objectId);
         }
         ImGui::EndDragDropTarget();
     }
 
     // If the node is open, recursively draw its children
     if (node_open) {
-        for (SceneObject* child : node->getChildren())
+        for (const auto& child : node->getChildren())
             drawNode(child);
         ImGui::TreePop();
     }

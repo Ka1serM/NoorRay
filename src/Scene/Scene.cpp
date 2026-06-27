@@ -1,141 +1,86 @@
-﻿#include "Scene.h"
+#include "Scene.h"
 #include <algorithm>
-#include <iostream>
 #include "Camera/CameraBase.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneObject.h"
 
-Scene::Scene(Context& context) : context(context) {}
-
-void Scene::copy(SceneObject* objectToCopy)
-{
-    copiedObject = objectToCopy;
+Scene::Scene(Context& context) : context(context) {
+    environment.settings.textureIndex = 0;
+    environment.settings.cdfTextureIndex = 1;
 }
 
-void Scene::paste() {
-    if (!copiedObject)
-        return; // Nothing to paste
-
-    //Create a  clone of the copied object and its entire hierarchy.
-    SceneObject* newObject = cloneHierarchy(copiedObject);
-
-    //    - If an object is selected, paste as a sibling (same parent).
-    //    - Otherwise, paste as a root object.
-    SceneObject* targetParent = nullptr;
-    if (SceneObject* activeObject = getActiveObject())
-        targetParent = activeObject->getParent();
-
-    // Reparent the new hierarchy to its correct place in the scene.
-    reparent(newObject, targetParent);
-
-    // Select the top-level object of the newly pasted hierarchy.
-    const auto it = std::ranges::find_if(sceneObjects,  [newObject](const auto& ptr) { return ptr.get() == newObject; });
-    if (it != sceneObjects.end()) {
-        const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
-        setActiveObjectIndex(index);
-    }
+void Scene::notifyGeometryChanged() {
+    setDirtyFlag(TLAS);
+    setDirtyFlag(Accumulation);
+    setDirtyFlag(RayLut);
 }
 
-uint32_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
-    SceneObject* newSceneObject = sceneObject.get();
-
-    // It calls the private helper to handle the actual registration.
-    const uint32_t addedIndex = registerObject(std::move(sceneObject));
-
-    // Then it completes its job by adding the object to the root.
-    rootObjects.push_back(newSceneObject);
-
-    return addedIndex;
-}
+// ── Internal registration ─────────────────────────────────────────────────────
 
 uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
-    if (auto* camera = dynamic_cast<CameraBase*>(sceneObject.get()))
-        activeCamera = camera;
-    else if (auto* meshInstance = dynamic_cast<MeshInstance*>(sceneObject.get()))
-    {
-        meshInstances.push_back(meshInstance);
-        setDirtyFlag(TLAS);
-    }
-    setDirtyFlag(Accumulation);
+    std::shared_ptr<SceneObject> sharedObject(std::move(sceneObject));
+    sharedObject->setId(nextObjectId++);
 
-    sceneObjects.push_back(std::move(sceneObject));
+    if (auto camera = std::dynamic_pointer_cast<CameraBase>(sharedObject))
+        activeCamera = camera;
+
+    notifyGeometryChanged();
+    sceneObjects.push_back(std::move(sharedObject));
     return static_cast<uint32_t>(sceneObjects.size() - 1);
 }
 
-SceneObject* Scene::cloneHierarchy(const SceneObject* source) {
-    std::unique_ptr<SceneObject> newObjectUPtr = source->clone();
-    SceneObject* newObjectRawPtr = newObjectUPtr.get();
+// ── Public lifetime API ───────────────────────────────────────────────────────
 
-    registerObject(std::move(newObjectUPtr));
-    for (const SceneObject* childSource : source->getChildren())
-        if (childSource != nullptr)
-            if (SceneObject* newChild = cloneHierarchy(childSource))
-                newObjectRawPtr->addChild(newChild);
-
-    return newObjectRawPtr;
+uint64_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
+    const uint32_t index = registerObject(std::move(sceneObject));
+    return sceneObjects[index]->getId();
 }
 
-// Adds a mesh asset to the scene.
 void Scene::add(const std::shared_ptr<MeshAsset>& meshAsset) {
     meshAsset->setMeshIndex(static_cast<uint32_t>(meshAssets.size()));
     meshAssets.push_back(meshAsset);
     setDirtyFlag(Meshes);
 }
 
-// Adds a texture to the scene.
 void Scene::add(Texture&& texture) {
     textureNames.push_back(texture.getName());
     textures.push_back(std::move(texture));
     setDirtyFlag(Textures);
 }
 
-// In Scene.cpp
 bool Scene::remove(SceneObject* objToRemove) {
-    if (!objToRemove || objToRemove == activeCamera)
-        return false;;
+    if (!objToRemove || objToRemove == getActiveCamera())
+        return false;
 
-    // Recursively remove children
-    while (!objToRemove->getChildren().empty())
-        remove(objToRemove->getChildren().back());
-
-    const SceneObject* previouslyActiveObject = getActiveObject();
-    const bool activeObjectWasRemoved = (objToRemove == previouslyActiveObject);
+    // Recursively remove children first
+    while (true) {
+        const auto children = objToRemove->getChildren();
+        if (children.empty()) break;
+        remove(children.back().get());
+    }
 
     if (objToRemove->getParent())
         objToRemove->getParent()->removeChild(objToRemove);
-    else
-        std::erase(rootObjects, objToRemove);
 
-    if (auto* meshInstance = dynamic_cast<MeshInstance*>(objToRemove))
-        std::erase(meshInstances, meshInstance);
+    const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) {
+        return ptr.get() == objToRemove;
+    });
+    if (it == sceneObjects.end())
+        return false;
 
-    const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) { return ptr.get() == objToRemove; });
-    if (it != sceneObjects.end()) {
-        const uint32_t removedIndex = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
-        sceneObjects.erase(it);
+    if (activeObjectId == (*it)->getId())
+        activeObjectId = 0;
 
-        if (activeObjectWasRemoved) {
-            resetActiveObjectIndex();
-        } else if (previouslyActiveObject) {
-            const auto newIt = std::ranges::find_if(sceneObjects,
-                [previouslyActiveObject](const auto& ptr) { return ptr.get() == previouslyActiveObject; });
-
-            if (newIt != sceneObjects.end()) {
-                activeObjectIndex = static_cast<uint32_t>(std::distance(sceneObjects.begin(), newIt));
-            } else
-                resetActiveObjectIndex();
-        }
-
-        setDirtyFlag(TLAS);
-        setDirtyFlag(Accumulation);
-        return true;
-    }
-
-    return false;
+    sceneObjects.erase(it);
+    notifyGeometryChanged();
+    return true;
 }
 
-bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject)
-{
+bool Scene::removeObject(const uint64_t objectId) {
+    return remove(findObjectPtr(objectId).get());
+}
+
+bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject) {
     if (!oldObject || !newObject)
         return false;
 
@@ -145,74 +90,137 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     if (it == sceneObjects.end())
         return false;
 
-    SceneObject* parent = oldObject->getParent();
-    const bool wasRoot = parent == nullptr;
     const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
-
-    if (parent) {
-        parent->removeChild(oldObject);
-    } else {
-        std::erase(rootObjects, oldObject);
-    }
-
-    SceneObject* rawNewObject = newObject.get();
-    if (auto* camera = dynamic_cast<CameraBase*>(rawNewObject))
-        activeCamera = camera;
-    if (auto* meshInstance = dynamic_cast<MeshInstance*>(oldObject))
-        std::erase(meshInstances, meshInstance);
-    if (auto* meshInstance = dynamic_cast<MeshInstance*>(rawNewObject))
-        meshInstances.push_back(meshInstance);
-
-    *it = std::move(newObject);
+    SceneObject* parent = oldObject->getParent();
+    const auto parentPtr = findObjectPtr(parent);
 
     if (parent)
-        parent->addChild(rawNewObject);
-    else if (wasRoot)
-        rootObjects.push_back(rawNewObject);
+        parent->removeChild(oldObject);
 
-    if (activeObjectIndex == index)
-        activeObjectIndex = index;
+    std::shared_ptr<SceneObject> newShared(std::move(newObject));
+    newShared->setId(oldObject->getId());
 
-    setDirtyFlag(TLAS);
-    setDirtyFlag(Accumulation);
-    setDirtyFlag(RayLut);
+    if (auto camera = std::dynamic_pointer_cast<CameraBase>(newShared))
+        activeCamera = camera;
+
+    *it = std::move(newShared);
+
+    if (parentPtr)
+        parentPtr->addChild(sceneObjects[index]);
+
+    notifyGeometryChanged();
     return true;
 }
+
+// ── Hierarchy ────────────────────────────────────────────────────────────────
 
 void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {
     if (!objectToMove || objectToMove == newParent)
         return;
 
-    // 1. Get the current world transform *before* modifying the parent.
+    const auto objectToMovePtr = findObjectPtr(objectToMove);
+    const auto newParentPtr = findObjectPtr(newParent);
+    if (!objectToMovePtr || (newParent && !newParentPtr))
+        return;
+
+    for (SceneObject* p = newParent; p != nullptr; p = p->getParent())
+        if (p == objectToMove)
+            return;
+
     const mat4 oldWorldMatrix = objectToMove->getWorldTransform().getMatrix();
 
-    // 2. Unparent the object from its current parent.
     if (objectToMove->getParent())
         objectToMove->getParent()->removeChild(objectToMove);
-    else
-        std::erase(rootObjects, objectToMove);
 
-    // 3. Set the new parent.
-    objectToMove->setParent(newParent);
-
-    // 4. Add the object to its new parent's child list or to the root.
-    if (newParent)
-        newParent->addChild(objectToMove);
-    else
-        rootObjects.push_back(objectToMove);
-
-    // 5. Calculate and set the new local transform based on the old world transform.
-    if (newParent) {
-        const mat4 newParentWorldMatrix = newParent->getWorldTransform().getMatrix();
-        const mat4 newLocalMatrix = inverse(newParentWorldMatrix) * oldWorldMatrix;
-        objectToMove->setLocalTransform(Transform{newLocalMatrix});
-    } else
+    if (newParentPtr) {
+        newParentPtr->addChild(objectToMovePtr);
+        const mat4 newLocal = inverse(newParent->getWorldTransform().getMatrix()) * oldWorldMatrix;
+        objectToMove->setLocalTransform(Transform{newLocal});
+    } else {
+        objectToMove->clearParent();
         objectToMove->setLocalTransform(Transform{oldWorldMatrix});
+    }
+}
+
+bool Scene::reparentObject(const uint64_t objectId, const uint64_t newParentId) {
+    const auto objectToMove = findObjectPtr(objectId);
+    const auto newParent = newParentId != 0 ? findObjectPtr(newParentId) : nullptr;
+    if (!objectToMove || (newParentId != 0 && !newParent))
+        return false;
+
+    reparent(objectToMove.get(), newParent.get());
+    return true;
+}
+
+// ── Clipboard ────────────────────────────────────────────────────────────────
+
+void Scene::copyObject(const uint64_t objectId) {
+    copiedObject = findObjectPtr(objectId);
+}
+
+std::shared_ptr<SceneObject> Scene::cloneHierarchy(const SceneObject* source) {
+    const uint32_t index = registerObject(source->clone());
+    const auto newObject = sceneObjects[index];
+    for (const auto& child : source->getChildren())
+        if (child)
+            newObject->addChild(cloneHierarchy(child.get()));
+    return newObject;
+}
+
+void Scene::paste() {
+    const auto source = copiedObject.lock();
+    if (!source)
+        return;
+
+    const auto newObject = cloneHierarchy(source.get());
+
+    SceneObject* targetParent = nullptr;
+    if (SceneObject* active = getActiveObject())
+        targetParent = active->getParent();
+
+    reparent(newObject.get(), targetParent);
+    setActiveObjectId(newObject->getId());
+}
+
+// ── Queries ───────────────────────────────────────────────────────────────────
+
+std::vector<std::shared_ptr<SceneObject>> Scene::getRootObjects() const {
+    std::vector<std::shared_ptr<SceneObject>> result;
+    for (const auto& obj : sceneObjects)
+        if (obj->getParent() == nullptr)
+            result.push_back(obj);
+    return result;
+}
+
+std::vector<std::shared_ptr<MeshInstance>> Scene::getMeshInstances() const {
+    std::vector<std::shared_ptr<MeshInstance>> result;
+    for (const auto& obj : sceneObjects)
+        if (auto mi = std::dynamic_pointer_cast<MeshInstance>(obj))
+            result.push_back(mi);
+    return result;
 }
 
 std::shared_ptr<MeshAsset> Scene::getMeshAsset(const std::string& name) const {
-    for (const auto& meshAsset : meshAssets)
-        if (meshAsset->getPath() == name)
-            return meshAsset;
+    for (const auto& asset : meshAssets)
+        if (asset->getPath() == name)
+            return asset;
     return nullptr;
+}
+
+// ── Lookups ───────────────────────────────────────────────────────────────────
+
+std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObject* object) const {
+    if (!object) return nullptr;
+    const auto it = std::ranges::find_if(sceneObjects, [object](const auto& ptr) {
+        return ptr.get() == object;
+    });
+    return it != sceneObjects.end() ? *it : nullptr;
+}
+
+std::shared_ptr<SceneObject> Scene::findObjectPtr(const uint64_t objectId) const {
+    if (objectId == 0) return nullptr;
+    const auto it = std::ranges::find_if(sceneObjects, [objectId](const auto& ptr) {
+        return ptr->getId() == objectId;
+    });
+    return it != sceneObjects.end() ? *it : nullptr;
 }

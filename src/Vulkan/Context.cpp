@@ -3,22 +3,31 @@
 #include <set>
 #include <algorithm>
 #include <stdexcept>
+#include <string_view>
 #include <cstdlib>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
-Context::Context(const int width, const int height) : windowWidth(width), windowHeight(height) {
+Context::Context(const int width, const int height, const bool isHeadless)
+    : windowWidth(width), windowHeight(height), headless(isHeadless)
+{
     try {
+        if (headless) {
+            // Headless mode: use SDL offscreen driver so we can still load the Vulkan
+            // library and create a hidden window for surface-based device selection.
+            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+        } else {
 #ifdef __linux__
-        SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
-        SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
+            SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
+            SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
 
-        if (std::getenv("WAYLAND_DISPLAY") && !std::getenv("SDL_VIDEO_DRIVER")) {
-            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
-        }
+            if (std::getenv("WAYLAND_DISPLAY") && !std::getenv("SDL_VIDEO_DRIVER")) {
+                SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
+            }
 #endif
+        }
 
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
@@ -30,14 +39,20 @@ Context::Context(const int width, const int height) : windowWidth(width), window
             throw std::runtime_error("Failed to load Vulkan library.");
         }
 
-        const float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-        if (dpiScaleFloat != 0.0f) {
-            dpiScale = dpiScaleFloat;
-            windowWidth  = static_cast<int>(static_cast<float>(windowWidth)  * dpiScale);
-            windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
+        if (!headless) {
+            const float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+            if (dpiScaleFloat != 0.0f) {
+                dpiScale = dpiScaleFloat;
+                windowWidth  = static_cast<int>(static_cast<float>(windowWidth)  * dpiScale);
+                windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
+            }
         }
-        
-        window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+
+        const SDL_WindowFlags windowFlags = headless
+            ? (SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN)
+            : (SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+
+        window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, windowFlags);
         if (!window) {
             std::cerr << "[FATAL] Failed to create SDL window: " << SDL_GetError() << std::endl;
             throw std::runtime_error("Failed to create SDL window.");
@@ -284,6 +299,14 @@ void Context::pickPhysicalDevice() {
             return bestDiscrete;
         return bestFallback;
     };
+
+    // In headless mode the swapchain extension is unnecessary (we never present).
+    if (headless) {
+        auto& exts = RequiredDeviceExtensions;
+        exts.erase(std::remove_if(exts.begin(), exts.end(),
+            [](const char* s) { return std::string_view(s) == VK_KHR_SWAPCHAIN_EXTENSION_NAME; }),
+            exts.end());
+    }
 
     // Try to find a GPU supporting all extensions including RTX
     std::vector<const char*> allExtensions = RequiredDeviceExtensions;

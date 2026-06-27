@@ -15,6 +15,7 @@ public:
     CameraProjectionType getProjectionType() const override { return CameraProjectionType::Realistic; }
     const char* getProjectionName() const override { return "Realistic"; }
     bool getPreferredRenderSize(uint32_t& width, uint32_t& height) const override;
+    bool supportsDOF() const override { return true; }
     mat4 getProjectionMatrix() const override;
     void renderUi() override;
     void populateRealisticCameraSettings(RealisticCameraSettings& realisticSettings) const override;
@@ -31,10 +32,6 @@ private:
     std::vector<RealisticLensElement> lensElements;
     std::vector<RealisticLensElement> maximumLensElements;
     std::vector<RealisticPupilBound> pupilBounds;
-    float sensorWidthM = CameraSettings::SensorWidthMm * 0.001f;
-    float sensorHeightM = 18.0f * 0.001f;
-    uint32_t sensorResolutionWidth = 0;
-    uint32_t sensorResolutionHeight = 0;
     float effectiveFocalLengthM = 0.045f;
     float focusSurfaceOffsetM = 0.0f;
     int apertureIndex = -1;

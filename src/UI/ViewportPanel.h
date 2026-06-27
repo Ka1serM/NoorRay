@@ -16,6 +16,7 @@ public:
     void handleObjectPicking() const;
     void handlePositionPicking() const;
     void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
+    void setAovImages(Image& crypto, Image& position);
     void resize(uint32_t width, uint32_t height, vk::Format imageFormat);
     int getViewportPixelSizePercent() const;
     ~ViewportPanel() override;
@@ -26,8 +27,8 @@ public:
 private:
     Context& context;
     Scene& scene;
-    Image& outputCrypto;
-    Image& outputPosition;
+    Image* outputCrypto;
+    Image* outputPosition;
     
     uint32_t width;
     uint32_t height;

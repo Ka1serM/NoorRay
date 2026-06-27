@@ -14,7 +14,7 @@
 #include "Scene/MeshInstance.h"
 
 ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, const uint32_t width, const uint32_t height)
-    : ImGuiComponent(name), context(context), scene(scene), outputCrypto(outputCrypto),outputPosition(outputPosition), width(width), height(height),
+    : ImGuiComponent(name), context(context), scene(scene), outputCrypto(&outputCrypto), outputPosition(&outputPosition), width(width), height(height),
     displayImage(context, width, height, outputColor.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
     cryptoStagingBuffer(context, Buffer::Type::Custom, sizeof(uint32_t), nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
     positionStagingBuffer(context, Buffer::Type::Custom, sizeof(float) * 4, nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
@@ -356,9 +356,9 @@ void ViewportPanel::handlePositionPicking() const {
     copyRegion.imageExtent = vk::Extent3D{1, 1, 1};
 
     context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-        outputPosition.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-        cmd.copyImageToBuffer(outputPosition.getImage(), vk::ImageLayout::eTransferSrcOptimal, positionStagingBuffer.getBuffer(), copyRegion);
-        outputPosition.setImageLayout(cmd, vk::ImageLayout::eGeneral);
+        outputPosition->setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
+        cmd.copyImageToBuffer(outputPosition->getImage(), vk::ImageLayout::eTransferSrcOptimal, positionStagingBuffer.getBuffer(), copyRegion);
+        outputPosition->setImageLayout(cmd, vk::ImageLayout::eGeneral);
     });
 
     vec3 position{0.f};
@@ -383,23 +383,29 @@ void ViewportPanel::handleObjectPicking() const {
     copyRegion.imageExtent = vk::Extent3D{ 1, 1, 1 };
     
     context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-       outputCrypto.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-       cmd.copyImageToBuffer(outputCrypto.getImage(), vk::ImageLayout::eTransferSrcOptimal, cryptoStagingBuffer.getBuffer(), copyRegion);
-       outputCrypto.setImageLayout(cmd, vk::ImageLayout::eGeneral);
+       outputCrypto->setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
+       cmd.copyImageToBuffer(outputCrypto->getImage(), vk::ImageLayout::eTransferSrcOptimal, cryptoStagingBuffer.getBuffer(), copyRegion);
+       outputCrypto->setImageLayout(cmd, vk::ImageLayout::eGeneral);
    });
     
-    uint32_t instanceId = INVALID_INSTANCE;
+    uint32_t instanceId = ~0u;
     if (cryptoStagingBufferMappedPtr)
         instanceId = *static_cast<uint32_t*>(cryptoStagingBufferMappedPtr);
 
     LOG_INFO( "Picked instance ID: " << instanceId);
     
     const auto meshInstances = scene.getMeshInstances();
-    if (instanceId != INVALID_INSTANCE && instanceId < meshInstances.size()) {
+    if (instanceId != ~0u && instanceId < meshInstances.size()) {
         scene.setActiveObjectId(meshInstances[instanceId]->getId());
     }
     else
         scene.clearActiveObject();
+}
+
+void ViewportPanel::setAovImages(Image& crypto, Image& position)
+{
+    outputCrypto = &crypto;
+    outputPosition = &position;
 }
 
 void ViewportPanel::onComputeFinished(const vk::CommandBuffer cmd, Image& srcImage) {

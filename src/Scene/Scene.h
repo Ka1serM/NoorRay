@@ -8,7 +8,7 @@
 #include "Vulkan/Texture.h"
 #include <vulkan/vulkan.hpp>
 
-#include "Shaders/Shared.h"
+#include "Scene/SceneTypes.h"
 #include "Scene/Environment.h"
 
 class SceneObject;

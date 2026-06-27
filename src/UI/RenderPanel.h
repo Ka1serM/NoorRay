@@ -12,13 +12,13 @@
 
 namespace vk { class Image; enum class Format; }
 class Context;
-class Raytracer;
+class GpuWavefrontRaytracer;
 class Renderer;
 class Image;
 
 class RenderPanel : public ImGuiComponent {
 public:
-    RenderPanel(std::string name, Context& context, Raytracer& raytracer, Renderer& renderer, Tonemapper& tonemapper);
+    RenderPanel(std::string name, Context& context, GpuWavefrontRaytracer& raytracer, Renderer& renderer, Tonemapper& tonemapper);
 
     void renderUi() override;
 
@@ -59,7 +59,7 @@ private:
     
     // Core System References
     Context& context;
-    Raytracer& raytracer;
+    GpuWavefrontRaytracer& raytracer;
     Renderer& renderer;
     Tonemapper& tonemapper;
 

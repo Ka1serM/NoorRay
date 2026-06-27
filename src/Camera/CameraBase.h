@@ -7,14 +7,14 @@
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
 #include "Scene/SceneObject.h"
-#include "Shaders/Shared.h"
+#include "Scene/SceneTypes.h"
 
 enum class CameraProjectionType : int {
-    Perspective  = CAMERA_PERSPECTIVE,
-    Orthographic = CAMERA_ORTHOGRAPHIC,
-    Fisheye      = CAMERA_FISHEYE,
-    ThinLens     = CAMERA_THINLENS,
-    Realistic    = CAMERA_REALISTIC,
+    Perspective  = CameraPerspective,
+    Orthographic = CameraOrthographic,
+    Fisheye      = CameraFisheye,
+    ThinLens     = CameraThinLens,
+    Realistic    = CameraRealistic,
 };
 
 struct CameraSettings {

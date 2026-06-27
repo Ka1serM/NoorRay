@@ -3,17 +3,21 @@
 
 #include "Globals.h"
 #include "Log.h"
-#include "Shaders/Shared.h"
+#include "TonemapperSpv.h"
 
-Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t height, const Image& inputImage, const vk::Format outputImageFormat)
+namespace
+{
+constexpr uint32_t TonemapperGroupSize = 16;
+}
+
+Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t height,
+                       const Image& inputImage0, const Image& inputImage1, const vk::Format outputImageFormat)
 : context(context),
   outputImage(context, width, height, outputImageFormat,  vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc |vk::ImageUsageFlagBits::eTransferDst)
 {
     //Load shader
-    static constexpr unsigned char code[] = {
-        #embed "../Shaders/Tonemapping/Tonemapper.spv"
-    };
-    shaderModule = context.getDevice().createShaderModuleUnique({{}, sizeof(code), reinterpret_cast<const uint32_t*>(code)});
+    shaderModule = context.getDevice().createShaderModuleUnique(
+        {{}, noorRayTonemapperSpvLength, reinterpret_cast<const uint32_t*>(noorRayTonemapperSpv)});
 
     // Descriptor set layout with 2 storage images
     std::vector<vk::DescriptorSetLayoutBinding> bindings = {
@@ -34,14 +38,17 @@ Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t he
     std::vector<vk::DescriptorPoolSize> poolSizes = {{vk::DescriptorType::eStorageImage, 2}};
     
     // Allocate descriptor set (store as UniqueDescriptorSet)
-    const vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 1, &descriptorSetLayout.get());
+    const std::array layouts{descriptorSetLayout.get(), descriptorSetLayout.get()};
+    const vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 2, layouts.data());
     auto descriptorSets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
-    descriptorSet = std::move(descriptorSets.front()); // descriptorSet is vk::UniqueDescriptorSet
+    this->descriptorSets[0] = std::move(descriptorSets[0]);
+    this->descriptorSets[1] = std::move(descriptorSets[1]);
 
-    writeDescriptors(inputImage);
+    writeDescriptors(0, inputImage0);
+    writeDescriptors(1, inputImage1);
 }
 
-void Tonemapper::writeDescriptors(const Image& inputImage)
+void Tonemapper::writeDescriptors(const uint32_t bufferIndex, const Image& inputImage)
 {
     std::vector imageInfos = {
         vk::DescriptorImageInfo({}, inputImage.getView(), vk::ImageLayout::eGeneral),
@@ -50,14 +57,14 @@ void Tonemapper::writeDescriptors(const Image& inputImage)
 
     const std::vector writes = {
         vk::WriteDescriptorSet()
-        .setDstSet(descriptorSet.get())
+        .setDstSet(descriptorSets[bufferIndex].get())
         .setDstBinding(0)
         .setDescriptorType(vk::DescriptorType::eStorageImage)
         .setImageInfo(imageInfos[0])
         .setDescriptorCount(1),
 
         vk::WriteDescriptorSet()
-        .setDstSet(descriptorSet.get())
+        .setDstSet(descriptorSets[bufferIndex].get())
         .setDstBinding(1)
         .setDescriptorType(vk::DescriptorType::eStorageImage)
         .setImageInfo(imageInfos[1])
@@ -72,17 +79,20 @@ Tonemapper::~Tonemapper()
     LOG_INFO("Destroying Tonemapper");
 }
 
-void Tonemapper::dispatch(const vk::CommandBuffer commandBuffer) {
+void Tonemapper::dispatch(const vk::CommandBuffer commandBuffer, const uint32_t bufferIndex) {
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0, descriptorSet.get(), {});
-    const uint32_t groupCountX = (outputImage.getWidth() + GROUP_SIZE - 1) / GROUP_SIZE;
-    const uint32_t groupCountY = (outputImage.getHeight() + GROUP_SIZE - 1) / GROUP_SIZE;
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0,
+                                     descriptorSets[bufferIndex].get(), {});
+    const uint32_t groupCountX = (outputImage.getWidth() + TonemapperGroupSize - 1) / TonemapperGroupSize;
+    const uint32_t groupCountY = (outputImage.getHeight() + TonemapperGroupSize - 1) / TonemapperGroupSize;
     commandBuffer.dispatch(groupCountX, groupCountY, 1);
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-void Tonemapper::resize(const uint32_t width, const uint32_t height, const Image& inputImage, const vk::Format outputImageFormat)
+void Tonemapper::resize(const uint32_t width, const uint32_t height,
+                        const Image& inputImage0, const Image& inputImage1,
+                        const vk::Format outputImageFormat)
 {
     if (width == 0 || height == 0)
         return;
@@ -90,5 +100,6 @@ void Tonemapper::resize(const uint32_t width, const uint32_t height, const Image
     context.getDevice().waitIdle();
     if (outputImage.getWidth() != width || outputImage.getHeight() != height || outputImage.getFormat() != outputImageFormat)
         outputImage = Image(context, width, height, outputImageFormat, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
-    writeDescriptors(inputImage);
+    writeDescriptors(0, inputImage0);
+    writeDescriptors(1, inputImage1);
 }

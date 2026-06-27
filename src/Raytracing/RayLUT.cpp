@@ -23,7 +23,7 @@ struct RayLUTFileHeader
 constexpr char RayLUTMagic[8] = {'R', 'A', 'Y', 'L', 'U', 'T', '\0', '\0'};
 constexpr uint32_t RayLUTVersion = 2u;
 
-bool isFinite(const float3& value)
+bool isFinite(const glm::vec3& value)
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
@@ -33,7 +33,7 @@ bool isValid(const RayLutEntry& ray)
     return ray.originValid != 0.0f && isFinite(ray.origin) && isFinite(ray.direction);
 }
 
-float3 lerp(const float3& a, const float3& b, float t)
+glm::vec3 lerp(const glm::vec3& a, const glm::vec3& b, float t)
 {
     return a * (1.0f - t) + b * t;
 }
@@ -124,8 +124,8 @@ RayLUT RayLUTFileReader::read(const std::filesystem::path& path) const
         throw std::runtime_error("Failed while reading RayLUT file wavelengths.");
 
     for (RayLutEntry& ray : lut.rays) {
-        in.read(reinterpret_cast<char*>(&ray.origin), sizeof(float3));
-        in.read(reinterpret_cast<char*>(&ray.direction), sizeof(float3));
+        in.read(reinterpret_cast<char*>(&ray.origin), sizeof(glm::vec3));
+        in.read(reinterpret_cast<char*>(&ray.direction), sizeof(glm::vec3));
         ray.originValid = isFinite(ray.origin) && isFinite(ray.direction) ? 1.0f : 0.0f;
     }
     if (!in)
@@ -153,8 +153,8 @@ void RayLUTFileWriter::write(const std::filesystem::path& path, const RayLUT& lu
         out.write(reinterpret_cast<const char*>(&wavelength), sizeof(float));
 
     for (const RayLutEntry& ray : lut.rays) {
-        out.write(reinterpret_cast<const char*>(&ray.origin), sizeof(float3));
-        out.write(reinterpret_cast<const char*>(&ray.direction), sizeof(float3));
+        out.write(reinterpret_cast<const char*>(&ray.origin), sizeof(glm::vec3));
+        out.write(reinterpret_cast<const char*>(&ray.direction), sizeof(glm::vec3));
     }
 
     if (!out)

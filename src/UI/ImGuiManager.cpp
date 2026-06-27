@@ -1,5 +1,7 @@
 ﻿#include "ImGuiManager.h"
 #include "ImGuiComponent.h"
+#include "ImGuiFont.h"
+#include "ImGuiLayout.h"
 #include <imgui.h>
 #include "imgui_internal.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -21,23 +23,20 @@ ImGuiManager::ImGuiManager(Context& context, const uint32_t numImages, const vk:
 
 #ifdef NDEBUG // Release mode: embed ini into binary
     io.IniFilename = nullptr;  // don't use external file
-    static constexpr char ini[] = {
-        #embed "../../assets/imgui.ini"
-    };
-    ImGui::LoadIniSettingsFromMemory(ini, sizeof(ini));
+    ImGui::LoadIniSettingsFromMemory(
+        reinterpret_cast<const char*>(noorRayImGuiLayout), noorRayImGuiLayoutLength);
 #else
     // Debug mode: use external file for easy tweaking
     io.IniFilename = "imgui.ini";  // ImGui will load and save this file
 #endif
 
-    static constexpr unsigned char font[] = {
-        #embed "../../assets/fonts/Inter.ttf"
-    };
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
 
     const float font_size = 18.0f * context.getDPIScale();
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), sizeof(font), font_size, &font_config);
+    io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(noorRayImGuiFont), noorRayImGuiFontLength,
+        font_size, &font_config);
 
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(context.getDPIScale());

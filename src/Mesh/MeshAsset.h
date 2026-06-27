@@ -5,9 +5,7 @@
 #include <vector>
 #include "Scene/Scene.h"
 #include "Scene/Inspectable.h"
-#include "../Shaders/Shared.h"
-#include "Vulkan/Accel.h"
-#include "BVH/BVH.h"
+#include "Scene/SceneTypes.h"
 
 class Scene;
 
@@ -28,8 +26,6 @@ public:
 
     // Getters & Setters-
     const std::string& getPath() const { return path; }
-    uint64_t getBlasAddress() const;
-    MeshAddresses getBufferAddresses() const;
     uint32_t getMeshIndex() const;
     void setMeshIndex(uint32_t newIndex);
     
@@ -38,14 +34,6 @@ public:
     const std::vector<Face>& getFaces() const { return faces; }
     const std::vector<Material>& getMaterials() const { return materials; }
 
-    const Buffer& getVertexBuffer() const { return vertexBuffer; }
-    const Buffer& getIndexBuffer() const { return indexBuffer; }
-    const Buffer& getFaceBuffer() const { return faceBuffer; }
-    const Buffer& getMaterialBuffer() const { return materialBuffer; }
-    
-    const Accel& getBlasGpu() const { return blasRtx; }
-    const BVH& getBlasCpu() const { return blasCompute; }
-    
     // Dirty Flag
     bool isDirty() const { return dirty; }
     void clearDirtyFlag() { dirty = false; }
@@ -62,13 +50,4 @@ private:
     std::vector<Face> faces;
     std::vector<Material> materials;
 
-    // GPU-side data
-    Buffer vertexBuffer;
-    Buffer indexBuffer;
-    Buffer faceBuffer;
-    Buffer materialBuffer;
-
-    // Acceleration structures
-    Accel blasRtx;
-    BVH blasCompute;
 };

@@ -1,7 +1,6 @@
 ﻿#pragma once
 #include "Vulkan/Context.h"
 #include <vector>
-#include <functional>
 
 class Renderer {
 public:
@@ -25,10 +24,10 @@ public:
     vk::CommandBuffer getCurrentCommandBuffer() const { return frames[m_currentFrame].commandBuffer.get(); }
     vk::Fence getCurrentInFlightFence() const { return frames[m_currentFrame].inFlightFence.get(); }
 
-    // Async compute
-    bool isComputeWorkFinished();
-    void waitForComputeIdle();
-    void submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands);
+    void setExternalFrameSync(
+        vk::Semaphore renderReady,
+        vk::Semaphore bufferReleased,
+        uint64_t value);
 
 private:
     void recreateSwapChain();
@@ -63,9 +62,7 @@ private:
     std::vector<Frame> frames;
     std::vector<vk::UniqueSemaphore> renderFinishedSemaphores;
 
-    // Async Compute
-    vk::UniqueCommandBuffer computeCommandBuffer;
-    vk::UniqueFence computeFence;
-    vk::UniqueSemaphore computeFinishedSemaphore;
-    bool computeSubmitted = false;
+    vk::Semaphore externalRenderReady{};
+    vk::Semaphore externalBufferReleased{};
+    uint64_t externalTimelineValue{};
 };

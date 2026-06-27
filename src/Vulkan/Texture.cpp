@@ -2,59 +2,41 @@
 #include <stdexcept>
 #include <stb_image.h>
 #include <string>
+#include <cstring>
 
 #include "Scene/SceneImporter.h"
 
 Texture::Texture(Context& context, const std::string& filepath)
-    : image([&]() -> Image {
-        int texWidth = 0, texHeight = 0, texChannels = 0;
-
-        float* rawPixels = stbi_loadf(filepath.c_str(), &texWidth, &texHeight, &texChannels, 4); 
-        if (!rawPixels)
-            throw std::runtime_error("Failed to load texture (stbi_loadf returned null). File: " + filepath);
-
-        if (texWidth <= 0 || texHeight <= 0) {
-            stbi_image_free(rawPixels);
-            throw std::runtime_error("Loaded texture has invalid dimensions (W=" + std::to_string(texWidth) + ", H=" + std::to_string(texHeight) + "). File: " + filepath);
-        }
-        
-        this->width = texWidth;
-        this->height = texHeight;
-        
-        Image img(context, rawPixels, texWidth, texHeight, vk::Format::eR32G32B32A32Sfloat); 
-
-        stbi_image_free(rawPixels);
-
-        return img;
-    }())
 {
+    (void)context;
+    int channels = 0;
+    float* rawPixels = stbi_loadf(filepath.c_str(), &width, &height, &channels, 4);
+    if (rawPixels == nullptr || width <= 0 || height <= 0)
+    {
+        stbi_image_free(rawPixels);
+        throw std::runtime_error("Failed to load texture: " + filepath);
+    }
+    pixels.assign(rawPixels, rawPixels + static_cast<size_t>(width) * height * 4);
+    stbi_image_free(rawPixels);
     name = SceneImporter::nameFromPath(filepath);
-    createSampler(context);
 }
 
-Texture::Texture(Context& context, const std::string& name, const void* data, const int width, const int height, const vk::Format format)
-    : image(context, data, width, height, format), name(name)
+Texture::Texture(Context& context, const std::string& textureName, const void* data, const int textureWidth, const int textureHeight, const vk::Format format)
+    : name(textureName), width(textureWidth), height(textureHeight)
 {
+    (void)context;
     if (width <= 0 || height <= 0)
         throw std::runtime_error("Texture constructor (raw data): Invalid dimensions provided (W=" + std::to_string(width) + ", H=" + std::to_string(height) + "). Name: " + name);
-    
-    this->width = width;
-    this->height = height;
-
-    createSampler(context);
-}
-
-void Texture::createSampler(const Context& context)
-{
-    vk::SamplerCreateInfo samplerInfo;
-    samplerInfo.setMagFilter(vk::Filter::eLinear);
-    samplerInfo.setMinFilter(vk::Filter::eLinear);
-    samplerInfo.setAddressModeU(vk::SamplerAddressMode::eRepeat);
-    samplerInfo.setAddressModeV(vk::SamplerAddressMode::eRepeat);
-    samplerInfo.setAddressModeW(vk::SamplerAddressMode::eRepeat);
-
-    sampler = context.getDevice().createSamplerUnique(samplerInfo);
-    descriptorInfo.setImageView(image.getView());
-    descriptorInfo.setSampler(*sampler);
-    descriptorInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+    const size_t pixelCount = static_cast<size_t>(width) * height;
+    pixels.resize(pixelCount * 4);
+    if (format == vk::Format::eR32G32B32A32Sfloat)
+        std::memcpy(pixels.data(), data, pixels.size() * sizeof(float));
+    else if (format == vk::Format::eR8G8B8A8Unorm || format == vk::Format::eR8G8B8A8Srgb)
+    {
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        for (size_t index = 0; index < pixels.size(); ++index)
+            pixels[index] = static_cast<float>(bytes[index]) / 255.0f;
+    }
+    else
+        throw std::runtime_error("Unsupported CPU texture format");
 }

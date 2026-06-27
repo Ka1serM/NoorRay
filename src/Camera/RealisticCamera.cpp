@@ -388,8 +388,8 @@ void RealisticCamera::computeProjectionData(const vec3&, const vec3& up, const v
     const float halfWidth = sensorWidth / (2.0f * focalLength);
     const float halfHeight = halfWidth / aspectRatio;
 
-    cameraData.sensorScaleX = 2.0f * halfWidth;
-    cameraData.sensorScaleY = 2.0f * halfHeight;
+    cameraData.sensorScaleX = halfWidth;
+    cameraData.sensorScaleY = halfHeight;
     cameraData.focalLength = focalLength;
     cameraData.orthoHeight = 0.0f;
     cameraData.fisheyeFov = 0.0f;
@@ -649,10 +649,10 @@ void RealisticCamera::renderUi()
 void RealisticCamera::populateRealisticCameraSettings(RealisticCameraSettings& realisticSettings) const
 {
     realisticSettings = {};
-    const int count = std::min<int>(static_cast<int>(lensElements.size()), MAX_REALISTIC_LENS_ELEMENTS);
+    const int count = std::min<int>(static_cast<int>(lensElements.size()), MaxRealisticLensElements);
     for (int i = 0; i < count; ++i)
         realisticSettings.elements[i] = lensElements[static_cast<size_t>(i)];
-    const int pupilCount = std::min<int>(static_cast<int>(pupilBounds.size()), MAX_REALISTIC_EXIT_PUPIL_BOUNDS);
+    const int pupilCount = std::min<int>(static_cast<int>(pupilBounds.size()), MaxRealisticExitPupilBounds);
     for (int i = 0; i < pupilCount; ++i)
         realisticSettings.pupilBounds[i] = pupilBounds[static_cast<size_t>(i)];
     realisticSettings.elementCount = count;
@@ -928,8 +928,8 @@ bool RealisticCamera::parseSensorFile(const std::string& path, std::string& erro
 
 void RealisticCamera::finalizeElements(std::vector<RealisticLensElement>& elements) const
 {
-    if (elements.size() > MAX_REALISTIC_LENS_ELEMENTS)
-        elements.resize(MAX_REALISTIC_LENS_ELEMENTS);
+    if (elements.size() > MaxRealisticLensElements)
+        elements.resize(MaxRealisticLensElements);
 
     float vertexZ = 0.0f;
     for (int i = static_cast<int>(elements.size()) - 1; i >= 0; --i) {
@@ -1035,7 +1035,7 @@ void RealisticCamera::rebuildExitPupilBounds()
     if (lensElements.empty())
         return;
 
-    constexpr int boundsCount = MAX_REALISTIC_EXIT_PUPIL_BOUNDS;
+    constexpr int boundsCount = MaxRealisticExitPupilBounds;
     constexpr int samplesPerDimension = 48;
     const float filmDiagonal = std::sqrt(sensor.widthMm * sensor.widthMm + sensor.heightMm * sensor.heightMm) * 0.001f;
     const float rearRadius = lensElements.back().apertureRadius;

@@ -121,9 +121,6 @@ Context::Context(const int width, const int height, const bool isHeadless)
             { vk::DescriptorType::eInputAttachment, 8 },
         };
 
-        if(rtxSupported)
-            poolSizes.emplace_back( vk::DescriptorType::eAccelerationStructureKHR, 16 );
-
         constexpr uint32_t maxSets = 210;
         vk::DescriptorPoolCreateInfo poolInfo{};
         poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
@@ -308,18 +305,7 @@ void Context::pickPhysicalDevice() {
             exts.end());
     }
 
-    // Try to find a GPU supporting all extensions including RTX
-    std::vector<const char*> allExtensions = RequiredDeviceExtensions;
-    allExtensions.insert(allExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
-
-    auto best = findBestDevice(allExtensions);
-    rtxSupported = best.has_value();
-
-    if (!best) {
-        // RTX not supported: fall back to GPU with just required device extensions
-        best = findBestDevice(RequiredDeviceExtensions);
-        rtxSupported = false; // fallback: RTX disabled
-    }
+    auto best = findBestDevice(RequiredDeviceExtensions);
 
     if (!best) {
         std::cerr << "[FATAL] No suitable GPU found that supports required Vulkan extensions!" << std::endl;
@@ -327,8 +313,7 @@ void Context::pickPhysicalDevice() {
     }
 
     physicalDevice = best->device;
-    std::cout << "\n[INFO] Picked GPU: " << physicalDevice.getProperties().deviceName
-              << (rtxSupported ? " (Ray Tracing Enabled)" : " (Ray Tracing Not Supported)") << std::endl;
+    std::cout << "\n[INFO] Picked display GPU: " << physicalDevice.getProperties().deviceName << std::endl;
 }
 
 void Context::createLogicalDevice() {
@@ -368,16 +353,8 @@ void Context::createLogicalDevice() {
     queueCreateInfos.emplace_back(vk::DeviceQueueCreateFlags{}, graphicsFamilyIndex, 1, &queuePriority);
     
     auto enabledExtensions = RequiredDeviceExtensions;
-    if (rtxSupported) {
-        std::cout << "[INFO] Ray tracing extensions are supported. Enabling them." << std::endl;
-        enabledExtensions.insert(enabledExtensions.end(), RayTracingExtensions.begin(), RayTracingExtensions.end());
-    } else
-        std::cout << "[INFO] Ray tracing extensions are not supported. Proceeding without them." << std::endl;
-    
     vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures{};
     vk::PhysicalDeviceVulkan12Features features12{};
-    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelFeatures{};
-    vk::PhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{};
 
     // Build the pNext chain. This creates a linked list of feature structs.
     void** nextFeature = nullptr;
@@ -389,15 +366,6 @@ void Context::createLogicalDevice() {
     *nextFeature = &dynamicRenderingFeatures;
     nextFeature = &dynamicRenderingFeatures.pNext;
 
-    if (rtxSupported) {
-        accelFeatures.sType = vk::StructureType::ePhysicalDeviceAccelerationStructureFeaturesKHR;
-        *nextFeature = &accelFeatures;
-        nextFeature = &accelFeatures.pNext;
-
-        rayQueryFeatures.sType = vk::StructureType::ePhysicalDeviceRayQueryFeaturesKHR;
-        *nextFeature = &rayQueryFeatures;
-        nextFeature = &rayQueryFeatures.pNext;
-    }
 
     // Put the chain head into the main features2 struct to query for support
     vk::PhysicalDeviceFeatures2 features2{};
@@ -411,10 +379,7 @@ void Context::createLogicalDevice() {
     features12.descriptorIndexing = VK_TRUE;
     features12.runtimeDescriptorArray = VK_TRUE;
     features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-    if (rtxSupported) {
-        accelFeatures.accelerationStructure = VK_TRUE;
-        rayQueryFeatures.rayQuery           = VK_TRUE;
-    }
+    features12.timelineSemaphore = VK_TRUE;
 
     // Create the logical device, pass the head of the feature chain.
     vk::DeviceCreateInfo createInfo;

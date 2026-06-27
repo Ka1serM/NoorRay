@@ -6,7 +6,7 @@
 
 class Renderer;
 class ImGuiManager;
-class Raytracer;
+class GpuWavefrontRaytracer;
 class Tonemapper;
 
 class NoorRay {
@@ -14,7 +14,7 @@ class NoorRay {
     Scene scene;
     std::unique_ptr<Renderer> renderer;
     std::unique_ptr<ImGuiManager> imGuiManager;
-    std::unique_ptr<Raytracer> raytracer;
+    std::unique_ptr<GpuWavefrontRaytracer> raytracer;
     std::unique_ptr<Tonemapper> tonemapper;
 
 public:

@@ -1,12 +1,25 @@
 #pragma once
 
+#include "GPU/Annotations.h"
+
+#ifndef __CUDACC__
 #include <string>
 #include <vector>
 #include "CameraBase.h"
 #include "portable-file-dialogs.h"
+#endif
 
-class RealisticCamera final : public CameraBase {
+#ifdef __CUDACC__
+#include "Kernels/SceneData.h"
+#endif
+
+class RealisticCamera
+#ifndef __CUDACC__
+    final : public CameraBase
+#endif
+{
 public:
+#ifndef __CUDACC__
     RealisticCamera(Scene& scene, const std::string& name, Transform transform, CameraSettings settings = {});
     RealisticCamera(Scene& scene, const std::string& name, Transform transform, CameraSettings settings, std::string lensPath, std::string sensorPath, std::string glassCatalogPaths = {});
     RealisticCamera(const RealisticCamera& other);
@@ -52,4 +65,18 @@ private:
     void rebuildLensMetadata();
     void applyAperture();
     void applyFocus();
+#endif
+
+#ifdef __CUDACC__
+    NR_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction,
+        float, float, float, uint32_t&,
+        const RayLutEntry* rayLut, uint32_t pixelIndex, int rayLutEnabled) const
+    {
+        if (rayLutEnabled == 0 || rayLut == nullptr || rayLut[pixelIndex].originValid == 0.0f)
+            return false;
+        origin = rayLut[pixelIndex].origin;
+        direction = rayLut[pixelIndex].direction;
+        return true;
+    }
+#endif
 };

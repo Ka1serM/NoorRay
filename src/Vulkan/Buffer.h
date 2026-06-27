@@ -6,10 +6,6 @@
 class Buffer {
 public:
     enum class Type {
-        AccelInput,
-        Scratch,
-        AccelStorage,
-        ShaderBindingTable,
         Storage,
         Custom
     };

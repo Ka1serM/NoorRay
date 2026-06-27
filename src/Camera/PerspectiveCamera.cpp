@@ -37,8 +37,8 @@ void PerspectiveCamera::computeProjectionData(const vec3&, const vec3& up, const
     const float halfHeight = halfWidth / aspectRatio;
     const float focalLengthMm = CameraSettings::SensorWidthMm / (2.0f * tanHalfFov);
 
-    cameraData.sensorScaleX = 2.0f * halfWidth;
-    cameraData.sensorScaleY = 2.0f * halfHeight;
+    cameraData.sensorScaleX = halfWidth;
+    cameraData.sensorScaleY = halfHeight;
     cameraData.focalLength = focalLengthMm * 0.001f;
     cameraData.orthoHeight = 0.0f;
     cameraData.fisheyeFov = 0.0f;

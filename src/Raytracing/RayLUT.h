@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Shaders/Shared.h"
+#include "Scene/SceneTypes.h"
 
 #include <filesystem>
 #include <optional>

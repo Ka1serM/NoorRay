@@ -1,5 +1,6 @@
 ﻿#include "Renderer.h"
 #include <iostream>
+#include <array>
 #include <vector>
 #include <algorithm>
 #include "Log.h"
@@ -22,13 +23,6 @@ Renderer::Renderer(Context& context, const uint32_t initial_width, const uint32_
         frames[i].renderFinishedSemaphore = context.getDevice().createSemaphoreUnique({});
         frames[i].inFlightFence = context.getDevice().createFenceUnique({ vk::FenceCreateFlagBits::eSignaled });
     }
-
-    // "Async" Compute
-    const vk::CommandBufferAllocateInfo computeCmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, 1);
-    computeCommandBuffer = std::move(context.getDevice().allocateCommandBuffersUnique(computeCmdAllocInfo).front());
-    computeFence = context.getDevice().createFenceUnique({ vk::FenceCreateFlagBits::eSignaled });
-    computeFinishedSemaphore = context.getDevice().createSemaphoreUnique({});
-    computeSubmitted = false;
 
     recreateSwapChain();
 }
@@ -215,11 +209,23 @@ void Renderer::endFrame() {
     vk::CommandBuffer cmd = getCurrentCommandBuffer();
     cmd.end();
 
-    const vk::Semaphore signalSemaphores[] = { frames[m_currentFrame].renderFinishedSemaphore.get() };
-    const vk::Semaphore waitSemaphores[] = { frames[m_currentFrame].imageAcquiredSemaphore.get() };
-    constexpr vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
+    std::vector<vk::Semaphore> signalSemaphores{frames[m_currentFrame].renderFinishedSemaphore.get()};
+    std::vector<vk::Semaphore> waitSemaphores{frames[m_currentFrame].imageAcquiredSemaphore.get()};
+    std::vector<vk::PipelineStageFlags> waitStages{vk::PipelineStageFlagBits::eColorAttachmentOutput};
+    std::array<uint64_t, 2> waitValues{0, externalTimelineValue};
+    std::array<uint64_t, 2> signalValues{0, externalTimelineValue};
+    vk::TimelineSemaphoreSubmitInfo timelineInfo{};
+    if (externalTimelineValue != 0)
+    {
+        waitSemaphores.push_back(externalRenderReady);
+        waitStages.push_back(vk::PipelineStageFlagBits::eComputeShader);
+        signalSemaphores.push_back(externalBufferReleased);
+        timelineInfo.setWaitSemaphoreValues(waitValues);
+        timelineInfo.setSignalSemaphoreValues(signalValues);
+    }
 
     vk::SubmitInfo submitInfo{};
+    submitInfo.pNext = externalTimelineValue != 0 ? &timelineInfo : nullptr;
     submitInfo.setWaitSemaphores(waitSemaphores);
     submitInfo.setWaitDstStageMask(waitStages);
     submitInfo.setCommandBuffers(cmd);
@@ -228,7 +234,7 @@ void Renderer::endFrame() {
     context.getGraphicsQueue().submit(submitInfo, frames[m_currentFrame].inFlightFence.get());
    
     vk::PresentInfoKHR presentInfo{};
-    presentInfo.setWaitSemaphores(signalSemaphores);
+    presentInfo.setWaitSemaphores(signalSemaphores.front());
     presentInfo.setSwapchains(swapchain.get());
     presentInfo.setImageIndices(m_imageIndex);
 
@@ -246,26 +252,15 @@ void Renderer::endFrame() {
         LOG_ERROR("Failed to present swap chain image!");
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    externalTimelineValue = 0;
 }
 
-bool Renderer::isComputeWorkFinished() {
-    return context.getDevice().getFenceStatus(computeFence.get()) == vk::Result::eSuccess;
-}
-
-void Renderer::waitForComputeIdle() {
-    (void)context.getDevice().waitForFences(computeFence.get(), VK_TRUE, UINT64_MAX);
-}
-
-void Renderer::submitCompute(const std::function<void(vk::CommandBuffer)>& recordComputeCommands) {
-    context.getDevice().resetFences(computeFence.get());
-
-    computeCommandBuffer->begin(vk::CommandBufferBeginInfo{ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
-    recordComputeCommands(computeCommandBuffer.get());
-    computeCommandBuffer->end();
-
-    vk::SubmitInfo submitInfo{};
-    submitInfo.setCommandBuffers(computeCommandBuffer.get());
-    
-    context.getGraphicsQueue().submit(submitInfo, computeFence.get());
-    computeSubmitted = true;
+void Renderer::setExternalFrameSync(
+    const vk::Semaphore renderReady,
+    const vk::Semaphore bufferReleased,
+    const uint64_t value)
+{
+    externalRenderReady = renderReady;
+    externalBufferReleased = bufferReleased;
+    externalTimelineValue = value;
 }

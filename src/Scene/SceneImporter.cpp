@@ -6,7 +6,7 @@
 #include "Camera/PerspectiveCamera.h"
 #include "Camera/ThinLensCamera.h"
 #include "Camera/FisheyeCamera.h"
-#include "Shaders/Shared.h"
+#include "Scene/SceneTypes.h"
 #include "Vulkan/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
@@ -58,10 +58,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     for (const auto& mat : model.materials) {
         Material material{};
         const auto& pbr = mat.pbrMetallicRoughness;
-        material.albedo = make_vec3(pbr.baseColorFactor.data());
+        material.albedo = glm::make_vec3(pbr.baseColorFactor.data());
         material.metallic = static_cast<float>(pbr.metallicFactor);
         material.roughness = static_cast<float>(pbr.roughnessFactor);
-        material.emission = make_vec3(mat.emissiveFactor.data());
+        material.emission = glm::make_vec3(mat.emissiveFactor.data());
         material.emissionStrength = (length2(material.emission) > 1e-6f) ? 1.0f : 0.0f;
         material.transmission = 0.0f;
 
@@ -139,10 +139,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
             vertices.resize(vertexCount);
             for (size_t v = 0; v < vertexCount; ++v) {
-                vertices[v].position    = make_vec3(&positions[v * 3]);
-                vertices[v].normal      = normals ? normalize(make_vec3(&normals[v * 3])) : vec3(0, 1, 0);
+                vertices[v].position    = glm::make_vec3(&positions[v * 3]);
+                vertices[v].normal      = normals ? normalize(glm::make_vec3(&normals[v * 3])) : vec3(0, 1, 0);
                 vertices[v].uv          = texcoords ? vec2(texcoords[v * 2], 1.0f - texcoords[v * 2 + 1]) : vec2(0);
-                vertices[v].tangent     = tangents ? normalize(vec3(make_vec3(&tangents[v * 4]))) : vec3(1, 0, 0);
+                vertices[v].tangent     = tangents ? normalize(vec3(glm::make_vec3(&tangents[v * 4]))) : vec3(1, 0, 0);
                 vertices[v].tangentSign = tangents ? tangents[v * 4 + 3] : 1.0f;
             }
 
@@ -182,13 +182,13 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         const auto& node = model.nodes[nodeIndex];
         mat4 localTransform;
         if (node.matrix.size() == 16) {
-            localTransform = make_mat4(node.matrix.data());
+            localTransform = glm::make_mat4(node.matrix.data());
         } else {
             // Decompose TRS and combine. glTF spec is T * R * S.
-            vec3 T = node.translation.size() == 3 ? vec3(make_vec3(node.translation.data())) : vec3(0.0f);
+            vec3 T = node.translation.size() == 3 ? vec3(glm::make_vec3(node.translation.data())) : vec3(0.0f);
             // glTF quat is [x, y, z, w], while GLM is [w, x, y, z]
             quat R = node.rotation.size() == 4 ? quat(static_cast<float>(node.rotation[3]), static_cast<float>(node.rotation[0]), static_cast<float>(node.rotation[1]), static_cast<float>(node.rotation[2])) : quat(1.0f, 0.0f, 0.0f, 0.0f);
-            vec3 S = node.scale.size() == 3 ? vec3(make_vec3(node.scale.data())) : vec3(1.0f);
+            vec3 S = node.scale.size() == 3 ? vec3(glm::make_vec3(node.scale.data())) : vec3(1.0f);
             localTransform = translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S);
         }
         

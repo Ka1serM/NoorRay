@@ -9,6 +9,8 @@ Image::Image(Image&& other) noexcept
       allocator(other.allocator),
       image(other.image),
       allocation(other.allocation),
+      externalMemory(other.externalMemory),
+      allocationSize(other.allocationSize),
       view(std::move(other.view)), // vk::Unique handles have their own move
       descImageInfo(other.descImageInfo),
       layout(other.layout),
@@ -19,6 +21,8 @@ Image::Image(Image&& other) noexcept
     // Reset the source object so its destructor does nothing
     other.image = VK_NULL_HANDLE;
     other.allocation = VK_NULL_HANDLE;
+    other.externalMemory = VK_NULL_HANDLE;
+    other.allocationSize = 0;
     other.device = VK_NULL_HANDLE;
     other.allocator = VK_NULL_HANDLE;
 }
@@ -30,6 +34,10 @@ Image& Image::operator=(Image&& other) noexcept
         // Clean up existing resources first
         if (image && allocation)
             vmaDestroyImage(allocator, image, allocation);
+        else if (image && externalMemory) {
+            device.destroyImage(image);
+            device.freeMemory(externalMemory);
+        }
         view.reset();
 
         // Pilfer the resources from the other object
@@ -37,6 +45,8 @@ Image& Image::operator=(Image&& other) noexcept
         allocator = other.allocator;
         image = other.image;
         allocation = other.allocation;
+        externalMemory = other.externalMemory;
+        allocationSize = other.allocationSize;
         view = std::move(other.view);
         descImageInfo = other.descImageInfo;
         layout = other.layout;
@@ -47,6 +57,8 @@ Image& Image::operator=(Image&& other) noexcept
         // Reset the source object
         other.image = VK_NULL_HANDLE;
         other.allocation = VK_NULL_HANDLE;
+        other.externalMemory = VK_NULL_HANDLE;
+        other.allocationSize = 0;
         other.device = VK_NULL_HANDLE;
         other.allocator = VK_NULL_HANDLE;
     }
@@ -172,9 +184,71 @@ Image::Image(Context& context, uint32_t w, uint32_t h, vk::Format format, vk::Im
     descImageInfo.setImageLayout(this->layout);
 }
 
+Image::Image(
+    Context& context,
+    const uint32_t w,
+    const uint32_t h,
+    const vk::Format imageFormat,
+    const vk::ImageUsageFlags usage,
+    const vk::ExternalMemoryHandleTypeFlagBits externalHandleType)
+    : device(context.getDevice()),
+      allocator(context.getAllocator()),
+      layout(vk::ImageLayout::eUndefined),
+      format(imageFormat),
+      width(w),
+      height(h)
+{
+    vk::ExternalMemoryImageCreateInfo externalImageInfo{};
+    externalImageInfo.handleTypes = externalHandleType;
+
+    vk::ImageCreateInfo imageInfo{};
+    imageInfo.pNext = &externalImageInfo;
+    imageInfo.imageType = vk::ImageType::e2D;
+    imageInfo.extent = vk::Extent3D{width, height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = format;
+    imageInfo.tiling = vk::ImageTiling::eOptimal;
+    imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+    imageInfo.usage = usage;
+    imageInfo.samples = vk::SampleCountFlagBits::e1;
+    imageInfo.sharingMode = vk::SharingMode::eExclusive;
+    image = device.createImage(imageInfo);
+
+    const vk::MemoryRequirements requirements = device.getImageMemoryRequirements(image);
+    allocationSize = requirements.size;
+
+    vk::MemoryDedicatedAllocateInfo dedicatedInfo{};
+    dedicatedInfo.image = image;
+    vk::ExportMemoryAllocateInfo exportInfo{};
+    exportInfo.pNext = &dedicatedInfo;
+    exportInfo.handleTypes = externalHandleType;
+    vk::MemoryAllocateInfo allocationInfo{};
+    allocationInfo.pNext = &exportInfo;
+    allocationInfo.allocationSize = requirements.size;
+    allocationInfo.memoryTypeIndex = context.findMemoryType(
+        requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    externalMemory = device.allocateMemory(allocationInfo);
+    device.bindImageMemory(image, externalMemory, 0);
+
+    vk::ImageViewCreateInfo viewInfo{};
+    viewInfo.image = image;
+    viewInfo.viewType = vk::ImageViewType::e2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+    view = device.createImageViewUnique(viewInfo);
+    descImageInfo.setImageView(*view);
+    descImageInfo.setImageLayout(layout);
+}
+
 Image::~Image() {
+    view.reset();
     if (image != VK_NULL_HANDLE && allocation != VK_NULL_HANDLE)
         vmaDestroyImage(allocator, image, allocation);
+    else if (image != VK_NULL_HANDLE && externalMemory != VK_NULL_HANDLE) {
+        device.destroyImage(image);
+        device.freeMemory(externalMemory);
+    }
 }
 
 void Image::setImageLayout(const vk::CommandBuffer& cmd, const vk::ImageLayout newLayout) {

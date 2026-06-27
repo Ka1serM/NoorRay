@@ -237,49 +237,6 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
 MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
     : scene(scene), path(std::move(name)), vertices(vertices), indices(indices), faces(faces), materials(materials)
 {
-    // Upload mesh data to GPU from the new member variable copies
-    vertexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Vertex) * this->vertices.size(), this->vertices.data()};
-    indexBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(uint32_t) * this->indices.size(), this->indices.data()};
-    faceBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Face) * this->faces.size(), this->faces.data()};
-    materialBuffer = Buffer{scene.getContext(), Buffer::Type::AccelInput , sizeof(Material) * this->materials.size(), this->materials.data()};
-
-    // Create bottom-level acceleration structure (BLAS)
-    if (scene.getContext().isRtxSupported()) {
-        vk::AccelerationStructureGeometryTrianglesDataKHR triangleData{};
-        triangleData.setVertexFormat(vk::Format::eR32G32B32Sfloat);
-        triangleData.setVertexData(vertexBuffer.getDeviceAddress());
-        triangleData.setVertexStride(sizeof(Vertex));
-        triangleData.setMaxVertex(static_cast<uint32_t>(this->vertices.size()));
-        triangleData.setIndexType(vk::IndexType::eUint32);
-        triangleData.setIndexData(indexBuffer.getDeviceAddress());
-
-        vk::AccelerationStructureGeometryKHR geometry{};
-        geometry.setGeometryType(vk::GeometryTypeKHR::eTriangles);
-        geometry.setGeometry({triangleData});
-        geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
-        blasRtx.build(scene.getContext(), geometry, this->faces.size(), vk::AccelerationStructureTypeKHR::eBottomLevel);
-    }
-    else
-        blasCompute.build(scene.getContext(), this->vertices, this->indices);
-}
-
-uint64_t MeshAsset::getBlasAddress() const {
-    // Only return a valid GPU BLAS address if RTX is supported
-    if (scene.getContext().isRtxSupported())
-        return blasRtx.getBuffer().getDeviceAddress();
-    return 0;
-}
-
-MeshAddresses MeshAsset::getBufferAddresses() const {
-    return MeshAddresses{
-        vertexBuffer.getDeviceAddress(),
-        indexBuffer.getDeviceAddress(),
-        faceBuffer.getDeviceAddress(),
-        materialBuffer.getDeviceAddress(),
-        //only used for Compute RT
-        blasCompute.getNodesBufferAddress(),
-        blasCompute.getIndicesBufferAddress()
-    };
 }
 
 uint32_t MeshAsset::getMeshIndex() const {
@@ -398,7 +355,6 @@ void MeshAsset::renderUi() {
 
 //this gets called from the renderer when the scene material flag is dirty
 void MeshAsset::updateMaterials() {
-    materialBuffer = Buffer{scene.getContext(), Buffer::Type::Storage, sizeof(Material) * materials.size(), materials.data()};
     dirty = false; // Reset dirty flag after updating
     scene.setDirtyFlag(Accumulation);
 }

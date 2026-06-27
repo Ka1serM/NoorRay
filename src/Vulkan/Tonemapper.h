@@ -2,14 +2,17 @@
 
 #include "../Vulkan/Context.h"
 #include "../Vulkan/Image.h"
+#include <array>
 
 class Tonemapper {
 public:
-    Tonemapper(Context& context, uint32_t width, uint32_t height, const Image& inputImage, vk::Format outputImageFormat);
+    Tonemapper(Context& context, uint32_t width, uint32_t height,
+               const Image& inputImage0, const Image& inputImage1, vk::Format outputImageFormat);
     ~Tonemapper();
 
-    void dispatch(vk::CommandBuffer commandBuffer);
-    void resize(uint32_t width, uint32_t height, const Image& inputImage, vk::Format outputImageFormat);
+    void dispatch(vk::CommandBuffer commandBuffer, uint32_t bufferIndex);
+    void resize(uint32_t width, uint32_t height,
+                const Image& inputImage0, const Image& inputImage1, vk::Format outputImageFormat);
     Image& getOutputImage() { return outputImage; }
 
 private:
@@ -19,7 +22,7 @@ private:
     vk::UniqueDescriptorSetLayout descriptorSetLayout;
     vk::UniquePipelineLayout pipelineLayout;
     vk::UniquePipeline pipeline;
-    vk::UniqueDescriptorSet descriptorSet;
+    std::array<vk::UniqueDescriptorSet, 2> descriptorSets;
 
-    void writeDescriptors(const Image& inputImage);
+    void writeDescriptors(uint32_t bufferIndex, const Image& inputImage);
 };

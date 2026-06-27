@@ -81,11 +81,11 @@ void CameraBase::rebuildCameraData()
 
     // GLM is column-major; Slang m[i] is row i (HLSL semantics). Transpose so
     // m[0..3].xyz = right, up, forward, position in the shader.
-    cameraToWorldMatrix = glm::transpose(mat4(
+    cameraToWorldMatrix = mat4(
         vec4(right,          0.0f),
         vec4(up,             0.0f),
-        vec4(direction,      0.0f),
-        vec4(getPosition(),  1.0f)));
+        vec4(-direction,     0.0f),
+        vec4(getPosition(),  1.0f));
 
     cameraData.cameraType = static_cast<int>(getProjectionType());
     cameraData.nearPlane = 0.01f;
@@ -169,16 +169,16 @@ void CameraBase::update()
             position += directionToCamera * moveSpeed;
 
         constexpr float sensitivity = 0.004f;
-        const quat yawQuat = angleAxis(-dx * sensitivity, WorldUp);
-        const quat pitchQuat = angleAxis(-dy * sensitivity, orientation * LocalRight);
+        const quat yawQuat = angleAxis(dx * sensitivity, WorldUp);
+        const quat pitchQuat = angleAxis(dy * sensitivity, orientation * LocalRight);
         vec3 offset = position - arcballPivot;
         offset = yawQuat * pitchQuat * offset;
         setPosition(arcballPivot + offset);
         setRotation(normalize(yawQuat * pitchQuat * orientation));
     } else {
         constexpr float sensitivity = 0.1f;
-        const float yaw = radians(-dx * sensitivity);
-        const float pitch = radians(-dy * sensitivity);
+        const float yaw = radians(dx * sensitivity);
+        const float pitch = radians(dy * sensitivity);
         quat rot = getRotation();
         const quat yawQuat = angleAxis(yaw, WorldUp);
         const quat pitchQuat = angleAxis(pitch, rot * LocalRight);

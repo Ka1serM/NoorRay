@@ -63,24 +63,6 @@ Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, con
     // Auto-configure usage and memory flags for known types
     if (type != Type::Custom) {
         switch (type) {
-            case Type::AccelInput:
-                usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress;
-                if (context.isRtxSupported())
-                    usage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-                memoryProps = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-                break;
-            case Type::Scratch:
-                usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress;
-                memoryProps = vk::MemoryPropertyFlagBits::eDeviceLocal;
-                break;
-            case Type::AccelStorage:
-                usage = vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress;
-                memoryProps = vk::MemoryPropertyFlagBits::eDeviceLocal;
-                break;
-            case Type::ShaderBindingTable:
-                usage = vk::BufferUsageFlagBits::eShaderBindingTableKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress;
-                memoryProps = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-                break;
             case Type::Storage:
                 usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress;
                 memoryProps = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;

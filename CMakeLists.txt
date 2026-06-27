@@ -1,8 +1,24 @@
-cmake_minimum_required(VERSION 3.16)
-project(NoorRay VERSION 0.1.0 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.25)
+project(NoorRay VERSION 0.1.0 LANGUAGES C CXX CUDA)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_ARCHITECTURES 89)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
+
+find_package(CUDAToolkit 13.3 EXACT REQUIRED)
+set(OPTIX_ROOT "/home/marcel/Programs/OptixSDK" CACHE PATH "OptiX 9.1 installation")
+find_path(OPTIX_INCLUDE_DIR optix.h HINTS "${OPTIX_ROOT}/include" REQUIRED)
+file(STRINGS "${OPTIX_INCLUDE_DIR}/optix.h" OPTIX_VERSION_LINE
+        REGEX "^#define OPTIX_VERSION 90100$")
+if(NOT OPTIX_VERSION_LINE)
+    message(FATAL_ERROR "NoorRay requires OptiX 9.1 headers")
+endif()
+
+# Suppress verbose status output from all external dependencies
+set(CMAKE_MESSAGE_LOG_LEVEL WARNING)
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
 
 # SDL3 (Static Linking Setup)
 set(SDL_STATIC ON CACHE BOOL "Build SDL3 as a static library" FORCE)
@@ -50,6 +66,9 @@ set(TBB_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(TBB_STRICT   OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/tbb)
 
+# Restore normal log level for project-own messages
+set(CMAKE_MESSAGE_LOG_LEVEL STATUS)
+
 # Vulkan
 if(DEFINED ENV{VULKAN_SDK})
     set(VULKAN_SDK_ROOT "$ENV{VULKAN_SDK}")
@@ -78,46 +97,6 @@ find_program(SLANGC_EXECUTABLE
 )
 
 set(SHADER_DIR     "${PROJECT_SOURCE_DIR}/src/Shaders")
-set(WAVEFRONT_DIR  "${SHADER_DIR}/Wavefront")
-
-# Shared Slang source dependencies (all UU shader files)
-set(SLANG_DEPS
-        "${SHADER_DIR}/Shared.h"
-        "${SHADER_DIR}/Bindings.slang"
-        "${SHADER_DIR}/Bxdfs/Brdf.slang"
-        "${SHADER_DIR}/Bxdfs/IBxdf.slang"
-        "${SHADER_DIR}/Bxdfs/PbrBxdf.slang"
-        "${SHADER_DIR}/Cameras/FisheyeCamera.slang"
-        "${SHADER_DIR}/Cameras/ICamera.slang"
-        "${SHADER_DIR}/Cameras/OrthographicCamera.slang"
-        "${SHADER_DIR}/Cameras/PerspectiveCamera.slang"
-        "${SHADER_DIR}/Cameras/RealisticCamera.slang"
-        "${SHADER_DIR}/Cameras/ThinLensCamera.slang"
-        "${SHADER_DIR}/Core/Accumulation.slang"
-        "${SHADER_DIR}/Core/AdaptiveSampling.slang"
-        "${SHADER_DIR}/Core/Core.slang"
-        "${SHADER_DIR}/Core/Payload.slang"
-        "${SHADER_DIR}/Core/RenderPolicy.slang"
-        "${SHADER_DIR}/Geometry/Intersection.slang"
-        "${SHADER_DIR}/Geometry/SurfaceData.slang"
-        "${SHADER_DIR}/Lights/DirectionalLight.slang"
-        "${SHADER_DIR}/Lights/EnvironmentLight.slang"
-        "${SHADER_DIR}/Lights/ILight.slang"
-        "${SHADER_DIR}/Lights/SceneLight.slang"
-        "${SHADER_DIR}/Materials/PbrMaterial.slang"
-        "${SHADER_DIR}/Samplers/HaltonSampler.slang"
-        "${SHADER_DIR}/Samplers/ISampler.slang"
-        "${SHADER_DIR}/Samplers/R2Sampler.slang"
-        "${SHADER_DIR}/Common.slang"
-        "${SHADER_DIR}/Integrators.slang"
-        "${WAVEFRONT_DIR}/Generate.slang"
-        "${WAVEFRONT_DIR}/Extend.slang"
-        "${WAVEFRONT_DIR}/Shade.slang"
-        "${WAVEFRONT_DIR}/Connect.slang"
-        "${WAVEFRONT_DIR}/Finalize.slang"
-        "${WAVEFRONT_DIR}/Advance.slang"
-        "${WAVEFRONT_DIR}/GenerateRayLut.slang"
-)
 
 # Base slangc flags (software BVH, no USE_RAY_QUERY)
 set(SLANGC_BASE
@@ -129,55 +108,57 @@ set(SLANGC_BASE
         -Wno-30081
 )
 
-# RTX variant adds USE_RAY_QUERY and the ray-query capability
-set(SLANGC_RTX ${SLANGC_BASE} -DUSE_RAY_QUERY=1 -capability rayquery)
-
 set(SHADER_OUTPUTS
         "${SHADER_DIR}/Tonemapping/Tonemapper.spv"
-        "${WAVEFRONT_DIR}/Generate.spv"
-        "${WAVEFRONT_DIR}/Extend.spv"
-        "${WAVEFRONT_DIR}/Shade.spv"
-        "${WAVEFRONT_DIR}/Connect.spv"
-        "${WAVEFRONT_DIR}/Finalize.spv"
-        "${WAVEFRONT_DIR}/Advance.spv"
-        "${WAVEFRONT_DIR}/GenerateRayLut.spv"
-        "${WAVEFRONT_DIR}/GenerateRtx.spv"
-        "${WAVEFRONT_DIR}/ExtendRtx.spv"
-        "${WAVEFRONT_DIR}/ShadeRtx.spv"
-        "${WAVEFRONT_DIR}/ConnectRtx.spv"
-        "${WAVEFRONT_DIR}/FinalizeRtx.spv"
-        "${WAVEFRONT_DIR}/AdvanceRtx.spv"
 )
 
 add_custom_command(
         OUTPUT ${SHADER_OUTPUTS}
-        # Tonemapper
         COMMAND "${SLANGC_EXECUTABLE}" "${SHADER_DIR}/Tonemapping/Tonemapper.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Tonemapping/Tonemapper.spv"
-        # Compute wavefront passes (software BVH, no USE_RAY_QUERY)
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Generate.slang" -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Generate.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Extend.slang"   -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Extend.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Shade.slang"    -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Shade.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Connect.slang"  -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Connect.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Finalize.slang" -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Finalize.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Advance.slang"  -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/Advance.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/GenerateRayLut.slang" -entry main ${SLANGC_BASE} -o "${WAVEFRONT_DIR}/GenerateRayLut.spv"
-        # RTX wavefront passes (inline RayQuery, USE_RAY_QUERY=1)
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Generate.slang" -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/GenerateRtx.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Extend.slang"   -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/ExtendRtx.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Shade.slang"    -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/ShadeRtx.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Connect.slang"  -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/ConnectRtx.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Finalize.slang" -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/FinalizeRtx.spv"
-        COMMAND "${SLANGC_EXECUTABLE}" "${WAVEFRONT_DIR}/Advance.slang"  -entry main ${SLANGC_RTX} -o "${WAVEFRONT_DIR}/AdvanceRtx.spv"
         DEPENDS
         "${SHADER_DIR}/Tonemapping/Tonemapper.slang"
-        ${SLANG_DEPS}
-        COMMENT "Compiling Slang shaders (Tonemapper + wavefront variants + RayLUT generator)"
+        COMMENT "Compiling the Vulkan tonemapper shader"
         VERBATIM
 )
 
 add_custom_target(NoorRayShaders DEPENDS ${SHADER_OUTPUTS})
 
+# Generate embed wrapper headers with absolute paths (GCC 15 #embed only resolves
+# absolute or source-relative paths, not -I search paths)
+cmake_path(SET NR_GEN "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${NR_GEN}")
 
+file(CONFIGURE OUTPUT "${NR_GEN}/TonemapperSpv.h" CONTENT
+"#pragma once
+static constexpr unsigned char noorRayTonemapperSpv[] = {
+    #embed \"${SHADER_DIR}/Tonemapping/Tonemapper.spv\"
+};
+static constexpr size_t noorRayTonemapperSpvLength = sizeof(noorRayTonemapperSpv);\n" @ONLY)
+
+file(CONFIGURE OUTPUT "${NR_GEN}/ImGuiFont.h" CONTENT
+"#pragma once
+static constexpr unsigned char noorRayImGuiFont[] = {
+    #embed \"${PROJECT_SOURCE_DIR}/assets/fonts/Inter.ttf\"
+};
+static constexpr size_t noorRayImGuiFontLength = sizeof(noorRayImGuiFont);\n" @ONLY)
+
+file(CONFIGURE OUTPUT "${NR_GEN}/ImGuiLayout.h" CONTENT
+"#pragma once
+static constexpr unsigned char noorRayImGuiLayout[] = {
+    #embed \"${PROJECT_SOURCE_DIR}/assets/imgui.ini\"
+};
+static constexpr size_t noorRayImGuiLayoutLength = sizeof(noorRayImGuiLayout);\n" @ONLY)
+
+# NR_OPTIX_PTX defined here early so it can be used in the embed header and
+# also referenced by the custom command further below
+set(NR_OPTIX_PTX "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.ptx")
+
+file(CONFIGURE OUTPUT "${NR_GEN}/NoorRayOptixIr.h" CONTENT
+"#pragma once
+static constexpr unsigned char noorRayOptixIr[] = {
+    #embed \"${NR_OPTIX_PTX}\"
+};
+static constexpr size_t noorRayOptixIrLength = sizeof(noorRayOptixIr);\n" @ONLY)
 
 # MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
@@ -215,6 +196,74 @@ target_link_libraries(imgui PUBLIC
 
 # Gather source files
 file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
+list(FILTER SRC_FILES EXCLUDE REGEX "/GPU/")
+list(FILTER SRC_FILES EXCLUDE REGEX "/Kernels/cuda/")
+list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/GpuWavefrontRaytracer\\.cpp$")
+
+file(GLOB_RECURSE NR_KERNEL_HEADERS CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/Kernels/*.h"
+        "${PROJECT_SOURCE_DIR}/src/Kernels/*/*.h"
+        "${PROJECT_SOURCE_DIR}/src/GPU/Annotations.h"
+        "${PROJECT_SOURCE_DIR}/src/GPU/RayTraversal.h")
+
+add_custom_command(
+        OUTPUT "${NR_OPTIX_PTX}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        COMMAND "${CMAKE_CUDA_COMPILER}"
+                -ccbin "${CMAKE_CUDA_HOST_COMPILER}"
+                --ptx --gpu-architecture=compute_89 --std=c++20
+                --use_fast_math --generate-line-info --expt-relaxed-constexpr
+                -DNR_BACKEND_CUDA=1 -DGLM_FORCE_CUDA=1
+                "-I${PROJECT_SOURCE_DIR}/src"
+                "-I${PROJECT_SOURCE_DIR}/external/glm"
+                "-I${OPTIX_INCLUDE_DIR}"
+                -o "${NR_OPTIX_PTX}"
+                "${PROJECT_SOURCE_DIR}/src/Kernels/cuda/OptixPrograms.cu"
+        DEPENDS
+                src/Kernels/cuda/OptixPrograms.cu
+                ${NR_KERNEL_HEADERS}
+        VERBATIM)
+add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
+
+# .h files compiled with NVCC as CUDA translation units
+set(NR_CUDA_KERNEL_SOURCES
+        src/Kernels/Generate.h
+        src/Kernels/Shade.h
+        src/Kernels/Finalize.h)
+set_source_files_properties(${NR_CUDA_KERNEL_SOURCES} PROPERTIES LANGUAGE CUDA)
+
+add_library(NoorRayCuda STATIC
+        src/GPU/CudaDevice.cpp
+        src/GPU/ImageInterop.cpp
+        src/GPU/Memory.cpp
+        src/Kernels/cuda/CudaRayLutGenerator.cu
+        ${NR_CUDA_KERNEL_SOURCES}
+        src/Kernels/cuda/AccelBuilder.cpp
+        src/Kernels/cuda/OptiXSetup.cpp
+        src/Raytracing/GpuWavefrontRaytracer.cpp)
+add_dependencies(NoorRayCuda NoorRayOptixIr)
+set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES 89)
+target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
+target_compile_definitions(NoorRayCuda PUBLIC
+        NR_BACKEND_CUDA=1
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+target_compile_definitions(NoorRayCuda PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:GLM_FORCE_CUDA=1>)
+target_include_directories(NoorRayCuda PUBLIC
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/external/glm"
+        "${OPTIX_INCLUDE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_options(NoorRayCuda PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math;--generate-line-info;--extended-lambda;--expt-relaxed-constexpr>)
+target_link_libraries(NoorRayCuda PUBLIC
+        CUDA::cudart
+        CUDA::cuda_driver
+        glm
+        stb
+        Vulkan::Vulkan
+        SDL3::SDL3-static
+        GPUOpen::VulkanMemoryAllocator)
 
 # Resource handling on Windows
 if(WIN32)
@@ -238,10 +287,12 @@ add_dependencies(NoorRay NoorRayShaders)
 
 target_include_directories(NoorRay PRIVATE
         ${PROJECT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 # Link against all libraries
 target_link_libraries(NoorRay PRIVATE
+        NoorRayCuda
         portable_file_dialogs
         glm
         imgui
@@ -256,7 +307,7 @@ target_link_libraries(NoorRay PRIVATE
         TBB::tbb
 )
 
-target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)
+target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED NR_BACKEND_CUDA=1)
 target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 
 # Platform specific linking and settings

@@ -19,17 +19,13 @@ class Context {
         VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
 #ifdef __APPLE__
         VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
 #endif
     };
 
-    std::vector<const char*> RayTracingExtensions = {
-        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-        VK_KHR_RAY_QUERY_EXTENSION_NAME,
-    };
-    
     SDL_Window* window = nullptr;
     int windowWidth;
     int windowHeight;
@@ -50,7 +46,6 @@ class Context {
     vk::UniqueCommandPool commandPool;
     vk::UniqueDescriptorPool descriptorPool;
     
-    bool rtxSupported = false;
 
     void createVulkanInstance();
     void pickPhysicalDevice();
@@ -90,5 +85,4 @@ public:
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
     VmaAllocator getAllocator() const { return allocator; }
 
-    bool isRtxSupported() const { return rtxSupported; }
 };

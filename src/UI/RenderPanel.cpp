@@ -15,7 +15,7 @@
 
 #include "ImGuiManager.h"
 #include "Log.h"
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/GpuWavefrontRaytracer.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Tonemapper.h"
 
@@ -50,7 +50,7 @@ static float halfToFloat(const uint16_t half) {
 RenderPanel::RenderPanel(
     std::string name,
     Context& context,
-    Raytracer& raytracer,
+    GpuWavefrontRaytracer& raytracer,
     Renderer& renderer,
     Tonemapper& tonemapper
 )

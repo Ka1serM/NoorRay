@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#include "Shaders/Shared.h"
+#include "Scene/SceneTypes.h"
 
 class Environment {
 public:

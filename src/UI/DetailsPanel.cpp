@@ -10,7 +10,7 @@ void DetailsPanel::renderUi() {
     
     if (ImGui::BeginTable("ObjectDetails", 2, ImGuiTableFlags_SizingStretchProp)) {
         
-        if (SceneObject* activeObject = scene.getActiveObject())
+        if (const auto activeObject = scene.getActiveObjectPtr())
             activeObject->renderUi(); 
         else {
             ImGui::TableNextColumn();

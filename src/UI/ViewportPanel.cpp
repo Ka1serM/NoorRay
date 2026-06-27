@@ -213,7 +213,7 @@ void ViewportPanel::handleInput() {
 }
 
 void ViewportPanel::handleTransformGizmo() {
-    const auto activeObject = scene.getActiveObject();
+    const auto activeObject = scene.getActiveObjectPtr();
     if (!activeObject)
         return;
 
@@ -258,8 +258,8 @@ void ViewportPanel::handleViewGizmo() const {
     quat rotation = camera->getRotation();
 
     vec3 pivot {};
-    if (scene.getActiveObject())
-        pivot = scene.getActiveObject()->getPosition();
+    if (const auto activeObject = scene.getActiveObjectPtr())
+        pivot = activeObject->getPosition();
 
     ImViewGuizmo::BeginFrame();
     bool wasModified = false;
@@ -394,21 +394,12 @@ void ViewportPanel::handleObjectPicking() const {
 
     LOG_INFO( "Picked instance ID: " << instanceId);
     
-    if (instanceId != INVALID_INSTANCE && instanceId < scene.getMeshInstances().size()) {
-        const MeshInstance* pickedInstance = scene.getMeshInstances()[instanceId];
-        const auto& objects = scene.getSceneObjects();
-        const auto it = std::ranges::find_if(objects, 
-         [pickedInstance](const std::unique_ptr<SceneObject>& obj) {
-             return obj.get() == pickedInstance;
-         });
-    
-        if (it != objects.end())
-            scene.setActiveObjectIndex(static_cast<uint32_t>(it - objects.begin()));
-        else
-            scene.resetActiveObjectIndex();
+    const auto meshInstances = scene.getMeshInstances();
+    if (instanceId != INVALID_INSTANCE && instanceId < meshInstances.size()) {
+        scene.setActiveObjectId(meshInstances[instanceId]->getId());
     }
     else
-        scene.resetActiveObjectIndex();
+        scene.clearActiveObject();
 }
 
 void ViewportPanel::onComputeFinished(const vk::CommandBuffer cmd, Image& srcImage) {

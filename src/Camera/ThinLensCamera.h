@@ -13,6 +13,7 @@ public:
     std::unique_ptr<SceneObject> clone() const override;
     CameraProjectionType getProjectionType() const override { return CameraProjectionType::ThinLens; }
     const char* getProjectionName() const override { return "Thin Lens"; }
+    bool supportsDOF() const override { return true; }
 
 protected:
     void computeProjectionData(const vec3& direction, const vec3& up, const vec3& right, float aspectRatio) override;

@@ -44,23 +44,19 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         bool   deterministicSample = pushConstants.frame == 0 && sampleIndex == 0u;
         float3 rayOrigin, rayDirection;
 
-        if (cameraType == CAMERA_REALISTIC && pushConstants.rayLutEnabled != 0) {
+        if (cameraType == CAMERA_REALISTIC) {
+            if (pushConstants.rayLutEnabled == 0)
+                continue;
             uint lutIndex = uint(blockCenterPixel.x + blockCenterPixel.y * screenSize.x);
             RayLutEntry entry = cameraRayLut[lutIndex];
-            if (entry.originValid != 0.0) {
-                LocalRay localRay;
-                localRay.origin = entry.origin;
-                localRay.direction = entry.direction;
-                transformCameraLocalRayToWorld(localRay, rayOrigin, rayDirection);
-            } else {
-                RealisticCamera<R2Sampler> camera;
-                camera.generateRay(blockCenterPixel, screenSize, samplerState, sampler, deterministicSample, rayOrigin, rayDirection);
-            }
+            if (entry.originValid == 0.0)
+                continue;
+            LocalRay localRay;
+            localRay.origin = entry.origin;
+            localRay.direction = entry.direction;
+            transformCameraLocalRayToWorld(localRay, rayOrigin, rayDirection);
         } else if (cameraType == CAMERA_THINLENS) {
             ThinLensCamera<R2Sampler> camera;
-            camera.generateRay(blockCenterPixel, screenSize, samplerState, sampler, deterministicSample, rayOrigin, rayDirection);
-        } else if (cameraType == CAMERA_REALISTIC) {
-            RealisticCamera<R2Sampler> camera;
             camera.generateRay(blockCenterPixel, screenSize, samplerState, sampler, deterministicSample, rayOrigin, rayDirection);
         } else if (cameraType == CAMERA_ORTHOGRAPHIC) {
             OrthographicCamera<R2Sampler> camera;

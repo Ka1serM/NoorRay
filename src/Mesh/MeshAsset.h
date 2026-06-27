@@ -4,14 +4,14 @@
 #include <string>
 #include <vector>
 #include "Scene/Scene.h"
+#include "Scene/Inspectable.h"
 #include "../Shaders/Shared.h"
-#include "UI/ImGuiComponent.h"
 #include "Vulkan/Accel.h"
 #include "BVH/BVH.h"
 
 class Scene;
 
-class MeshAsset : public ImGuiComponent
+class MeshAsset : public Inspectable
 {
 public:
     static std::shared_ptr<MeshAsset> CreateCube(Scene& scene, const std::string& name, const Material& material);
@@ -21,7 +21,9 @@ public:
     
     MeshAsset(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials);
 
-    void renderUi() override;
+    const std::string& getName() const override { return path; }
+    std::string getType() const override { return "Mesh Asset"; }
+    void renderUi();
     void updateMaterials();
 
     // Getters & Setters-

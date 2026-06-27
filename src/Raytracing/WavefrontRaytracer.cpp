@@ -315,7 +315,7 @@ bool WavefrontRaytracer::prepareCameraRayLut(PushData& pc, const SceneSettings& 
                                 loadedFromFile ? entries.data() : nullptr);
     writeCameraRayLutDescriptor();
     cameraRayLutValid = true;
-    cameraRayLutNeedsGeneration = !loadedFromFile;
+    cameraRayLutNeedsGeneration = true;
     pc.rayLutEnabled = 1;
     return true;
 }

@@ -49,6 +49,7 @@ CameraBase::CameraBase(Scene& scene, const std::string& name, Transform transfor
 CameraBase::CameraBase(const CameraBase& other)
     : SceneObject(other),
       settings(other.settings),
+      sensor(other.sensor),
       cameraData(other.cameraData),
       arcballPivot(other.arcballPivot),
       arcballMode(other.arcballMode),
@@ -126,14 +127,20 @@ mat4 CameraBase::getViewMatrix() const
     return lookAt(getPosition(), getPosition() + direction, dynamicUp);
 }
 
+bool CameraBase::getPreferredRenderSize(uint32_t& width, uint32_t& height) const
+{
+    if (sensor.resolutionWidth > 0 && sensor.resolutionHeight > 0) {
+        width = sensor.resolutionWidth;
+        height = sensor.resolutionHeight;
+        return true;
+    }
+    return false;
+}
+
 mat4 CameraBase::getProjectionMatrix() const
 {
     const float aspectRatio = static_cast<float>(std::max(1u, renderWidth)) / static_cast<float>(std::max(1u, renderHeight));
-    if (getProjectionType() == CameraProjectionType::Orthographic) {
-        const float halfHeight = std::max(cameraData.orthoHeight, 0.001f) * 0.5f;
-        return ortho(-halfHeight * aspectRatio, halfHeight * aspectRatio, -halfHeight, halfHeight, cameraData.nearPlane, cameraData.farPlane);
-    }
-    // Perspective, ThinLens, and Fisheye all use a perspective projection matrix for rasterisation.
+    // Always use a perspective matrix for UI/gizmo rendering; the ray tracer handles ortho projection separately.
     const float fovY = 2.0f * std::atan(std::tan(glm::radians(settings.fieldOfView) * 0.5f) / aspectRatio);
     return perspective(fovY, aspectRatio, cameraData.nearPlane, cameraData.farPlane);
 }
@@ -234,7 +241,33 @@ void CameraBase::renderUi()
         anyChanged = true;
     });
 
-    if (getProjectionType() != CameraProjectionType::Orthographic) {
+    ImGuiManager::dragFloatRow("Sensor Width", sensor.widthMm, 0.1f, 0.1f, 500.0f, [&](float v) {
+        sensor.widthMm = std::max(v, 0.1f);
+        anyChanged = true;
+    });
+    ImGuiManager::dragFloatRow("Sensor Height", sensor.heightMm, 0.1f, 0.1f, 500.0f, [&](float v) {
+        sensor.heightMm = std::max(v, 0.1f);
+        anyChanged = true;
+    });
+
+    ImGuiManager::tableRowLabel("Resolution");
+    {
+        int w = static_cast<int>(sensor.resolutionWidth);
+        int h = static_cast<int>(sensor.resolutionHeight);
+        ImGui::PushItemWidth((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("x").x - ImGui::GetStyle().ItemSpacing.x * 2.0f) * 0.5f);
+        if (ImGui::DragInt("##ResW", &w, 1.0f, 0, 16384, w == 0 ? "auto" : "%d"))
+            anyChanged = true;
+        ImGui::SameLine();
+        ImGui::TextUnformatted("x");
+        ImGui::SameLine();
+        if (ImGui::DragInt("##ResH", &h, 1.0f, 0, 16384, h == 0 ? "auto" : "%d"))
+            anyChanged = true;
+        ImGui::PopItemWidth();
+        sensor.resolutionWidth  = static_cast<uint32_t>(std::max(w, 0));
+        sensor.resolutionHeight = static_cast<uint32_t>(std::max(h, 0));
+    }
+
+    if (supportsDOF()) {
         ImGuiManager::dragFloatRow("F-Stop", settings.fStop, 0.1f, 0.0f, 32.0f, [&](float v) {
             settings.fStop = std::max(0.0f, v);
             anyChanged = true;

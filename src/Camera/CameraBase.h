@@ -32,6 +32,13 @@ struct CameraSettings {
     void setFocalLength(float value);
 };
 
+struct Sensor {
+    float widthMm = 32.0f;
+    float heightMm = 18.0f;
+    uint32_t resolutionWidth = 0;   // 0 = follow raytracer viewport size
+    uint32_t resolutionHeight = 0;
+};
+
 class CameraBase : public SceneObject {
 public:
     static constexpr vec3 WorldUp{0.0f, 1.0f, 0.0f};
@@ -50,7 +57,8 @@ public:
     virtual CameraProjectionType getProjectionType() const = 0;
     virtual const char* getProjectionName() const = 0;
     virtual std::unique_ptr<CameraBase> recreateAs(CameraProjectionType type) const;
-    virtual bool getPreferredRenderSize(uint32_t& width, uint32_t& height) const { return false; }
+    virtual bool getPreferredRenderSize(uint32_t& width, uint32_t& height) const;
+    virtual bool supportsDOF() const { return false; }
 
     CameraData getCameraData() const { return cameraData; }
     mat4 getCameraToWorld() const { return cameraToWorldMatrix; }
@@ -58,6 +66,8 @@ public:
     virtual std::string getRayLutCacheFolder() const { return {}; }
     const CameraSettings& getSettings() const { return settings; }
     CameraSettings& getSettings() { return settings; }
+    const Sensor& getSensor() const { return sensor; }
+    Sensor& getSensor() { return sensor; }
 
     mat4 getViewMatrix() const;
     virtual mat4 getProjectionMatrix() const;
@@ -72,6 +82,7 @@ public:
 
 protected:
     CameraSettings settings;
+    Sensor sensor;
     CameraData cameraData{};
     mat4 cameraToWorldMatrix{1.0f};
     vec3 arcballPivot{};

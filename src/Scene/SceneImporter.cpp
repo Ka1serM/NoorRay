@@ -2,6 +2,10 @@
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
+#include <glaze/glaze.hpp>
+#include "Camera/PerspectiveCamera.h"
+#include "Camera/ThinLensCamera.h"
+#include "Camera/FisheyeCamera.h"
 #include "Shaders/Shared.h"
 #include "Vulkan/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
@@ -215,12 +219,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         // If the node has a mesh, create instances and attach them as children
         if (node.mesh >= 0 && node.mesh < loadedMeshAssets.size()) {
             for (const auto& asset : loadedMeshAssets[node.mesh]) {
-                // MeshInstances have an identity transform relative to their parent node
-                auto instance = std::make_unique<MeshInstance>(scene, asset->getName() + "_inst", asset, Transform{});
-                SceneObject* instPtr = instance.get();
-                scene.registerObject(std::move(instance));
-                instPtr->setParent(objPtr);
-                objPtr->addChild(instPtr);
+                // Give the instance the node's world transform so reparent computes identity local
+                auto instance = std::make_unique<MeshInstance>(scene, asset->getName() + "_inst", asset, Transform{worldTransforms[i]});
+                const uint64_t instId = scene.add(std::move(instance));
+                scene.reparentObject(instId, objPtr->getId());
             }
         }
     }
@@ -232,7 +234,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
     auto importRoot = std::make_unique<SceneObject>(scene, nameFromPath(filepath), Transform{});
     SceneObject* importRootPtr = importRoot.get();
-    const uint32_t rootIdx = scene.add(std::move(importRoot));
+    const uint64_t rootId = scene.add(std::move(importRoot));
 
     // Reparent nodes to build the glTF hierarchy
     for (size_t i = 0; i < model.nodes.size(); ++i) {
@@ -240,19 +242,18 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         if (nodeMap[i] == nullptr) continue;
 
         for (int childIndex : node.children) {
-            if (nodeMap[childIndex]) {
-                scene.reparent(nodeMap[childIndex], nodeMap[i]);
-            }
+            if (nodeMap[childIndex])
+                scene.reparentObject(nodeMap[childIndex]->getId(), nodeMap[i]->getId());
         }
     }
-    
+
     // Attach the scene's original root nodes to our new import object
     if (model.defaultScene >= 0)
         for (int rootNodeIndex : model.scenes[model.defaultScene].nodes)
             if (nodeMap[rootNodeIndex])
-                scene.reparent(nodeMap[rootNodeIndex], importRootPtr);
+                scene.reparentObject(nodeMap[rootNodeIndex]->getId(), rootId);
     
-    scene.setActiveObjectIndex(rootIdx);
+    scene.setActiveObjectId(rootId);
 
     const mat4 correctionMatrix = scale(mat4(1.0f), vec3(1.0f, -1.0f, -1.0f));
     scene.getActiveObject()->setLocalTransform(Transform(correctionMatrix));
@@ -323,7 +324,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
     // Create a parent object for this entire OBJ file to keep the scene organized
     std::string parentName = nameFromPath(filepath);
     auto parentObject = std::make_unique<SceneObject>(scene, parentName, Transform{});
-    uint32_t parentIndex = scene.add(std::move(parentObject));
+    const uint64_t parentId = scene.add(std::move(parentObject));
 
     for (const auto& shape : shapes) {
         if (shape.mesh.indices.empty())
@@ -450,13 +451,11 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
         Transform transform;
         transform.setPosition(center);
         auto instance = std::make_unique<MeshInstance>(scene, meshName, meshAsset, transform);
-        uint32_t instanceIndex = scene.add(std::move(instance));
-
-        // Parent the new instance to the main object for this file
-        scene.reparent(scene.getObject(instanceIndex), scene.getObject(parentIndex));
+        const uint64_t instanceId = scene.add(std::move(instance));
+        scene.reparentObject(instanceId, parentId);
     }
 
-    scene.setActiveObjectIndex(parentIndex);
+    scene.setActiveObjectId(parentId);
 }
 
 std::string SceneImporter::nameFromPath(const std::string& path) {
@@ -483,4 +482,110 @@ std::vector<char> SceneImporter::readFile(const std::string& filename) {
     file.close();
 
     return buffer;
+}
+
+// ── JSON scene ────────────────────────────────────────────────────────────────
+
+void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
+{
+    glz::generic j{};
+    std::string buf;
+    if (const auto err = glz::read_file_json(j, filepath, buf))
+        throw std::runtime_error("Failed to parse scene JSON: " + glz::format_error(err, buf));
+
+    // Safe accessors
+    static const glz::generic kNull{};
+    auto at = [&](const glz::generic& obj, std::string_view key) -> const glz::generic& {
+        return obj.contains(key) ? obj[key] : kNull;
+    };
+    auto jfloat = [](const glz::generic& v, float def = 0.f) {
+        return v.is_number() ? v.as<float>() : def;
+    };
+    auto jint = [](const glz::generic& v, int def = 0) {
+        return v.is_number() ? v.as<int>() : def;
+    };
+    auto jstr = [](const glz::generic& v, std::string_view def = "") -> std::string {
+        return v.is_string() ? v.get<std::string>() : std::string(def);
+    };
+    auto jvec3 = [&](const glz::generic& v, vec3 def = {}) -> vec3 {
+        if (!v.is_array()) return def;
+        const auto& a = v.get_array();
+        return { a.size() > 0 ? jfloat(a[0], def.x) : def.x,
+                 a.size() > 1 ? jfloat(a[1], def.y) : def.y,
+                 a.size() > 2 ? jfloat(a[2], def.z) : def.z };
+    };
+
+    // Render resolution — stored on the camera sensor
+    const auto& render = at(j, "render");
+    const uint32_t renderW = static_cast<uint32_t>(jint(at(render, "width"),  1920));
+    const uint32_t renderH = static_cast<uint32_t>(jint(at(render, "height"), 1080));
+
+    // Camera
+    const auto& cam = at(j, "camera");
+    CameraSettings cs{};
+    cs.setFocalLength(jfloat(at(cam, "focal_length_mm"), 28.f));
+    cs.fStop         = jfloat(at(cam, "fstop"));
+    cs.focusDistance = jfloat(at(cam, "focus_distance"), 4.f);
+    cs.bokehBias     = jfloat(at(cam, "bokeh_bias"),     1.f);
+    Transform camT{ jvec3(at(cam, "position"), {0, 0, 5}),
+                    jvec3(at(cam, "rotation_euler")),
+                    vec3(1.f) };
+    const std::string camType = jstr(at(cam, "type"), "perspective");
+    const std::string camName = jstr(at(cam, "name"), "Camera");
+
+    CameraBase* addedCam = nullptr;
+    if (camType == "thinlens") {
+        auto c = std::make_unique<ThinLensCamera>(scene, camName, camT, cs);
+        addedCam = c.get();
+        scene.add(std::move(c));
+    } else if (camType == "fisheye") {
+        auto c = std::make_unique<FisheyeCamera>(scene, camName, camT, cs);
+        addedCam = c.get();
+        scene.add(std::move(c));
+    } else {
+        auto c = std::make_unique<PerspectiveCamera>(scene, camName, camT, cs);
+        addedCam = c.get();
+        scene.add(std::move(c));
+    }
+
+    // Bake the requested resolution into the camera sensor so the caller can
+    // retrieve it via getPreferredRenderSize().
+    addedCam->getSensor().resolutionWidth  = renderW;
+    addedCam->getSensor().resolutionHeight = renderH;
+
+    // Objects
+    if (!j.contains("objects") || !j["objects"].is_array()) return;
+    for (const auto& obj : j["objects"].get_array()) {
+        const std::string type = jstr(at(obj, "type"), "sphere");
+        const std::string name = jstr(at(obj, "name"), "Object");
+        Transform t{ jvec3(at(obj, "position")),
+                     jvec3(at(obj, "rotation_euler")),
+                     jvec3(at(obj, "scale"), {1, 1, 1}) };
+
+        if (type == "gltf" || type == "glb") {
+            ImportGltfScene(scene, jstr(at(obj, "path")));
+        } else if (type == "obj") {
+            ImportObjScene(scene, jstr(at(obj, "path")));
+        } else {
+            const auto& md = at(obj, "material");
+            Material mat{};
+            mat.albedo           = jvec3(at(md, "albedo"),          {0.8f, 0.8f, 0.8f});
+            mat.roughness        = jfloat(at(md, "roughness"),       0.5f);
+            mat.metallic         = jfloat(at(md, "metallic"));
+            mat.specular         = jfloat(at(md, "specular"),        0.5f);
+            mat.ior              = jfloat(at(md, "ior"),             1.5f);
+            mat.transmission     = jfloat(at(md, "transmission"));
+            mat.opacity          = jfloat(at(md, "opacity"),         1.f);
+            mat.emission         = jvec3(at(md, "emission"));
+            mat.emissionStrength = jfloat(at(md, "emission_strength"));
+
+            std::shared_ptr<MeshAsset> asset;
+            if      (type == "cube")  asset = MeshAsset::CreateCube(scene, name, mat);
+            else if (type == "plane") asset = MeshAsset::CreatePlane(scene, name, mat);
+            else if (type == "disk")  asset = MeshAsset::CreateDisk(scene, name, mat);
+            else                      asset = MeshAsset::CreateSphere(scene, name, mat);
+            scene.add(asset);
+            scene.add(std::make_unique<MeshInstance>(scene, name, asset, t));
+        }
+    }
 }

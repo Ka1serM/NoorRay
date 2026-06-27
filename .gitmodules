@@ -40,3 +40,9 @@
 [submodule "external/ImViewGuizmo"]
 	path = external/ImViewGuizmo
 	url = https://github.com/Ka1serM/ImViewGuizmo.git
+[submodule "external/glaze"]
+	path = external/glaze
+	url = https://github.com/stephenberry/glaze.git
+[submodule "external/tbb"]
+	path = external/tbb
+	url = https://github.com/oneapi-src/oneTBB.git

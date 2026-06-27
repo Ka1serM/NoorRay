@@ -5,18 +5,35 @@
 #include "Scene.h"
 #include "../UI/ImGuiManager.h"
 
-SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : transform(transform), scene(scene), visible(true), ImGuiComponent(name)
+SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : name(name), transform(transform), scene(scene), visible(true)
 {
 }
 
 SceneObject::SceneObject(const SceneObject& other)
-    : ImGuiComponent(other.name + " Copy"),
+    : id(0),
+      name(other.name + " Copy"),
       scene(other.scene), visible(other.visible),
       transform(other.transform)
 {}
 
 std::unique_ptr<SceneObject> SceneObject::clone() const {
     return std::make_unique<SceneObject>(*this);
+}
+
+std::vector<std::shared_ptr<SceneObject>> SceneObject::getChildren() const {
+    std::vector<std::shared_ptr<SceneObject>> result;
+    result.reserve(children.size());
+    for (const auto& child : children)
+        if (auto locked = child.lock())
+            result.push_back(std::move(locked));
+    return result;
+}
+
+void SceneObject::removeChild(const SceneObject* child) {
+    std::erase_if(children, [child](const std::weak_ptr<SceneObject>& candidate) {
+        const auto locked = candidate.lock();
+        return !locked || locked.get() == child;
+    });
 }
 
 void SceneObject::setPosition(const vec3& position) {
@@ -45,8 +62,8 @@ void SceneObject::setLocalTransform(const Transform& transf) {
 }
 
 void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
-    if (parent) {
-        const mat4 parentWorld = parent->getWorldTransform().getMatrix();
+    if (const auto parentPtr = parent.lock()) {
+        const mat4 parentWorld = parentPtr->getWorldTransform().getMatrix();
         const mat4 localMatrix = inverse(parentWorld) * worldMatrix;
         transform.setFromMatrix(localMatrix);
     } else
@@ -89,10 +106,10 @@ void SceneObject::renderUi() {
 Transform SceneObject::getWorldTransform() const {
     mat4 worldMatrix = transform.getMatrix();
 
-    const SceneObject* currentParent = parent;
+    auto currentParent = parent.lock();
     while (currentParent != nullptr) {
         worldMatrix = currentParent->transform.getMatrix() * worldMatrix;
-        currentParent = currentParent->parent;
+        currentParent = currentParent->parent.lock();
     }
 
     Transform worldTransform;
@@ -102,6 +119,6 @@ Transform SceneObject::getWorldTransform() const {
 
 void SceneObject::onTransformUpdated() {
     scene.setDirtyFlag(Accumulation);
-    for (SceneObject* child : children)
+    for (const auto& child : getChildren())
         child->onTransformUpdated();
 }

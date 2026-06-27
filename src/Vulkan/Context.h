@@ -30,10 +30,11 @@ class Context {
         VK_KHR_RAY_QUERY_EXTENSION_NAME,
     };
     
-    SDL_Window* window;
+    SDL_Window* window = nullptr;
     int windowWidth;
     int windowHeight;
     float dpiScale = 1;
+    bool headless = false;
 
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;
@@ -56,7 +57,9 @@ class Context {
     void createLogicalDevice();
     void createAllocator();
 public:
-    Context(int width, int height);
+    // headless = true: creates a hidden off-screen window, skips DPI scaling and
+    // swapchain requirements so the Context can be used without a display.
+    Context(int width, int height, bool headless = false);
     ~Context();
 
     // Helper functions

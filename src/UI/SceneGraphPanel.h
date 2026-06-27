@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <memory>
 #include "UI/ImGuiComponent.h"
 #include "Scene/Scene.h"
 
@@ -9,6 +10,6 @@ public:
     void renderUi() override;
 
 private:
-    void drawNode(SceneObject* node);
+    void drawNode(const std::shared_ptr<SceneObject>& node);
     Scene& scene;
 };

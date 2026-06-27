@@ -42,5 +42,5 @@ void PerspectiveCamera::computeProjectionData(const vec3&, const vec3& up, const
     cameraData.focalLength = focalLengthMm * 0.001f;
     cameraData.orthoHeight = 0.0f;
     cameraData.fisheyeFov = 0.0f;
-    applyDepthOfField(focalLengthMm);
+    clearDepthOfField();
 }

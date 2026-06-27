@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(NoorRay VERSION 0.1.0 LANGUAGES C CXX)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
@@ -37,6 +37,18 @@ add_library(ImViewGuizmo INTERFACE)
 target_include_directories(ImViewGuizmo INTERFACE
         ${PROJECT_SOURCE_DIR}/external/ImViewGuizmo
 )
+
+# glaze (header-only JSON/reflection library)
+add_library(glaze INTERFACE)
+target_include_directories(glaze INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/glaze/include
+)
+
+# Intel oneTBB
+set(TBB_TEST     OFF CACHE BOOL "" FORCE)
+set(TBB_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(TBB_STRICT   OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/tbb)
 
 # Vulkan
 if(DEFINED ENV{VULKAN_SDK})
@@ -214,8 +226,13 @@ if(WIN32)
     list(APPEND SRC_FILES "${RESOURCE_RC_PATH}")
 endif()
 
-# Executable target
-add_executable(NoorRay WIN32 ${SRC_FILES})
+# Executable target — WIN32 only applies on Windows (suppresses the console window
+# for GUI mode), but CLI mode still works because SDL_MAIN_HANDLED is set.
+if(WIN32)
+    add_executable(NoorRay WIN32 ${SRC_FILES})
+else()
+    add_executable(NoorRay ${SRC_FILES})
+endif()
 set_target_properties(NoorRay PROPERTIES PREFIX "")
 add_dependencies(NoorRay NoorRayShaders)
 
@@ -235,6 +252,8 @@ target_link_libraries(NoorRay PRIVATE
         stb
         ImViewGuizmo
         GPUOpen::VulkanMemoryAllocator
+        glaze
+        TBB::tbb
 )
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED)

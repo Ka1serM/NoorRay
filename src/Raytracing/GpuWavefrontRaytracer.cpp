@@ -1,6 +1,7 @@
 #include "Raytracing/GpuWavefrontRaytracer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -11,15 +12,16 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
 #include "Camera/CameraInstance.h"
 #include "GPU/Checks.h"
 #include "GPU/CudaDevice.h"
 #include "GPU/Memory.h"
-#include "Kernels/Generate.h"
 #include "Kernels/Shade.h"
-#include "Kernels/Finalize.h"
+#include "Kernels/OptixLaunchParams.h"
+#include "NoorRayOptixIr.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
@@ -53,7 +55,55 @@ void copyTransform(float destination[12], const mat4& matrix)
     const auto source = toOptixTransform(matrix);
     std::copy(source.begin(), source.end(), destination);
 }
+
+template <typename Data = uint32_t>
+struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord
+{
+    char header[OPTIX_SBT_RECORD_HEADER_SIZE];
+    Data data{};
+};
+
+void optixLogCallback(unsigned int level, const char* tag, const char* message, void*)
+{
+    if (level <= 2)
+        fprintf(stderr, "[OptiX][%s] %s\n", tag, message);
 }
+
+OptixProgramGroup makeRaygenGroup(
+    const OptixDeviceContext context,
+    const OptixModule module,
+    const char* entry)
+{
+    OptixProgramGroupDesc description{};
+    description.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+    description.raygen.module = module;
+    description.raygen.entryFunctionName = entry;
+    OptixProgramGroupOptions options{};
+    std::array<char, 4096> log{};
+    size_t logSize = log.size();
+    OptixProgramGroup group{};
+    const OptixResult result = optixProgramGroupCreate(
+        context, &description, 1, &options, log.data(), &logSize, &group);
+    if (result != OPTIX_SUCCESS)
+        throw std::runtime_error(std::string("OptiX raygen program creation failed: ") + log.data());
+    return group;
+}
+
+CUdeviceptr uploadRecord(const OptixProgramGroup group)
+{
+    SbtRecord<> record{};
+    NR_OPTIX_CHECK(optixSbtRecordPackHeader(group, &record));
+    void* deviceRecord = nullptr;
+    NR_GPU_CHECK(cudaMalloc(&deviceRecord, sizeof(record)));
+    NR_GPU_CHECK(cudaMemcpy(deviceRecord, &record, sizeof(record), cudaMemcpyHostToDevice));
+    return reinterpret_cast<CUdeviceptr>(deviceRecord);
+}
+
+}
+
+extern NR_GPU_KERNEL void generateKernel(const KernelParams);
+extern NR_GPU_KERNEL void finalizeKernel(const KernelParams);
+extern NR_GPU_KERNEL void shadeKernel(const KernelParams);
 
 GpuWavefrontRaytracer::GpuWavefrontRaytracer(
     Context& context,
@@ -70,9 +120,88 @@ GpuWavefrontRaytracer::GpuWavefrontRaytracer(
     CUcontext cudaContext{};
     if (cuCtxGetCurrent(&cudaContext) != CUDA_SUCCESS || cudaContext == nullptr)
         throw std::runtime_error("CUDA primary context is unavailable");
-    optix.create(cudaContext);
-    accel.initialize(optix.getContext(), stream);
+
+    NR_OPTIX_CHECK(optixInit());
+
+    OptixDeviceContextOptions ctxOptions{};
+    ctxOptions.logCallbackFunction = optixLogCallback;
+    ctxOptions.logCallbackLevel = 3;
+    NR_OPTIX_CHECK(optixDeviceContextCreate(cudaContext, &ctxOptions, &optixCtx));
+
+    OptixModuleCompileOptions moduleOptions{};
+    moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
+#if !defined(NDEBUG)
+    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MODERATE;
+#else
+    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#endif
+
+    OptixPipelineCompileOptions pipelineOptions{};
+    pipelineOptions.usesMotionBlur = false;
+    pipelineOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
+    pipelineOptions.numPayloadValues = 0;
+    pipelineOptions.numAttributeValues = 2;
+    pipelineOptions.pipelineLaunchParamsVariableName = "params";
+    pipelineOptions.pipelineLaunchParamsSizeInBytes = sizeof(OptixLaunchParams);
+    pipelineOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
+
+    std::array<char, 8192> log{};
+    size_t logSize = log.size();
+    OptixResult result = optixModuleCreate(
+        optixCtx, &moduleOptions, &pipelineOptions,
+        reinterpret_cast<const char*>(noorRayOptixIr), noorRayOptixIrLength,
+        log.data(), &logSize, &optixModule);
+    if (result != OPTIX_SUCCESS)
+        throw std::runtime_error(std::string("OptiX module creation failed: ") + log.data());
+
+    optixExtendGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__extend");
+    optixConnectGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__connect");
+
+    OptixProgramGroupDesc triDesc{};
+    triDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    OptixProgramGroupOptions groupOptions{};
+    logSize = log.size();
+    NR_OPTIX_CHECK(optixProgramGroupCreate(
+        optixCtx, &triDesc, 1, &groupOptions, log.data(), &logSize, &optixTriangleGroup));
+
+    OptixProgramGroupDesc missDesc{};
+    missDesc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
+    missDesc.miss.module = nullptr;
+    missDesc.miss.entryFunctionName = nullptr;
+    logSize = log.size();
+    NR_OPTIX_CHECK(optixProgramGroupCreate(
+        optixCtx, &missDesc, 1, &groupOptions, log.data(), &logSize, &optixMissGroup));
+
+    const std::array groups{optixExtendGroup, optixConnectGroup, optixTriangleGroup, optixMissGroup};
+    OptixPipelineLinkOptions linkOptions{};
+    linkOptions.maxTraceDepth = 1;
+    logSize = log.size();
+    result = optixPipelineCreate(
+        optixCtx, &pipelineOptions, &linkOptions,
+        groups.data(), static_cast<unsigned int>(groups.size()),
+        log.data(), &logSize, &optixPipeline);
+    if (result != OPTIX_SUCCESS)
+        throw std::runtime_error(std::string("OptiX pipeline creation failed: ") + log.data());
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixPipeline, 0, 0, 0, 2));
+
+    optixExtendRecord = uploadRecord(optixExtendGroup);
+    optixConnectRecord = uploadRecord(optixConnectGroup);
+    optixHitgroupRecord = uploadRecord(optixTriangleGroup);
+    optixMissRecord = uploadRecord(optixMissGroup);
+
+    optixExtendSbt.raygenRecord = optixExtendRecord;
+    optixExtendSbt.missRecordBase = optixMissRecord;
+    optixExtendSbt.missRecordStrideInBytes = sizeof(SbtRecord<>);
+    optixExtendSbt.missRecordCount = 1;
+    optixExtendSbt.hitgroupRecordBase = optixHitgroupRecord;
+    optixExtendSbt.hitgroupRecordStrideInBytes = sizeof(SbtRecord<>);
+    optixExtendSbt.hitgroupRecordCount = 1;
+    optixConnectSbt = optixExtendSbt;
+    optixConnectSbt.raygenRecord = optixConnectRecord;
+
     interop = std::make_unique<ImageInterop>(context);
+    NR_GPU_CHECK(cudaEventCreate(&m_startEvent));
+    NR_GPU_CHECK(cudaEventCreate(&m_stopEvent));
     setup(width, height);
 }
 
@@ -80,18 +209,33 @@ GpuWavefrontRaytracer::~GpuWavefrontRaytracer()
 {
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
-    accel.destroy();
+    triangleBlas.destroy(stream);
+    tlas.destroy(stream);
     freeSceneData();
     freeQueues();
-    for (uint32_t depth = 0; depth < MaxBounces; ++depth)
-    {
-        nr::gpu::freeDevice(extendParams[depth], stream);
-        nr::gpu::freeDevice(connectParams[depth], stream);
-    }
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
+    cudaEventDestroy(m_startEvent);
+    cudaEventDestroy(m_stopEvent);
     interop.reset();
-    optix.destroy();
+
+    auto freeRecord = [](CUdeviceptr& ptr) {
+        if (ptr != 0) { cudaFree(reinterpret_cast<void*>(ptr)); ptr = 0; }
+    };
+    freeRecord(optixExtendRecord);
+    freeRecord(optixConnectRecord);
+    freeRecord(optixHitgroupRecord);
+    freeRecord(optixMissRecord);
+    if (optixPipeline != nullptr) { optixPipelineDestroy(optixPipeline); optixPipeline = nullptr; }
+    if (optixMissGroup != nullptr) { optixProgramGroupDestroy(optixMissGroup); optixMissGroup = nullptr; }
+    if (optixTriangleGroup != nullptr) { optixProgramGroupDestroy(optixTriangleGroup); optixTriangleGroup = nullptr; }
+    if (optixConnectGroup != nullptr) { optixProgramGroupDestroy(optixConnectGroup); optixConnectGroup = nullptr; }
+    if (optixExtendGroup != nullptr) { optixProgramGroupDestroy(optixExtendGroup); optixExtendGroup = nullptr; }
+    if (optixModule != nullptr) { optixModuleDestroy(optixModule); optixModule = nullptr; }
+    if (optixCtx != nullptr) { optixDeviceContextDestroy(optixCtx); optixCtx = nullptr; }
+    optixExtendSbt = {};
+    optixConnectSbt = {};
+
     if (stream != nullptr)
         cudaStreamDestroy(stream);
 }
@@ -108,7 +252,6 @@ void GpuWavefrontRaytracer::setup(const uint32_t newWidth, const uint32_t newHei
     allocateQueues();
     updateTextures();
     updateMeshes();
-    uploadLaunchParams();
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     nextBuffer = 0;
     lastLaunched = 0;
@@ -230,7 +373,8 @@ void GpuWavefrontRaytracer::updateTextures()
 void GpuWavefrontRaytracer::updateMeshes()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    accel.destroy();
+    triangleBlas.destroy(stream);
+    tlas.destroy(stream);
     nr::gpu::freeDevice(deviceMeshes, stream);
     nr::gpu::freeDevice(deviceInstances, stream);
     for (const DeviceMeshAllocation& allocation : meshAllocations)
@@ -296,24 +440,26 @@ void GpuWavefrontRaytracer::updateMeshes()
         deviceMeshes = allocateDevice<GpuMesh>(gpuMeshes.size(), stream);
         uploadVector(deviceMeshes, gpuMeshes, stream);
     }
+    triangleBlas.build(optixCtx, stream, accelMeshes);
+    gpuScene.meshes = deviceMeshes;
+    gpuScene.meshCount = static_cast<uint32_t>(gpuMeshes.size());
+
     std::vector<GpuInstance> instances;
-    const std::vector<AccelInstanceInput> accelInstances = buildInstanceInputs(&instances);
+    const std::vector<AccelInstanceInput> accelInstances = buildInstanceInputs(triangleBlas.getHandles(), &instances);
     if (!instances.empty())
     {
         deviceInstances = allocateDevice<GpuInstance>(instances.size(), stream);
         uploadVector(deviceInstances, instances, stream);
     }
-    accel.rebuild(accelMeshes, accelInstances);
-    gpuScene.meshes = deviceMeshes;
-    gpuScene.meshCount = static_cast<uint32_t>(gpuMeshes.size());
+    tlas.build(optixCtx, stream, accelInstances);
     gpuScene.instances = deviceInstances;
     gpuScene.instanceCount = static_cast<uint32_t>(instances.size());
     gpuScene.renderSettings = &scene.getRenderSettings();
     gpuScene.environment = scene.getEnvironment().settings;
-    uploadLaunchParams();
 }
 
 std::vector<AccelInstanceInput> GpuWavefrontRaytracer::buildInstanceInputs(
+    const std::vector<OptixTraversableHandle>& meshHandles,
     std::vector<GpuInstance>* gpuInstances) const
 {
     std::vector<AccelInstanceInput> result;
@@ -326,7 +472,8 @@ std::vector<AccelInstanceInput> GpuWavefrontRaytracer::buildInstanceInputs(
         const MeshInstance& instance = *instances[index];
         const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
         const mat4 worldToObject = inverse(objectToWorld);
-        result.push_back({toOptixTransform(objectToWorld), instance.getMeshAsset().getMeshIndex(), index});
+        const uint32_t meshIndex = instance.getMeshAsset().getMeshIndex();
+        result.push_back({toOptixTransform(objectToWorld), meshHandles[meshIndex], index});
         if (gpuInstances != nullptr)
         {
             GpuInstance gpuInstance{};
@@ -348,30 +495,67 @@ void GpuWavefrontRaytracer::updateTLAS()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     std::vector<GpuInstance> instances;
-    const auto accelInstances = buildInstanceInputs(&instances);
+    const auto accelInstances = buildInstanceInputs(triangleBlas.getHandles(), &instances);
     if (instances.size() != gpuScene.instanceCount)
     {
         updateMeshes();
         return;
     }
     uploadVector(deviceInstances, instances, stream);
-    accel.updateInstances(accelInstances);
-    uploadLaunchParams();
+    tlas.update(optixCtx, stream, accelInstances);
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
-void GpuWavefrontRaytracer::uploadLaunchParams()
+void GpuWavefrontRaytracer::launchGenerate(const KernelParams& params, const cudaStream_t stream) const
 {
-    for (uint32_t depth = 0; depth < MaxBounces; ++depth)
-    {
-        if (extendParams[depth] == nullptr)
-            extendParams[depth] = allocateDevice<OptixLaunchParams>(1, stream);
-        if (connectParams[depth] == nullptr)
-            connectParams[depth] = allocateDevice<OptixLaunchParams>(1, stream);
-        const OptixLaunchParams params{queues, accel.getTraversable(), depth};
-        NR_GPU_CHECK(cudaMemcpyAsync(extendParams[depth], &params, sizeof(params), cudaMemcpyHostToDevice, stream));
-        NR_GPU_CHECK(cudaMemcpyAsync(connectParams[depth], &params, sizeof(params), cudaMemcpyHostToDevice, stream));
-    }
+    constexpr uint32_t blockSize = 256;
+    const uint32_t count = params.frame.width * params.frame.height;
+    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = { const_cast<KernelParams*>(&params) };
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(generateKernel), grid, blockSize, args, 0, stream));
+}
+
+void GpuWavefrontRaytracer::launchFinalize(const KernelParams& params, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const uint32_t count = params.frame.width * params.frame.height;
+    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = { const_cast<KernelParams*>(&params) };
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(finalizeKernel), grid, blockSize, args, 0, stream));
+}
+
+void GpuWavefrontRaytracer::launchShade(const KernelParams& params, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const dim3 grid((params.queues.capacity + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = { const_cast<KernelParams*>(&params) };
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(shadeKernel), grid, blockSize, args, 0, stream));
+}
+
+void GpuWavefrontRaytracer::launchExtend(const WavefrontQueues& queues, const uint32_t depth,
+                                         const uint32_t capacity, const cudaStream_t stream) const
+{
+    const OptixLaunchParams params{queues, tlas.getTraversable(), depth};
+    void* deviceParams = nullptr;
+    NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
+    NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
+    optixLaunch(optixPipeline, stream,
+        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(OptixLaunchParams),
+        &optixExtendSbt, capacity, 1, 1);
+    NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
+}
+
+void GpuWavefrontRaytracer::launchConnect(const WavefrontQueues& queues, const uint32_t depth,
+                                          const uint32_t capacity, const cudaStream_t stream) const
+{
+    const OptixLaunchParams params{queues, tlas.getTraversable(), depth};
+    void* deviceParams = nullptr;
+    NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
+    NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
+    optixLaunch(optixPipeline, stream,
+        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(OptixLaunchParams),
+        &optixConnectSbt, capacity, 1, 1);
+    NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
 void GpuWavefrontRaytracer::render(const PushData& pushData)
@@ -380,6 +564,11 @@ void GpuWavefrontRaytracer::render(const PushData& pushData)
     const uint64_t frameValue = ++submittedFrame;
     if (lastUseValue[buffer] != 0)
         interop->waitForRelease(stream, lastUseValue[buffer]);
+
+    if (m_eventsRecorded) {
+        NR_GPU_CHECK(cudaEventSynchronize(m_stopEvent));
+        NR_GPU_CHECK(cudaEventElapsedTime(&m_gpuTimeMs, m_startEvent, m_stopEvent));
+    }
 
     if (pushData.frame == 0)
     {
@@ -406,6 +595,9 @@ void GpuWavefrontRaytracer::render(const PushData& pushData)
         static_cast<uint32_t>(std::max({renderSettings.diffuseBounces,
                                         renderSettings.specularBounces,
                                         renderSettings.transmissionBounces, 1}) + 1));
+
+    NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
+
     for (uint32_t s = 0; s < samplesPerFrame; ++s)
     {
         NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0, sizeof(uint32_t) * MaxBounces, stream));
@@ -417,17 +609,17 @@ void GpuWavefrontRaytracer::render(const PushData& pushData)
         for (uint32_t depth = 0; depth < maxShaderBounces; ++depth)
         {
             params.depth = depth;
-            NR_OPTIX_CHECK(optixLaunch(optix.getPipeline(), stream,
-                reinterpret_cast<CUdeviceptr>(extendParams[depth]), sizeof(OptixLaunchParams),
-                &optix.getExtendSbt(), queues.capacity, 1, 1));
+            launchExtend(queues, depth, queues.capacity, stream);
             launchShade(params, stream);
-            NR_OPTIX_CHECK(optixLaunch(optix.getPipeline(), stream,
-                reinterpret_cast<CUdeviceptr>(connectParams[depth]), sizeof(OptixLaunchParams),
-                &optix.getConnectSbt(), queues.capacity, 1, 1));
+            launchConnect(queues, depth, queues.capacity, stream);
         }
         launchFinalize(params, stream);
     }
     NR_GPU_CHECK(cudaPeekAtLastError());
+
+    NR_GPU_CHECK(cudaEventRecord(m_stopEvent, stream));
+    m_eventsRecorded = true;
+
     interop->signalReady(stream, frameValue);
     lastLaunched = buffer;
     lastReadyValue = frameValue;
@@ -445,7 +637,7 @@ void GpuWavefrontRaytracer::debugSave(const std::string& path) const
     std::cout << "[debug] rayCounts[0]=" << rayCount0
               << " meshCount=" << gpuScene.meshCount
               << " instanceCount=" << gpuScene.instanceCount
-              << " traversable=" << accel.getTraversable()
+              << " traversable=" << tlas.getTraversable()
               << " size=" << width << "x" << height << "\n";
 
     const size_t pixelCount = static_cast<size_t>(width) * height;

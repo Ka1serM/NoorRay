@@ -12,6 +12,7 @@
 #define NR_CPU_GPU __host__ __device__
 #define NR_GPU __device__
 #define NR_GPU_KERNEL __global__
+#define NR_GPU_CODE 1
 #else
 #define NR_CPU_GPU
 #define NR_GPU

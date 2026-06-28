@@ -2,7 +2,6 @@
 
 #include "GPU/Annotations.h"
 #include "Camera/Camera.h"
-#include "Kernels/Math.h"
 #include "Scene/SceneTypes.h"
 
 class CameraInstance;
@@ -16,7 +15,7 @@ public:
             sensor.widthMm / (2.f * focalLengthMm),
             sensor.heightMm / (2.f * focalLengthMm)};
         origin = glm::vec3(0.f);
-        direction = normalize3(glm::vec3(nx * scale.x, ny * scale.y, -1.f));
+        direction = glm::normalize(glm::vec3(nx * scale.x, ny * scale.y, -1.f));
         transformRay(origin, direction);
         return true;
     }

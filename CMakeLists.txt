@@ -4,7 +4,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES 89)
+set(NR_CUDA_ARCH "89" CACHE STRING "CUDA architecture (e.g. 89 for sm_89)")
+set(CMAKE_CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
 find_package(CUDAToolkit 13.3 EXACT REQUIRED)
@@ -212,16 +213,17 @@ add_custom_command(
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
         COMMAND "${CMAKE_CUDA_COMPILER}"
                 -ccbin "${CMAKE_CUDA_HOST_COMPILER}"
-                --ptx --gpu-architecture=compute_89 --std=c++20
+                --ptx --gpu-architecture=compute_${NR_CUDA_ARCH} --std=c++20
                 --use_fast_math --generate-line-info --expt-relaxed-constexpr
-                -DNR_BACKEND_CUDA=1
+                -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
                 "-I${PROJECT_SOURCE_DIR}/src"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
                 "-I${OPTIX_INCLUDE_DIR}"
                 -o "${NR_OPTIX_PTX}"
-                "${PROJECT_SOURCE_DIR}/src/Kernels/cuda/OptixPrograms.cu"
+                "${PROJECT_SOURCE_DIR}/src/Kernels/cuda/Extend.cu"
         DEPENDS
-                src/Kernels/cuda/OptixPrograms.cu
+                src/Kernels/cuda/Extend.cu
+                src/Kernels/cuda/Connect.cu
                 ${NR_KERNEL_HEADERS}
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
@@ -231,15 +233,14 @@ add_library(NoorRayCuda STATIC
         src/GPU/ImageInterop.cpp
         src/GPU/Memory.cpp
         src/GPU/rstd/Memory.cpp
-        src/Kernels/cuda/CudaRayLutGenerator.cu
         src/Kernels/cuda/Generate.cu
         src/Kernels/cuda/Shade.cu
         src/Kernels/cuda/Finalize.cu
-        src/Kernels/cuda/AccelBuilder.cpp
-        src/Kernels/cuda/OptiXSetup.cpp
+        src/Kernels/cuda/TriangleBlas.cpp
+        src/Kernels/cuda/TlasBuilder.cpp
         src/Raytracing/GpuWavefrontRaytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
-set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES 89)
+set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
 target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
 target_compile_definitions(NoorRayCuda PUBLIC
         NR_BACKEND_CUDA=1

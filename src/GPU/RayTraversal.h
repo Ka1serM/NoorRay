@@ -5,7 +5,7 @@
 
 #include <optix.h>
 
-#if defined(__CUDACC__)
+#if defined(NR_GPU_CODE)
 #include <optix_device.h>
 #endif
 

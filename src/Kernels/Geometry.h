@@ -45,14 +45,8 @@ NR_GPU inline SurfaceData loadSurface(
     const float v)
 {
     SurfaceData surface{};
-    if (instanceIndex >= scene.instanceCount)
-        return surface;
     const GpuInstance instance = scene.instances[instanceIndex];
-    if (instance.meshIndex >= scene.meshCount)
-        return surface;
     const GpuMesh mesh = scene.meshes[instance.meshIndex];
-    if (primitiveIndex >= mesh.triangleCount)
-        return surface;
     const uint32_t i0 = mesh.indices[primitiveIndex * 3];
     const uint32_t i1 = mesh.indices[primitiveIndex * 3 + 1];
     const uint32_t i2 = mesh.indices[primitiveIndex * 3 + 2];
@@ -72,7 +66,6 @@ NR_GPU inline SurfaceData loadSurface(
                        a.uv.y * w + b.uv.y * u + c.uv.y * v);
     surface.objectIndex = instance.objectIndex;
     const int materialIndex = mesh.faces[primitiveIndex].materialIndex;
-    if (materialIndex >= 0 && static_cast<uint32_t>(materialIndex) < mesh.materialCount)
-        surface.material = &mesh.materials[materialIndex];
+    surface.material = &mesh.materials[materialIndex];
     return surface;
 }

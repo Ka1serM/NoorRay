@@ -15,7 +15,7 @@
 
 #include "ImGuiManager.h"
 #include "Log.h"
-#include "Raytracing/GpuWavefrontRaytracer.h"
+#include "Raytracing/Raytracer.h"
 #include "Scene/Scene.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Tonemapper.h"
@@ -52,7 +52,7 @@ RenderPanel::RenderPanel(
     std::string name,
     Context& context,
     Scene& scene,
-    GpuWavefrontRaytracer& raytracer,
+    Raytracer& raytracer,
     Renderer& renderer,
     Tonemapper& tonemapper
 )
@@ -81,7 +81,7 @@ void RenderPanel::renderUi() {
         for (const auto& job : m_saveJobs) {
             const Image& imageToSave = job.imageProvider();
             std::vector<uint8_t> imageData = copyImageToHostMemory(imageToSave.getImage(), job.format, width, height);
-            
+
             std::future<void> saveFuture = std::async(std::launch::async,
                 [imgData = std::move(imageData), format = job.format, filename = job.filename, w = width, h = height]() mutable {
                     writeDataToFile(imgData, format, filename, w, h);
@@ -95,7 +95,7 @@ void RenderPanel::renderUi() {
     const bool isSaving = (m_saveState != SaveState::IDLE);
     ImGui::Begin(name.c_str());
 
-    // Render Settings (top) 
+    // Render Settings (top)
     if (ImGui::BeginTable("RenderSettingsTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableSetupColumn("Label");
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
@@ -112,8 +112,8 @@ void RenderPanel::renderUi() {
         ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##TransmissionBounces", &settings.transmissionBounces, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::EndTable();
     }
-    
-    // Save Location 
+
+    // Save Location
     ImGui::SeparatorText("Save Location");
 
     // Poll for the result from the previous frame
@@ -140,13 +140,13 @@ void RenderPanel::renderUi() {
         ImGui::BeginDisabled(m_folderDialog != nullptr);
         if (ImGui::Button("Select", ImVec2(buttonWidth, 0)))
             m_folderDialog = std::make_unique<pfd::select_folder>("Select Render Output Folder", ".");
-        
+
         ImGui::EndDisabled();
 
         ImGui::EndTable();
     }
 
-    // Output Files 
+    // Output Files
     ImGui::Spacing(); ImGui::SeparatorText("Output Files");
     if (ImGui::BeginTable("FilenamesTable", 2, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed);
@@ -164,7 +164,7 @@ void RenderPanel::renderUi() {
         ImGui::EndTable();
     }
 
-    // Render Button 
+    // Render Button
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
     ImGui::BeginDisabled(isSaving);
     const char* buttonText = isSaving ? "Saving..." : "Render";
@@ -220,7 +220,7 @@ void RenderPanel::executeSave() {
 
     if (!m_saveJobs.empty())
         m_saveState = SaveState::COPY_PENDING;
-    
+
     saveRequested = false;
 }
 
@@ -267,7 +267,7 @@ void RenderPanel::writeDataToFile(std::vector<uint8_t>& imageData, const vk::For
 
     bool success = false;
     switch (format) {
-        case vk::Format::eR32G32B32A32Sfloat: 
+        case vk::Format::eR32G32B32A32Sfloat:
             success = stbi_write_hdr(filename.c_str(), width, height, 4, reinterpret_cast<const float*>(imageData.data())) != 0;
             break;
         case vk::Format::eR16G16B16A16Sfloat: {

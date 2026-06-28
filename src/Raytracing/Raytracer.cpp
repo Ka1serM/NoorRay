@@ -1,4 +1,4 @@
-#include "Raytracing/GpuWavefrontRaytracer.h"
+#include "Raytracing/Raytracer.h"
 
 #include <algorithm>
 #include <array>
@@ -18,7 +18,7 @@
 #include "Camera/CameraInstance.h"
 #include "GPU/Checks.h"
 #include "GPU/CudaDevice.h"
-#include "GPU/Memory.h"
+#include "GPU/rstd/Memory.h"
 #include "Kernels/Shade.h"
 #include "Kernels/OptixLaunchParams.h"
 #include "NoorRayOptixIr.h"
@@ -32,7 +32,7 @@ namespace
 template <typename T>
 T* allocateDevice(const size_t count, const cudaStream_t stream)
 {
-    return static_cast<T*>(nr::gpu::mallocDevice(sizeof(T) * count, stream));
+    return static_cast<T*>(nr::rstd::allocate_device(sizeof(T) * count, stream));
 }
 
 template <typename T>
@@ -105,7 +105,7 @@ extern NR_GPU_KERNEL void generateKernel(const KernelParams);
 extern NR_GPU_KERNEL void finalizeKernel(const KernelParams);
 extern NR_GPU_KERNEL void shadeKernel(const KernelParams);
 
-GpuWavefrontRaytracer::GpuWavefrontRaytracer(
+Raytracer::Raytracer(
     Context& context,
     Scene& scene,
     const uint32_t width,
@@ -199,13 +199,18 @@ GpuWavefrontRaytracer::GpuWavefrontRaytracer(
     optixConnectSbt = optixExtendSbt;
     optixConnectSbt.raygenRecord = optixConnectRecord;
 
+    managedR2Sampler = static_cast<R2Sampler*>(nr::rstd::allocate_managed(sizeof(R2Sampler)));
+    new(managedR2Sampler) R2Sampler{};
+    managedHaltonSampler = static_cast<HaltonSampler*>(nr::rstd::allocate_managed(sizeof(HaltonSampler)));
+    new(managedHaltonSampler) HaltonSampler{};
+
     interop = std::make_unique<ImageInterop>(context);
     NR_GPU_CHECK(cudaEventCreate(&m_startEvent));
     NR_GPU_CHECK(cudaEventCreate(&m_stopEvent));
     setup(width, height);
 }
 
-GpuWavefrontRaytracer::~GpuWavefrontRaytracer()
+Raytracer::~Raytracer()
 {
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
@@ -240,7 +245,7 @@ GpuWavefrontRaytracer::~GpuWavefrontRaytracer()
         cudaStreamDestroy(stream);
 }
 
-void GpuWavefrontRaytracer::setup(const uint32_t newWidth, const uint32_t newHeight)
+void Raytracer::setup(const uint32_t newWidth, const uint32_t newHeight)
 {
     if (newWidth == 0 || newHeight == 0)
         throw std::runtime_error("GPU renderer dimensions must be non-zero");
@@ -260,13 +265,13 @@ void GpuWavefrontRaytracer::setup(const uint32_t newWidth, const uint32_t newHei
     lastUseValue = {};
 }
 
-void GpuWavefrontRaytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
+void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
 {
     if (newWidth != width || newHeight != height)
         setup(newWidth, newHeight);
 }
 
-void GpuWavefrontRaytracer::allocateQueues()
+void Raytracer::allocateQueues()
 {
     queues.capacity = width * height;
     queues.rayCounts = allocateDevice<uint32_t>(MaxBounces, stream);
@@ -282,33 +287,33 @@ void GpuWavefrontRaytracer::allocateQueues()
     NR_GPU_CHECK(cudaMemsetAsync(adaptiveState, 0, sizeof(glm::vec4) * width * height, stream));
 }
 
-void GpuWavefrontRaytracer::freeQueues() noexcept
+void Raytracer::freeQueues() noexcept
 {
-    nr::gpu::freeDevice(queues.rayCounts, stream);
-    nr::gpu::freeDevice(queues.pathStates, stream);
-    nr::gpu::freeDevice(queues.primaryStates, stream);
-    nr::gpu::freeDevice(queues.rayQueues[0], stream);
-    nr::gpu::freeDevice(queues.rayQueues[1], stream);
-    nr::gpu::freeDevice(queues.hitQueue, stream);
-    nr::gpu::freeDevice(queues.shadowQueue, stream);
-    nr::gpu::freeDevice(accumulation, stream);
-    nr::gpu::freeDevice(adaptiveState, stream);
+    nr::rstd::deallocate_device(queues.rayCounts, stream);
+    nr::rstd::deallocate_device(queues.pathStates, stream);
+    nr::rstd::deallocate_device(queues.primaryStates, stream);
+    nr::rstd::deallocate_device(queues.rayQueues[0], stream);
+    nr::rstd::deallocate_device(queues.rayQueues[1], stream);
+    nr::rstd::deallocate_device(queues.hitQueue, stream);
+    nr::rstd::deallocate_device(queues.shadowQueue, stream);
+    nr::rstd::deallocate_device(accumulation, stream);
+    nr::rstd::deallocate_device(adaptiveState, stream);
     queues = {};
     accumulation = nullptr;
     adaptiveState = nullptr;
 }
 
-void GpuWavefrontRaytracer::freeSceneData() noexcept
+void Raytracer::freeSceneData() noexcept
 {
-    nr::gpu::freeDevice(deviceMeshes, stream);
-    nr::gpu::freeDevice(deviceInstances, stream);
-    nr::gpu::freeDevice(deviceTextureObjects, stream);
+    nr::rstd::deallocate_device(deviceMeshes, stream);
+    nr::rstd::deallocate_device(deviceInstances, stream);
+    nr::rstd::deallocate_device(deviceTextureObjects, stream);
     for (const DeviceMeshAllocation& allocation : meshAllocations)
     {
-        nr::gpu::freeDevice(allocation.vertices, stream);
-        nr::gpu::freeDevice(allocation.indices, stream);
-        nr::gpu::freeDevice(allocation.faces, stream);
-        nr::gpu::freeDevice(allocation.materials, stream);
+        nr::rstd::deallocate_device(allocation.vertices, stream);
+        nr::rstd::deallocate_device(allocation.indices, stream);
+        nr::rstd::deallocate_device(allocation.faces, stream);
+        nr::rstd::deallocate_device(allocation.materials, stream);
     }
     for (const cudaTextureObject_t texture : textureObjects)
         cudaDestroyTextureObject(texture);
@@ -320,16 +325,21 @@ void GpuWavefrontRaytracer::freeSceneData() noexcept
     meshAllocations.clear();
     textureObjects.clear();
     textureArrays.clear();
+    nr::rstd::deallocate_managed(managedR2Sampler);
+    nr::rstd::deallocate_managed(managedHaltonSampler);
+    managedR2Sampler = nullptr;
+    managedHaltonSampler = nullptr;
     gpuScene = {};
     gpuScene.renderSettings = &scene.getRenderSettings();
     gpuScene.environment = scene.getEnvironment().settings;
+    gpuScene.sampler = Sampler{managedR2Sampler};
 }
 
-void GpuWavefrontRaytracer::updateTextures()
+void Raytracer::updateTextures()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     if (deviceTextureObjects != nullptr)
-        nr::gpu::freeDevice(deviceTextureObjects, stream);
+        nr::rstd::deallocate_device(deviceTextureObjects, stream);
     for (const cudaTextureObject_t texture : textureObjects)
         NR_GPU_CHECK(cudaDestroyTextureObject(texture));
     for (const cudaArray_t array : textureArrays)
@@ -370,19 +380,19 @@ void GpuWavefrontRaytracer::updateTextures()
     gpuScene.textureCount = static_cast<uint32_t>(textureObjects.size());
 }
 
-void GpuWavefrontRaytracer::updateMeshes()
+void Raytracer::updateMeshes()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     triangleBlas.destroy(stream);
     tlas.destroy(stream);
-    nr::gpu::freeDevice(deviceMeshes, stream);
-    nr::gpu::freeDevice(deviceInstances, stream);
+    nr::rstd::deallocate_device(deviceMeshes, stream);
+    nr::rstd::deallocate_device(deviceInstances, stream);
     for (const DeviceMeshAllocation& allocation : meshAllocations)
     {
-        nr::gpu::freeDevice(allocation.vertices, stream);
-        nr::gpu::freeDevice(allocation.indices, stream);
-        nr::gpu::freeDevice(allocation.faces, stream);
-        nr::gpu::freeDevice(allocation.materials, stream);
+        nr::rstd::deallocate_device(allocation.vertices, stream);
+        nr::rstd::deallocate_device(allocation.indices, stream);
+        nr::rstd::deallocate_device(allocation.faces, stream);
+        nr::rstd::deallocate_device(allocation.materials, stream);
     }
     meshAllocations.clear();
 
@@ -458,7 +468,7 @@ void GpuWavefrontRaytracer::updateMeshes()
     gpuScene.environment = scene.getEnvironment().settings;
 }
 
-std::vector<AccelInstanceInput> GpuWavefrontRaytracer::buildInstanceInputs(
+std::vector<AccelInstanceInput> Raytracer::buildInstanceInputs(
     const std::vector<OptixTraversableHandle>& meshHandles,
     std::vector<GpuInstance>* gpuInstances) const
 {
@@ -491,7 +501,7 @@ std::vector<AccelInstanceInput> GpuWavefrontRaytracer::buildInstanceInputs(
     return result;
 }
 
-void GpuWavefrontRaytracer::updateTLAS()
+void Raytracer::updateTLAS()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     std::vector<GpuInstance> instances;
@@ -506,7 +516,7 @@ void GpuWavefrontRaytracer::updateTLAS()
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
-void GpuWavefrontRaytracer::launchGenerate(const KernelParams& params, const cudaStream_t stream) const
+void Raytracer::launchGenerate(const KernelParams& params, const cudaStream_t stream) const
 {
     constexpr uint32_t blockSize = 256;
     const uint32_t count = params.frame.width * params.frame.height;
@@ -515,7 +525,7 @@ void GpuWavefrontRaytracer::launchGenerate(const KernelParams& params, const cud
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(generateKernel), grid, blockSize, args, 0, stream));
 }
 
-void GpuWavefrontRaytracer::launchFinalize(const KernelParams& params, const cudaStream_t stream) const
+void Raytracer::launchFinalize(const KernelParams& params, const cudaStream_t stream) const
 {
     constexpr uint32_t blockSize = 256;
     const uint32_t count = params.frame.width * params.frame.height;
@@ -524,7 +534,7 @@ void GpuWavefrontRaytracer::launchFinalize(const KernelParams& params, const cud
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(finalizeKernel), grid, blockSize, args, 0, stream));
 }
 
-void GpuWavefrontRaytracer::launchShade(const KernelParams& params, const cudaStream_t stream) const
+void Raytracer::launchShade(const KernelParams& params, const cudaStream_t stream) const
 {
     constexpr uint32_t blockSize = 256;
     const dim3 grid((params.queues.capacity + blockSize - 1) / blockSize, 1, 1);
@@ -532,7 +542,7 @@ void GpuWavefrontRaytracer::launchShade(const KernelParams& params, const cudaSt
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(shadeKernel), grid, blockSize, args, 0, stream));
 }
 
-void GpuWavefrontRaytracer::launchExtend(const WavefrontQueues& queues, const uint32_t depth,
+void Raytracer::launchExtend(const WavefrontQueues& queues, const uint32_t depth,
                                          const uint32_t capacity, const cudaStream_t stream) const
 {
     const OptixLaunchParams params{queues, tlas.getTraversable(), depth};
@@ -545,7 +555,7 @@ void GpuWavefrontRaytracer::launchExtend(const WavefrontQueues& queues, const ui
     NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
-void GpuWavefrontRaytracer::launchConnect(const WavefrontQueues& queues, const uint32_t depth,
+void Raytracer::launchConnect(const WavefrontQueues& queues, const uint32_t depth,
                                           const uint32_t capacity, const cudaStream_t stream) const
 {
     const OptixLaunchParams params{queues, tlas.getTraversable(), depth};
@@ -558,7 +568,7 @@ void GpuWavefrontRaytracer::launchConnect(const WavefrontQueues& queues, const u
     NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
-void GpuWavefrontRaytracer::render(const PushData& pushData)
+void Raytracer::render(const PushData& pushData)
 {
     const uint32_t buffer = nextBuffer;
     const uint64_t frameValue = ++submittedFrame;
@@ -627,7 +637,7 @@ void GpuWavefrontRaytracer::render(const PushData& pushData)
     nextBuffer = 1 - buffer;
 }
 
-void GpuWavefrontRaytracer::debugSave(const std::string& path) const
+void Raytracer::debugSave(const std::string& path) const
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 
@@ -684,19 +694,19 @@ void GpuWavefrontRaytracer::debugSave(const std::string& path) const
         std::cerr << "[debug] failed to write " << path << "\n";
 }
 
-FrameInfo GpuWavefrontRaytracer::getFrameInfo() const
+FrameInfo Raytracer::getFrameInfo() const
 {
     return {lastLaunched, lastReadyValue,
             interop->getRenderReadySemaphore(), interop->getBufferReleasedSemaphore()};
 }
 
-Image& GpuWavefrontRaytracer::getOutputColor() { return interop->getImage(lastLaunched, Aov::Color); }
-Image& GpuWavefrontRaytracer::getOutputAlbedo() { return interop->getImage(lastLaunched, Aov::Albedo); }
-Image& GpuWavefrontRaytracer::getOutputNormal() { return interop->getImage(lastLaunched, Aov::Normal); }
-Image& GpuWavefrontRaytracer::getOutputCrypto() { return interop->getImage(lastLaunched, Aov::Cryptomatte); }
-Image& GpuWavefrontRaytracer::getOutputPosition() { return interop->getImage(lastLaunched, Aov::Position); }
-Image& GpuWavefrontRaytracer::getOutputMaterial() { return interop->getImage(lastLaunched, Aov::Material); }
-Image& GpuWavefrontRaytracer::getOutputImage(const uint32_t bufferIndex, const Aov aov)
+Image& Raytracer::getOutputColor() { return interop->getImage(lastLaunched, Aov::Color); }
+Image& Raytracer::getOutputAlbedo() { return interop->getImage(lastLaunched, Aov::Albedo); }
+Image& Raytracer::getOutputNormal() { return interop->getImage(lastLaunched, Aov::Normal); }
+Image& Raytracer::getOutputCrypto() { return interop->getImage(lastLaunched, Aov::Cryptomatte); }
+Image& Raytracer::getOutputPosition() { return interop->getImage(lastLaunched, Aov::Position); }
+Image& Raytracer::getOutputMaterial() { return interop->getImage(lastLaunched, Aov::Material); }
+Image& Raytracer::getOutputImage(const uint32_t bufferIndex, const Aov aov)
 {
     return interop->getImage(bufferIndex, aov);
 }

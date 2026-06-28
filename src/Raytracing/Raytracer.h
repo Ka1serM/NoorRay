@@ -34,14 +34,14 @@ struct PushData
     int pixelSizePercent{};
 };
 
-class GpuWavefrontRaytracer
+class Raytracer
 {
 public:
-    GpuWavefrontRaytracer(Context& context, Scene& scene, uint32_t width, uint32_t height);
-    ~GpuWavefrontRaytracer();
+    Raytracer(Context& context, Scene& scene, uint32_t width, uint32_t height);
+    ~Raytracer();
 
-    GpuWavefrontRaytracer(const GpuWavefrontRaytracer&) = delete;
-    GpuWavefrontRaytracer& operator=(const GpuWavefrontRaytracer&) = delete;
+    Raytracer(const Raytracer&) = delete;
+    Raytracer& operator=(const Raytracer&) = delete;
 
     void setup(uint32_t width, uint32_t height);
     void resize(uint32_t width, uint32_t height);
@@ -92,6 +92,8 @@ private:
     std::vector<cudaArray_t> textureArrays;
     std::vector<cudaTextureObject_t> textureObjects;
     GpuSceneData gpuScene{};
+    R2Sampler* managedR2Sampler{};
+    HaltonSampler* managedHaltonSampler{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
     uint64_t lastReadyValue{};

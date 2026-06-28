@@ -200,7 +200,7 @@ target_link_libraries(imgui PUBLIC
 file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
 list(FILTER SRC_FILES EXCLUDE REGEX "/GPU/")
 list(FILTER SRC_FILES EXCLUDE REGEX "/Kernels/cuda/")
-list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/GpuWavefrontRaytracer\\.cpp$")
+list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
 
 file(GLOB_RECURSE NR_KERNEL_HEADERS CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/src/Kernels/*.h"
@@ -231,14 +231,13 @@ add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 add_library(NoorRayCuda STATIC
         src/GPU/CudaDevice.cpp
         src/GPU/ImageInterop.cpp
-        src/GPU/Memory.cpp
         src/GPU/rstd/Memory.cpp
         src/Kernels/cuda/Generate.cu
         src/Kernels/cuda/Shade.cu
         src/Kernels/cuda/Finalize.cu
         src/Kernels/cuda/TriangleBlas.cpp
         src/Kernels/cuda/TlasBuilder.cpp
-        src/Raytracing/GpuWavefrontRaytracer.cpp)
+        src/Raytracing/Raytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
 target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)

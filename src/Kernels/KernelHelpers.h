@@ -17,7 +17,7 @@ NR_GPU inline glm::vec3 sampleTexture(
     const glm::vec2 uv,
     const glm::vec3 fallback)
 {
-    if (index < 0 || static_cast<uint32_t>(index) >= scene.textureCount)
+    if (index < 0)
         return fallback;
     const float4 value = tex2D<float4>(scene.textures[index], uv.x, uv.y);
     return {value.x, value.y, value.z};
@@ -30,7 +30,7 @@ NR_GPU inline float sampleTextureScalar(
     const float fallback,
     const int channel = 0)
 {
-    if (index < 0 || static_cast<uint32_t>(index) >= scene.textureCount)
+    if (index < 0)
         return fallback;
     const float4 value = tex2D<float4>(scene.textures[index], uv.x, uv.y);
     return channel == 1 ? value.y : channel == 2 ? value.z : value.x;

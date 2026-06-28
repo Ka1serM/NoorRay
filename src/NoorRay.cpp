@@ -20,7 +20,7 @@
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneImporter.h"
-#include "Raytracing/GpuWavefrontRaytracer.h"
+#include "Raytracing/Raytracer.h"
 #include "Vulkan/Tonemapper.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Image.h"
@@ -37,7 +37,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     const int scaledW = static_cast<int>(renderWidth  * dpiScale);
     const int scaledH = static_cast<int>(renderHeight * dpiScale);
 
-    raytracer = std::make_unique<GpuWavefrontRaytracer>(context, scene, scaledW, scaledH);
+    raytracer = std::make_unique<Raytracer>(context, scene, scaledW, scaledH);
 
     tonemapper = std::make_unique<Tonemapper>(
         context, raytracer->getWidth(), raytracer->getHeight(),
@@ -85,7 +85,7 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
     const uint32_t w = resolution.x;
     const uint32_t h = resolution.y;
 
-    raytracer = std::make_unique<GpuWavefrontRaytracer>(context, scene, w, h);
+    raytracer = std::make_unique<Raytracer>(context, scene, w, h);
 
     tonemapper = std::make_unique<Tonemapper>(
         context, w, h, raytracer->getOutputImage(0, Aov::Color),

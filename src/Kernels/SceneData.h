@@ -5,6 +5,7 @@
 #include <cuda_runtime_api.h>
 
 #include "Camera/Camera.h"
+#include "Kernels/Samplers.h"
 #include "Kernels/Types.h"
 #include "Kernels/Output.h"
 #include "Mesh/MeshAsset.h"
@@ -64,6 +65,7 @@ struct GpuSceneData
     const RenderSettings* renderSettings{};
     const EnvironmentSettings* environment{};
     const Camera* camera{};
+    Sampler sampler{};
     uint32_t meshCount{};
     uint32_t instanceCount{};
     uint32_t lightCount{};

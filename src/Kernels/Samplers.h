@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "GPU/Annotations.h"
+#include "GPU/TaggedPointer.h"
 #include "Kernels/Types.h"
 
 NR_CPU_GPU inline uint32_t pcgHash(uint32_t value)
@@ -18,29 +19,48 @@ NR_CPU_GPU inline float randomFloat(uint32_t& state)
     return static_cast<float>(state >> 8u) * (1.0f / 16777216.0f);
 }
 
-NR_CPU_GPU inline float radicalInverse(uint32_t value, const uint32_t base)
+struct R2Sampler
 {
-    float result = 0.0f;
-    float factor = 1.0f / static_cast<float>(base);
-    while (value != 0)
+    NR_CPU_GPU glm::vec2 sample(const uint32_t index) const
     {
-        result += static_cast<float>(value % base) * factor;
-        value /= base;
-        factor /= static_cast<float>(base);
+        constexpr float plastic = 1.324717957244746f;
+        constexpr float a1 = 1.0f / plastic;
+        constexpr float a2 = 1.0f / (plastic * plastic);
+        return {fmodf(0.5f + a1 * static_cast<float>(index), 1.0f),
+                fmodf(0.5f + a2 * static_cast<float>(index), 1.0f)};
     }
-    return result;
-}
+};
 
-NR_CPU_GPU inline glm::vec2 haltonSample(const uint32_t index)
+struct HaltonSampler
 {
-    return {radicalInverse(index + 1, 2), radicalInverse(index + 1, 3)};
-}
+    NR_CPU_GPU glm::vec2 sample(const uint32_t index) const
+    {
+        // Radical inverse base-2 (bit reversal) and base-3
+        float r2 = 0.0f;
+        float factor = 0.5f;
+        for (uint32_t v = index + 1; v != 0; v >>= 1)
+        {
+            r2 += static_cast<float>(v & 1u) * factor;
+            factor *= 0.5f;
+        }
+        float r3 = 0.0f;
+        factor = 1.0f / 3.0f;
+        for (uint32_t v = index + 1; v != 0; v /= 3)
+        {
+            r3 += static_cast<float>(v % 3u) * factor;
+            factor /= 3.0f;
+        }
+        return {r2, r3};
+    }
+};
 
-NR_CPU_GPU inline glm::vec2 r2Sample(const uint32_t index)
+class Sampler : public nr::TaggedPointer<R2Sampler, HaltonSampler>
 {
-    constexpr float plastic = 1.324717957244746f;
-    constexpr float a1 = 1.0f / plastic;
-    constexpr float a2 = 1.0f / (plastic * plastic);
-    return {fmodf(0.5f + a1 * static_cast<float>(index), 1.0f),
-            fmodf(0.5f + a2 * static_cast<float>(index), 1.0f)};
-}
+public:
+    using nr::TaggedPointer<R2Sampler, HaltonSampler>::TaggedPointer;
+
+    NR_CPU_GPU glm::vec2 sample(const uint32_t index) const
+    {
+        return Dispatch([index](const auto* s) { return s->sample(index); });
+    }
+};

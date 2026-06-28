@@ -14,6 +14,7 @@
 #include "Kernels/cuda/AccelBuilder.h"
 #include "Kernels/cuda/OptiXSetup.h"
 
+class CameraInstance;
 class Context;
 class Image;
 class Scene;
@@ -41,9 +42,6 @@ public:
     void updateMeshes();
     void updateTextures();
     void updateTLAS();
-    void updateSceneSettings(const SceneSettings& settings);
-    bool prepareCameraRayLut(PushData& pushData, const SceneSettings& settings);
-    void invalidateCameraRayLut() { cameraRayLutValid = false; }
 
     FrameInfo getFrameInfo() const;
     uint32_t getWidth() const { return width; }
@@ -77,10 +75,8 @@ private:
     OptiXSetup optix;
     AccelBuilder accel;
     WavefrontQueues queues{};
-    SceneSettings* deviceSettings{};
     GpuMesh* deviceMeshes{};
     GpuInstance* deviceInstances{};
-    RayLutEntry* deviceRayLut{};
     cudaTextureObject_t* deviceTextureObjects{};
     glm::vec4* accumulation{};
     glm::vec4* adaptiveState{};
@@ -90,14 +86,11 @@ private:
     std::array<OptixLaunchParams*, MaxBounces> extendParams{};
     std::array<OptixLaunchParams*, MaxBounces> connectParams{};
     GpuSceneData gpuScene{};
-    SceneSettings hostSettings{};
-    uint32_t maxShaderBounces{2};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
     uint64_t lastReadyValue{};
     uint64_t submittedFrame{};
     std::array<uint64_t, 2> lastUseValue{};
-    bool cameraRayLutValid{};
 
     void allocateQueues();
     void freeQueues() noexcept;

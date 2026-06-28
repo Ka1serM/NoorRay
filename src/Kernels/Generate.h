@@ -13,7 +13,6 @@ void launchGenerate(const KernelParams& params, cudaStream_t stream);
 #include "Kernels/Math.h"
 #include "Kernels/Queues.h"
 #include "Kernels/Samplers.h"
-#include "Kernels/CameraVariant.h"
 #include "Kernels/KernelHelpers.h"
 
 NR_GPU_KERNEL void generateKernel(const KernelParams params)
@@ -27,8 +26,6 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     glm::vec3 direction{};
     if (active)
     {
-        const CameraData camera = params.scene.settings->camera;
-        const CameraGPU cam = makeCameraGPU(camera, params.scene.cameraRayLut);
         const uint32_t x = pixel % params.frame.width;
         const uint32_t y = pixel / params.frame.width;
         const glm::vec2 jitter = params.frame.sampleIndex == 0 && params.frame.frame == 0
@@ -36,12 +33,10 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
             : r2Sample(params.frame.totalAccumulated);
         const float nx = (static_cast<float>(x) + jitter.x) / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y) / static_cast<float>(params.frame.height) * 2.0f;
-        const float aspect = static_cast<float>(params.frame.width) / static_cast<float>(params.frame.height);
-        const GenerateRayVisitor visitor{origin, direction, nx, ny, aspect, rng,
-            params.scene.cameraRayLut, pixel, params.frame.rayLutEnabled};
-        active = cuda::std::visit(visitor, cam);
-        origin = transformPoint(params.frame.cameraToWorld, origin);
-        direction = normalize3(transformVector(params.frame.cameraToWorld, direction));
+        active = params.scene.camera->Dispatch([&](const auto* camera) {
+            return camera->generateRay(origin, direction, nx, ny, rng,
+                pixel);
+        });
     }
 
     PathRayWorkItem ray{};

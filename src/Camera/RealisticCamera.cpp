@@ -1,3 +1,4 @@
+#define GLM_ENABLE_EXPERIMENTAL
 #include "RealisticCamera.h"
 
 #include <algorithm>
@@ -15,6 +16,10 @@
 #include <unordered_map>
 #include <utility>
 #include "glm/gtx/norm.hpp"
+#include "Camera/CameraInstance.h"
+#include "GPU/rstd/Allocator.h"
+#include "Kernels/cuda/CudaRayLutGenerator.h"
+#include "Raytracing/RayLUT.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
 
@@ -326,99 +331,79 @@ void computeCardinalPoints(const CpuRay& rayIn, const CpuRay& rayOut, float& pz,
 }
 }
 
-RealisticCamera::RealisticCamera(Scene& scene, const std::string& name, Transform transform, CameraSettings settings)
-    : CameraBase(scene, name, transform, settings)
+void RealisticCamera::load(std::string lensPath_, std::string sensorPath_,
+                           std::string glassCatalogPaths_)
 {
+    lensPath           = std::move(lensPath_);
+    sensorPath         = std::move(sensorPath_);
+    glassCatalogPaths  = std::move(glassCatalogPaths_);
     loadLensAndSensor();
-    rebuildCameraData();
+    rebuildRayLut();
 }
 
-RealisticCamera::RealisticCamera(Scene& scene, const std::string& name, Transform transform, CameraSettings settings, std::string lensPath, std::string sensorPath, std::string glassCatalogPaths)
-    : CameraBase(scene, name, transform, settings),
-      lensPath(std::move(lensPath)),
-      sensorPath(std::move(sensorPath)),
-      glassCatalogPaths(std::move(glassCatalogPaths))
+RealisticCamera::~RealisticCamera()
 {
-    loadLensAndSensor();
-    rebuildCameraData();
+    releaseRayLut();
 }
 
-RealisticCamera::RealisticCamera(const RealisticCamera& other)
-    : CameraBase(other),
-      lensPath(other.lensPath),
-      sensorPath(other.sensorPath),
-      glassCatalogPaths(other.glassCatalogPaths),
-      rayLutCacheFolder(other.rayLutCacheFolder),
-      lensElements(other.lensElements),
-      maximumLensElements(other.maximumLensElements),
-      pupilBounds(other.pupilBounds),
-      effectiveFocalLengthM(other.effectiveFocalLengthM),
-      focusSurfaceOffsetM(other.focusSurfaceOffsetM),
-      apertureIndex(other.apertureIndex),
-      loadStatus(other.loadStatus)
+void RealisticCamera::releaseRayLut()
 {
-    rebuildCameraData();
-}
-
-std::unique_ptr<SceneObject> RealisticCamera::clone() const
-{
-    return std::make_unique<RealisticCamera>(*this);
-}
-
-bool RealisticCamera::getPreferredRenderSize(uint32_t& width, uint32_t& height) const
-{
-    if (lensElements.empty() || sensor.resolutionWidth == 0 || sensor.resolutionHeight == 0)
-        return false;
-    width = sensor.resolutionWidth;
-    height = sensor.resolutionHeight;
-    return true;
-}
-
-mat4 RealisticCamera::getProjectionMatrix() const
-{
-    const float aspectRatio = static_cast<float>(std::max(1u, renderWidth)) / static_cast<float>(std::max(1u, renderHeight));
-    const float fovY = 2.0f * std::atan((sensor.heightMm * 0.001f) / (2.0f * std::max(effectiveFocalLengthM, 0.001f)));
-    return perspective(fovY, aspectRatio, cameraData.nearPlane, cameraData.farPlane);
-}
-
-void RealisticCamera::computeProjectionData(const vec3&, const vec3& up, const vec3& right, float aspectRatio)
-{
-    const float sensorWidth = std::max(sensor.widthMm * 0.001f, 0.001f);
-    const float focalLength = std::max(effectiveFocalLengthM, 0.001f);
-    const float halfWidth = sensorWidth / (2.0f * focalLength);
-    const float halfHeight = halfWidth / aspectRatio;
-
-    cameraData.sensorScaleX = halfWidth;
-    cameraData.sensorScaleY = halfHeight;
-    cameraData.focalLength = focalLength;
-    cameraData.orthoHeight = 0.0f;
-    cameraData.fisheyeFov = 0.0f;
-    applyDepthOfField(effectiveFocalLengthM * 1000.0f);
-}
-
-void RealisticCamera::renderUi()
-{
-    SceneObject::renderUi();
-
-    bool changed = false;
-    ImGuiManager::tableRowLabel("Projection");
-    static const CameraProjectionType projectionTypes[] = {
-        CameraProjectionType::Perspective,
-        CameraProjectionType::ThinLens,
-        CameraProjectionType::Realistic,
-        CameraProjectionType::Orthographic,
-        CameraProjectionType::Fisheye,
-    };
-    static const char* projectionNames[] = {"Perspective", "Thin Lens", "Realistic", "Orthographic", "Fisheye"};
-    constexpr int projectionCount = 5;
-    int projectionIndex = 0;
-    for (int i = 0; i < projectionCount; ++i)
-        if (projectionTypes[i] == getProjectionType()) { projectionIndex = i; break; }
-    if (ImGui::Combo("##CameraProjection", &projectionIndex, projectionNames, projectionCount)) {
-        if (auto replacement = recreateAs(projectionTypes[projectionIndex]))
-            scene.replaceObject(this, std::move(replacement));
+    if (rayLut == nullptr)
         return;
+    nr::rstd::allocator<RayLutEntry> allocator;
+    allocator.deallocate(rayLut, rayLutSize);
+    rayLut = nullptr;
+    rayLutSize = 0;
+}
+
+void RealisticCamera::rebuildRayLut()
+{
+    releaseRayLut();
+    if (elementCount <= 0 || pupilBoundCount <= 0)
+        return;
+
+    const uint32_t width = sensor.resolutionWidth;
+    const uint32_t height = sensor.resolutionHeight;
+    rayLutSize = width * height;
+    nr::rstd::allocator<RayLutEntry> allocator;
+    rayLut = allocator.allocate(rayLutSize);
+
+    bool loaded = false;
+    if (!rayLutPath.empty()) {
+        try {
+            const RayLUT source = RayLUTFileReader{}.read(rayLutPath);
+            if (source.rasterWidth == width && source.rasterHeight == height && !source.empty()) {
+                const float wavelength = source.wavelengths.front();
+                for (uint32_t y = 0; y < height; ++y)
+                    for (uint32_t x = 0; x < width; ++x) {
+                        const auto ray = source.lookupInterpolated(
+                            static_cast<float>(x), static_cast<float>(y), wavelength);
+                        rayLut[x + y * width] = ray.value_or(RayLutEntry{});
+                    }
+                loaded = true;
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "[RayLUT] " << error.what() << '\n';
+        }
     }
+
+    if (!loaded) {
+        generateCudaRayLut(this, rayLut, width, height, nullptr);
+        cudaDeviceSynchronize();
+    }
+}
+
+void RealisticCamera::renderUi(CameraInstance& inst)
+{
+    const bool opticsChanged = Camera::renderUi(inst, true);
+    if (opticsChanged && !lensElements.empty()) {
+        applyAperture();
+        applyFocus();
+        rebuildExitPupilBounds();
+        updateGpuData();
+        rebuildRayLut();
+    }
+    bool changed = false;
 
     if (lensDialog && lensDialog->ready(0)) {
         const auto selection = lensDialog->result();
@@ -444,13 +429,13 @@ void RealisticCamera::renderUi()
         }
         glassCatalogDialog.reset();
     }
-    if (rayLutCacheDialog && rayLutCacheDialog->ready(0)) {
-        const auto selection = rayLutCacheDialog->result();
+    if (rayLutDialog && rayLutDialog->ready(0)) {
+        const auto selection = rayLutDialog->result();
         if (!selection.empty()) {
-            rayLutCacheFolder = selection;
+            rayLutPath = selection.front();
             changed = true;
         }
-        rayLutCacheDialog.reset();
+        rayLutDialog.reset();
     }
 
     std::array<char, 512> lensBuffer{};
@@ -460,32 +445,21 @@ void RealisticCamera::renderUi()
     std::snprintf(lensBuffer.data(), lensBuffer.size(), "%s", lensPath.c_str());
     std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensorPath.c_str());
     std::snprintf(glassCatalogBuffer.data(), glassCatalogBuffer.size(), "%s", glassCatalogPaths.c_str());
-    std::snprintf(rayLutCacheBuffer.data(), rayLutCacheBuffer.size(), "%s", rayLutCacheFolder.c_str());
+    std::snprintf(rayLutCacheBuffer.data(), rayLutCacheBuffer.size(), "%s", rayLutPath.c_str());
 
-    ImGuiManager::dragFloatRow("Sensor Width", sensor.widthMm, 0.01f, 0.001f, 500.0f, [&](float v) {
-        sensor.widthMm = std::max(v, 0.001f);
+    auto* rs = &sensor;
+    ImGuiManager::dragFloatRow("Sensor Width", rs->widthMm, 0.01f, 0.001f, 500.0f, [&](float v) {
+        rs->widthMm = std::max(v, 0.001f);
         rebuildLensMetadata();
         applyAperture();
         applyFocus();
         rebuildExitPupilBounds();
         changed = true;
     });
-    ImGuiManager::dragFloatRow("Sensor Height", sensor.heightMm, 0.01f, 0.001f, 500.0f, [&](float v) {
-        sensor.heightMm = std::max(v, 0.001f);
+    ImGuiManager::dragFloatRow("Sensor Height", rs->heightMm, 0.01f, 0.001f, 500.0f, [&](float v) {
+        rs->heightMm = std::max(v, 0.001f);
         rebuildLensMetadata();
         applyAperture();
-        applyFocus();
-        rebuildExitPupilBounds();
-        changed = true;
-    });
-    ImGuiManager::dragFloatRow("F-Stop", settings.fStop, 0.01f, 0.0f, 128.0f, [&](float v) {
-        settings.fStop = std::max(0.0f, v);
-        applyAperture();
-        rebuildExitPupilBounds();
-        changed = true;
-    });
-    ImGuiManager::dragFloatRow("Focus Distance", settings.focusDistance, 0.01f, 0.001f, 10000.0f, [&](float v) {
-        settings.focusDistance = std::max(0.001f, v);
         applyFocus();
         rebuildExitPupilBounds();
         changed = true;
@@ -493,19 +467,19 @@ void RealisticCamera::renderUi()
 
     ImGuiManager::tableRowLabel("Resolution");
     {
-        int w = static_cast<int>(sensor.resolutionWidth);
-        int h = static_cast<int>(sensor.resolutionHeight);
+        int w = static_cast<int>(rs->resolutionWidth);
+        int h = static_cast<int>(rs->resolutionHeight);
         ImGui::PushItemWidth((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("x").x - ImGui::GetStyle().ItemSpacing.x * 2.0f) * 0.5f);
-        if (ImGui::DragInt("##ResW", &w, 1.0f, 0, 16384, w == 0 ? "auto" : "%d"))
+        if (ImGui::DragInt("##ResW", &w, 1.0f, 1, 16384))
             changed = true;
         ImGui::SameLine();
         ImGui::TextUnformatted("x");
         ImGui::SameLine();
-        if (ImGui::DragInt("##ResH", &h, 1.0f, 0, 16384, h == 0 ? "auto" : "%d"))
+        if (ImGui::DragInt("##ResH", &h, 1.0f, 1, 16384))
             changed = true;
         ImGui::PopItemWidth();
-        sensor.resolutionWidth  = static_cast<uint32_t>(std::max(w, 0));
-        sensor.resolutionHeight = static_cast<uint32_t>(std::max(h, 0));
+        rs->resolutionWidth  = static_cast<uint32_t>(std::max(w, 1));
+        rs->resolutionHeight = static_cast<uint32_t>(std::max(h, 1));
     }
 
     ImGuiManager::tableRowLabel("Lens File");
@@ -547,20 +521,20 @@ void RealisticCamera::renderUi()
     }
     ImGui::EndDisabled();
 
-    ImGuiManager::tableRowLabel("RayLUT Cache");
+    ImGuiManager::tableRowLabel("RayLUT File");
     const float rayLutButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
     ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - rayLutButtonWidth - ImGui::GetStyle().ItemSpacing.x);
-    if (ImGui::InputText("##RealisticRayLutCacheFolder", rayLutCacheBuffer.data(), rayLutCacheBuffer.size())) {
-        rayLutCacheFolder = rayLutCacheBuffer.data();
+    if (ImGui::InputText("##RealisticRayLutPath", rayLutCacheBuffer.data(), rayLutCacheBuffer.size())) {
+        rayLutPath = rayLutCacheBuffer.data();
         changed = true;
     }
     ImGui::PopItemWidth();
     ImGui::SameLine();
-    ImGui::BeginDisabled(rayLutCacheDialog != nullptr);
+    ImGui::BeginDisabled(rayLutDialog != nullptr);
     if (ImGui::Button("Select##RealisticRayLutCache", ImVec2(rayLutButtonWidth, 0))) {
-        rayLutCacheDialog = std::make_unique<pfd::select_folder>(
-            "Select RayLUT Cache Folder",
-            rayLutCacheFolder.empty() ? "." : rayLutCacheFolder);
+        rayLutDialog = std::make_unique<pfd::open_file>(
+            "Select RayLUT File", ".",
+            std::vector<std::string>{"RayLUT Files", "*.raylut", "All Files", "*"});
     }
     ImGui::EndDisabled();
 
@@ -640,37 +614,37 @@ void RealisticCamera::renderUi()
     }
 
     if (changed) {
-        rebuildCameraData();
-        scene.setDirtyFlag(Accumulation);
-        scene.setDirtyFlag(RayLut);
+        updateGpuData();
+        rebuildRayLut();
+        inst.markDirty();
     }
 }
 
-void RealisticCamera::populateRealisticCameraSettings(RealisticCameraSettings& realisticSettings) const
+void RealisticCamera::updateGpuData()
 {
-    realisticSettings = {};
     const int count = std::min<int>(static_cast<int>(lensElements.size()), MaxRealisticLensElements);
     for (int i = 0; i < count; ++i)
-        realisticSettings.elements[i] = lensElements[static_cast<size_t>(i)];
+        elements[i] = lensElements[static_cast<size_t>(i)];
     const int pupilCount = std::min<int>(static_cast<int>(pupilBounds.size()), MaxRealisticExitPupilBounds);
     for (int i = 0; i < pupilCount; ++i)
-        realisticSettings.pupilBounds[i] = pupilBounds[static_cast<size_t>(i)];
-    realisticSettings.elementCount = count;
-    realisticSettings.pupilBoundCount = pupilCount;
-    realisticSettings.sensorWidth = sensor.widthMm * 0.001f;
-    realisticSettings.sensorHeight = sensor.heightMm * 0.001f;
-    realisticSettings.filmDiagonal = std::sqrt(realisticSettings.sensorWidth * realisticSettings.sensorWidth + realisticSettings.sensorHeight * realisticSettings.sensorHeight);
-    realisticSettings.rearElementZ = count > 0 ? lensElements.back().vertexZ + focusSurfaceOffsetM : 0.0f;
-    realisticSettings.apertureRadius = 0.0f;
-    realisticSettings.surfaceOffset = focusSurfaceOffsetM;
+        exitPupilBounds[i] = pupilBounds[static_cast<size_t>(i)];
+    elementCount = count;
+    pupilBoundCount = pupilCount;
+    const auto* rs = &sensor;
+    sensorWidth = rs->widthMm * 0.001f;
+    sensorHeight = rs->heightMm * 0.001f;
+    filmDiagonal = std::sqrt(sensorWidth * sensorWidth + sensorHeight * sensorHeight);
+    rearElementZ = count > 0 ? lensElements.back().vertexZ + focusSurfaceOffsetM : 0.0f;
+    apertureRadius = 0.0f;
+    surfaceOffset = focusSurfaceOffsetM;
     for (int i = 0; i < count; ++i) {
         const RealisticLensElement& element = lensElements[static_cast<size_t>(i)];
         if (element.isAperture != 0) {
-            realisticSettings.apertureRadius = element.apertureRadius;
+            apertureRadius = element.apertureRadius;
             break;
         }
-        if (realisticSettings.apertureRadius <= 0.0f || element.apertureRadius < realisticSettings.apertureRadius)
-            realisticSettings.apertureRadius = element.apertureRadius;
+        if (apertureRadius <= 0.0f || element.apertureRadius < apertureRadius)
+            apertureRadius = element.apertureRadius;
     }
 }
 
@@ -680,11 +654,11 @@ bool RealisticCamera::loadLensAndSensor()
         lensElements.clear();
         maximumLensElements.clear();
         pupilBounds.clear();
-        sensor.resolutionWidth = 0;
-        sensor.resolutionHeight = 0;
+        auto* rs0 = &sensor;
         apertureIndex = -1;
         focusSurfaceOffsetM = 0.0f;
         loadStatus = "Thin lens fallback";
+        updateGpuData();
         std::cout << "[INFO] RealisticCamera: no lens/sensor file loaded, using thin lens fallback" << std::endl;
         return true;
     }
@@ -704,6 +678,7 @@ bool RealisticCamera::loadLensAndSensor()
 
     if (lensOk && sensorOk) {
         rebuildExitPupilBounds();
+        updateGpuData();
         loadStatus = std::to_string(lensElements.size()) + " surfaces";
         std::cout << "[INFO] RealisticCamera: loaded " << lensElements.size() << " surfaces"
                   << ", pupil bounds: " << pupilBounds.size()
@@ -717,6 +692,7 @@ bool RealisticCamera::loadLensAndSensor()
     apertureIndex = -1;
     focusSurfaceOffsetM = 0.0f;
     loadStatus = !lensOk ? lensError : sensorError;
+    updateGpuData();
     std::cerr << "[ERROR] RealisticCamera: " << loadStatus << std::endl;
     return false;
 }
@@ -896,8 +872,7 @@ bool RealisticCamera::parseZmxFile(const std::string& text, std::vector<Realisti
 
 bool RealisticCamera::parseSensorFile(const std::string& path, std::string& error)
 {
-    sensor.resolutionWidth = 0;
-    sensor.resolutionHeight = 0;
+    auto* rs = &sensor;
 
     const std::string text = readTextFile(path);
     if (text.empty()) {
@@ -919,10 +894,10 @@ bool RealisticCamera::parseSensorFile(const std::string& path, std::string& erro
         return false;
     }
 
-    sensor.widthMm = std::max(widthMm, 0.001f);
-    sensor.heightMm = std::max(heightMm, 0.001f);
-    sensor.resolutionWidth = resolutionWidth;
-    sensor.resolutionHeight = resolutionHeight;
+    rs->widthMm = std::max(widthMm, 0.001f);
+    rs->heightMm = std::max(heightMm, 0.001f);
+    rs->resolutionWidth = std::max(1u, resolutionWidth);
+    rs->resolutionHeight = std::max(1u, resolutionHeight);
     return true;
 }
 
@@ -948,6 +923,7 @@ void RealisticCamera::finalizeElements(std::vector<RealisticLensElement>& elemen
 
 void RealisticCamera::rebuildLensMetadata()
 {
+    thickLensValid = false;
     apertureIndex = -1;
     for (int i = static_cast<int>(lensElements.size()) - 1; i >= 0; --i) {
         if (lensElements[static_cast<size_t>(i)].isAperture != 0) {
@@ -956,18 +932,21 @@ void RealisticCamera::rebuildLensMetadata()
         }
     }
 
-    effectiveFocalLengthM = std::max(settings.focalLengthMm * 0.001f, 0.001f);
-    if (lensElements.size() < 2)
+    effectiveFocalLengthM = std::max(focalLengthMm * 0.001f, 0.001f);
+    const std::vector<RealisticLensElement>& metadataElements =
+        maximumLensElements.empty() ? lensElements : maximumLensElements;
+    if (metadataElements.size() < 2)
         return;
 
-    const float x = 0.001f * std::sqrt(sensor.widthMm * sensor.widthMm + sensor.heightMm * sensor.heightMm) * 0.001f;
-    CpuRay sceneRay{{x, 0.0f, lensElements.front().vertexZ + 1.0f}, {0.0f, 0.0f, -1.0f}};
+    const auto* rs = &sensor;
+    const float x = 0.001f * std::sqrt(rs->widthMm * rs->widthMm + rs->heightMm * rs->heightMm) * 0.001f;
+    CpuRay sceneRay{{x, 0.0f, metadataElements.front().vertexZ + 1.0f}, {0.0f, 0.0f, -1.0f}};
     CpuRay filmRay{};
-    CpuRay filmProbe{{x, 0.0f, lensElements.back().vertexZ - 1.0f}, {0.0f, 0.0f, 1.0f}};
+    CpuRay filmProbe{{x, 0.0f, metadataElements.back().vertexZ - 1.0f}, {0.0f, 0.0f, 1.0f}};
     CpuRay sceneOut{};
-    if (!traceFromSceneRoss(lensElements, 0.0f, sceneRay, filmRay))
+    if (!traceFromSceneRoss(metadataElements, 0.0f, sceneRay, filmRay))
         return;
-    if (!traceFromFilmRoss(lensElements, 0.0f, filmProbe, sceneOut))
+    if (!traceFromFilmRoss(metadataElements, 0.0f, filmProbe, sceneOut))
         return;
 
     float pz0 = 0.0f;
@@ -977,8 +956,13 @@ void RealisticCamera::rebuildLensMetadata()
     computeCardinalPoints(sceneRay, filmRay, pz0, fz0);
     computeCardinalPoints(filmProbe, sceneOut, pz1, fz1);
     const float focalLength = fz0 - pz0;
-    if (std::isfinite(focalLength) && focalLength > 0.0f)
+    if (std::isfinite(focalLength) && focalLength > 0.0f &&
+        std::isfinite(pz0) && std::isfinite(pz1)) {
         effectiveFocalLengthM = focalLength;
+        firstPrincipalZ = pz0;
+        secondPrincipalZ = pz1;
+        thickLensValid = true;
+    }
 }
 
 void RealisticCamera::applyAperture()
@@ -989,42 +973,23 @@ void RealisticCamera::applyAperture()
     const float maxRadius = apertureIndex < static_cast<int>(maximumLensElements.size())
         ? maximumLensElements[static_cast<size_t>(apertureIndex)].apertureRadius
         : lensElements[static_cast<size_t>(apertureIndex)].apertureRadius;
-    const float requestedRadius = settings.fStop > 0.0f
-        ? effectiveFocalLengthM / (2.0f * settings.fStop)
+    const float requestedRadius = fStop > 0.0f
+        ? effectiveFocalLengthM / (2.0f * fStop)
         : maxRadius;
     lensElements[static_cast<size_t>(apertureIndex)].apertureRadius = std::clamp(requestedRadius, 0.0f, maxRadius);
 }
 
 void RealisticCamera::applyFocus()
 {
-    focusSurfaceOffsetM = 0.0f;
-    if (lensElements.size() < 2)
+    if (!thickLensValid)
         return;
-
-    const float x = 0.001f * std::sqrt(sensor.widthMm * sensor.widthMm + sensor.heightMm * sensor.heightMm) * 0.001f;
-    CpuRay sceneRay{{x, 0.0f, lensElements.front().vertexZ + 1.0f}, {0.0f, 0.0f, -1.0f}};
-    CpuRay filmRay{};
-    CpuRay filmProbe{{x, 0.0f, lensElements.back().vertexZ - 1.0f}, {0.0f, 0.0f, 1.0f}};
-    CpuRay sceneOut{};
-    if (!traceFromSceneRoss(lensElements, 0.0f, sceneRay, filmRay))
-        return;
-    if (!traceFromFilmRoss(lensElements, 0.0f, filmProbe, sceneOut))
-        return;
-
-    float pz0 = 0.0f;
-    float fz0 = 0.0f;
-    float pz1 = 0.0f;
-    float fz1 = 0.0f;
-    computeCardinalPoints(sceneRay, filmRay, pz0, fz0);
-    computeCardinalPoints(filmProbe, sceneOut, pz1, fz1);
-
-    const float f = fz0 - pz0;
-    const float z = -settings.focusDistance;
-    const float c = (pz1 - z - pz0) * (pz1 - z - 4.0f * f - pz0);
+    const float z = -focusDistance;
+    const float c = (secondPrincipalZ - z - firstPrincipalZ) *
+        (secondPrincipalZ - z - 4.0f * effectiveFocalLengthM - firstPrincipalZ);
     if (c <= 0.0f)
         return;
 
-    const float offset = 0.5f * (pz1 - z + pz0 - std::sqrt(c));
+    const float offset = 0.5f * (secondPrincipalZ - z + firstPrincipalZ - std::sqrt(c));
     if (std::isfinite(offset))
         focusSurfaceOffsetM = offset;
 }
@@ -1037,7 +1002,8 @@ void RealisticCamera::rebuildExitPupilBounds()
 
     constexpr int boundsCount = MaxRealisticExitPupilBounds;
     constexpr int samplesPerDimension = 48;
-    const float filmDiagonal = std::sqrt(sensor.widthMm * sensor.widthMm + sensor.heightMm * sensor.heightMm) * 0.001f;
+    const auto* rs = &sensor;
+    const float filmDiagonal = std::sqrt(rs->widthMm * rs->widthMm + rs->heightMm * rs->heightMm) * 0.001f;
     const float rearRadius = lensElements.back().apertureRadius;
     const float rearZ = lensElements.back().vertexZ + focusSurfaceOffsetM;
     if (filmDiagonal <= 0.0f || rearRadius <= 0.0f || rearZ <= 0.0f)

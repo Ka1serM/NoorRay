@@ -2,11 +2,39 @@
 
 #include <cmath>
 #include <numeric>
+#include "GPU/rstd/Allocator.h"
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 
 static constexpr float kPi = 3.14159265f;
+
+Environment::Environment()
+{
+    nr::rstd::allocator<EnvironmentSettings> allocator;
+    settings = allocator.allocate(1);
+    allocator.construct(settings);
+    settings->textureIndex = 0;
+    settings->cdfTextureIndex = 1;
+    updateDerivedSettings();
+}
+
+Environment::~Environment()
+{
+    nr::rstd::allocator<EnvironmentSettings> allocator;
+    allocator.destroy(settings);
+    allocator.deallocate(settings, 1);
+}
+
+void Environment::updateDerivedSettings()
+{
+    const float rotationRadians = settings->rotation * (kPi / 180.f);
+    settings->rotationSin = std::sin(rotationRadians);
+    settings->rotationCos = std::cos(rotationRadians);
+    settings->lightingExposureScale = settings->lightingExposure;
+    settings->visibleExposureScale = std::pow(2.f, settings->visibleExposure);
+    settings->maxTextureLod = 3.f;
+}
 
 std::vector<float> Environment::computeCdf(const float* hdr, const int w, const int h)
 {

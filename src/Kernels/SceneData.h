@@ -4,6 +4,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include "Camera/Camera.h"
 #include "Kernels/Types.h"
 #include "Kernels/Output.h"
 #include "Scene/SceneTypes.h"
@@ -59,8 +60,9 @@ struct GpuSceneData
     const GpuInstance* instances{};
     const LightGpu* lights{};
     const cudaTextureObject_t* textures{};
-    const RayLutEntry* cameraRayLut{};
-    const SceneSettings* settings{};
+    const RenderSettings* renderSettings{};
+    const EnvironmentSettings* environment{};
+    const Camera* camera{};
     uint32_t meshCount{};
     uint32_t instanceCount{};
     uint32_t lightCount{};
@@ -72,8 +74,6 @@ struct GpuFrameSettings
     int frame{};
     int isMoving{};
     int pixelSizePercent{100};
-    int rayLutEnabled{};
-    float cameraToWorld[12]{};
     uint32_t width{};
     uint32_t height{};
     uint32_t sampleIndex{};       // which sample within this frame (RNG seed diversity)

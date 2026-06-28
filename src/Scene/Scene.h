@@ -14,7 +14,7 @@
 class SceneObject;
 class MeshInstance;
 class MeshAsset;
-class CameraBase;
+class CameraInstance;
 class Buffer;
 
 enum DirtyFlag : uint8_t {
@@ -22,7 +22,6 @@ enum DirtyFlag : uint8_t {
     Meshes       = 1 << 1,
     Textures     = 1 << 2,
     Accumulation = 1 << 3,
-    RayLut       = 1 << 4,
 };
 
 class Scene {
@@ -32,10 +31,11 @@ class Scene {
     std::vector<std::string> textureNames;
     std::vector<std::shared_ptr<MeshAsset>> meshAssets;
     Environment environment{};
+    RenderSettings* renderSettings{};
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
 
-    std::weak_ptr<CameraBase> activeCamera;
+    std::weak_ptr<CameraInstance> activeCamera;
     uint64_t activeObjectId = 0;
     uint64_t nextObjectId = 1;
     uint8_t dirtyFlags = 0;
@@ -53,6 +53,7 @@ class Scene {
 
 public:
     Scene(Context& context);
+    ~Scene();
 
     // Object lifetime
     uint64_t add(std::unique_ptr<SceneObject> sceneObject);
@@ -87,12 +88,14 @@ public:
     std::shared_ptr<SceneObject> getActiveObjectPtr() const { return findObjectPtr(activeObjectId); }
 
     // Camera
-    CameraBase* getActiveCamera() const { return activeCamera.lock().get(); }
+    CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }
 
     // Context
     Context& getContext() const { return context; }
     Environment& getEnvironment() { return environment; }
     const Environment& getEnvironment() const { return environment; }
+    RenderSettings& getRenderSettings() { return *renderSettings; }
+    const RenderSettings& getRenderSettings() const { return *renderSettings; }
 
     // Dirty flags
     void setDirtyFlag(DirtyFlag flag) { dirtyFlags |= flag; }

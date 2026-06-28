@@ -10,7 +10,7 @@
 #include "Log.h"
 #include "glm/gtc/type_ptr.hpp"
 #include "SDL3/SDL_mouse.h"
-#include "Camera/CameraBase.h"
+#include "Camera/CameraInstance.h"
 #include "Scene/MeshInstance.h"
 
 ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, const uint32_t width, const uint32_t height)

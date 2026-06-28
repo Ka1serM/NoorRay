@@ -3,10 +3,10 @@
 #include <cuda_runtime_api.h>
 #include <cstdint>
 
-#include "Scene/SceneTypes.h"
+#include "Camera/RealisticCamera.h"
 
 void generateCudaRayLut(
-    const RealisticCameraSettings& settings,
+    const RealisticCamera* camera,
     RayLutEntry* deviceOutput,
     uint32_t width,
     uint32_t height,

@@ -3,9 +3,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <glaze/glaze.hpp>
-#include "Camera/PerspectiveCamera.h"
-#include "Camera/ThinLensCamera.h"
-#include "Camera/FisheyeCamera.h"
+#include "Camera/CameraInstance.h"
 #include "Scene/SceneTypes.h"
 #include "Vulkan/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
@@ -522,36 +520,28 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
 
     // Camera
     const auto& cam = at(j, "camera");
-    CameraSettings cs{};
-    cs.setFocalLength(jfloat(at(cam, "focal_length_mm"), 28.f));
-    cs.fStop         = jfloat(at(cam, "fstop"));
-    cs.focusDistance = jfloat(at(cam, "focus_distance"), 4.f);
-    cs.bokehBias     = jfloat(at(cam, "bokeh_bias"),     1.f);
     Transform camT{ jvec3(at(cam, "position"), {0, 0, 5}),
                     jvec3(at(cam, "rotation_euler")),
                     vec3(1.f) };
     const std::string camType = jstr(at(cam, "type"), "perspective");
     const std::string camName = jstr(at(cam, "name"), "Camera");
 
-    CameraBase* addedCam = nullptr;
-    if (camType == "thinlens") {
-        auto c = std::make_unique<ThinLensCamera>(scene, camName, camT, cs);
-        addedCam = c.get();
-        scene.add(std::move(c));
-    } else if (camType == "fisheye") {
-        auto c = std::make_unique<FisheyeCamera>(scene, camName, camT, cs);
-        addedCam = c.get();
-        scene.add(std::move(c));
-    } else {
-        auto c = std::make_unique<PerspectiveCamera>(scene, camName, camT, cs);
-        addedCam = c.get();
-        scene.add(std::move(c));
-    }
+    CameraProjectionType projection = CameraProjectionType::Perspective;
+    if (camType == "thinlens") projection = CameraProjectionType::ThinLens;
+    else if (camType == "fisheye") projection = CameraProjectionType::Fisheye;
+    else if (camType == "orthographic") projection = CameraProjectionType::Orthographic;
 
-    // Bake the requested resolution into the camera sensor so the caller can
-    // retrieve it via getPreferredRenderSize().
-    addedCam->getSensor().resolutionWidth  = renderW;
-    addedCam->getSensor().resolutionHeight = renderH;
+    auto camera = std::make_unique<CameraInstance>(scene, camName, camT, projection);
+    camera->setFocalLength(jfloat(at(cam, "focal_length_mm"), 28.f));
+    camera->getCamera()->DispatchCPU([&](auto* managedCamera) {
+        managedCamera->fStop = jfloat(at(cam, "fstop"));
+        managedCamera->focusDistance = jfloat(at(cam, "focus_distance"), 4.f);
+        managedCamera->bokehBias = jfloat(at(cam, "bokeh_bias"), 1.f);
+    });
+    CameraInstance* addedCam = camera.get();
+    scene.add(std::move(camera));
+
+    addedCam->setRenderResolution(renderW, renderH);
 
     // Objects
     if (!j.contains("objects") || !j["objects"].is_array()) return;

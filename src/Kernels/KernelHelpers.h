@@ -39,7 +39,7 @@ NR_GPU inline float sampleTextureScalar(
 
 NR_GPU inline glm::vec3 environmentRadiance(const GpuSceneData scene, const glm::vec3 direction, const bool visible)
 {
-    const EnvironmentSettings environment = scene.settings->environment;
+    const EnvironmentSettings environment = *scene.environment;
     if (!visible || environment.textureIndex < 0 ||
         static_cast<uint32_t>(environment.textureIndex) >= scene.textureCount)
         return glm::vec3(0.0f);
@@ -77,7 +77,7 @@ NR_GPU inline ushort4 packHalf4(const glm::vec3 value, const float w)
 
 NR_GPU inline bool adaptiveSkip(const KernelParams params, const uint32_t pixel)
 {
-    const RenderSettings settings = params.scene.settings->renderSettings;
+    const RenderSettings settings = *params.scene.renderSettings;
     if (settings.adaptiveSamplingEnabled == 0 || params.frame.totalAccumulated == 0)
         return false;
     const glm::vec4 state = params.adaptiveState[pixel];

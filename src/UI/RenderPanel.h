@@ -15,28 +15,22 @@ class Context;
 class GpuWavefrontRaytracer;
 class Renderer;
 class Image;
+class Scene;
 
 class RenderPanel : public ImGuiComponent {
 public:
-    RenderPanel(std::string name, Context& context, GpuWavefrontRaytracer& raytracer, Renderer& renderer, Tonemapper& tonemapper);
+    RenderPanel(std::string name, Context& context, Scene& scene, GpuWavefrontRaytracer& raytracer, Renderer& renderer, Tonemapper& tonemapper);
 
     void renderUi() override;
 
     bool isSaveRequested() const { return saveRequested; }
     void executeSave();
     
-    int getSamples() const { return samples; }
-    int getDiffuseBounces() const { return diffuseBounces; }
-    int getSpecularBounces() const { return specularBounces; }
-    int getTransmissionBounces() const { return transmissionBounces; }
     int getPixelSizePercent() const { return pixelSizePercent; }
-    float getExposure() const { return exposure; }
-    bool consumeChanged() { return std::exchange(changed, false); }
     
 private:
     // Render Settings
-    int samples, diffuseBounces, specularBounces, transmissionBounces, pixelSizePercent;
-    float exposure;
+    int pixelSizePercent{100};
     bool changed = false;
     
     // State machine for the save process
@@ -59,6 +53,7 @@ private:
     
     // Core System References
     Context& context;
+    Scene& scene;
     GpuWavefrontRaytracer& raytracer;
     Renderer& renderer;
     Tonemapper& tonemapper;

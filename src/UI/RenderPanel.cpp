@@ -16,6 +16,7 @@
 #include "ImGuiManager.h"
 #include "Log.h"
 #include "Raytracing/GpuWavefrontRaytracer.h"
+#include "Scene/Scene.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Tonemapper.h"
 
@@ -50,12 +51,12 @@ static float halfToFloat(const uint16_t half) {
 RenderPanel::RenderPanel(
     std::string name,
     Context& context,
+    Scene& scene,
     GpuWavefrontRaytracer& raytracer,
     Renderer& renderer,
     Tonemapper& tonemapper
 )
-    : ImGuiComponent(std::move(name)), samples(1), diffuseBounces(3), specularBounces(3), transmissionBounces(3), pixelSizePercent(100), exposure(0),
-      context(context),
+    : ImGuiComponent(std::move(name)), context(context), scene(scene),
       raytracer(raytracer),
       renderer(renderer),
       tonemapper(tonemapper)
@@ -63,6 +64,7 @@ RenderPanel::RenderPanel(
 }
 
 void RenderPanel::renderUi() {
+    RenderSettings& settings = scene.getRenderSettings();
     // 1. Clean up completed file-writing futures
     if (m_saveState == SaveState::WRITING_TO_DISK) {
         std::erase_if(m_saveFutures,
@@ -97,17 +99,17 @@ void RenderPanel::renderUi() {
     if (ImGui::BeginTable("RenderSettingsTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableSetupColumn("Label");
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
-        ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](const float v) { exposure = v; changed = true; });
+        ImGuiManager::dragFloatRow("Exposure", settings.exposure, 0.01f, -100.f, 100.f, [&](const float v) { settings.exposure = v; changed = true; });
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Samples Per Pixel");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##SamplesDrag", &samples, 0.1f, 1, 64, "%d")) changed = true;
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##SamplesDrag", &settings.samples, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Pixel Size");
         ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##PixelSizePercent", &pixelSizePercent, 1.0f, 100, 800, "%d%%")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Diffuse Bounces");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##DiffuseBounces", &diffuseBounces, 0.1f, 1, 64, "%d")) changed = true;
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##DiffuseBounces", &settings.diffuseBounces, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Specular Bounces");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##SpecularBounces", &specularBounces, 0.1f, 1, 64, "%d")) changed = true;
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##SpecularBounces", &settings.specularBounces, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Transmission Bounces");
-        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##TransmissionBounces", &transmissionBounces, 0.1f, 1, 64, "%d")) changed = true;
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN); if (ImGui::DragInt("##TransmissionBounces", &settings.transmissionBounces, 0.1f, 1, 64, "%d")) changed = true;
         ImGui::EndTable();
     }
     
@@ -176,6 +178,10 @@ void RenderPanel::renderUi() {
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
 
+    if (changed) {
+        scene.setDirtyFlag(Accumulation);
+        changed = false;
+    }
     ImGui::End();
 }
 

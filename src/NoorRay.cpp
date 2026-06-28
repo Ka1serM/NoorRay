@@ -1,6 +1,5 @@
 #include "NoorRay.h"
 #include <cmath>
-#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <SDL3/SDL.h>
@@ -17,8 +16,7 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include "backends/imgui_impl_sdl3.h"
-#include "Camera/PerspectiveCamera.h"
-#include "Camera/RealisticCamera.h"
+#include "Camera/CameraInstance.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneImporter.h"
@@ -51,25 +49,28 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     imGuiManager->addComponent<EnvironmentPanel>("Environment", scene);
     imGuiManager->addComponent<SceneGraphPanel>("Scene Graph", scene);
     imGuiManager->addComponent<DetailsPanel>("Details", scene);
-    imGuiManager->addComponent<RenderPanel>("Render", context, *raytracer, *renderer, *tonemapper);
+    imGuiManager->addComponent<RenderPanel>("Render", context, scene, *raytracer, *renderer, *tonemapper);
     imGuiManager->addComponent<ViewportPanel>("Viewport", context, scene,
         tonemapper->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(),
         raytracer->getWidth(), raytracer->getHeight());
 
     SceneImporter::ImportGltfScene(scene, "/home/marcel/GitRepositories/NoorRay/assets/slanted_edge_target.glb");
 
-    CameraSettings cameraSettings{};
-    cameraSettings.setFocalLength(45.0f);
-    cameraSettings.fStop = 2.8f;
-    cameraSettings.focusDistance = 39.0f;
-    cameraSettings.bokehBias = 2.0f;
-    scene.add(std::make_unique<RealisticCamera>(
+    auto camera = std::make_unique<CameraInstance>(
         scene, "Camera",
-        Transform{vec3(0.0f, 0.0f, 39.0f), vec3(0.0f), vec3(1.0f)},
-        cameraSettings,
-        "/home/marcel/GitRepositories/ROSS/resources/lenses/laikin/Wide1.zmx",
-        "/home/marcel/GitRepositories/ROSS/resources/sensors/onsemi_AR0237.json",
-        "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/schott.AGF;/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/ohara.AGF"));
+        Transform{vec3(0.0f, 0.0f, 12.0f), vec3(0.0f), vec3(1.0f)},
+        CameraProjectionType::ThinLens);
+    camera->setFocalLength(45.0f);
+    camera->getCamera()->DispatchCPU([](auto* managedCamera) {
+        managedCamera->fStop = 2.8f;
+        managedCamera->focusDistance = 39.0f;
+        managedCamera->bokehBias = 2.0f;
+    });
+    //camera->loadRealisticLens(
+    //    "/home/marcel/GitRepositories/ROSS/resources/lenses/laikin/Wide1.zmx",
+    //    "/home/marcel/GitRepositories/ROSS/resources/sensors/onsemi_AR0237.json",
+    //    "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/schott.AGF;/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/ohara.AGF");
+    scene.add(std::move(camera));
 }
 
 // ── Headless constructor ──────────────────────────────────────────────────────
@@ -80,8 +81,9 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
 {
     SceneImporter::ImportJsonScene(scene, argv[1]);
 
-    uint32_t w = 1920, h = 1080;
-    scene.getActiveCamera()->getPreferredRenderSize(w, h);
+    const glm::uvec2 resolution = scene.getActiveCamera()->getRenderResolution();
+    const uint32_t w = resolution.x;
+    const uint32_t h = resolution.y;
 
     raytracer = std::make_unique<GpuWavefrontRaytracer>(context, scene, w, h);
 
@@ -100,8 +102,7 @@ void NoorRay::runUi() {
     auto* renderPanel      = dynamic_cast<RenderPanel*>(imGuiManager->getComponent("Render"));
 
     int frame = 0;
-    bool isRunning = true, isFullscreen = false, isMoving = false, firstFrame = true;
-    mat4 prevCameraMatrix{1.0f};
+    bool isRunning = true, isFullscreen = false, firstFrame = true;
 
     while (isRunning) {
         SDL_Event event{};
@@ -122,11 +123,10 @@ void NoorRay::runUi() {
 
             {
                 if (auto* cam = scene.getActiveCamera()) {
-                    uint32_t pw = 0, ph = 0;
-                    if (cam->getPreferredRenderSize(pw, ph) &&
-                        (pw != raytracer->getWidth() || ph != raytracer->getHeight())) {
+                    const glm::uvec2 resolution = cam->getRenderResolution();
+                    if (resolution.x != raytracer->getWidth() || resolution.y != raytracer->getHeight()) {
                         context.getDevice().waitIdle();
-                        raytracer->resize(pw, ph);
+                        raytracer->resize(resolution.x, resolution.y);
                         tonemapper->resize(
                             raytracer->getWidth(), raytracer->getHeight(),
                             raytracer->getOutputImage(0, Aov::Color),
@@ -148,38 +148,12 @@ void NoorRay::runUi() {
 
                     const int pixelPct = std::max(renderPanel->getPixelSizePercent(),
                                                   viewportPanel->getViewportPixelSizePercent());
-                    const EnvironmentSettings& env = scene.getEnvironment().settings;
-
-                    SceneSettings ss{};
-                    ss.renderSettings.samples               = renderPanel->getSamples();
-                    ss.renderSettings.diffuseBounces        = renderPanel->getDiffuseBounces();
-                    ss.renderSettings.specularBounces       = renderPanel->getSpecularBounces();
-                    ss.renderSettings.transmissionBounces   = renderPanel->getTransmissionBounces();
-                    ss.renderSettings.russianRouletteStartBounce = 3;
-                    ss.renderSettings.exposure              = renderPanel->getExposure();
-                    ss.renderSettings.transparentBackground = 0;
-                    ss.environment = env;
-                    const float rotRad = env.rotation * (3.14159265f / 180.0f);
-                    ss.environment.rotationSin          = std::sin(rotRad);
-                    ss.environment.rotationCos          = std::cos(rotRad);
-                    ss.environment.lightingExposureScale = env.lightingExposure;
-                    ss.environment.visibleExposureScale  = std::pow(2.0f, env.visibleExposure);
-                    ss.environment.maxTextureLod         = 3.0f;
-
                     PushData push{};
                     push.frame            = frame;
                     push.pixelSizePercent = pixelPct;
                     auto* cam = scene.getActiveCamera();
-                    cam->setRenderSize(raytracer->getWidth(), raytracer->getHeight());
-                    push.cameraToWorld = cam->getCameraToWorld();
-                    ss.camera = cam->getCameraData();
-                    cam->populateRealisticCameraSettings(ss.realisticCamera);
 
-                    if (scene.isDirty(RayLut)) raytracer->invalidateCameraRayLut();
-                    const bool rayLutChanged = raytracer->prepareCameraRayLut(push, ss);
-                    const bool renderChanged = renderPanel->consumeChanged();
-
-                    if (firstFrame || scene.isDirty(Accumulation) || renderChanged || rayLutChanged)
+                    if (firstFrame || scene.isDirty(Accumulation))
                         frame = 0;
                     else
                         ++frame;
@@ -188,11 +162,7 @@ void NoorRay::runUi() {
                     scene.clearDirtyFlags();
                     firstFrame = false;
 
-                    isMoving = (frame == 0) || memcmp(&push.cameraToWorld, &prevCameraMatrix, sizeof(mat4)) != 0;
-                    prevCameraMatrix = push.cameraToWorld;
-                    push.isMoving = isMoving ? 1 : 0;
-
-                    if (frame == 0) raytracer->updateSceneSettings(ss);
+                    push.isMoving = frame == 0 ? 1 : 0;
 
                     raytracer->render(push);
                     const FrameInfo frameInfo = raytracer->getFrameInfo();
@@ -226,15 +196,9 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
     if (!cam) { std::cerr << "No camera in scene.\n"; return; }
 
     const uint32_t w = raytracer->getWidth(), h = raytracer->getHeight();
-    cam->setRenderSize(w, h);
     cam->update();
 
-    SceneSettings ss{};
-    ss.renderSettings.samples                    = 1;
-    ss.renderSettings.russianRouletteStartBounce = 3;
-    ss.camera = cam->getCameraData();
-    cam->populateRealisticCameraSettings(ss.realisticCamera);
-    raytracer->updateSceneSettings(ss);
+    scene.getRenderSettings().samples = 1;
 
     std::cout << "Rendering " << w << "x" << h << " @ " << spp << " spp\n";
 
@@ -246,8 +210,6 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
         push.frame            = frame;
         push.isMoving         = (frame == 0) ? 1 : 0;
         push.pixelSizePercent = 100;
-        push.cameraToWorld    = cam->getCameraToWorld();
-        raytracer->prepareCameraRayLut(push, ss);
 
         context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
             raytracer->render(push);

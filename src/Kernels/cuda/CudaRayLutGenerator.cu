@@ -61,7 +61,7 @@ __device__ bool refractLens(V3 pt, V3 normalIn, V3 rd, float iorIn, float iorOut
 }
 
 __device__ bool traceFromFilm(
-    const RealisticCameraSettings& lens,
+    const RealisticCamera& lens,
     V3 ro, V3 rd,
     V3& outOrigin, V3& outDir)
 {
@@ -107,13 +107,13 @@ __device__ bool traceFromFilm(
     return true;
 }
 
-__device__ V2 sampleExitPupil(const RealisticCameraSettings& lens, V2 filmPos, V2 u)
+__device__ V2 sampleExitPupil(const RealisticCamera& lens, V2 filmPos, V2 u)
 {
     const float rFilm = glm::length(filmPos);
     const float halfDiag = fmaxf(lens.filmDiagonal * 0.5f, 1e-7f);
     int bi = static_cast<int>((rFilm / halfDiag) * static_cast<float>(lens.pupilBoundCount));
     bi = max(0, min(bi, max(lens.pupilBoundCount - 1, 0)));
-    const RealisticPupilBound& bound = lens.pupilBounds[bi];
+    const RealisticPupilBound& bound = lens.exitPupilBounds[bi];
     const V2 p = bound.minBounds + (bound.maxBounds - bound.minBounds) * u;
     const float sinTh = rFilm > 0.0f ? filmPos.y / rFilm : 0.0f;
     const float cosTh = rFilm > 0.0f ? filmPos.x / rFilm : 1.0f;
@@ -121,13 +121,15 @@ __device__ V2 sampleExitPupil(const RealisticCameraSettings& lens, V2 filmPos, V
 }
 
 __global__ void rayLutKernel(
-    RealisticCameraSettings lens,
+    const RealisticCamera* camera,
     RayLutEntry* output,
     uint32_t width,
     uint32_t height)
 {
     const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= width * height) return;
+
+    const RealisticCamera& lens = *camera;
 
     const uint32_t px = idx % width;
     const uint32_t py = idx / width;
@@ -163,7 +165,7 @@ __global__ void rayLutKernel(
 }
 
 void generateCudaRayLut(
-    const RealisticCameraSettings& settings,
+    const RealisticCamera* camera,
     RayLutEntry* deviceOutput,
     const uint32_t width,
     const uint32_t height,
@@ -172,5 +174,5 @@ void generateCudaRayLut(
     constexpr uint32_t blockSize = 256;
     const uint32_t count = width * height;
     rayLutKernel<<<(count + blockSize - 1) / blockSize, blockSize, 0, stream>>>(
-        settings, deviceOutput, width, height);
+        camera, deviceOutput, width, height);
 }

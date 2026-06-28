@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -14,16 +13,14 @@
 #include <cuda_runtime.h>
 #include <optix_stubs.h>
 
-#include "Camera/CameraBase.h"
+#include "Camera/CameraInstance.h"
 #include "GPU/Checks.h"
 #include "GPU/CudaDevice.h"
 #include "GPU/Memory.h"
-#include "Kernels/cuda/CudaRayLutGenerator.h"
 #include "Kernels/Generate.h"
 #include "Kernels/Shade.h"
 #include "Kernels/Finalize.h"
 #include "Mesh/MeshAsset.h"
-#include "Raytracing/RayLUT.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 #include "Vulkan/Context.h"
@@ -86,8 +83,6 @@ GpuWavefrontRaytracer::~GpuWavefrontRaytracer()
     accel.destroy();
     freeSceneData();
     freeQueues();
-    if (deviceSettings != nullptr)
-        nr::gpu::freeDevice(deviceSettings, stream);
     for (uint32_t depth = 0; depth < MaxBounces; ++depth)
     {
         nr::gpu::freeDevice(extendParams[depth], stream);
@@ -111,8 +106,6 @@ void GpuWavefrontRaytracer::setup(const uint32_t newWidth, const uint32_t newHei
     interop->resize(width, height);
     freeQueues();
     allocateQueues();
-    if (deviceSettings == nullptr)
-        deviceSettings = allocateDevice<SceneSettings>(1, stream);
     updateTextures();
     updateMeshes();
     uploadLaunchParams();
@@ -122,7 +115,6 @@ void GpuWavefrontRaytracer::setup(const uint32_t newWidth, const uint32_t newHei
     lastReadyValue = 0;
     submittedFrame = 0;
     lastUseValue = {};
-    cameraRayLutValid = false;
 }
 
 void GpuWavefrontRaytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
@@ -167,7 +159,6 @@ void GpuWavefrontRaytracer::freeSceneData() noexcept
 {
     nr::gpu::freeDevice(deviceMeshes, stream);
     nr::gpu::freeDevice(deviceInstances, stream);
-    nr::gpu::freeDevice(deviceRayLut, stream);
     nr::gpu::freeDevice(deviceTextureObjects, stream);
     for (const DeviceMeshAllocation& allocation : meshAllocations)
     {
@@ -182,13 +173,13 @@ void GpuWavefrontRaytracer::freeSceneData() noexcept
         cudaFreeArray(array);
     deviceMeshes = nullptr;
     deviceInstances = nullptr;
-    deviceRayLut = nullptr;
     deviceTextureObjects = nullptr;
     meshAllocations.clear();
     textureObjects.clear();
     textureArrays.clear();
     gpuScene = {};
-    gpuScene.settings = deviceSettings;
+    gpuScene.renderSettings = &scene.getRenderSettings();
+    gpuScene.environment = scene.getEnvironment().settings;
 }
 
 void GpuWavefrontRaytracer::updateTextures()
@@ -317,7 +308,8 @@ void GpuWavefrontRaytracer::updateMeshes()
     gpuScene.meshCount = static_cast<uint32_t>(gpuMeshes.size());
     gpuScene.instances = deviceInstances;
     gpuScene.instanceCount = static_cast<uint32_t>(instances.size());
-    gpuScene.settings = deviceSettings;
+    gpuScene.renderSettings = &scene.getRenderSettings();
+    gpuScene.environment = scene.getEnvironment().settings;
     uploadLaunchParams();
 }
 
@@ -368,90 +360,6 @@ void GpuWavefrontRaytracer::updateTLAS()
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
-void GpuWavefrontRaytracer::updateSceneSettings(const SceneSettings& settings)
-{
-    hostSettings = settings;
-    hostSettings.renderSettings.samples = std::max(1, hostSettings.renderSettings.samples);
-    maxShaderBounces = std::min(MaxBounces - 1,
-        static_cast<uint32_t>(std::max({settings.renderSettings.diffuseBounces,
-                                        settings.renderSettings.specularBounces,
-                                        settings.renderSettings.transmissionBounces, 1}) + 1));
-    NR_GPU_CHECK(cudaMemcpyAsync(deviceSettings, &hostSettings, sizeof(hostSettings), cudaMemcpyHostToDevice, stream));
-}
-
-bool GpuWavefrontRaytracer::prepareCameraRayLut(PushData& pushData, const SceneSettings& settings)
-{
-    pushData.rayLutEnabled = 0;
-    if (settings.camera.cameraType != CameraRealistic)
-        return false;
-    if (cameraRayLutValid)
-    {
-        pushData.rayLutEnabled = 1;
-        return false;
-    }
-    if (settings.realisticCamera.elementCount <= 0 || settings.realisticCamera.pupilBoundCount <= 0)
-        return false;
-
-    // Try loading from a cached .raylut file first (higher-quality multi-wavelength LUT)
-    const CameraBase* camera = scene.getActiveCamera();
-    const std::string folder = camera != nullptr ? camera->getRayLutCacheFolder() : std::string{};
-    if (!folder.empty() && std::filesystem::is_directory(folder))
-    {
-        RayLUTFileReader reader;
-        for (const auto& file : std::filesystem::directory_iterator(folder))
-        {
-            if (!file.is_regular_file() || file.path().extension() != ".raylut")
-                continue;
-            try
-            {
-                const RayLUT lut = reader.read(file.path());
-                if (lut.rasterWidth != width || lut.rasterHeight != height || lut.empty())
-                    continue;
-                std::vector<RayLutEntry> entries(static_cast<size_t>(width) * height);
-                const float wavelength = lut.wavelengths.front();
-                for (uint32_t y = 0; y < height; ++y)
-                    for (uint32_t x = 0; x < width; ++x)
-                        if (const auto ray = lut.lookupInterpolated(
-                                static_cast<float>(x), static_cast<float>(y), wavelength))
-                            entries[x + y * width] = *ray;
-                nr::gpu::freeDevice(deviceRayLut, stream);
-                deviceRayLut = allocateDevice<RayLutEntry>(entries.size(), stream);
-                uploadVector(deviceRayLut, entries, stream);
-                gpuScene.cameraRayLut = deviceRayLut;
-                cameraRayLutValid = true;
-                pushData.rayLutEnabled = 1;
-                return true;
-            }
-            catch (const std::exception&) {}
-        }
-    }
-
-    // No cache file — generate LUT on GPU from the lens description (single wavelength)
-    std::cout << "[RayLUT] Generating " << width << "x" << height << " LUT on GPU...\n";
-    nr::gpu::freeDevice(deviceRayLut, stream);
-    deviceRayLut = allocateDevice<RayLutEntry>(static_cast<size_t>(width) * height, stream);
-    // deviceSettings already contains the uploaded SceneSettings (with realisticCamera)
-    generateCudaRayLut(settings.realisticCamera, deviceRayLut, width, height, stream);
-    NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    std::cout << "[RayLUT] Done.\n";
-    // Diagnostic: print first few entries to verify ray variation
-    {
-        constexpr int N = 4;
-        RayLutEntry entries[N];
-        const uint32_t indices[N] = {0, 1, width/2 + height/2*width, width-1 + (height-1)*width};
-        for (int i = 0; i < N; ++i)
-            NR_GPU_CHECK(cudaMemcpy(&entries[i], deviceRayLut + indices[i], sizeof(RayLutEntry), cudaMemcpyDeviceToHost));
-        for (int i = 0; i < N; ++i)
-            printf("[RayLUT] entry[%d] valid=%.0f o=(%.3f,%.3f,%.3f) d=(%.3f,%.3f,%.3f)\n", i,
-                entries[i].originValid, entries[i].origin.x, entries[i].origin.y, entries[i].origin.z,
-                entries[i].direction.x, entries[i].direction.y, entries[i].direction.z);
-    }
-    gpuScene.cameraRayLut = deviceRayLut;
-    cameraRayLutValid = true;
-    pushData.rayLutEnabled = 1;
-    return true;
-}
-
 void GpuWavefrontRaytracer::uploadLaunchParams()
 {
     for (uint32_t depth = 0; depth < MaxBounces; ++depth)
@@ -481,19 +389,23 @@ void GpuWavefrontRaytracer::render(const PushData& pushData)
 
     KernelParams params{};
     params.scene = gpuScene;
+    params.scene.camera = scene.getActiveCamera()->getCamera();
     params.queues = queues;
     params.output = interop->getSurfaces(buffer);
     params.frame.frame = pushData.frame;
     params.frame.isMoving = pushData.isMoving;
     params.frame.pixelSizePercent = pushData.pixelSizePercent;
-    params.frame.rayLutEnabled = pushData.rayLutEnabled;
-    copyTransform(params.frame.cameraToWorld, pushData.cameraToWorld);
     params.frame.width = width;
     params.frame.height = height;
     params.accumulation = accumulation;
     params.adaptiveState = adaptiveState;
 
-    const uint32_t samplesPerFrame = static_cast<uint32_t>(hostSettings.renderSettings.samples);
+    const RenderSettings& renderSettings = scene.getRenderSettings();
+    const uint32_t samplesPerFrame = static_cast<uint32_t>(std::max(1, renderSettings.samples));
+    const uint32_t maxShaderBounces = std::min(MaxBounces - 1,
+        static_cast<uint32_t>(std::max({renderSettings.diffuseBounces,
+                                        renderSettings.specularBounces,
+                                        renderSettings.transmissionBounces, 1}) + 1));
     for (uint32_t s = 0; s < samplesPerFrame; ++s)
     {
         NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0, sizeof(uint32_t) * MaxBounces, stream));

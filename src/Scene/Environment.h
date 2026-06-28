@@ -5,7 +5,14 @@
 
 class Environment {
 public:
-    EnvironmentSettings settings;
+    EnvironmentSettings* settings{};
+
+    Environment();
+    ~Environment();
+    Environment(const Environment&) = delete;
+    Environment& operator=(const Environment&) = delete;
+
+    void updateDerivedSettings();
 
     static std::vector<float> computeCdf(const float* hdr, int w, int h);
 };

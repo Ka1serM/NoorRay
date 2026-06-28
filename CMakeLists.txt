@@ -23,6 +23,7 @@ set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
 # SDL3 (Static Linking Setup)
 set(SDL_STATIC ON CACHE BOOL "Build SDL3 as a static library" FORCE)
 set(SDL_SHARED OFF CACHE BOOL "Do not build SDL3 as a shared library" FORCE)
+set(SDL_ALSA OFF CACHE BOOL "NoorRay does not use SDL audio" FORCE)
 add_subdirectory(external/SDL)
 
 # External Libraries
@@ -213,7 +214,7 @@ add_custom_command(
                 -ccbin "${CMAKE_CUDA_HOST_COMPILER}"
                 --ptx --gpu-architecture=compute_89 --std=c++20
                 --use_fast_math --generate-line-info --expt-relaxed-constexpr
-                -DNR_BACKEND_CUDA=1 -DGLM_FORCE_CUDA=1
+                -DNR_BACKEND_CUDA=1
                 "-I${PROJECT_SOURCE_DIR}/src"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
                 "-I${OPTIX_INCLUDE_DIR}"
@@ -225,19 +226,15 @@ add_custom_command(
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 
-# .h files compiled with NVCC as CUDA translation units
-set(NR_CUDA_KERNEL_SOURCES
-        src/Kernels/Generate.h
-        src/Kernels/Shade.h
-        src/Kernels/Finalize.h)
-set_source_files_properties(${NR_CUDA_KERNEL_SOURCES} PROPERTIES LANGUAGE CUDA)
-
 add_library(NoorRayCuda STATIC
         src/GPU/CudaDevice.cpp
         src/GPU/ImageInterop.cpp
         src/GPU/Memory.cpp
+        src/GPU/rstd/Memory.cpp
         src/Kernels/cuda/CudaRayLutGenerator.cu
-        ${NR_CUDA_KERNEL_SOURCES}
+        src/Kernels/cuda/Generate.cu
+        src/Kernels/cuda/Shade.cu
+        src/Kernels/cuda/Finalize.cu
         src/Kernels/cuda/AccelBuilder.cpp
         src/Kernels/cuda/OptiXSetup.cpp
         src/Raytracing/GpuWavefrontRaytracer.cpp)
@@ -247,8 +244,6 @@ target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
 target_compile_definitions(NoorRayCuda PUBLIC
         NR_BACKEND_CUDA=1
         VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
-target_compile_definitions(NoorRayCuda PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:GLM_FORCE_CUDA=1>)
 target_include_directories(NoorRayCuda PUBLIC
         "${PROJECT_SOURCE_DIR}/src"
         "${PROJECT_SOURCE_DIR}/external/glm"
@@ -263,6 +258,7 @@ target_link_libraries(NoorRayCuda PUBLIC
         stb
         Vulkan::Vulkan
         SDL3::SDL3-static
+        portable_file_dialogs
         GPUOpen::VulkanMemoryAllocator)
 
 # Resource handling on Windows

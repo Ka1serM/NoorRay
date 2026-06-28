@@ -1,46 +1,25 @@
 #pragma once
 
 #include "GPU/Annotations.h"
+#include "Camera/Camera.h"
+#include "Kernels/Math.h"
+#include "Scene/SceneTypes.h"
 
-#ifndef __CUDACC__
-#include "CameraBase.h"
-#endif
+class CameraInstance;
 
-#ifdef __CUDACC__
-#include "Kernels/SceneData.h"
-#endif
-
-class PerspectiveCamera
-#ifndef __CUDACC__
-    final : public CameraBase
-#endif
-{
+class PerspectiveCamera : public Camera {
 public:
-    float sensorScaleX{};
-    float sensorScaleY{};
-
-#ifndef __CUDACC__
-    PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, CameraSettings settings = {});
-    PerspectiveCamera(Scene& scene, const std::string& name, Transform transform, float aspect, float sensorWidth, float sensorHeight, float focalLength, float aperture, float focusDistance, float bokehBias);
-    PerspectiveCamera(const PerspectiveCamera& other);
-
-    std::unique_ptr<SceneObject> clone() const override;
-    CameraProjectionType getProjectionType() const override { return CameraProjectionType::Perspective; }
-    const char* getProjectionName() const override { return "Perspective"; }
-
-protected:
-    void computeProjectionData(const vec3& direction, const vec3& up, const vec3& right, float aspectRatio) override;
-#endif
-
-#ifdef __CUDACC__
-    NR_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction,
-        float nx, float ny, float, uint32_t& rng,
-        const RayLutEntry*, uint32_t, int) const
+    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction,
+        float nx, float ny, uint32_t&, uint32_t) const
     {
-        (void)rng;
-        origin = glm::vec3(0.0f);
-        direction = normalize3(glm::vec3(nx * sensorScaleX, ny * sensorScaleY, -1.0f));
+        const glm::vec2 scale{
+            sensor.widthMm / (2.f * focalLengthMm),
+            sensor.heightMm / (2.f * focalLengthMm)};
+        origin = glm::vec3(0.f);
+        direction = normalize3(glm::vec3(nx * scale.x, ny * scale.y, -1.f));
+        transformRay(origin, direction);
         return true;
     }
-#endif
+
+    void renderUi(CameraInstance& inst);
 };

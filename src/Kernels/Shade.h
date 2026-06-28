@@ -33,8 +33,8 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         PathState state = params.queues.pathStates[hit.sampleIndex];
         if (hit.primitiveIndex == InvalidIndex)
         {
-            const bool visible = params.scene.settings->environment.visible != 0 &&
-                params.scene.settings->renderSettings.transparentBackground == 0;
+            const bool visible = params.scene.environment->visible != 0 &&
+                params.scene.renderSettings->transparentBackground == 0;
             state.radiance = add(state.radiance,
                 multiply(state.throughput, environmentRadiance(params.scene, hit.rayDirection, visible)));
             if (visible)
@@ -105,7 +105,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                     glm::vec3 lightDirection{};
                     glm::vec3 lightRadiance{};
                     float lightDistance = 1000.0f;
-                    const EnvironmentSettings environment = params.scene.settings->environment;
+                    const EnvironmentSettings environment = *params.scene.environment;
                     if (environment.directionalIntensity > 0.0f)
                     {
                         lightDirection = normalize3(multiply(environment.directionalDirection, -1.0f));
@@ -138,7 +138,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
 
                 state.rngState = rng;
                 state.depth++;
-                const RenderSettings render = params.scene.settings->renderSettings;
+                const RenderSettings render = *params.scene.renderSettings;
                 const uint32_t diffuse = (state.packedCounters >> CounterDiffuseShift) & 0xffu;
                 const uint32_t specular = (state.packedCounters >> CounterSpecularShift) & 0xffu;
                 const uint32_t transmitted = (state.packedCounters >> CounterTransmissionShift) & 0xffu;

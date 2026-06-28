@@ -1,18 +1,31 @@
 #include "Scene.h"
 #include <algorithm>
-#include "Camera/CameraBase.h"
+#include "Camera/CameraInstance.h"
+#include "GPU/rstd/Allocator.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneObject.h"
 
 Scene::Scene(Context& context) : context(context) {
-    environment.settings.textureIndex = 0;
-    environment.settings.cdfTextureIndex = 1;
+    nr::rstd::allocator<RenderSettings> allocator;
+    renderSettings = allocator.allocate(1);
+    allocator.construct(renderSettings);
+    renderSettings->samples = 1;
+    renderSettings->diffuseBounces = 3;
+    renderSettings->specularBounces = 3;
+    renderSettings->transmissionBounces = 3;
+    renderSettings->russianRouletteStartBounce = 3;
+}
+
+Scene::~Scene()
+{
+    nr::rstd::allocator<RenderSettings> allocator;
+    allocator.destroy(renderSettings);
+    allocator.deallocate(renderSettings, 1);
 }
 
 void Scene::notifyGeometryChanged() {
     setDirtyFlag(TLAS);
     setDirtyFlag(Accumulation);
-    setDirtyFlag(RayLut);
 }
 
 // ── Internal registration ─────────────────────────────────────────────────────
@@ -21,7 +34,7 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     std::shared_ptr<SceneObject> sharedObject(std::move(sceneObject));
     sharedObject->setId(nextObjectId++);
 
-    if (auto camera = std::dynamic_pointer_cast<CameraBase>(sharedObject))
+    if (auto camera = std::dynamic_pointer_cast<CameraInstance>(sharedObject))
         activeCamera = camera;
 
     notifyGeometryChanged();
@@ -100,7 +113,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     std::shared_ptr<SceneObject> newShared(std::move(newObject));
     newShared->setId(oldObject->getId());
 
-    if (auto camera = std::dynamic_pointer_cast<CameraBase>(newShared))
+    if (auto camera = std::dynamic_pointer_cast<CameraInstance>(newShared))
         activeCamera = camera;
 
     *it = std::move(newShared);

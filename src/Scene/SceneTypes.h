@@ -30,11 +30,6 @@ using glm::quat_cast;
 using glm::radians;
 using glm::transpose;
 
-static constexpr int CameraPerspective = 0;
-static constexpr int CameraOrthographic = 1;
-static constexpr int CameraFisheye = 2;
-static constexpr int CameraThinLens = 3;
-static constexpr int CameraRealistic = 4;
 static constexpr int MaxRealisticLensElements = 64;
 static constexpr int MaxRealisticExitPupilBounds = 64;
 
@@ -120,22 +115,6 @@ struct EnvironmentSettings
     float directionalSoftAngle{};
 };
 
-struct CameraData
-{
-    int cameraType{};
-    float focalLength{};
-    float focusDistance{};
-    float aperture{};
-    float bokehBias{};
-    float orthoHeight{};
-    float fisheyeFov{};
-    float nearPlane{};
-    float farPlane{};
-    float sensorScaleX{};
-    float sensorScaleY{};
-    int _pad0{};
-};
-
 struct RayLutEntry
 {
     vec3 origin{};
@@ -163,35 +142,11 @@ struct RealisticPupilBound
     vec2 maxBounds{};
 };
 
-struct RealisticCameraSettings
-{
-    RealisticLensElement elements[MaxRealisticLensElements]{};
-    RealisticPupilBound pupilBounds[MaxRealisticExitPupilBounds]{};
-    int elementCount{};
-    int pupilBoundCount{};
-    float sensorWidth{};
-    float sensorHeight{};
-    float apertureRadius{};
-    float filmDiagonal{};
-    float rearElementZ{};
-    float surfaceOffset{};
-};
-
-struct SceneSettings
-{
-    RenderSettings renderSettings{};
-    EnvironmentSettings environment{};
-    RealisticCameraSettings realisticCamera{};
-    CameraData camera{};
-};
-
 struct PushData
 {
     int frame{};
     int isMoving{};
     int pixelSizePercent{};
-    int rayLutEnabled{};
-    mat4 cameraToWorld{1.0f};
 };
 
 struct LightGpu

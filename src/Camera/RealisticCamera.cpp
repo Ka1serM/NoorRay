@@ -17,9 +17,6 @@
 #include <utility>
 #include "glm/gtx/norm.hpp"
 #include "Camera/CameraInstance.h"
-#include "GPU/rstd/Allocator.h"
-#include "Kernels/cuda/CudaRayLutGenerator.h"
-#include "Raytracing/RayLUT.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
 
@@ -169,11 +166,11 @@ bool intersectRossSphere(const RealisticLensElement& element, float surfaceOffse
     t = 0.0f;
     normal = vec3(0.0f, 0.0f, 1.0f);
     const float surfaceCenter = element.vertexZ + surfaceOffset;
-    const float zCenter = -surfaceCenter + element.radius;
+    const float zCenter = surfaceCenter + element.radius;
     if (std::abs(element.radius) <= 1e-7f) {
         if (std::abs(ray.direction.z) <= 1e-7f)
             return false;
-        t = (-surfaceCenter - ray.origin.z) / ray.direction.z;
+        t = (surfaceCenter - ray.origin.z) / ray.direction.z;
         normal = ray.direction.z > 0.0f ? vec3(0.0f, 0.0f, -1.0f) : vec3(0.0f, 0.0f, 1.0f);
         return t >= 0.0f;
     }
@@ -229,11 +226,7 @@ bool traceFromFilmRoss(const std::vector<RealisticLensElement>& elements, float 
     if (elements.empty())
         return false;
 
-    // Public realistic-camera local space matches ROSS: film at z=0 and +Z
-    // travels from film toward the world. ROSS's sequential tracer flips Z
-    // internally and stores surface centers at negative Z during intersection.
-    CpuRay tracedRay{{inputRay.origin.x, inputRay.origin.y, -inputRay.origin.z},
-                     {inputRay.direction.x, inputRay.direction.y, -inputRay.direction.z}};
+    CpuRay tracedRay = inputRay;
 
     for (int i = static_cast<int>(elements.size()) - 1; i >= 0; --i) {
         const RealisticLensElement& element = elements[static_cast<size_t>(i)];
@@ -241,7 +234,7 @@ bool traceFromFilmRoss(const std::vector<RealisticLensElement>& elements, float 
         if (element.isAperture != 0) {
             if (std::abs(tracedRay.direction.z) <= 1e-7f)
                 return false;
-            const float t = (-surfaceCenter - tracedRay.origin.z) / tracedRay.direction.z;
+            const float t = (surfaceCenter - tracedRay.origin.z) / tracedRay.direction.z;
             if (t < 0.0f)
                 return false;
             const vec3 p = tracedRay.origin + tracedRay.direction * t;
@@ -270,10 +263,7 @@ bool traceFromFilmRoss(const std::vector<RealisticLensElement>& elements, float 
         tracedRay = {refracted.origin, -refracted.direction};
     }
 
-    // Convert the internally flipped ROSS ray back to the public +Z-forward
-    // lens space before mapping it onto Noor's camera basis.
-    outputRay = {{tracedRay.origin.x, tracedRay.origin.y, -tracedRay.origin.z},
-                 {tracedRay.direction.x, tracedRay.direction.y, -tracedRay.direction.z}};
+    outputRay = tracedRay;
     return true;
 }
 
@@ -282,8 +272,7 @@ bool traceFromSceneRoss(const std::vector<RealisticLensElement>& elements, float
     if (elements.empty())
         return false;
 
-    CpuRay tracedRay{{inputRay.origin.x, inputRay.origin.y, -inputRay.origin.z},
-                     {inputRay.direction.x, inputRay.direction.y, -inputRay.direction.z}};
+    CpuRay tracedRay = inputRay;
 
     for (size_t i = 0; i < elements.size(); ++i) {
         const RealisticLensElement& element = elements[i];
@@ -291,7 +280,7 @@ bool traceFromSceneRoss(const std::vector<RealisticLensElement>& elements, float
         if (element.isAperture != 0) {
             if (std::abs(tracedRay.direction.z) <= 1e-7f)
                 return false;
-            const float t = (-surfaceCenter - tracedRay.origin.z) / tracedRay.direction.z;
+            const float t = (surfaceCenter - tracedRay.origin.z) / tracedRay.direction.z;
             if (t < 0.0f)
                 return false;
             const vec3 p = tracedRay.origin + tracedRay.direction * t;
@@ -317,8 +306,7 @@ bool traceFromSceneRoss(const std::vector<RealisticLensElement>& elements, float
         tracedRay = {refracted.origin, -refracted.direction};
     }
 
-    outputRay = {{tracedRay.origin.x, tracedRay.origin.y, -tracedRay.origin.z},
-                 {tracedRay.direction.x, tracedRay.direction.y, -tracedRay.direction.z}};
+    outputRay = tracedRay;
     return true;
 }
 
@@ -338,59 +326,10 @@ void RealisticCamera::load(std::string lensPath_, std::string sensorPath_,
     sensorPath         = std::move(sensorPath_);
     glassCatalogPaths  = std::move(glassCatalogPaths_);
     loadLensAndSensor();
-    rebuildRayLut();
 }
 
 RealisticCamera::~RealisticCamera()
 {
-    releaseRayLut();
-}
-
-void RealisticCamera::releaseRayLut()
-{
-    if (rayLut == nullptr)
-        return;
-    nr::rstd::allocator<RayLutEntry> allocator;
-    allocator.deallocate(rayLut, rayLutSize);
-    rayLut = nullptr;
-    rayLutSize = 0;
-}
-
-void RealisticCamera::rebuildRayLut()
-{
-    releaseRayLut();
-    if (elementCount <= 0 || pupilBoundCount <= 0)
-        return;
-
-    const uint32_t width = sensor.resolutionWidth;
-    const uint32_t height = sensor.resolutionHeight;
-    rayLutSize = width * height;
-    nr::rstd::allocator<RayLutEntry> allocator;
-    rayLut = allocator.allocate(rayLutSize);
-
-    bool loaded = false;
-    if (!rayLutPath.empty()) {
-        try {
-            const RayLUT source = RayLUTFileReader{}.read(rayLutPath);
-            if (source.rasterWidth == width && source.rasterHeight == height && !source.empty()) {
-                const float wavelength = source.wavelengths.front();
-                for (uint32_t y = 0; y < height; ++y)
-                    for (uint32_t x = 0; x < width; ++x) {
-                        const auto ray = source.lookupInterpolated(
-                            static_cast<float>(x), static_cast<float>(y), wavelength);
-                        rayLut[x + y * width] = ray.value_or(RayLutEntry{});
-                    }
-                loaded = true;
-            }
-        } catch (const std::exception& error) {
-            std::cerr << "[RayLUT] " << error.what() << '\n';
-        }
-    }
-
-    if (!loaded) {
-        generateCudaRayLut(this, rayLut, width, height, nullptr);
-        cudaDeviceSynchronize();
-    }
 }
 
 void RealisticCamera::renderUi(CameraInstance& inst)
@@ -401,7 +340,6 @@ void RealisticCamera::renderUi(CameraInstance& inst)
         applyFocus();
         rebuildExitPupilBounds();
         updateGpuData();
-        rebuildRayLut();
     }
     bool changed = false;
 
@@ -429,23 +367,13 @@ void RealisticCamera::renderUi(CameraInstance& inst)
         }
         glassCatalogDialog.reset();
     }
-    if (rayLutDialog && rayLutDialog->ready(0)) {
-        const auto selection = rayLutDialog->result();
-        if (!selection.empty()) {
-            rayLutPath = selection.front();
-            changed = true;
-        }
-        rayLutDialog.reset();
-    }
 
     std::array<char, 512> lensBuffer{};
     std::array<char, 512> sensorBuffer{};
     std::array<char, 1024> glassCatalogBuffer{};
-    std::array<char, 512> rayLutCacheBuffer{};
     std::snprintf(lensBuffer.data(), lensBuffer.size(), "%s", lensPath.c_str());
     std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensorPath.c_str());
     std::snprintf(glassCatalogBuffer.data(), glassCatalogBuffer.size(), "%s", glassCatalogPaths.c_str());
-    std::snprintf(rayLutCacheBuffer.data(), rayLutCacheBuffer.size(), "%s", rayLutPath.c_str());
 
     auto* rs = &sensor;
     ImGuiManager::dragFloatRow("Sensor Width", rs->widthMm, 0.01f, 0.001f, 500.0f, [&](float v) {
@@ -518,23 +446,6 @@ void RealisticCamera::renderUi(CameraInstance& inst)
             "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs",
             std::vector<std::string>{"Glass Catalogs", "*.agf *.AGF", "All Files", "*"},
             pfd::opt::multiselect);
-    }
-    ImGui::EndDisabled();
-
-    ImGuiManager::tableRowLabel("RayLUT File");
-    const float rayLutButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - rayLutButtonWidth - ImGui::GetStyle().ItemSpacing.x);
-    if (ImGui::InputText("##RealisticRayLutPath", rayLutCacheBuffer.data(), rayLutCacheBuffer.size())) {
-        rayLutPath = rayLutCacheBuffer.data();
-        changed = true;
-    }
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(rayLutDialog != nullptr);
-    if (ImGui::Button("Select##RealisticRayLutCache", ImVec2(rayLutButtonWidth, 0))) {
-        rayLutDialog = std::make_unique<pfd::open_file>(
-            "Select RayLUT File", ".",
-            std::vector<std::string>{"RayLUT Files", "*.raylut", "All Files", "*"});
     }
     ImGui::EndDisabled();
 
@@ -615,7 +526,6 @@ void RealisticCamera::renderUi(CameraInstance& inst)
 
     if (changed) {
         updateGpuData();
-        rebuildRayLut();
         inst.markDirty();
     }
 }
@@ -909,7 +819,7 @@ void RealisticCamera::finalizeElements(std::vector<RealisticLensElement>& elemen
     float vertexZ = 0.0f;
     for (int i = static_cast<int>(elements.size()) - 1; i >= 0; --i) {
         RealisticLensElement& element = elements[static_cast<size_t>(i)];
-        vertexZ += element.thickness;
+        vertexZ -= element.thickness;
         element.vertexZ = vertexZ * 0.001f;
         element.radius *= 0.001f;
         element.thickness *= 0.001f;
@@ -940,9 +850,9 @@ void RealisticCamera::rebuildLensMetadata()
 
     const auto* rs = &sensor;
     const float x = 0.001f * std::sqrt(rs->widthMm * rs->widthMm + rs->heightMm * rs->heightMm) * 0.001f;
-    CpuRay sceneRay{{x, 0.0f, metadataElements.front().vertexZ + 1.0f}, {0.0f, 0.0f, -1.0f}};
+    CpuRay sceneRay{{x, 0.0f, metadataElements.front().vertexZ - 1.0f}, {0.0f, 0.0f, 1.0f}};
     CpuRay filmRay{};
-    CpuRay filmProbe{{x, 0.0f, metadataElements.back().vertexZ - 1.0f}, {0.0f, 0.0f, 1.0f}};
+    CpuRay filmProbe{{x, 0.0f, metadataElements.back().vertexZ + 1.0f}, {0.0f, 0.0f, -1.0f}};
     CpuRay sceneOut{};
     if (!traceFromSceneRoss(metadataElements, 0.0f, sceneRay, filmRay))
         return;
@@ -991,7 +901,7 @@ void RealisticCamera::applyFocus()
 
     const float offset = 0.5f * (secondPrincipalZ - z + firstPrincipalZ - std::sqrt(c));
     if (std::isfinite(offset))
-        focusSurfaceOffsetM = offset;
+        focusSurfaceOffsetM = -offset;
 }
 
 void RealisticCamera::rebuildExitPupilBounds()
@@ -1006,7 +916,7 @@ void RealisticCamera::rebuildExitPupilBounds()
     const float filmDiagonal = std::sqrt(rs->widthMm * rs->widthMm + rs->heightMm * rs->heightMm) * 0.001f;
     const float rearRadius = lensElements.back().apertureRadius;
     const float rearZ = lensElements.back().vertexZ + focusSurfaceOffsetM;
-    if (filmDiagonal <= 0.0f || rearRadius <= 0.0f || rearZ <= 0.0f)
+    if (filmDiagonal <= 0.0f || rearRadius <= 0.0f || rearZ >= 0.0f)
         return;
 
     pupilBounds.resize(boundsCount);

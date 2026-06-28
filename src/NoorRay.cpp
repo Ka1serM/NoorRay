@@ -138,7 +138,7 @@ void NoorRay::runUi() {
                     }
                 }
 
-                debugPanel->onComputeFinished();
+                debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
                 if (renderPanel->isSaveRequested()) {
                     renderPanel->executeSave();
                 } else {

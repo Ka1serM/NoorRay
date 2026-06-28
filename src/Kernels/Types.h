@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#if defined(__CUDACC__)
+#if defined(NR_GPU_CODE)
 #include <cuda.h>
 #endif
 

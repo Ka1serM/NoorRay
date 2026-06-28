@@ -3,7 +3,6 @@
 #include <cuda_fp16.h>
 
 #include "Kernels/SceneData.h"
-#include "Kernels/Math.h"
 #include "Kernels/Samplers.h"
 
 static constexpr float Pi = 3.14159265358979323846f;
@@ -48,8 +47,7 @@ NR_GPU inline glm::vec3 environmentRadiance(const GpuSceneData scene, const glm:
     const float u = 0.5f + atan2f(rotatedZ, rotatedX) / (2.0f * Pi);
     const float v = acosf(fminf(fmaxf(direction.y, -1.0f), 1.0f)) / Pi;
     const float4 color = tex2DLod<float4>(scene.textures[environment.textureIndex], u, v, 0.0f);
-    return multiply(glm::vec3(color.x, color.y, color.z),
-        visible ? environment.visibleExposureScale : environment.lightingExposureScale);
+    return glm::vec3(color.x, color.y, color.z) * (visible ? environment.visibleExposureScale : environment.lightingExposureScale);
 }
 
 NR_GPU inline glm::vec3 cosineHemisphere(const glm::vec3 normal, uint32_t& rng)
@@ -59,11 +57,11 @@ NR_GPU inline glm::vec3 cosineHemisphere(const glm::vec3 normal, uint32_t& rng)
     const float radius = sqrtf(r1);
     const float angle = 2.0f * Pi * r2;
     const glm::vec3 helper = fabsf(normal.z) < 0.999f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
-    const glm::vec3 tangent = normalize3(cross3(helper, normal));
-    const glm::vec3 bitangent = cross3(normal, tangent);
-    return normalize3(add(add(multiply(tangent, radius * cosf(angle)),
-                               multiply(bitangent, radius * sinf(angle))),
-                           multiply(normal, sqrtf(fmaxf(0.0f, 1.0f - r1)))));
+    const glm::vec3 tangent = glm::normalize(glm::cross(helper, normal));
+    const glm::vec3 bitangent = glm::cross(normal, tangent);
+    return glm::normalize(tangent * (radius * cosf(angle)) +
+                           bitangent * (radius * sinf(angle)) +
+                           normal * sqrtf(fmaxf(0.0f, 1.0f - r1)));
 }
 
 NR_GPU inline ushort4 packHalf4(const glm::vec3 value, const float w)

@@ -24,6 +24,24 @@ enum DirtyFlag : uint8_t {
     Accumulation = 1 << 3,
 };
 
+struct RenderSettings
+{
+    int samples{};
+    int diffuseBounces{};
+    int specularBounces{};
+    int transmissionBounces{};
+    int adaptiveSamplingEnabled{};
+    int adaptiveMinSamples{};
+    float adaptiveTargetError{};
+    int russianRouletteStartBounce{};
+    float exposure{};
+    int transparentBackground{};
+    int renderMode{};
+    int bufferVisualization{};
+    int taaEnabled{};
+    int aoSampleAlbedo{};
+};
+
 class Scene {
     Context& context;
 

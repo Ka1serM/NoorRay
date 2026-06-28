@@ -5,7 +5,7 @@
 #include "GPU/Annotations.h"
 #include "Kernels/Types.h"
 
-#if defined(__CUDACC__)
+#if defined(NR_GPU_CODE)
 NR_GPU inline uint32_t reserveWarpRange(uint32_t* count, const bool active)
 {
     const unsigned int mask = __ballot_sync(0xffffffffu, active);

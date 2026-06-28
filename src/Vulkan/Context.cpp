@@ -424,19 +424,19 @@ vk::PresentModeKHR Context::chooseSwapPresentMode() const {
     const std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.getSurfacePresentModesKHR(surface.get());
 
     for (const auto& mode : availablePresentModes)
+        if (mode == vk::PresentModeKHR::eImmediate) {
+            std::cout << "Present Mode: Immediate (Unlocked, Tearing)" << std::endl;
+            return mode;
+        }
+
+    for (const auto& mode : availablePresentModes)
         if (mode == vk::PresentModeKHR::eMailbox) {
             std::cout << "Present Mode: Mailbox (Low-latency, No Tearing)" << std::endl;
             return mode;
         }
     
-    for (const auto& mode : availablePresentModes)
-        if (mode == vk::PresentModeKHR::eFifo) {
-            std::cout << "Present Mode: FIFO (V-Sync)" << std::endl;
-            return mode;
-        }
-    
-    std::cout << "Present Mode: Immediate (Unlocked, Tearing)" << std::endl;
-    return vk::PresentModeKHR::eImmediate;
+    std::cout << "Present Mode: FIFO (V-Sync)" << std::endl;
+    return vk::PresentModeKHR::eFifo;
 }
 
 VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(

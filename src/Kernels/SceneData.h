@@ -7,6 +7,7 @@
 #include "Camera/Camera.h"
 #include "Kernels/Types.h"
 #include "Kernels/Output.h"
+#include "Mesh/MeshAsset.h"
 #include "Scene/SceneTypes.h"
 
 struct GpuMaterial

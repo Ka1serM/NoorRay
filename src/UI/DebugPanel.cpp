@@ -5,10 +5,12 @@
 DebugPanel::DebugPanel(std::string name) 
     : ImGuiComponent(std::move(name)), lastTime(std::chrono::high_resolution_clock::now()) {}
 
-void DebugPanel::onComputeFinished() {
+void DebugPanel::onComputeFinished(const float raytraceMs) {
     const auto now = std::chrono::high_resolution_clock::now();
     const float deltaTime = std::chrono::duration<float>(now - lastTime).count();
     lastTime = now;
+
+    m_raytraceMs = raytraceMs;
 
     timeAccumulator += deltaTime;
     frameCounter++;
@@ -27,7 +29,10 @@ void DebugPanel::renderUi() {
 
         ImGuiManager::tableRowLabel("FPS");
         ImGui::Text("%.2f", fps);
-        
+
+        ImGuiManager::tableRowLabel("Raytrace");
+        ImGui::Text("%.2f ms", m_raytraceMs);
+
         //ImGuiManager::tableRowLabel("Show BVH");
         //ImGui::Combo("##BVHMode", &visualizeBVH, modes, IM_ARRAYSIZE(modes));
         

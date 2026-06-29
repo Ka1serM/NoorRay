@@ -14,7 +14,7 @@ void EnvironmentPanel::renderUi() {
 
     if (ImGui::BeginTable("Environment Table", 2, ImGuiTableFlags_SizingStretchProp))
     {
-        ImGuiManager::dragFloatRow("Lighting Intensity", settings.lightingExposure, 0.01f, 0.0f, 1000000.0f, [&](const float v) { settings.lightingExposure = v; anyChanged = true; });
+        ImGuiManager::dragFloatRow("Intensity", settings.lightingExposure, 0.01f, 0.0f, 1000000.0f, [&](const float v) { settings.lightingExposure = v; anyChanged = true; });
         
         ImGuiManager::tableRowLabel("HDRI Texture");
         
@@ -49,7 +49,10 @@ void EnvironmentPanel::renderUi() {
         
         if (oldHdriTexture != settings.textureIndex) {
             anyChanged = true;
+            scene.setDirtyFlag(EnvironmentCdf);
         }
+
+        ImGuiManager::colorEdit3Row("HDRI Color", settings.color, [&](const vec3 v) { settings.color = v; anyChanged = true; });
         
         if (settings.textureIndex != -1) {
             ImGuiManager::dragFloatRow("Visible Exposure", settings.visibleExposure, 0.01f, -100.f, 100.f, [&](const float v) { settings.visibleExposure = v; anyChanged = true; });

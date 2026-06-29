@@ -111,15 +111,15 @@ set(SLANGC_BASE
 )
 
 set(SHADER_OUTPUTS
-        "${SHADER_DIR}/Tonemapping/Tonemapper.spv"
+        "${SHADER_DIR}/Viewport/Viewport.spv"
 )
 
 add_custom_command(
         OUTPUT ${SHADER_OUTPUTS}
-        COMMAND "${SLANGC_EXECUTABLE}" "${SHADER_DIR}/Tonemapping/Tonemapper.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Tonemapping/Tonemapper.spv"
+        COMMAND "${SLANGC_EXECUTABLE}" "${SHADER_DIR}/Viewport/Viewport.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Viewport/Viewport.spv"
         DEPENDS
-        "${SHADER_DIR}/Tonemapping/Tonemapper.slang"
-        COMMENT "Compiling the Vulkan tonemapper shader"
+        "${SHADER_DIR}/Viewport/Viewport.slang"
+        COMMENT "Compiling the Vulkan viewport shader"
         VERBATIM
 )
 
@@ -130,12 +130,12 @@ add_custom_target(NoorRayShaders DEPENDS ${SHADER_OUTPUTS})
 cmake_path(SET NR_GEN "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${NR_GEN}")
 
-file(CONFIGURE OUTPUT "${NR_GEN}/TonemapperSpv.h" CONTENT
+file(CONFIGURE OUTPUT "${NR_GEN}/ViewportSpv.h" CONTENT
 "#pragma once
-static constexpr unsigned char noorRayTonemapperSpv[] = {
-    #embed \"${SHADER_DIR}/Tonemapping/Tonemapper.spv\"
+static constexpr unsigned char noorRayViewportSpv[] = {
+    #embed \"${SHADER_DIR}/Viewport/Viewport.spv\"
 };
-static constexpr size_t noorRayTonemapperSpvLength = sizeof(noorRayTonemapperSpv);\n" @ONLY)
+static constexpr size_t noorRayViewportSpvLength = sizeof(noorRayViewportSpv);\n" @ONLY)
 
 file(CONFIGURE OUTPUT "${NR_GEN}/ImGuiFont.h" CONTENT
 "#pragma once

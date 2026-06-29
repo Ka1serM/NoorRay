@@ -3,7 +3,6 @@
 #include <cstdint>
 
 #include "GPU/Annotations.h"
-#include "GPU/TaggedPointer.h"
 #include "Kernels/Types.h"
 
 NR_CPU_GPU inline uint32_t pcgHash(uint32_t value)
@@ -51,16 +50,5 @@ struct HaltonSampler
             factor /= 3.0f;
         }
         return {r2, r3};
-    }
-};
-
-class Sampler : public nr::TaggedPointer<R2Sampler, HaltonSampler>
-{
-public:
-    using nr::TaggedPointer<R2Sampler, HaltonSampler>::TaggedPointer;
-
-    NR_CPU_GPU glm::vec2 sample(const uint32_t index) const
-    {
-        return Dispatch([index](const auto* s) { return s->sample(index); });
     }
 };

@@ -25,6 +25,21 @@
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Image.h"
 
+namespace
+{
+constexpr uint32_t InvalidInstanceIndex = ~0u;
+
+uint32_t getSelectedInstanceIndex(const Scene& scene)
+{
+    const uint64_t selectedObjectId = scene.getActiveObjectId();
+    const auto meshInstances = scene.getMeshInstances();
+    for (uint32_t index = 0; index < meshInstances.size(); ++index)
+        if (meshInstances[index]->getId() == selectedObjectId)
+            return index;
+    return InvalidInstanceIndex;
+}
+}
+
 // ── GUI constructor ───────────────────────────────────────────────────────────
 
 NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int renderWidth, const int renderHeight)
@@ -42,6 +57,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     tonemapper = std::make_unique<Tonemapper>(
         context, raytracer->getWidth(), raytracer->getHeight(),
         raytracer->getOutputImage(0, Aov::Color), raytracer->getOutputImage(1, Aov::Color),
+        raytracer->getOutputImage(0, Aov::Cryptomatte), raytracer->getOutputImage(1, Aov::Cryptomatte),
         renderer->getColorImageFormat());
 
     imGuiManager->addComponent<MainMenuBar>("Menu", context, scene, *imGuiManager);
@@ -89,7 +105,9 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
 
     tonemapper = std::make_unique<Tonemapper>(
         context, w, h, raytracer->getOutputImage(0, Aov::Color),
-        raytracer->getOutputImage(1, Aov::Color), vk::Format::eR8G8B8A8Unorm);
+        raytracer->getOutputImage(1, Aov::Color),
+        raytracer->getOutputImage(0, Aov::Cryptomatte),
+        raytracer->getOutputImage(1, Aov::Cryptomatte), vk::Format::eR8G8B8A8Unorm);
 }
 
 NoorRay::~NoorRay() = default;
@@ -131,6 +149,8 @@ void NoorRay::runUi() {
                             raytracer->getWidth(), raytracer->getHeight(),
                             raytracer->getOutputImage(0, Aov::Color),
                             raytracer->getOutputImage(1, Aov::Color),
+                            raytracer->getOutputImage(0, Aov::Cryptomatte),
+                            raytracer->getOutputImage(1, Aov::Cryptomatte),
                             renderer->getColorImageFormat());
                         viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(),
                                               tonemapper->getOutputImage().getFormat());
@@ -144,6 +164,7 @@ void NoorRay::runUi() {
                 } else {
                     if (scene.isDirty(Meshes))   raytracer->updateMeshes();
                     if (scene.isDirty(Textures)) raytracer->updateTextures();
+                    else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
                     if (scene.isDirty(TLAS))     raytracer->updateTLAS();
 
                     const int pixelPct = std::max(renderPanel->getPixelSizePercent(),
@@ -166,7 +187,8 @@ void NoorRay::runUi() {
 
                     raytracer->render(push);
                     const FrameInfo frameInfo = raytracer->getFrameInfo();
-                    tonemapper->dispatch(cmd, frameInfo.bufferIndex);
+                    tonemapper->dispatch(
+                        cmd, frameInfo.bufferIndex, getSelectedInstanceIndex(scene));
                     viewportPanel->onComputeFinished(cmd, tonemapper->getOutputImage());
                     viewportPanel->setAovImages(
                         raytracer->getOutputImage(frameInfo.bufferIndex, Aov::Cryptomatte),
@@ -213,7 +235,8 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
 
         context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
             raytracer->render(push);
-            tonemapper->dispatch(cmd, raytracer->getFrameInfo().bufferIndex);
+            tonemapper->dispatch(
+                cmd, raytracer->getFrameInfo().bufferIndex, InvalidInstanceIndex);
         });
     }
     context.getDevice().waitIdle();

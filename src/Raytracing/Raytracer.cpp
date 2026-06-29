@@ -199,11 +199,6 @@ Raytracer::Raytracer(
     optixConnectSbt = optixExtendSbt;
     optixConnectSbt.raygenRecord = optixConnectRecord;
 
-    managedR2Sampler = static_cast<R2Sampler*>(nr::rstd::allocate_managed(sizeof(R2Sampler)));
-    new(managedR2Sampler) R2Sampler{};
-    managedHaltonSampler = static_cast<HaltonSampler*>(nr::rstd::allocate_managed(sizeof(HaltonSampler)));
-    new(managedHaltonSampler) HaltonSampler{};
-
     interop = std::make_unique<ImageInterop>(context);
     NR_GPU_CHECK(cudaEventCreate(&m_startEvent));
     NR_GPU_CHECK(cudaEventCreate(&m_stopEvent));
@@ -319,20 +314,21 @@ void Raytracer::freeSceneData() noexcept
         cudaDestroyTextureObject(texture);
     for (const cudaArray_t array : textureArrays)
         cudaFreeArray(array);
+    if (environmentCdfTexture != 0)
+        cudaDestroyTextureObject(environmentCdfTexture);
+    if (environmentCdfArray != nullptr)
+        cudaFreeArray(environmentCdfArray);
     deviceMeshes = nullptr;
     deviceInstances = nullptr;
     deviceTextureObjects = nullptr;
+    environmentCdfTexture = 0;
+    environmentCdfArray = nullptr;
     meshAllocations.clear();
     textureObjects.clear();
     textureArrays.clear();
-    nr::rstd::deallocate_managed(managedR2Sampler);
-    nr::rstd::deallocate_managed(managedHaltonSampler);
-    managedR2Sampler = nullptr;
-    managedHaltonSampler = nullptr;
     gpuScene = {};
     gpuScene.renderSettings = &scene.getRenderSettings();
     gpuScene.environment = scene.getEnvironment().settings;
-    gpuScene.sampler = Sampler{managedR2Sampler};
 }
 
 void Raytracer::updateTextures()
@@ -378,6 +374,48 @@ void Raytracer::updateTextures()
     }
     gpuScene.textures = deviceTextureObjects;
     gpuScene.textureCount = static_cast<uint32_t>(textureObjects.size());
+    updateEnvironmentCdf();
+}
+
+void Raytracer::updateEnvironmentCdf()
+{
+    NR_GPU_CHECK(cudaStreamSynchronize(stream));
+    if (environmentCdfTexture != 0)
+        NR_GPU_CHECK(cudaDestroyTextureObject(environmentCdfTexture));
+    if (environmentCdfArray != nullptr)
+        NR_GPU_CHECK(cudaFreeArray(environmentCdfArray));
+    environmentCdfTexture = 0;
+    environmentCdfArray = nullptr;
+    gpuScene.environmentCdf = 0;
+
+    const int textureIndex = scene.getEnvironment().settings->textureIndex;
+    const auto& textures = scene.getTextures();
+    if (textureIndex < 0 || textureIndex >= static_cast<int>(textures.size()))
+        return;
+
+    const Texture& texture = textures[textureIndex];
+    const std::vector<float> cdf = Environment::computeCdf(
+        texture.getPixels().data(), texture.getWidth(), texture.getHeight());
+    const cudaChannelFormatDesc format = cudaCreateChannelDesc<float4>();
+    NR_GPU_CHECK(cudaMallocArray(
+        &environmentCdfArray, &format, texture.getWidth(), texture.getHeight()));
+    NR_GPU_CHECK(cudaMemcpy2DToArrayAsync(
+        environmentCdfArray, 0, 0, cdf.data(), texture.getWidth() * sizeof(float4),
+        texture.getWidth() * sizeof(float4), texture.getHeight(),
+        cudaMemcpyHostToDevice, stream));
+
+    cudaResourceDesc resource{};
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = environmentCdfArray;
+    cudaTextureDesc description{};
+    description.addressMode[0] = cudaAddressModeClamp;
+    description.addressMode[1] = cudaAddressModeClamp;
+    description.filterMode = cudaFilterModePoint;
+    description.readMode = cudaReadModeElementType;
+    description.normalizedCoords = 1;
+    NR_GPU_CHECK(cudaCreateTextureObject(
+        &environmentCdfTexture, &resource, &description, nullptr));
+    gpuScene.environmentCdf = environmentCdfTexture;
 }
 
 void Raytracer::updateMeshes()

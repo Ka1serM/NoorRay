@@ -62,10 +62,11 @@ struct GpuSceneData
     const GpuInstance* instances{};
     const LightGpu* lights{};
     const cudaTextureObject_t* textures{};
+    cudaTextureObject_t environmentCdf{};
     const RenderSettings* renderSettings{};
     const EnvironmentSettings* environment{};
     const Camera* camera{};
-    Sampler sampler{};
+    R2Sampler sampler{};
     uint32_t meshCount{};
     uint32_t instanceCount{};
     uint32_t lightCount{};

@@ -58,4 +58,4 @@ public:
 
     bool renderUi();
 };
-static_assert(sizeof(RectLight) == 72);
+

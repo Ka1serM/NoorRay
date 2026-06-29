@@ -18,7 +18,6 @@ public:
     void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
     void setAovImages(Image& crypto, Image& position);
     void resize(uint32_t width, uint32_t height, vk::Format imageFormat);
-    int getViewportPixelSizePercent() const;
     ~ViewportPanel() override;
 
     ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, uint32_t width, uint32_t height);

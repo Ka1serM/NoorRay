@@ -5,7 +5,7 @@
 
 #include <glm/vec2.hpp>
 
-#include "GPU/Annotations.h"
+#include "CUDA/Annotations.h"
 
 struct Sensor {
     float widthMm{5.784f};

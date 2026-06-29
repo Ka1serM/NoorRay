@@ -4,7 +4,10 @@
 #include <memory>
 #include <vector>
 #include <string>
-#include "GPU/rstd/Vector.h"
+#include "CUDA/Texture.h"
+#include "CUDA/rstd/Vector.h"
+#include "Scene/GpuInstance.h"
+#include "Scene/RenderSettings.h"
 #include "Mesh/MeshAsset.h"
 #include "Light/PointLight.h"
 #include "Light/SpotLight.h"
@@ -55,24 +58,6 @@ enum DirtyFlag : uint8_t {
     Lights       = 1 << 5,
 };
 
-struct RenderSettings
-{
-    int samples{};
-    int diffuseBounces{};
-    int specularBounces{};
-    int transmissionBounces{};
-    int adaptiveSamplingEnabled{};
-    int adaptiveMinSamples{};
-    float adaptiveTargetError{};
-    int russianRouletteStartBounce{};
-    float exposure{};
-    int transparentBackground{};
-    int renderMode{};
-    int bufferVisualization{};
-    int taaEnabled{};
-    int aoSampleAlbedo{};
-};
-
 class Scene {
     friend class LightInstance;
     Context& context;
@@ -80,14 +65,16 @@ class Scene {
     std::vector<Texture> textures;
     std::vector<std::string> textureNames;
     nr::rstd::vector<MeshAsset> meshAssets;
-    Environment environment{};
-    RenderSettings* renderSettings{};
+    Environment* environment{};
+    RenderSettings renderSettings{};
 
-    // Light GPU data — unified memory arrays, one per type
+    // GPU data — unified memory arrays
     nr::rstd::vector<PointLight> pointLights;
     nr::rstd::vector<SpotLight> spotLights;
     nr::rstd::vector<RectLight> rectLights;
     nr::rstd::vector<DirectionalLight> directionalLights;
+    nr::rstd::vector<GpuInstance> gpuInstances;
+    nr::rstd::vector<CudaTexture> cudaTextures;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
 
@@ -131,6 +118,7 @@ public:
     const std::vector<std::shared_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
     std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
     std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
+    uint32_t getActiveMeshInstanceIndex() const;
     MeshAsset* getMeshAsset(const std::string& name);
     const MeshAsset* getMeshAsset(const std::string& name) const;
     MeshAsset& getMeshAsset(uint32_t index) { return meshAssets[index]; }
@@ -160,16 +148,26 @@ public:
     uint32_t getRectLightCount() const { return static_cast<uint32_t>(rectLights.size()); }
     uint32_t getDirectionalLightCount() const { return static_cast<uint32_t>(directionalLights.size()); }
 
+    // Gpu instances
+    const GpuInstance* getGpuInstances() const { return gpuInstances.data(); }
+    uint32_t getGpuInstanceCount() const { return static_cast<uint32_t>(gpuInstances.size()); }
+    nr::rstd::vector<GpuInstance>& getGpuInstancesRef() { return gpuInstances; }
+
+    // Cuda textures
+    const CudaTexture* getCudaTextures() const { return cudaTextures.data(); }
+    uint32_t getCudaTextureCount() const { return static_cast<uint32_t>(cudaTextures.size()); }
+    nr::rstd::vector<CudaTexture>& getCudaTexturesRef() { return cudaTextures; }
+
     // Light registration (called by Scene internals)
     uint32_t registerLight(LightInstance& light);
     void unregisterLight(const LightInstance& light);
 
     // Context
     Context& getContext() const { return context; }
-    Environment& getEnvironment() { return environment; }
-    const Environment& getEnvironment() const { return environment; }
-    RenderSettings& getRenderSettings() { return *renderSettings; }
-    const RenderSettings& getRenderSettings() const { return *renderSettings; }
+    Environment& getEnvironment() { return *environment; }
+    const Environment& getEnvironment() const { return *environment; }
+    RenderSettings& getRenderSettings() { return renderSettings; }
+    const RenderSettings& getRenderSettings() const { return renderSettings; }
 
     // Dirty flags
     void setDirtyFlag(DirtyFlag flag) { dirtyFlags |= flag; }

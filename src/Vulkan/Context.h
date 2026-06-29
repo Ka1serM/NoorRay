@@ -11,6 +11,9 @@
 #include "vk_mem_alloc.h"
 #include "SDL3/SDL_video.h"
 
+#include <cuda_runtime_api.h>
+#include <optix.h>
+
 class Context {
 
     std::vector<const char*> RequiredDeviceExtensions = {
@@ -39,6 +42,9 @@ class Context {
     vk::UniqueDevice device;
 
     VmaAllocator allocator;
+
+    OptixDeviceContext optixCtx = nullptr;
+    cudaStream_t cudaStream = nullptr;
     
     vk::Queue graphicsQueue;
     uint32_t graphicsFamilyIndex = UINT32_MAX;
@@ -84,5 +90,8 @@ public:
     const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
     VmaAllocator getAllocator() const { return allocator; }
+
+    OptixDeviceContext getOptixContext() const { return optixCtx; }
+    cudaStream_t getCudaStream() const { return cudaStream; }
 
 };

@@ -6,8 +6,8 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
-#include "GPU/Annotations.h"
-#include "Kernels/Samplers.h"
+#include "CUDA/Annotations.h"
+#include "Samplers/RandomSampler.h"
 
 inline constexpr float LightPi = 3.14159265358979323846f;
 

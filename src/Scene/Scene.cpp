@@ -1,7 +1,7 @@
 #include "Scene.h"
 #include <algorithm>
 #include "Camera/CameraInstance.h"
-#include "GPU/rstd/Allocator.h"
+#include "CUDA/rstd/Allocator.h"
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Light/PointLight.h"
@@ -10,23 +10,18 @@
 #include "Light/DirectionalLight.h"
 #include "Scene/SceneObject.h"
 
-Scene::Scene(Context& context) : context(context) {
-    nr::rstd::allocator<RenderSettings> allocator;
-    renderSettings = allocator.allocate(1);
-    allocator.construct(renderSettings);
-    renderSettings->samples = 1;
-    renderSettings->diffuseBounces = 3;
-    renderSettings->specularBounces = 3;
-    renderSettings->transmissionBounces = 3;
-    renderSettings->russianRouletteStartBounce = 3;
+Scene::Scene(Context& context) : context(context)
+{
+    nr::rstd::allocator<Environment> allocator;
+    environment = allocator.allocate(1);
+    allocator.construct(environment);
 }
 
 Scene::~Scene()
 {
-    nr::rstd::allocator<RenderSettings> allocator;
-    allocator.destroy(renderSettings);
-    allocator.deallocate(renderSettings, 1);
-
+    nr::rstd::allocator<Environment> allocator;
+    allocator.destroy(environment);
+    allocator.deallocate(environment, 1);
 }
 
 void Scene::notifyGeometryChanged() {
@@ -303,6 +298,20 @@ std::vector<std::shared_ptr<MeshInstance>> Scene::getMeshInstances() const {
         if (auto mi = std::dynamic_pointer_cast<MeshInstance>(obj))
             result.push_back(mi);
     return result;
+}
+
+uint32_t Scene::getActiveMeshInstanceIndex() const
+{
+    uint32_t instanceIndex = 0;
+    for (const auto& object : sceneObjects)
+    {
+        if (!std::dynamic_pointer_cast<MeshInstance>(object))
+            continue;
+        if (object->getId() == activeObjectId)
+            return instanceIndex;
+        ++instanceIndex;
+    }
+    return ~0u;
 }
 
 MeshAsset* Scene::getMeshAsset(const std::string& name) {

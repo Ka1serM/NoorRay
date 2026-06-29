@@ -1,8 +1,8 @@
 #pragma once
 
-#include "GPU/Annotations.h"
+#include "CUDA/Annotations.h"
 #include "Camera/Camera.h"
-#include "Kernels/Samplers.h"
+#include "Samplers/RandomSampler.h"
 
 class ThinLensCamera : public Camera {
 public:

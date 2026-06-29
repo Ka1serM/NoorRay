@@ -12,39 +12,19 @@
 #include "UI/DetailsPanel.h"
 #include "UI/EnvironmentPanel.h"
 #include "UI/RenderPanel.h"
+#include "UI/RenderSettingsPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "Camera/CameraInstance.h"
-#include "GPU/rstd/Allocator.h"
+#include "CUDA/rstd/Allocator.h"
 #include "Mesh/MeshAsset.h"
-#include "Scene/MeshInstance.h"
 #include "Scene/SceneImporter.h"
 #include "Raytracing/Raytracer.h"
 #include "Vulkan/Viewport.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Image.h"
-
-namespace
-{
-
-static constexpr unsigned char noorRayDefaultHdri[] = {
-    #embed "/home/marcel/GitRepositories/NoorRay/assets/textures/whipple_creek_regional_park_04_2k.hdr"
-};
-static constexpr size_t noorRayDefaultHdriLength = sizeof(noorRayDefaultHdri);
-constexpr uint32_t InvalidInstanceIndex = ~0u;
-
-uint32_t getSelectedInstanceIndex(const Scene& scene)
-{
-    const uint64_t selectedObjectId = scene.getActiveObjectId();
-    const auto meshInstances = scene.getMeshInstances();
-    for (uint32_t index = 0; index < meshInstances.size(); ++index)
-        if (meshInstances[index]->getId() == selectedObjectId)
-            return index;
-    return InvalidInstanceIndex;
-}
-}
 
 // ── GUI constructor ───────────────────────────────────────────────────────────
 
@@ -74,8 +54,11 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
 
     viewport = std::make_unique<Viewport>(
         context, raytracer->getWidth(), raytracer->getHeight(),
-        raytracer->getOutputImage(0, Aov::Color), raytracer->getOutputImage(1, Aov::Color),
-        raytracer->getOutputImage(0, Aov::Cryptomatte), raytracer->getOutputImage(1, Aov::Cryptomatte),
+        raytracer->getOutputColor(0),    raytracer->getOutputColor(1),
+        raytracer->getOutputAlbedo(0),   raytracer->getOutputAlbedo(1),
+        raytracer->getOutputNormal(0),   raytracer->getOutputNormal(1),
+        raytracer->getOutputCrypto(0),   raytracer->getOutputCrypto(1),
+        raytracer->getOutputPosition(0), raytracer->getOutputPosition(1),
         renderer->getColorImageFormat());
 
     imGuiManager->addComponent<MainMenuBar>("Menu", context, scene, *imGuiManager);
@@ -83,7 +66,8 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     imGuiManager->addComponent<EnvironmentPanel>("Environment", scene);
     imGuiManager->addComponent<SceneGraphPanel>("Scene Graph", scene);
     imGuiManager->addComponent<DetailsPanel>("Details", scene);
-    imGuiManager->addComponent<RenderPanel>("Render", context, scene, *raytracer, *renderer, *viewport);
+    imGuiManager->addComponent<RenderSettingsPanel>("Render Settings", scene);
+    imGuiManager->addComponent<RenderPanel>("Render", context, *raytracer, *renderer, *viewport);
     imGuiManager->addComponent<ViewportPanel>("Viewport", context, scene,
         viewport->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(),
         raytracer->getWidth(), raytracer->getHeight());
@@ -112,10 +96,13 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
     raytracer = std::make_unique<Raytracer>(context, scene);
 
     viewport = std::make_unique<Viewport>(
-        context, raytracer->getWidth(), raytracer->getHeight(), raytracer->getOutputImage(0, Aov::Color),
-        raytracer->getOutputImage(1, Aov::Color),
-        raytracer->getOutputImage(0, Aov::Cryptomatte),
-        raytracer->getOutputImage(1, Aov::Cryptomatte), vk::Format::eR8G8B8A8Unorm);
+        context, raytracer->getWidth(), raytracer->getHeight(),
+        raytracer->getOutputColor(0),    raytracer->getOutputColor(1),
+        raytracer->getOutputAlbedo(0),   raytracer->getOutputAlbedo(1),
+        raytracer->getOutputNormal(0),   raytracer->getOutputNormal(1),
+        raytracer->getOutputCrypto(0),   raytracer->getOutputCrypto(1),
+        raytracer->getOutputPosition(0), raytracer->getOutputPosition(1),
+        vk::Format::eR8G8B8A8Unorm);
 }
 
 NoorRay::~NoorRay() = default;
@@ -155,10 +142,11 @@ void NoorRay::runUi() {
                         raytracer->resize(resolution.x, resolution.y);
                         viewport->resize(
                             raytracer->getWidth(), raytracer->getHeight(),
-                            raytracer->getOutputImage(0, Aov::Color),
-                            raytracer->getOutputImage(1, Aov::Color),
-                            raytracer->getOutputImage(0, Aov::Cryptomatte),
-                            raytracer->getOutputImage(1, Aov::Cryptomatte),
+                            raytracer->getOutputColor(0),    raytracer->getOutputColor(1),
+                            raytracer->getOutputAlbedo(0),   raytracer->getOutputAlbedo(1),
+                            raytracer->getOutputNormal(0),   raytracer->getOutputNormal(1),
+                            raytracer->getOutputCrypto(0),   raytracer->getOutputCrypto(1),
+                            raytracer->getOutputPosition(0), raytracer->getOutputPosition(1),
                             renderer->getColorImageFormat());
                         viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(),
                                               viewport->getOutputImage().getFormat());
@@ -176,11 +164,8 @@ void NoorRay::runUi() {
                     if (scene.isDirty(Lights))   raytracer->updateLights();
                     if (scene.isDirty(TLAS))     raytracer->updateTLAS();
 
-                    const int pixelPct = std::max(renderPanel->getPixelSizePercent(),
-                                                  viewportPanel->getViewportPixelSizePercent());
                     PushData push{};
                     push.frame            = frame;
-                    push.pixelSizePercent = pixelPct;
                     auto* cam = scene.getActiveCamera();
 
                     if (firstFrame || scene.isDirty(Accumulation))
@@ -197,11 +182,13 @@ void NoorRay::runUi() {
                     raytracer->render(push);
                     const FrameInfo frameInfo = raytracer->getFrameInfo();
                     viewport->dispatch(
-                        cmd, frameInfo.bufferIndex, getSelectedInstanceIndex(scene));
+                        cmd, frameInfo.bufferIndex, scene.getActiveMeshInstanceIndex(),
+                        scene.getRenderSettings().exposure,
+                        static_cast<int>(scene.getRenderSettings().bufferVisualization));
                     viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
                     viewportPanel->setAovImages(
-                        raytracer->getOutputImage(frameInfo.bufferIndex, Aov::Cryptomatte),
-                        raytracer->getOutputImage(frameInfo.bufferIndex, Aov::Position));
+                        raytracer->getOutputCrypto(frameInfo.bufferIndex),
+                        raytracer->getOutputPosition(frameInfo.bufferIndex));
                     renderer->setExternalFrameSync(
                         frameInfo.renderReadySemaphore,
                         frameInfo.bufferReleasedSemaphore,
@@ -240,7 +227,6 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
         PushData push{};
         push.frame            = frame;
         push.isMoving         = (frame == 0) ? 1 : 0;
-        push.pixelSizePercent = 100;
 
         context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
             raytracer->render(push);

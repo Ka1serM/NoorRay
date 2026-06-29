@@ -9,11 +9,10 @@
 #include <optix.h>
 #include <vulkan/vulkan.hpp>
 
-#include "GPU/ImageInterop.h"
-#include "GPU/rstd/Vector.h"
-#include "Kernels/SceneData.h"
-#include "Kernels/cuda/TriangleBlas.h"
-#include "Kernels/cuda/TlasBuilder.h"
+#include "CUDA/Texture.h"
+#include "CUDA/Tlas.h"
+#include "CUDA/SharedImage.h"
+#include "Raytracing/SceneData.h"
 
 class CameraInstance;
 class Context;
@@ -32,7 +31,6 @@ struct PushData
 {
     int frame{};
     int isMoving{};
-    int pixelSizePercent{};
 };
 
 class Raytracer
@@ -44,7 +42,6 @@ public:
     Raytracer(const Raytracer&) = delete;
     Raytracer& operator=(const Raytracer&) = delete;
 
-    void setup(uint32_t width, uint32_t height);
     void resize(uint32_t width, uint32_t height);
     void render(const PushData& pushData);
     void updateMeshes();
@@ -58,13 +55,17 @@ public:
     uint32_t getWidth() const { return width; }
     uint32_t getHeight() const { return height; }
     void debugSave(const std::string& path) const;
-    Image& getOutputColor();
-    Image& getOutputAlbedo();
-    Image& getOutputNormal();
-    Image& getOutputCrypto();
-    Image& getOutputPosition();
-    Image& getOutputMaterial();
-    Image& getOutputImage(uint32_t bufferIndex, Aov aov);
+    Image& getOutputColor() { return color[lastLaunched].getImage(); }
+    Image& getOutputAlbedo() { return albedo[lastLaunched].getImage(); }
+    Image& getOutputNormal() { return normal[lastLaunched].getImage(); }
+    Image& getOutputCrypto() { return cryptomatte[lastLaunched].getImage(); }
+    Image& getOutputPosition() { return position[lastLaunched].getImage(); }
+
+    Image& getOutputColor(uint32_t bufferIndex) { return color[bufferIndex].getImage(); }
+    Image& getOutputAlbedo(uint32_t bufferIndex) { return albedo[bufferIndex].getImage(); }
+    Image& getOutputNormal(uint32_t bufferIndex) { return normal[bufferIndex].getImage(); }
+    Image& getOutputCrypto(uint32_t bufferIndex) { return cryptomatte[bufferIndex].getImage(); }
+    Image& getOutputPosition(uint32_t bufferIndex) { return position[bufferIndex].getImage(); }
 
 private:
     static constexpr uint32_t MaxBounces = 66;
@@ -74,17 +75,19 @@ private:
     uint32_t width{};
     uint32_t height{};
     cudaStream_t stream{};
-    std::unique_ptr<ImageInterop> interop;
-    TriangleBlas triangleBlas;
-    TlasBuilder tlas;
+    SharedImage color[2];
+    SharedImage albedo[2];
+    SharedImage normal[2];
+    SharedImage cryptomatte[2];
+    SharedImage position[2];
+    vk::UniqueSemaphore renderReady;
+    vk::UniqueSemaphore bufferReleased;
+    cudaExternalSemaphore_t cudaRenderReady{};
+    cudaExternalSemaphore_t cudaBufferReleased{};
+    Tlas tlas;
     WavefrontQueues queues{};
-    nr::rstd::vector<GpuInstance> gpuInstances;
     glm::vec4* accumulation{};
     glm::vec4* adaptiveState{};
-    nr::rstd::vector<cudaArray_t> textureArrays;
-    nr::rstd::vector<cudaTextureObject_t> textureObjects;
-    cudaArray_t environmentCdfArray{};
-    cudaTextureObject_t environmentCdfTexture{};
     GpuSceneData gpuScene{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
@@ -114,12 +117,9 @@ private:
     void allocateQueues();
     void freeQueues() noexcept;
     void freeSceneData() noexcept;
-    std::vector<AccelInstanceInput> buildInstanceInputs(
-        const std::vector<OptixTraversableHandle>& meshHandles,
-        nr::rstd::vector<GpuInstance>* instances = nullptr) const;
     void launchGenerate(const KernelParams& params, cudaStream_t stream) const;
     void launchFinalize(const KernelParams& params, cudaStream_t stream) const;
     void launchShade(const KernelParams& params, cudaStream_t stream) const;
-    void launchExtend(const WavefrontQueues& queues, uint32_t depth, uint32_t capacity, cudaStream_t stream) const;
-    void launchConnect(const WavefrontQueues& queues, uint32_t depth, uint32_t capacity, cudaStream_t stream) const;
+    void launchExtend(const KernelParams& params, cudaStream_t stream) const;
+    void launchConnect(const KernelParams& params, cudaStream_t stream) const;
 };

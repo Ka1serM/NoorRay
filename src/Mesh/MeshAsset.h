@@ -3,7 +3,9 @@
 #include <string>
 #include <vector>
 
-#include "GPU/rstd/Vector.h"
+#include "CUDA/Blas.h"
+#include "CUDA/rstd/Vector.h"
+#include "Mesh/Material.h"
 #include "Scene/Inspectable.h"
 
 #include <glm/vec2.hpp>
@@ -26,39 +28,10 @@ struct Vertex
     vec2 uv;
     int _pad3;
 };
-static_assert(sizeof(Vertex) == 64);
-
 struct Face
 {
     int materialIndex;
 };
-
-struct Material
-{
-    vec3 albedo{1.0f};
-    int albedoIndex{-1};
-    float specular{0.5f};
-    float metallic{};
-    float roughness{};
-    float ior{1.5f};
-    int specularIndex{-1};
-    int metallicIndex{-1};
-    int roughnessIndex{-1};
-    int normalIndex{-1};
-    vec3 transmissionColor{1.0f};
-    int _pad0{};
-    float transmission{};
-    float _pad1{};
-    vec3 emission{1.0f};
-    int _pad2{};
-    float emissionStrength{};
-    int _pad3{};
-    int emissionIndex{-1};
-    int transmissionIndex{-1};
-    int opacityIndex{-1};
-    float opacity{1.0f};
-};
-static_assert(sizeof(Material) == 112);
 
 class MeshAsset : public Inspectable
 {
@@ -73,6 +46,9 @@ public:
     MeshAsset(const MeshAsset&) = delete;
     MeshAsset& operator=(const MeshAsset&) = delete;
     MeshAsset& operator=(MeshAsset&&) = delete;
+    ~MeshAsset() = default;
+
+    const Blas& getBlas() const { return blas; }
 
     const std::string& getName() const override { return path; }
     std::string getType() const override { return "Mesh Asset"; }
@@ -104,5 +80,7 @@ private:
     nr::rstd::vector<uint32_t> indices;
     nr::rstd::vector<Face> faces;
     nr::rstd::vector<Material> materials;
+
+    Blas blas;
 
 };

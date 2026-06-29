@@ -10,17 +10,13 @@
 
 #include "stb_image_write.h"
 
-#include <cuda.h>
 #include <cuda_runtime.h>
-#include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
 #include "Camera/CameraInstance.h"
-#include "GPU/Checks.h"
-#include "GPU/CudaDevice.h"
-#include "GPU/rstd/Memory.h"
-#include "Kernels/Shade.h"
-#include "Kernels/OptixLaunchParams.h"
+#include "CUDA/Checks.h"
+#include "CUDA/rstd/Memory.h"
+#include "Raytracing/Shade.h"
 #include "NoorRayOptixIr.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
@@ -29,37 +25,12 @@
 
 namespace
 {
-template <typename T>
-T* allocateDevice(const size_t count, const cudaStream_t stream)
-{
-    return static_cast<T*>(nr::rstd::allocate_device(sizeof(T) * count, stream));
-}
-
-std::array<float, 12> toOptixTransform(const mat4& matrix)
-{
-    return {matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0],
-            matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1],
-            matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2]};
-}
-
-void copyTransform(float destination[12], const mat4& matrix)
-{
-    const auto source = toOptixTransform(matrix);
-    std::copy(source.begin(), source.end(), destination);
-}
-
 template <typename Data = uint32_t>
 struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord
 {
     char header[OPTIX_SBT_RECORD_HEADER_SIZE];
     Data data{};
 };
-
-void optixLogCallback(unsigned int level, const char* tag, const char* message, void*)
-{
-    if (level <= 2)
-        fprintf(stderr, "[OptiX][%s] %s\n", tag, message);
-}
 
 OptixProgramGroup makeRaygenGroup(
     const OptixDeviceContext context,
@@ -93,30 +64,19 @@ CUdeviceptr uploadRecord(const OptixProgramGroup group)
 
 }
 
-extern NR_GPU_KERNEL void generateKernel(const KernelParams);
-extern NR_GPU_KERNEL void finalizeKernel(const KernelParams);
-extern NR_GPU_KERNEL void shadeKernel(const KernelParams);
+extern NR_GPU_KERNEL void generateKernel(KernelParams);
+extern NR_GPU_KERNEL void finalizeKernel(KernelParams);
+extern NR_GPU_KERNEL void shadeKernel(KernelParams);
 
 Raytracer::Raytracer(
     Context& context,
     Scene& scene)
     : context(context), scene(scene)
 {
-    selectCudaDeviceForVulkan(context.getPhysicalDevice());
-    int leastPriority = 0;
-    int greatestPriority = 0;
-    NR_GPU_CHECK(cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority));
-    NR_GPU_CHECK(cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking, greatestPriority));
-    CUcontext cudaContext{};
-    if (cuCtxGetCurrent(&cudaContext) != CUDA_SUCCESS || cudaContext == nullptr)
-        throw std::runtime_error("CUDA primary context is unavailable");
-
-    NR_OPTIX_CHECK(optixInit());
-
-    OptixDeviceContextOptions ctxOptions{};
-    ctxOptions.logCallbackFunction = optixLogCallback;
-    ctxOptions.logCallbackLevel = 3;
-    NR_OPTIX_CHECK(optixDeviceContextCreate(cudaContext, &ctxOptions, &optixCtx));
+    stream = context.getCudaStream();
+    optixCtx = context.getOptixContext();
+    if (stream == nullptr || optixCtx == nullptr)
+        throw std::runtime_error("CUDA/OptiX not initialized in Context");
 
     OptixModuleCompileOptions moduleOptions{};
     moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
@@ -132,7 +92,7 @@ Raytracer::Raytracer(
     pipelineOptions.numPayloadValues = 0;
     pipelineOptions.numAttributeValues = 2;
     pipelineOptions.pipelineLaunchParamsVariableName = "params";
-    pipelineOptions.pipelineLaunchParamsSizeInBytes = sizeof(OptixLaunchParams);
+    pipelineOptions.pipelineLaunchParamsSizeInBytes = sizeof(KernelParams);
     pipelineOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
 
     std::array<char, 8192> log{};
@@ -189,20 +149,46 @@ Raytracer::Raytracer(
     optixConnectSbt = optixExtendSbt;
     optixConnectSbt.raygenRecord = optixConnectRecord;
 
-    interop = std::make_unique<ImageInterop>(context);
     NR_GPU_CHECK(cudaEventCreate(&m_startEvent));
     NR_GPU_CHECK(cudaEventCreate(&m_stopEvent));
+
+    auto createSemaphore = [&]() -> vk::UniqueSemaphore {
+        vk::ExportSemaphoreCreateInfo exportInfo{};
+        exportInfo.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
+        vk::SemaphoreTypeCreateInfo timelineInfo{};
+        timelineInfo.pNext = &exportInfo;
+        timelineInfo.semaphoreType = vk::SemaphoreType::eTimeline;
+        timelineInfo.initialValue = 0;
+        return context.getDevice().createSemaphoreUnique({vk::SemaphoreCreateFlags{}, &timelineInfo});
+    };
+    renderReady = createSemaphore();
+    bufferReleased = createSemaphore();
+
+    auto importSemaphore = [&](const vk::Semaphore sem) -> cudaExternalSemaphore_t {
+        vk::SemaphoreGetFdInfoKHR fdInfo{};
+        fdInfo.semaphore = sem;
+        fdInfo.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
+        const int fd = context.getDevice().getSemaphoreFdKHR(fdInfo);
+        cudaExternalSemaphoreHandleDesc desc{};
+        desc.type = cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
+        desc.handle.fd = fd;
+        cudaExternalSemaphore_t result{};
+        NR_GPU_CHECK(cudaImportExternalSemaphore(&result, &desc));
+        return result;
+    };
+    cudaRenderReady = importSemaphore(renderReady.get());
+    cudaBufferReleased = importSemaphore(bufferReleased.get());
+
     auto* cam = scene.getActiveCamera();
     auto* c = cam ? cam->getCamera() : nullptr;
     auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
-    setup(res.x, res.y);
+    resize(res.x, res.y);
 }
 
 Raytracer::~Raytracer()
 {
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
-    triangleBlas.destroy(stream);
     tlas.destroy(stream);
     freeSceneData();
     freeQueues();
@@ -210,7 +196,15 @@ Raytracer::~Raytracer()
         cudaStreamSynchronize(stream);
     cudaEventDestroy(m_startEvent);
     cudaEventDestroy(m_stopEvent);
-    interop.reset();
+    for (auto& img : color) img.destroy();
+    for (auto& img : albedo) img.destroy();
+    for (auto& img : normal) img.destroy();
+    for (auto& img : cryptomatte) img.destroy();
+    for (auto& img : position) img.destroy();
+    if (cudaRenderReady != nullptr)
+        cudaDestroyExternalSemaphore(cudaRenderReady);
+    if (cudaBufferReleased != nullptr)
+        cudaDestroyExternalSemaphore(cudaBufferReleased);
 
     auto freeRecord = [](CUdeviceptr& ptr) {
         if (ptr != 0) { cudaFree(reinterpret_cast<void*>(ptr)); ptr = 0; }
@@ -225,23 +219,30 @@ Raytracer::~Raytracer()
     if (optixConnectGroup != nullptr) { optixProgramGroupDestroy(optixConnectGroup); optixConnectGroup = nullptr; }
     if (optixExtendGroup != nullptr) { optixProgramGroupDestroy(optixExtendGroup); optixExtendGroup = nullptr; }
     if (optixModule != nullptr) { optixModuleDestroy(optixModule); optixModule = nullptr; }
-    if (optixCtx != nullptr) { optixDeviceContextDestroy(optixCtx); optixCtx = nullptr; }
     optixExtendSbt = {};
     optixConnectSbt = {};
-
-    if (stream != nullptr)
-        cudaStreamDestroy(stream);
 }
 
-void Raytracer::setup(const uint32_t newWidth, const uint32_t newHeight)
+void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
 {
-    if (newWidth == 0 || newHeight == 0)
-        throw std::runtime_error("GPU renderer dimensions must be non-zero");
+    if (newWidth == width && newHeight == height)
+        return;
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     width = newWidth;
     height = newHeight;
-    interop->resize(width, height);
     freeQueues();
+
+    auto createImages = [&](SharedImage (&arr)[2], const vk::Format format)
+    {
+        for (auto& img : arr)
+            img.create(context, width, height, format);
+    };
+    createImages(color,        vk::Format::eR32G32B32A32Sfloat);
+    createImages(albedo,       vk::Format::eR8G8B8A8Unorm);
+    createImages(normal,       vk::Format::eR16G16B16A16Sfloat);
+    createImages(cryptomatte,  vk::Format::eR32Uint);
+    createImages(position,     vk::Format::eR16G16B16A16Sfloat);
+
     allocateQueues();
     updateTextures();
     updateMeshes();
@@ -253,24 +254,18 @@ void Raytracer::setup(const uint32_t newWidth, const uint32_t newHeight)
     lastUseValue = {};
 }
 
-void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
-{
-    if (newWidth != width || newHeight != height)
-        setup(newWidth, newHeight);
-}
-
 void Raytracer::allocateQueues()
 {
     queues.capacity = width * height;
-    queues.rayCounts = allocateDevice<uint32_t>(MaxBounces, stream);
-    queues.pathStates = allocateDevice<PathState>(queues.capacity, stream);
-    queues.primaryStates = allocateDevice<PrimaryState>(queues.capacity, stream);
-    queues.rayQueues[0] = allocateDevice<PathRayWorkItem>(queues.capacity, stream);
-    queues.rayQueues[1] = allocateDevice<PathRayWorkItem>(queues.capacity, stream);
-    queues.hitQueue = allocateDevice<HitWorkItem>(queues.capacity, stream);
-    queues.shadowQueue = allocateDevice<ShadowWorkItem>(queues.capacity, stream);
-    accumulation = allocateDevice<glm::vec4>(static_cast<size_t>(width) * height, stream);
-    adaptiveState = allocateDevice<glm::vec4>(static_cast<size_t>(width) * height, stream);
+    queues.rayCounts = nr::rstd::allocate_device<uint32_t>(MaxBounces, stream);
+    queues.pathStates = nr::rstd::allocate_device<PathState>(queues.capacity, stream);
+    queues.primaryStates = nr::rstd::allocate_device<PrimaryState>(queues.capacity, stream);
+    queues.rayQueues[0] = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
+    queues.rayQueues[1] = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
+    queues.hitQueue = nr::rstd::allocate_device<HitWorkItem>(queues.capacity, stream);
+    queues.shadowQueue = nr::rstd::allocate_device<ShadowWorkItem>(queues.capacity, stream);
+    accumulation = nr::rstd::allocate_device<glm::vec4>(static_cast<size_t>(width) * height, stream);
+    adaptiveState = nr::rstd::allocate_device<glm::vec4>(static_cast<size_t>(width) * height, stream);
     NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
     NR_GPU_CHECK(cudaMemsetAsync(adaptiveState, 0, sizeof(glm::vec4) * width * height, stream));
 }
@@ -293,74 +288,40 @@ void Raytracer::freeQueues() noexcept
 
 void Raytracer::freeSceneData() noexcept
 {
-    for (const cudaTextureObject_t texture : textureObjects)
-        cudaDestroyTextureObject(texture);
-    for (const cudaArray_t array : textureArrays)
-        cudaFreeArray(array);
-    if (environmentCdfTexture != 0)
-        cudaDestroyTextureObject(environmentCdfTexture);
-    if (environmentCdfArray != nullptr)
-        cudaFreeArray(environmentCdfArray);
-    gpuInstances.clear();
-    environmentCdfTexture = 0;
-    environmentCdfArray = nullptr;
-    textureObjects.clear();
-    textureArrays.clear();
+    scene.getCudaTexturesRef().clear();
+    scene.getEnvironment().destroyCdf();
+    scene.getGpuInstancesRef().clear();
     gpuScene = {};
-    gpuScene.renderSettings = &scene.getRenderSettings();
-    gpuScene.environment = scene.getEnvironment().settings;
 }
 
 void Raytracer::updateTextures()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    for (const cudaTextureObject_t texture : textureObjects)
-        NR_GPU_CHECK(cudaDestroyTextureObject(texture));
-    for (const cudaArray_t array : textureArrays)
-        NR_GPU_CHECK(cudaFreeArray(array));
-    textureObjects.clear();
-    textureArrays.clear();
 
-    for (const Texture& texture : scene.getTextures())
-    {
-        cudaArray_t array{};
-        const cudaChannelFormatDesc format = cudaCreateChannelDesc<float4>();
-        NR_GPU_CHECK(cudaMallocArray(&array, &format, texture.getWidth(), texture.getHeight()));
-        NR_GPU_CHECK(cudaMemcpy2DToArrayAsync(
-            array, 0, 0, texture.getPixels().data(), texture.getWidth() * sizeof(float4),
-            texture.getWidth() * sizeof(float4), texture.getHeight(), cudaMemcpyHostToDevice, stream));
-        cudaResourceDesc resource{};
-        resource.resType = cudaResourceTypeArray;
-        resource.res.array.array = array;
-        cudaTextureDesc description{};
-        description.addressMode[0] = cudaAddressModeWrap;
-        description.addressMode[1] = cudaAddressModeWrap;
-        description.filterMode = cudaFilterModeLinear;
-        description.readMode = cudaReadModeElementType;
-        description.normalizedCoords = 1;
-        description.mipmapFilterMode = cudaFilterModeLinear;
-        cudaTextureObject_t object{};
-        NR_GPU_CHECK(cudaCreateTextureObject(&object, &resource, &description, nullptr));
-        textureArrays.push_back(array);
-        textureObjects.push_back(object);
-    }
-    gpuScene.textures = textureObjects.data();
-    gpuScene.textureCount = static_cast<uint32_t>(textureObjects.size());
+    const auto& cpuTextures = scene.getTextures();
+    const size_t count = cpuTextures.size();
+
+    auto& cudaTextures = scene.getCudaTexturesRef();
+    cudaTextures.clear();
+    for (size_t i = 0; i < count; ++i)
+        cudaTextures.emplace_back(cpuTextures[i].getPixels().data(), cpuTextures[i].getWidth(), cpuTextures[i].getHeight(), stream);
+    gpuScene.textures = cudaTextures.data();
+    gpuScene.textureCount = static_cast<uint32_t>(cpuTextures.size());
+
+    for (MeshAsset& asset : scene.getMeshAssets())
+        asset.updateMaterials();
+
     updateEnvironmentCdf();
 }
 
 void Raytracer::updateEnvironmentCdf()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    if (environmentCdfTexture != 0)
-        NR_GPU_CHECK(cudaDestroyTextureObject(environmentCdfTexture));
-    if (environmentCdfArray != nullptr)
-        NR_GPU_CHECK(cudaFreeArray(environmentCdfArray));
-    environmentCdfTexture = 0;
-    environmentCdfArray = nullptr;
-    gpuScene.environmentCdf = 0;
+    Environment& env = scene.getEnvironment();
+    gpuScene.environment = &env;
+    env.destroyCdf();
 
-    const int textureIndex = scene.getEnvironment().settings->textureIndex;
+    const int textureIndex = env.textureIndex;
     const auto& textures = scene.getTextures();
     if (textureIndex < 0 || textureIndex >= static_cast<int>(textures.size()))
         return;
@@ -370,15 +331,15 @@ void Raytracer::updateEnvironmentCdf()
         texture.getPixels().data(), texture.getWidth(), texture.getHeight());
     const cudaChannelFormatDesc format = cudaCreateChannelDesc<float4>();
     NR_GPU_CHECK(cudaMallocArray(
-        &environmentCdfArray, &format, texture.getWidth(), texture.getHeight()));
+        &env.cdfArray, &format, texture.getWidth(), texture.getHeight()));
     NR_GPU_CHECK(cudaMemcpy2DToArrayAsync(
-        environmentCdfArray, 0, 0, cdf.data(), texture.getWidth() * sizeof(float4),
+        env.cdfArray, 0, 0, cdf.data(), texture.getWidth() * sizeof(float4),
         texture.getWidth() * sizeof(float4), texture.getHeight(),
         cudaMemcpyHostToDevice, stream));
 
     cudaResourceDesc resource{};
     resource.resType = cudaResourceTypeArray;
-    resource.res.array.array = environmentCdfArray;
+    resource.res.array.array = env.cdfArray;
     cudaTextureDesc description{};
     description.addressMode[0] = cudaAddressModeClamp;
     description.addressMode[1] = cudaAddressModeClamp;
@@ -386,93 +347,23 @@ void Raytracer::updateEnvironmentCdf()
     description.readMode = cudaReadModeElementType;
     description.normalizedCoords = 1;
     NR_GPU_CHECK(cudaCreateTextureObject(
-        &environmentCdfTexture, &resource, &description, nullptr));
-    gpuScene.environmentCdf = environmentCdfTexture;
+        &env.cdfTexture, &resource, &description, nullptr));
 }
 
 void Raytracer::updateMeshes()
 {
-    NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    triangleBlas.destroy(stream);
-    tlas.destroy(stream);
-    gpuInstances.clear();
-
-    std::vector<AccelMeshInput> accelMeshes;
-    for (MeshAsset& asset : scene.getMeshAssets())
-    {
-        asset.updateMaterials();
-        accelMeshes.push_back({reinterpret_cast<CUdeviceptr>(asset.getVertices().data()),
-            static_cast<uint32_t>(asset.getVertices().size()), sizeof(Vertex),
-            reinterpret_cast<CUdeviceptr>(asset.getIndices().data()),
-            static_cast<uint32_t>(asset.getIndices().size() / 3)});
-    }
-    triangleBlas.build(optixCtx, stream, accelMeshes);
     gpuScene.meshes = scene.getMeshAssets().data();
     gpuScene.meshCount = static_cast<uint32_t>(scene.getMeshAssets().size());
-
-    const std::vector<AccelInstanceInput> accelInstances = buildInstanceInputs(triangleBlas.getHandles(), &gpuInstances);
-    tlas.build(optixCtx, stream, accelInstances);
-    gpuScene.instances = gpuInstances.data();
-    gpuScene.instanceCount = static_cast<uint32_t>(gpuInstances.size());
-    gpuScene.renderSettings = &scene.getRenderSettings();
-    gpuScene.environment = scene.getEnvironment().settings;
-
-    gpuScene.pointLights = scene.getPointLights();
-    gpuScene.spotLights = scene.getSpotLights();
-    gpuScene.rectLights = scene.getRectLights();
-    gpuScene.directionalLights = scene.getDirectionalLights();
-    gpuScene.pointLightCount = scene.getPointLightCount();
-    gpuScene.spotLightCount = scene.getSpotLightCount();
-    gpuScene.rectLightCount = scene.getRectLightCount();
-    gpuScene.directionalLightCount = scene.getDirectionalLightCount();
-}
-
-std::vector<AccelInstanceInput> Raytracer::buildInstanceInputs(
-    const std::vector<OptixTraversableHandle>& meshHandles,
-    nr::rstd::vector<GpuInstance>* instancesOut) const
-{
-    std::vector<AccelInstanceInput> result;
-    const auto instances = scene.getMeshInstances();
-    result.reserve(instances.size());
-    if (instancesOut != nullptr)
-        instancesOut->reserve(instances.size());
-    for (uint32_t index = 0; index < instances.size(); ++index)
-    {
-        const MeshInstance& instance = *instances[index];
-        const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
-        const mat4 worldToObject = inverse(objectToWorld);
-        const uint32_t meshIndex = instance.getMeshIndex();
-        result.push_back({toOptixTransform(objectToWorld), meshHandles[meshIndex], index});
-        if (instancesOut != nullptr)
-        {
-            GpuInstance gpuInstance{};
-            copyTransform(gpuInstance.objectToWorld, objectToWorld);
-            copyTransform(gpuInstance.worldToObject, worldToObject);
-            const mat4 normal = transpose(worldToObject);
-            gpuInstance.normalToWorld[0] = normal[0][0]; gpuInstance.normalToWorld[1] = normal[1][0]; gpuInstance.normalToWorld[2] = normal[2][0];
-            gpuInstance.normalToWorld[3] = normal[0][1]; gpuInstance.normalToWorld[4] = normal[1][1]; gpuInstance.normalToWorld[5] = normal[2][1];
-            gpuInstance.normalToWorld[6] = normal[0][2]; gpuInstance.normalToWorld[7] = normal[1][2]; gpuInstance.normalToWorld[8] = normal[2][2];
-            gpuInstance.meshIndex = meshIndex;
-            gpuInstance.objectIndex = index;
-            instancesOut->push_back(gpuInstance);
-        }
-    }
-    return result;
 }
 
 void Raytracer::updateTLAS()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    nr::rstd::vector<GpuInstance> instances;
-    const auto accelInstances = buildInstanceInputs(triangleBlas.getHandles(), &instances);
-    if (instances.size() != gpuScene.instanceCount)
-    {
-        updateMeshes();
-        return;
-    }
-    gpuInstances = std::move(instances);
+    auto& gpuInstances = scene.getGpuInstancesRef();
+    tlas.build(optixCtx, stream, scene, gpuInstances);
+    gpuScene.tlasHandle = tlas.getTraversable();
     gpuScene.instances = gpuInstances.data();
-    tlas.update(optixCtx, stream, accelInstances);
+    gpuScene.instanceCount = static_cast<uint32_t>(gpuInstances.size());
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
@@ -497,7 +388,7 @@ void Raytracer::launchGenerate(const KernelParams& params, const cudaStream_t st
     const uint32_t count = params.frame.width * params.frame.height;
     const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
     void* args[] = { const_cast<KernelParams*>(&params) };
-    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(generateKernel), grid, blockSize, args, 0, stream));
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&generateKernel), grid, blockSize, args, 0, stream));
 }
 
 void Raytracer::launchFinalize(const KernelParams& params, const cudaStream_t stream) const
@@ -506,7 +397,7 @@ void Raytracer::launchFinalize(const KernelParams& params, const cudaStream_t st
     const uint32_t count = params.frame.width * params.frame.height;
     const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
     void* args[] = { const_cast<KernelParams*>(&params) };
-    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(finalizeKernel), grid, blockSize, args, 0, stream));
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&finalizeKernel), grid, blockSize, args, 0, stream));
 }
 
 void Raytracer::launchShade(const KernelParams& params, const cudaStream_t stream) const
@@ -514,41 +405,42 @@ void Raytracer::launchShade(const KernelParams& params, const cudaStream_t strea
     constexpr uint32_t blockSize = 256;
     const dim3 grid((params.queues.capacity + blockSize - 1) / blockSize, 1, 1);
     void* args[] = { const_cast<KernelParams*>(&params) };
-    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(shadeKernel), grid, blockSize, args, 0, stream));
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&shadeKernel), grid, blockSize, args, 0, stream));
 }
 
-void Raytracer::launchExtend(const WavefrontQueues& queues, const uint32_t depth,
-                                         const uint32_t capacity, const cudaStream_t stream) const
+void Raytracer::launchExtend(const KernelParams& params, const cudaStream_t stream) const
 {
-    const OptixLaunchParams params{queues, tlas.getTraversable(), depth};
     void* deviceParams = nullptr;
     NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
     NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     optixLaunch(optixPipeline, stream,
-        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(OptixLaunchParams),
-        &optixExtendSbt, capacity, 1, 1);
+        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
+        &optixExtendSbt, params.queues.capacity, 1, 1);
     NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
-void Raytracer::launchConnect(const WavefrontQueues& queues, const uint32_t depth,
-                                          const uint32_t capacity, const cudaStream_t stream) const
+void Raytracer::launchConnect(const KernelParams& params, const cudaStream_t stream) const
 {
-    const OptixLaunchParams params{queues, tlas.getTraversable(), depth};
     void* deviceParams = nullptr;
     NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
     NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     optixLaunch(optixPipeline, stream,
-        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(OptixLaunchParams),
-        &optixConnectSbt, capacity, 1, 1);
+        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
+        &optixConnectSbt, params.queues.capacity, 1, 1);
     NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
 void Raytracer::render(const PushData& pushData)
 {
+    gpuScene.renderSettings = scene.getRenderSettings();
     const uint32_t buffer = nextBuffer;
     const uint64_t frameValue = ++submittedFrame;
     if (lastUseValue[buffer] != 0)
-        interop->waitForRelease(stream, lastUseValue[buffer]);
+    {
+        cudaExternalSemaphoreWaitParams waitParams{};
+        waitParams.params.fence.value = lastUseValue[buffer];
+        NR_GPU_CHECK(cudaWaitExternalSemaphoresAsync(&cudaBufferReleased, &waitParams, 1, stream));
+    }
 
     if (m_eventsRecorded) {
         NR_GPU_CHECK(cudaEventSynchronize(m_stopEvent));
@@ -563,12 +455,18 @@ void Raytracer::render(const PushData& pushData)
 
     KernelParams params{};
     params.scene = gpuScene;
+    params.scene.renderSettings = scene.getRenderSettings();
     params.scene.camera = scene.getActiveCamera()->getCamera();
     params.queues = queues;
-    params.output = interop->getSurfaces(buffer);
+    params.output = {
+        color[buffer].getSurface(),
+        albedo[buffer].getSurface(),
+        normal[buffer].getSurface(),
+        cryptomatte[buffer].getSurface(),
+        position[buffer].getSurface(),
+        width, height};
     params.frame.frame = pushData.frame;
     params.frame.isMoving = pushData.isMoving;
-    params.frame.pixelSizePercent = pushData.pixelSizePercent;
     params.frame.width = width;
     params.frame.height = height;
     params.accumulation = accumulation;
@@ -591,12 +489,13 @@ void Raytracer::render(const PushData& pushData)
         params.frame.totalAccumulated = static_cast<uint32_t>(pushData.frame) * samplesPerFrame + s;
 
         launchGenerate(params, stream);
+        NR_GPU_CHECK(cudaGetLastError());
         for (uint32_t depth = 0; depth < maxShaderBounces; ++depth)
         {
             params.depth = depth;
-            launchExtend(queues, depth, queues.capacity, stream);
+            launchExtend(params, stream);
             launchShade(params, stream);
-            launchConnect(queues, depth, queues.capacity, stream);
+            launchConnect(params, stream);
         }
         launchFinalize(params, stream);
     }
@@ -605,7 +504,11 @@ void Raytracer::render(const PushData& pushData)
     NR_GPU_CHECK(cudaEventRecord(m_stopEvent, stream));
     m_eventsRecorded = true;
 
-    interop->signalReady(stream, frameValue);
+    {
+        cudaExternalSemaphoreSignalParams signalParams{};
+        signalParams.params.fence.value = frameValue;
+        NR_GPU_CHECK(cudaSignalExternalSemaphoresAsync(&cudaRenderReady, &signalParams, 1, stream));
+    }
     lastLaunched = buffer;
     lastReadyValue = frameValue;
     lastUseValue[buffer] = frameValue;
@@ -620,8 +523,8 @@ void Raytracer::debugSave(const std::string& path) const
     uint32_t rayCount0 = 0;
     NR_GPU_CHECK(cudaMemcpy(&rayCount0, queues.rayCounts, sizeof(uint32_t), cudaMemcpyDeviceToHost));
     std::cout << "[debug] rayCounts[0]=" << rayCount0
-              << " meshCount=" << gpuScene.meshCount
-              << " instanceCount=" << gpuScene.instanceCount
+              << " meshCount=" << scene.getMeshAssets().size()
+              << " instanceCount=" << scene.getGpuInstanceCount()
               << " traversable=" << tlas.getTraversable()
               << " size=" << width << "x" << height << "\n";
 
@@ -671,17 +574,5 @@ void Raytracer::debugSave(const std::string& path) const
 
 FrameInfo Raytracer::getFrameInfo() const
 {
-    return {lastLaunched, lastReadyValue,
-            interop->getRenderReadySemaphore(), interop->getBufferReleasedSemaphore()};
-}
-
-Image& Raytracer::getOutputColor() { return interop->getImage(lastLaunched, Aov::Color); }
-Image& Raytracer::getOutputAlbedo() { return interop->getImage(lastLaunched, Aov::Albedo); }
-Image& Raytracer::getOutputNormal() { return interop->getImage(lastLaunched, Aov::Normal); }
-Image& Raytracer::getOutputCrypto() { return interop->getImage(lastLaunched, Aov::Cryptomatte); }
-Image& Raytracer::getOutputPosition() { return interop->getImage(lastLaunched, Aov::Position); }
-Image& Raytracer::getOutputMaterial() { return interop->getImage(lastLaunched, Aov::Material); }
-Image& Raytracer::getOutputImage(const uint32_t bufferIndex, const Aov aov)
-{
-    return interop->getImage(bufferIndex, aov);
+    return {lastLaunched, lastReadyValue, renderReady.get(), bufferReleased.get()};
 }

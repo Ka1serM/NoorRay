@@ -4,11 +4,21 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build dependencies as static libraries" FORCE)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+option(NR_ENABLE_UNITY_BUILD "Batch NoorRay C++ sources for faster compilation" ON)
+option(NR_ENABLE_PCH "Precompile common NoorRay C++ headers" ON)
+set(NR_UNITY_BUILD_BATCH_SIZE "8" CACHE STRING "Maximum sources per NoorRay unity batch")
+set(NR_CUDA_SPLIT_COMPILE_JOBS "0" CACHE STRING "NVCC optimization threads per CUDA translation unit (0 = all cores)")
+if(UNIX AND NOT APPLE)
+    set(CMAKE_SKIP_BUILD_RPATH ON)
+endif()
 set(NR_CUDA_ARCH "89" CACHE STRING "CUDA architecture (e.g. 89 for sm_89)")
 set(CMAKE_CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
-find_package(CUDAToolkit 13.3 EXACT REQUIRED)
+find_package(CUDAToolkit 13.2 EXACT REQUIRED)
 set(OPTIX_ROOT "/home/marcel/Programs/OptixSDK" CACHE PATH "OptiX 9.1 installation")
 find_path(OPTIX_INCLUDE_DIR optix.h HINTS "${OPTIX_ROOT}/include" REQUIRED)
 file(STRINGS "${OPTIX_INCLUDE_DIR}/optix.h" OPTIX_VERSION_LINE
@@ -66,6 +76,7 @@ target_include_directories(glaze INTERFACE
 set(TBB_TEST     OFF CACHE BOOL "" FORCE)
 set(TBB_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(TBB_STRICT   OFF CACHE BOOL "" FORCE)
+set(TBBMALLOC_BUILD OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/tbb)
 
 # Restore normal log level for project-own messages
@@ -197,16 +208,11 @@ target_link_libraries(imgui PUBLIC
 )
 
 # Gather source files
-file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
-list(FILTER SRC_FILES EXCLUDE REGEX "/GPU/")
-list(FILTER SRC_FILES EXCLUDE REGEX "/Kernels/cuda/")
+file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS src/*.cpp src/*.h)
+list(FILTER SRC_FILES EXCLUDE REGEX "/CUDA/")
 list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
 
-file(GLOB_RECURSE NR_KERNEL_HEADERS CONFIGURE_DEPENDS
-        "${PROJECT_SOURCE_DIR}/src/Kernels/*.h"
-        "${PROJECT_SOURCE_DIR}/src/Kernels/*/*.h"
-        "${PROJECT_SOURCE_DIR}/src/GPU/Annotations.h"
-        "${PROJECT_SOURCE_DIR}/src/GPU/RayTraversal.h")
+set(NR_OPTIX_DEPFILE "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.d")
 
 add_custom_command(
         OUTPUT "${NR_OPTIX_PTX}"
@@ -214,32 +220,36 @@ add_custom_command(
         COMMAND "${CMAKE_CUDA_COMPILER}"
                 -ccbin "${CMAKE_CXX_COMPILER}"
                 --ptx --gpu-architecture=compute_${NR_CUDA_ARCH} --std=c++20
-                --use_fast_math --generate-line-info --expt-relaxed-constexpr
+                --generate-line-info --expt-relaxed-constexpr
+                "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
+                --generate-nonsystem-dependencies-with-compile
+                --dependency-output "${NR_OPTIX_DEPFILE}"
                 -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
                 "-I${PROJECT_SOURCE_DIR}/src"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
                 "-I${OPTIX_INCLUDE_DIR}"
                 -o "${NR_OPTIX_PTX}"
-                "${PROJECT_SOURCE_DIR}/src/Kernels/cuda/Extend.cu"
+                "${PROJECT_SOURCE_DIR}/src/Kernels/Extend.cu"
         DEPENDS
-                src/Kernels/cuda/Extend.cu
-                src/Kernels/cuda/Connect.cu
-                ${NR_KERNEL_HEADERS}
+                src/Kernels/Extend.cu
+                src/Kernels/Connect.cu
+        DEPFILE "${NR_OPTIX_DEPFILE}"
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 
 add_library(NoorRayCuda STATIC
-        src/GPU/CudaDevice.cpp
-        src/GPU/ImageInterop.cpp
-        src/GPU/rstd/Memory.cpp
-        src/Kernels/cuda/Generate.cu
-        src/Kernels/cuda/Shade.cu
-        src/Kernels/cuda/Finalize.cu
-        src/Kernels/cuda/TriangleBlas.cpp
-        src/Kernels/cuda/TlasBuilder.cpp
+        src/CUDA/Blas.cpp
+        src/CUDA/Texture.cpp
+        src/CUDA/SharedImage.cpp
+        src/CUDA/rstd/Memory.cpp
+        src/Kernels/Generate.cu
+        src/Kernels/Shade.cu
+        src/Kernels/Finalize.cu
+        src/CUDA/Tlas.cpp
         src/Raytracing/Raytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
+set_target_properties(NoorRayCuda PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
 target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
 target_compile_definitions(NoorRayCuda PUBLIC
         NR_BACKEND_CUDA=1
@@ -250,9 +260,9 @@ target_include_directories(NoorRayCuda PUBLIC
         "${OPTIX_INCLUDE_DIR}"
         "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_options(NoorRayCuda PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math;--generate-line-info;--extended-lambda;--expt-relaxed-constexpr>)
+        $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info;--extended-lambda;--expt-relaxed-constexpr;--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}>)
 target_link_libraries(NoorRayCuda PUBLIC
-        CUDA::cudart
+        CUDA::cudart_static
         CUDA::cuda_driver
         glm
         stb
@@ -305,6 +315,41 @@ target_link_libraries(NoorRay PRIVATE
 
 target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED NR_BACKEND_CUDA=1)
 target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+
+if(NR_ENABLE_UNITY_BUILD)
+    set_target_properties(NoorRay PROPERTIES
+            UNITY_BUILD ON
+            UNITY_BUILD_BATCH_SIZE "${NR_UNITY_BUILD_BATCH_SIZE}")
+    set_source_files_properties(
+            src/NoorRay.cpp
+            src/Scene/SceneImporter.cpp
+            src/StbImpl.cpp
+            src/UI/ImGuiManager.cpp
+            src/Vulkan/Viewport.cpp
+            src/Vulkan/VmaImpl.cpp
+            PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+endif()
+
+if(NR_ENABLE_PCH)
+    target_precompile_headers(NoorRay PRIVATE
+            <algorithm>
+            <array>
+            <cstddef>
+            <cstdint>
+            <memory>
+            <string>
+            <utility>
+            <vector>
+            <glm/glm.hpp>
+            <vulkan/vulkan.hpp>)
+endif()
+
+if(MSVC)
+    set_property(TARGET NoorRay PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+elseif(UNIX AND NOT APPLE)
+    target_link_options(NoorRay PRIVATE -static-libgcc -static-libstdc++)
+endif()
 
 # Platform specific linking and settings
 if(APPLE)

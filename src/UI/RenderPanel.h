@@ -15,24 +15,17 @@ class Context;
 class Raytracer;
 class Renderer;
 class Image;
-class Scene;
 
 class RenderPanel : public ImGuiComponent {
 public:
-    RenderPanel(std::string name, Context& context, Scene& scene, Raytracer& raytracer, Renderer& renderer, Viewport& viewport);
+    RenderPanel(std::string name, Context& context, Raytracer& raytracer, Renderer& renderer, Viewport& viewport);
 
     void renderUi() override;
 
     bool isSaveRequested() const { return saveRequested; }
     void executeSave();
 
-    int getPixelSizePercent() const { return pixelSizePercent; }
-
 private:
-    // Render Settings
-    int pixelSizePercent{100};
-    bool changed = false;
-
     // State machine for the save process
     enum class SaveState {
         IDLE,
@@ -53,7 +46,6 @@ private:
 
     // Core System References
     Context& context;
-    Scene& scene;
     Raytracer& raytracer;
     Renderer& renderer;
     Viewport& viewport;

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <numbers>
+
 #include "imgui.h"
 #include "glm/gtc/type_ptr.inl"
 #include "UI/ImGuiManager.h"
@@ -240,13 +241,21 @@ MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>&
       vertices(vertices.begin(), vertices.end()), indices(indices.begin(), indices.end()),
       faces(faces.begin(), faces.end()), materials(materials.begin(), materials.end())
 {
+    const auto& ctx = scene.getContext();
+    if (ctx.getOptixContext() != nullptr && ctx.getCudaStream() != nullptr)
+        blas.build(
+            ctx.getOptixContext(), ctx.getCudaStream(),
+            this->vertices.data(), static_cast<uint32_t>(this->vertices.size()), sizeof(Vertex),
+            this->indices.data(), static_cast<uint32_t>(this->indices.size() / 3));
 }
 
 MeshAsset::MeshAsset(MeshAsset&& other) noexcept
     : scene(other.scene), path(std::move(other.path)), index(other.index), dirty(other.dirty),
       vertices(std::move(other.vertices)), indices(std::move(other.indices)),
-      faces(std::move(other.faces)), materials(std::move(other.materials))
-{}
+      faces(std::move(other.faces)), materials(std::move(other.materials)),
+      blas(std::move(other.blas))
+{
+}
 
 uint32_t MeshAsset::getMeshIndex() const {
     return index;

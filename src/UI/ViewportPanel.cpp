@@ -157,15 +157,6 @@ void ViewportPanel::drawImageAndUpdateState() {
     uiScale = std::max(viewportSize.x / 1080.0f, 0.5f);
 }
 
-int ViewportPanel::getViewportPixelSizePercent() const {
-    if (viewportSize.x <= 1.0f || viewportSize.y <= 1.0f)
-        return 100;
-
-    const float xPercent = static_cast<float>(width) * 100.0f / viewportSize.x;
-    const float yPercent = static_cast<float>(height) * 100.0f / viewportSize.y;
-    return std::max(100, static_cast<int>(std::ceil(std::max(xPercent, yPercent))));
-}
-
 void ViewportPanel::beginMouseCapture() {
     if (isCapturingMouse)
         return;

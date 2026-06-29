@@ -6,7 +6,7 @@
 #include <utility>
 #include <imgui.h>
 #include "Camera/RealisticCamera.h"
-#include "GPU/rstd/Allocator.h"
+#include "CUDA/rstd/Allocator.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/quaternion.hpp"
 #include "SDL3/SDL_mouse.h"

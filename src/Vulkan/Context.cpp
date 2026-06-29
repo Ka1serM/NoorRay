@@ -2,13 +2,51 @@
 #include <iostream>
 #include <set>
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 #include <string_view>
 #include <cstdlib>
+#include <cstring>
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include <cuda_runtime_api.h>
+#include <optix_function_table_definition.h>
+#include <optix_stubs.h>
+
+#include "CUDA/Checks.h"
+
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+
+static void optixLogCallback(unsigned int level, const char* tag, const char* message, void*)
+{
+    if (level <= 2)
+        std::fprintf(stderr, "[OptiX][%s] %s\n", tag, message);
+}
+
+static int selectCudaDeviceForVulkan(const vk::PhysicalDevice physicalDevice)
+{
+    vk::PhysicalDeviceIDProperties idProperties{};
+    vk::PhysicalDeviceProperties2 properties{};
+    properties.pNext = &idProperties;
+    physicalDevice.getProperties2(&properties);
+
+    int deviceCount = 0;
+    NR_GPU_CHECK(cudaGetDeviceCount(&deviceCount));
+    for (int deviceIndex = 0; deviceIndex < deviceCount; ++deviceIndex)
+    {
+        cudaDeviceProp cudaProperties{};
+        NR_GPU_CHECK(cudaGetDeviceProperties(&cudaProperties, deviceIndex));
+        if (std::memcmp(idProperties.deviceUUID, cudaProperties.uuid.bytes, VK_UUID_SIZE) == 0)
+        {
+            NR_GPU_CHECK(cudaSetDevice(deviceIndex));
+            return deviceIndex;
+        }
+    }
+
+    throw std::runtime_error("No CUDA device matches the selected Vulkan physical device UUID");
+}
 
 Context::Context(const int width, const int height, const bool isHeadless)
     : windowWidth(width), windowHeight(height), headless(isHeadless)
@@ -129,6 +167,23 @@ Context::Context(const int width, const int height, const bool isHeadless)
         descriptorPool = device->createDescriptorPoolUnique(poolInfo);
 
         createAllocator();
+
+        // Initialize CUDA + OptiX
+        selectCudaDeviceForVulkan(physicalDevice);
+        int leastPriority = 0, greatestPriority = 0;
+        NR_GPU_CHECK(cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority));
+        NR_GPU_CHECK(cudaStreamCreateWithPriority(&cudaStream, cudaStreamNonBlocking, greatestPriority));
+
+        CUcontext currentCtx{};
+        if (cuCtxGetCurrent(&currentCtx) != CUDA_SUCCESS || currentCtx == nullptr)
+            throw std::runtime_error("CUDA primary context is unavailable");
+
+        NR_OPTIX_CHECK(optixInit());
+
+        OptixDeviceContextOptions ctxOpts{};
+        ctxOpts.logCallbackFunction = optixLogCallback;
+        ctxOpts.logCallbackLevel = 3;
+        NR_OPTIX_CHECK(optixDeviceContextCreate(currentCtx, &ctxOpts, &optixCtx));
 
     } catch (const vk::Error& e) {
         std::cerr << "[FATAL] Vulkan Error in Context constructor: " << e.what() << std::endl;
@@ -457,6 +512,8 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
 
 Context::~Context() {
     std::cout << "[INFO] Destroying Context..." << std::endl;
+    if (optixCtx != nullptr) { optixDeviceContextDestroy(optixCtx); optixCtx = nullptr; }
+    if (cudaStream != nullptr) { cudaStreamDestroy(cudaStream); cudaStream = nullptr; }
     try {
         if (device)
             device->waitIdle();

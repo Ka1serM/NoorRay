@@ -1,7 +1,7 @@
 #pragma once
 
-#include "GPU/Annotations.h"
-#include "GPU/TaggedPointer.h"
+#include "CUDA/Annotations.h"
+#include "CUDA/TaggedPointer.h"
 
 #include <glm/glm.hpp>
 

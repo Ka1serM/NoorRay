@@ -6,6 +6,7 @@
 
 class Image {
 public:
+    Image() = default;
     Image(Context& context, const void* data, int width, int height, vk::Format format);
     Image(Context& context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage);
     Image(Context& context, uint32_t width, uint32_t height, vk::Format format,

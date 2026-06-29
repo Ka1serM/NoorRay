@@ -1,6 +1,6 @@
 #pragma once
 
-#include "GPU/Annotations.h"
+#include "CUDA/Annotations.h"
 #include "Camera/Camera.h"
 
 class PerspectiveCamera : public Camera {

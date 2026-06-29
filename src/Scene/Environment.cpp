@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <numeric>
-#include "GPU/rstd/Allocator.h"
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
@@ -11,26 +10,31 @@ static constexpr float kPi = 3.14159265f;
 
 Environment::Environment()
 {
-    nr::rstd::allocator<EnvironmentSettings> allocator;
-    settings = allocator.allocate(1);
-    allocator.construct(settings);
     updateDerivedSettings();
 }
 
 Environment::~Environment()
 {
-    nr::rstd::allocator<EnvironmentSettings> allocator;
-    allocator.destroy(settings);
-    allocator.deallocate(settings, 1);
+    destroyCdf();
+}
+
+void Environment::destroyCdf() noexcept
+{
+    if (cdfTexture != 0)
+        cudaDestroyTextureObject(cdfTexture);
+    if (cdfArray != nullptr)
+        cudaFreeArray(cdfArray);
+    cdfTexture = 0;
+    cdfArray = nullptr;
 }
 
 void Environment::updateDerivedSettings()
 {
-    const float rotationRadians = settings->rotation * (kPi / 180.f);
-    settings->rotationSin = std::sin(rotationRadians);
-    settings->rotationCos = std::cos(rotationRadians);
-    settings->lightingExposureScale = settings->lightingExposure;
-    settings->visibleExposureScale = std::pow(2.f, settings->visibleExposure);
+    const float rotationRadians = rotation * (kPi / 180.f);
+    rotationSin = std::sin(rotationRadians);
+    rotationCos = std::cos(rotationRadians);
+    lightingExposureScale = lightingExposure;
+    visibleExposureScale = std::pow(2.f, visibleExposure);
 }
 
 std::vector<float> Environment::computeCdf(const float* hdr, const int w, const int h)

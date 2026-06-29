@@ -1,8 +1,8 @@
 #pragma once
 
-#include "GPU/Annotations.h"
+#include "CUDA/Annotations.h"
 #include "Camera/Camera.h"
-#include "Kernels/Samplers.h"
+#include "Samplers/RandomSampler.h"
 #include <glm/vec2.hpp>
 using glm::vec2;
 

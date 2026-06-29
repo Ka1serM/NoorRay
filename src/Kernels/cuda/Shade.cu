@@ -22,10 +22,13 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         PathState state = params.queues.pathStates[hit.sampleIndex];
         if (hit.primitiveIndex == InvalidIndex)
         {
-            const bool visible = params.scene.environment->visible != 0 &&
+            const bool cameraRay = state.depth == 0;
+            const bool backgroundVisible = params.scene.environment->visible != 0 &&
                 params.scene.renderSettings->transparentBackground == 0;
-            state.radiance = state.radiance + state.throughput * environmentRadiance(params.scene, hit.rayDirection, visible);
-            if (visible)
+            if (!cameraRay || backgroundVisible)
+                state.radiance = state.radiance + state.throughput *
+                    environmentRadiance(params.scene, hit.rayDirection, cameraRay);
+            if (cameraRay && backgroundVisible)
                 state.packedCounters |= 1u << CounterHitShift;
             params.queues.pathStates[hit.sampleIndex] = state;
         }

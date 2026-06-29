@@ -4,6 +4,14 @@ static const int GROUP_SIZE = 16;
 
 [[vk::binding(0, 0)]] [format("rgba32f")] RWTexture2D<float4> inputImage;
 [[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> outputImage;
+[[vk::binding(2, 0)]] [format("r32ui")] RWTexture2D<uint> idImage;
+
+struct PushConstants
+{
+    uint selectedIndex;
+};
+
+[[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
 
 static const float3x3 ACESInputMat = float3x3(
     0.59719, 0.35458, 0.04823,
@@ -42,5 +50,32 @@ void main(uint3 threadId : SV_DispatchThreadID)
     const float4 hdr = inputImage[int2(threadId.xy)];
     const float alpha = clamp(hdr.a, 0.0, 1.0);
     const float3 straightColor = alpha > 0.0 ? hdr.rgb / alpha : float3(0.0);
-    outputImage[int2(threadId.xy)] = float4(acesFitted(straightColor), alpha);
+    float3 color = acesFitted(straightColor);
+
+    static const int outlineRadius = 3;
+    const int2 pixel = int2(threadId.xy);
+    if (pushConstants.selectedIndex != ~0u && idImage[pixel] != pushConstants.selectedIndex)
+    {
+        bool outline = false;
+        for (int y = -outlineRadius; y <= outlineRadius && !outline; ++y)
+        {
+            for (int x = -outlineRadius; x <= outlineRadius; ++x)
+            {
+                const int2 offset = int2(x, y);
+                const int2 samplePixel = pixel + offset;
+                if (dot(offset, offset) <= outlineRadius * outlineRadius &&
+                    all(samplePixel >= int2(0)) &&
+                    all(samplePixel < int2(width, height)) &&
+                    idImage[samplePixel] == pushConstants.selectedIndex)
+                {
+                    outline = true;
+                    break;
+                }
+            }
+        }
+        if (outline)
+            color = float3(1.0, 0.42, 0.05);
+    }
+
+    outputImage[pixel] = float4(color, alpha);
 }

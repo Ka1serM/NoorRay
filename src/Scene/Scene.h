@@ -22,6 +22,7 @@ enum DirtyFlag : uint8_t {
     Meshes       = 1 << 1,
     Textures     = 1 << 2,
     Accumulation = 1 << 3,
+    EnvironmentCdf = 1 << 4,
 };
 
 struct RenderSettings
@@ -119,7 +120,7 @@ public:
     void setDirtyFlag(DirtyFlag flag) { dirtyFlags |= flag; }
     void clearDirtyFlag(DirtyFlag flag) { dirtyFlags &= ~flag; }
     bool isDirty(DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
-    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures); }
+    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
 };

@@ -48,6 +48,7 @@ public:
     void render(const PushData& pushData);
     void updateMeshes();
     void updateTextures();
+    void updateEnvironmentCdf();
     void updateTLAS();
 
     FrameInfo getFrameInfo() const;
@@ -91,9 +92,9 @@ private:
     std::vector<DeviceMeshAllocation> meshAllocations;
     std::vector<cudaArray_t> textureArrays;
     std::vector<cudaTextureObject_t> textureObjects;
+    cudaArray_t environmentCdfArray{};
+    cudaTextureObject_t environmentCdfTexture{};
     GpuSceneData gpuScene{};
-    R2Sampler* managedR2Sampler{};
-    HaltonSampler* managedHaltonSampler{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
     uint64_t lastReadyValue{};

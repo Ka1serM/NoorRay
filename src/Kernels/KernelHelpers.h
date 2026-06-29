@@ -36,18 +36,26 @@ NR_GPU inline float sampleTextureScalar(
     return channel == 1 ? value.y : channel == 2 ? value.z : value.x;
 }
 
-NR_GPU inline glm::vec3 environmentRadiance(const GpuSceneData scene, const glm::vec3 direction, const bool visible)
+NR_GPU inline glm::vec3 environmentRadiance(
+    const GpuSceneData scene,
+    const glm::vec3 direction,
+    const bool cameraRay)
 {
     const EnvironmentSettings environment = *scene.environment;
-    if (!visible || environment.textureIndex < 0 ||
-        static_cast<uint32_t>(environment.textureIndex) >= scene.textureCount)
-        return glm::vec3(0.0f);
-    const float rotatedX = environment.rotationCos * direction.x - environment.rotationSin * direction.z;
-    const float rotatedZ = environment.rotationSin * direction.x + environment.rotationCos * direction.z;
-    const float u = 0.5f + atan2f(rotatedZ, rotatedX) / (2.0f * Pi);
-    const float v = acosf(fminf(fmaxf(direction.y, -1.0f), 1.0f)) / Pi;
-    const float4 color = tex2DLod<float4>(scene.textures[environment.textureIndex], u, v, 0.0f);
-    return glm::vec3(color.x, color.y, color.z) * (visible ? environment.visibleExposureScale : environment.lightingExposureScale);
+    glm::vec3 radiance = environment.color;
+    if (environment.textureIndex >= 0 &&
+        static_cast<uint32_t>(environment.textureIndex) < scene.textureCount)
+    {
+        const float rotatedX = environment.rotationCos * direction.x - environment.rotationSin * direction.z;
+        const float rotatedZ = environment.rotationSin * direction.x + environment.rotationCos * direction.z;
+        const float u = 0.5f + atan2f(rotatedZ, rotatedX) / (2.0f * Pi);
+        const float v = acosf(fminf(fmaxf(direction.y, -1.0f), 1.0f)) / Pi;
+        const float4 textureColor = tex2D<float4>(scene.textures[environment.textureIndex], u, v);
+        radiance = radiance * glm::vec3(textureColor.x, textureColor.y, textureColor.z);
+    }
+    return radiance * (cameraRay
+        ? environment.visibleExposureScale
+        : environment.lightingExposureScale);
 }
 
 NR_GPU inline glm::vec3 cosineHemisphere(const glm::vec3 normal, uint32_t& rng)

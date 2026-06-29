@@ -15,7 +15,6 @@ Environment::Environment()
     settings = allocator.allocate(1);
     allocator.construct(settings);
     settings->textureIndex = 0;
-    settings->cdfTextureIndex = 1;
     updateDerivedSettings();
 }
 
@@ -33,7 +32,6 @@ void Environment::updateDerivedSettings()
     settings->rotationCos = std::cos(rotationRadians);
     settings->lightingExposureScale = settings->lightingExposure;
     settings->visibleExposureScale = std::pow(2.f, settings->visibleExposure);
-    settings->maxTextureLod = 3.f;
 }
 
 std::vector<float> Environment::computeCdf(const float* hdr, const int w, const int h)

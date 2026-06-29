@@ -1,4 +1,4 @@
-﻿#include "Tonemapper.h"
+﻿#include "Viewport.h"
 #include <iostream>
 
 #include "Globals.h"
@@ -10,7 +10,7 @@ namespace
 constexpr uint32_t ViewportGroupSize = 16;
 }
 
-Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t height,
+Viewport::Viewport(Context& context, const uint32_t width, const uint32_t height,
                        const Image& inputImage0, const Image& inputImage1,
                        const Image& idImage0, const Image& idImage1,
                        const vk::Format outputImageFormat)
@@ -51,7 +51,7 @@ Tonemapper::Tonemapper(Context& context, const uint32_t width, const uint32_t he
     writeDescriptors(1, inputImage1, idImage1);
 }
 
-void Tonemapper::writeDescriptors(
+void Viewport::writeDescriptors(
     const uint32_t bufferIndex, const Image& inputImage, const Image& idImage)
 {
     std::vector imageInfos = {
@@ -86,12 +86,12 @@ void Tonemapper::writeDescriptors(
     context.getDevice().updateDescriptorSets(writes, {});
 }
 
-Tonemapper::~Tonemapper()
+Viewport::~Viewport()
 {
-    LOG_INFO("Destroying Tonemapper");
+    LOG_INFO("Destroying Viewport");
 }
 
-void Tonemapper::dispatch(
+void Viewport::dispatch(
     const vk::CommandBuffer commandBuffer,
     const uint32_t bufferIndex,
     const uint32_t selectedIndex)
@@ -108,7 +108,7 @@ void Tonemapper::dispatch(
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-void Tonemapper::resize(const uint32_t width, const uint32_t height,
+void Viewport::resize(const uint32_t width, const uint32_t height,
                         const Image& inputImage0, const Image& inputImage1,
                         const Image& idImage0, const Image& idImage1,
                         const vk::Format outputImageFormat)

@@ -7,7 +7,7 @@
 class Renderer;
 class ImGuiManager;
 class Raytracer;
-class Tonemapper;
+class Viewport;
 
 class NoorRay {
     Context context;
@@ -15,10 +15,10 @@ class NoorRay {
     std::unique_ptr<Renderer> renderer;
     std::unique_ptr<ImGuiManager> imGuiManager;
     std::unique_ptr<Raytracer> raytracer;
-    std::unique_ptr<Tonemapper> tonemapper;
+    std::unique_ptr<Viewport> viewport;
 
 public:
-    NoorRay(int windowWidth, int windowHeight, int renderWidth, int renderHeight);
+    NoorRay(int windowWidth, int windowHeight);
     NoorRay(int argc, char* argv[]);   // headless: argv[1] = scene.json
     ~NoorRay();
 

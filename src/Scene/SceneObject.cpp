@@ -73,7 +73,7 @@ void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
 }
 
 
-void SceneObject::renderUi() {
+bool SceneObject::renderUi() {
     bool anyChanged = false;
 
     // Name
@@ -101,6 +101,7 @@ void SceneObject::renderUi() {
         onTransformUpdated();
        scene.setDirtyFlag(Accumulation);
     }
+    return anyChanged;
 }
 
 Transform SceneObject::getWorldTransform() const {

@@ -3,15 +3,13 @@
 #include "GPU/Annotations.h"
 #include "Camera/Camera.h"
 #include "Kernels/Samplers.h"
-#include "Scene/SceneTypes.h"
-
-class CameraInstance;
 
 class ThinLensCamera : public Camera {
 public:
-    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction,
+    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, uint32_t& rng, uint32_t) const
     {
+        weight = 1.0f;
         const glm::vec2 scale{
             sensor.widthMm / (2.f * focalLengthMm),
             sensor.heightMm / (2.f * focalLengthMm)};
@@ -30,5 +28,5 @@ public:
         return true;
     }
 
-    void renderUi(CameraInstance& inst);
+    bool renderUi();
 };

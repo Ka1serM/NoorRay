@@ -13,6 +13,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     uint32_t rng = pcgHash(pixel ^ (params.frame.totalAccumulated * 1664525u + 1013904223u));
     glm::vec3 origin{};
     glm::vec3 direction{};
+    float cameraWeight = 1.0f;
     if (active)
     {
         const uint32_t x = pixel % params.frame.width;
@@ -23,7 +24,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         const float nx = (static_cast<float>(x) + jitter.x) / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y) / static_cast<float>(params.frame.height) * 2.0f;
         active = params.scene.camera->Dispatch([&](const auto* camera) {
-            return camera->generateRay(origin, direction, nx, ny, rng,
+            return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
                 pixel);
         });
     }
@@ -32,7 +33,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     if (active)
     {
         PathState state{};
-        state.throughput = glm::vec3(1.0f);
+        state.throughput = glm::vec3(cameraWeight);
         state.rngState = rng == 0 ? 1 : rng;
         params.queues.pathStates[pixel] = state;
         PrimaryState primary{};

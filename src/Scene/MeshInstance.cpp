@@ -4,13 +4,13 @@
 
 #include "../UI/ImGuiManager.h"
 
-MeshInstance::MeshInstance(Scene& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf)
-    : SceneObject(scene, name, transf), meshAsset(std::move(asset))
+MeshInstance::MeshInstance(Scene& scene, const std::string& name, const uint32_t meshIndex, const Transform& transf)
+    : SceneObject(scene, name, transf), meshIndex(meshIndex)
 {}
 
 MeshInstance::MeshInstance(const MeshInstance& other)
     : SceneObject(other),
-      meshAsset(other.meshAsset)
+      meshIndex(other.meshIndex)
 {}
 
 std::unique_ptr<SceneObject> MeshInstance::clone() const {
@@ -22,14 +22,17 @@ void MeshInstance::onTransformUpdated() {
     scene.setDirtyFlag(TLAS);
 }
 
-void MeshInstance::renderUi() {
-    SceneObject::renderUi();
+bool MeshInstance::renderUi() {
+    bool changed = SceneObject::renderUi();
 
-    ImGui::SeparatorText("Mesh Asset");
-    
-    ImGui::TableNextColumn();
-    if (meshAsset)
-        meshAsset->renderUi();  // render mesh details inside the value column
-    else
-        ImGui::TextUnformatted("No Mesh Assigned.");
+    ImGuiManager::tableRowLabel("Mesh");
+    if (!ImGui::TreeNodeEx("Mesh Asset###MeshProperties", ImGuiTreeNodeFlags_Framed))
+        return changed;
+
+    if (ImGui::BeginTable("MeshTable", 2, ImGuiTableFlags_SizingStretchProp)) {
+        changed |= scene.getMeshAsset(meshIndex).renderUi();
+        ImGui::EndTable();
+    }
+    ImGui::TreePop();
+    return changed;
 }

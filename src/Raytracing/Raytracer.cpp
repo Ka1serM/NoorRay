@@ -35,14 +35,6 @@ T* allocateDevice(const size_t count, const cudaStream_t stream)
     return static_cast<T*>(nr::rstd::allocate_device(sizeof(T) * count, stream));
 }
 
-template <typename T>
-void uploadVector(T* destination, const std::vector<T>& source, const cudaStream_t stream)
-{
-    if (!source.empty())
-        NR_GPU_CHECK(cudaMemcpyAsync(destination, source.data(), source.size() * sizeof(T),
-                                     cudaMemcpyHostToDevice, stream));
-}
-
 std::array<float, 12> toOptixTransform(const mat4& matrix)
 {
     return {matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0],
@@ -107,9 +99,7 @@ extern NR_GPU_KERNEL void shadeKernel(const KernelParams);
 
 Raytracer::Raytracer(
     Context& context,
-    Scene& scene,
-    const uint32_t width,
-    const uint32_t height)
+    Scene& scene)
     : context(context), scene(scene)
 {
     selectCudaDeviceForVulkan(context.getPhysicalDevice());
@@ -202,7 +192,10 @@ Raytracer::Raytracer(
     interop = std::make_unique<ImageInterop>(context);
     NR_GPU_CHECK(cudaEventCreate(&m_startEvent));
     NR_GPU_CHECK(cudaEventCreate(&m_stopEvent));
-    setup(width, height);
+    auto* cam = scene.getActiveCamera();
+    auto* c = cam ? cam->getCamera() : nullptr;
+    auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
+    setup(res.x, res.y);
 }
 
 Raytracer::~Raytracer()
@@ -300,16 +293,6 @@ void Raytracer::freeQueues() noexcept
 
 void Raytracer::freeSceneData() noexcept
 {
-    nr::rstd::deallocate_device(deviceMeshes, stream);
-    nr::rstd::deallocate_device(deviceInstances, stream);
-    nr::rstd::deallocate_device(deviceTextureObjects, stream);
-    for (const DeviceMeshAllocation& allocation : meshAllocations)
-    {
-        nr::rstd::deallocate_device(allocation.vertices, stream);
-        nr::rstd::deallocate_device(allocation.indices, stream);
-        nr::rstd::deallocate_device(allocation.faces, stream);
-        nr::rstd::deallocate_device(allocation.materials, stream);
-    }
     for (const cudaTextureObject_t texture : textureObjects)
         cudaDestroyTextureObject(texture);
     for (const cudaArray_t array : textureArrays)
@@ -318,12 +301,9 @@ void Raytracer::freeSceneData() noexcept
         cudaDestroyTextureObject(environmentCdfTexture);
     if (environmentCdfArray != nullptr)
         cudaFreeArray(environmentCdfArray);
-    deviceMeshes = nullptr;
-    deviceInstances = nullptr;
-    deviceTextureObjects = nullptr;
+    gpuInstances.clear();
     environmentCdfTexture = 0;
     environmentCdfArray = nullptr;
-    meshAllocations.clear();
     textureObjects.clear();
     textureArrays.clear();
     gpuScene = {};
@@ -334,13 +314,10 @@ void Raytracer::freeSceneData() noexcept
 void Raytracer::updateTextures()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    if (deviceTextureObjects != nullptr)
-        nr::rstd::deallocate_device(deviceTextureObjects, stream);
     for (const cudaTextureObject_t texture : textureObjects)
         NR_GPU_CHECK(cudaDestroyTextureObject(texture));
     for (const cudaArray_t array : textureArrays)
         NR_GPU_CHECK(cudaFreeArray(array));
-    deviceTextureObjects = nullptr;
     textureObjects.clear();
     textureArrays.clear();
 
@@ -367,12 +344,7 @@ void Raytracer::updateTextures()
         textureArrays.push_back(array);
         textureObjects.push_back(object);
     }
-    if (!textureObjects.empty())
-    {
-        deviceTextureObjects = allocateDevice<cudaTextureObject_t>(textureObjects.size(), stream);
-        uploadVector(deviceTextureObjects, textureObjects, stream);
-    }
-    gpuScene.textures = deviceTextureObjects;
+    gpuScene.textures = textureObjects.data();
     gpuScene.textureCount = static_cast<uint32_t>(textureObjects.size());
     updateEnvironmentCdf();
 }
@@ -423,106 +395,55 @@ void Raytracer::updateMeshes()
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     triangleBlas.destroy(stream);
     tlas.destroy(stream);
-    nr::rstd::deallocate_device(deviceMeshes, stream);
-    nr::rstd::deallocate_device(deviceInstances, stream);
-    for (const DeviceMeshAllocation& allocation : meshAllocations)
-    {
-        nr::rstd::deallocate_device(allocation.vertices, stream);
-        nr::rstd::deallocate_device(allocation.indices, stream);
-        nr::rstd::deallocate_device(allocation.faces, stream);
-        nr::rstd::deallocate_device(allocation.materials, stream);
-    }
-    meshAllocations.clear();
+    gpuInstances.clear();
 
-    std::vector<GpuMesh> gpuMeshes;
     std::vector<AccelMeshInput> accelMeshes;
-    for (const auto& asset : scene.getMeshAssets())
+    for (MeshAsset& asset : scene.getMeshAssets())
     {
-        asset->updateMaterials();
-        DeviceMeshAllocation allocation{};
-        allocation.vertices = allocateDevice<Vertex>(asset->getVertices().size(), stream);
-        allocation.indices = allocateDevice<uint32_t>(asset->getIndices().size(), stream);
-        allocation.faces = allocateDevice<Face>(asset->getFaces().size(), stream);
-        std::vector<GpuMaterial> materials;
-        materials.reserve(asset->getMaterials().size());
-        for (const Material& source : asset->getMaterials())
-        {
-            GpuMaterial material{};
-            material.albedo = source.albedo;
-            material.albedoIndex = source.albedoIndex;
-            material.specular = source.specular;
-            material.metallic = source.metallic;
-            material.roughness = source.roughness;
-            material.ior = source.ior;
-            material.specularIndex = source.specularIndex;
-            material.metallicIndex = source.metallicIndex;
-            material.roughnessIndex = source.roughnessIndex;
-            material.normalIndex = source.normalIndex;
-            material.transmissionColor = source.transmissionColor;
-            material.transmission = source.transmission;
-            material.transmissionIndex = source.transmissionIndex;
-            material.emission = source.emission;
-            material.emissionIndex = source.emissionIndex;
-            material.emissionStrength = source.emissionStrength;
-            material.opacity = source.opacity;
-            material.opacityIndex = source.opacityIndex;
-            materials.push_back(material);
-        }
-        allocation.materials = allocateDevice<GpuMaterial>(materials.size(), stream);
-        uploadVector(allocation.vertices, asset->getVertices(), stream);
-        uploadVector(allocation.indices, asset->getIndices(), stream);
-        uploadVector(allocation.faces, asset->getFaces(), stream);
-        uploadVector(allocation.materials, materials, stream);
-        gpuMeshes.push_back({allocation.vertices, allocation.indices, allocation.faces, allocation.materials,
-            static_cast<uint32_t>(asset->getVertices().size()),
-            static_cast<uint32_t>(asset->getIndices().size() / 3),
-            static_cast<uint32_t>(materials.size()), 0});
-        accelMeshes.push_back({reinterpret_cast<CUdeviceptr>(allocation.vertices),
-            static_cast<uint32_t>(asset->getVertices().size()), sizeof(Vertex),
-            reinterpret_cast<CUdeviceptr>(allocation.indices),
-            static_cast<uint32_t>(asset->getIndices().size() / 3)});
-        meshAllocations.push_back(allocation);
-    }
-    if (!gpuMeshes.empty())
-    {
-        deviceMeshes = allocateDevice<GpuMesh>(gpuMeshes.size(), stream);
-        uploadVector(deviceMeshes, gpuMeshes, stream);
+        asset.updateMaterials();
+        accelMeshes.push_back({reinterpret_cast<CUdeviceptr>(asset.getVertices().data()),
+            static_cast<uint32_t>(asset.getVertices().size()), sizeof(Vertex),
+            reinterpret_cast<CUdeviceptr>(asset.getIndices().data()),
+            static_cast<uint32_t>(asset.getIndices().size() / 3)});
     }
     triangleBlas.build(optixCtx, stream, accelMeshes);
-    gpuScene.meshes = deviceMeshes;
-    gpuScene.meshCount = static_cast<uint32_t>(gpuMeshes.size());
+    gpuScene.meshes = scene.getMeshAssets().data();
+    gpuScene.meshCount = static_cast<uint32_t>(scene.getMeshAssets().size());
 
-    std::vector<GpuInstance> instances;
-    const std::vector<AccelInstanceInput> accelInstances = buildInstanceInputs(triangleBlas.getHandles(), &instances);
-    if (!instances.empty())
-    {
-        deviceInstances = allocateDevice<GpuInstance>(instances.size(), stream);
-        uploadVector(deviceInstances, instances, stream);
-    }
+    const std::vector<AccelInstanceInput> accelInstances = buildInstanceInputs(triangleBlas.getHandles(), &gpuInstances);
     tlas.build(optixCtx, stream, accelInstances);
-    gpuScene.instances = deviceInstances;
-    gpuScene.instanceCount = static_cast<uint32_t>(instances.size());
+    gpuScene.instances = gpuInstances.data();
+    gpuScene.instanceCount = static_cast<uint32_t>(gpuInstances.size());
     gpuScene.renderSettings = &scene.getRenderSettings();
     gpuScene.environment = scene.getEnvironment().settings;
+
+    gpuScene.pointLights = scene.getPointLights();
+    gpuScene.spotLights = scene.getSpotLights();
+    gpuScene.rectLights = scene.getRectLights();
+    gpuScene.directionalLights = scene.getDirectionalLights();
+    gpuScene.pointLightCount = scene.getPointLightCount();
+    gpuScene.spotLightCount = scene.getSpotLightCount();
+    gpuScene.rectLightCount = scene.getRectLightCount();
+    gpuScene.directionalLightCount = scene.getDirectionalLightCount();
 }
 
 std::vector<AccelInstanceInput> Raytracer::buildInstanceInputs(
     const std::vector<OptixTraversableHandle>& meshHandles,
-    std::vector<GpuInstance>* gpuInstances) const
+    nr::rstd::vector<GpuInstance>* instancesOut) const
 {
     std::vector<AccelInstanceInput> result;
     const auto instances = scene.getMeshInstances();
     result.reserve(instances.size());
-    if (gpuInstances != nullptr)
-        gpuInstances->reserve(instances.size());
+    if (instancesOut != nullptr)
+        instancesOut->reserve(instances.size());
     for (uint32_t index = 0; index < instances.size(); ++index)
     {
         const MeshInstance& instance = *instances[index];
         const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
         const mat4 worldToObject = inverse(objectToWorld);
-        const uint32_t meshIndex = instance.getMeshAsset().getMeshIndex();
+        const uint32_t meshIndex = instance.getMeshIndex();
         result.push_back({toOptixTransform(objectToWorld), meshHandles[meshIndex], index});
-        if (gpuInstances != nullptr)
+        if (instancesOut != nullptr)
         {
             GpuInstance gpuInstance{};
             copyTransform(gpuInstance.objectToWorld, objectToWorld);
@@ -531,9 +452,9 @@ std::vector<AccelInstanceInput> Raytracer::buildInstanceInputs(
             gpuInstance.normalToWorld[0] = normal[0][0]; gpuInstance.normalToWorld[1] = normal[1][0]; gpuInstance.normalToWorld[2] = normal[2][0];
             gpuInstance.normalToWorld[3] = normal[0][1]; gpuInstance.normalToWorld[4] = normal[1][1]; gpuInstance.normalToWorld[5] = normal[2][1];
             gpuInstance.normalToWorld[6] = normal[0][2]; gpuInstance.normalToWorld[7] = normal[1][2]; gpuInstance.normalToWorld[8] = normal[2][2];
-            gpuInstance.meshIndex = instance.getMeshAsset().getMeshIndex();
+            gpuInstance.meshIndex = meshIndex;
             gpuInstance.objectIndex = index;
-            gpuInstances->push_back(gpuInstance);
+            instancesOut->push_back(gpuInstance);
         }
     }
     return result;
@@ -542,16 +463,32 @@ std::vector<AccelInstanceInput> Raytracer::buildInstanceInputs(
 void Raytracer::updateTLAS()
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    std::vector<GpuInstance> instances;
+    nr::rstd::vector<GpuInstance> instances;
     const auto accelInstances = buildInstanceInputs(triangleBlas.getHandles(), &instances);
     if (instances.size() != gpuScene.instanceCount)
     {
         updateMeshes();
         return;
     }
-    uploadVector(deviceInstances, instances, stream);
+    gpuInstances = std::move(instances);
+    gpuScene.instances = gpuInstances.data();
     tlas.update(optixCtx, stream, accelInstances);
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
+}
+
+void Raytracer::updateLights()
+{
+    // Scene light arrays are managed allocations and may move when their size
+    // changes. Refresh both pointers and counts before the next kernel launch.
+    NR_GPU_CHECK(cudaStreamSynchronize(stream));
+    gpuScene.pointLights = scene.getPointLights();
+    gpuScene.spotLights = scene.getSpotLights();
+    gpuScene.rectLights = scene.getRectLights();
+    gpuScene.directionalLights = scene.getDirectionalLights();
+    gpuScene.pointLightCount = scene.getPointLightCount();
+    gpuScene.spotLightCount = scene.getSpotLightCount();
+    gpuScene.rectLightCount = scene.getRectLightCount();
+    gpuScene.directionalLightCount = scene.getDirectionalLightCount();
 }
 
 void Raytracer::launchGenerate(const KernelParams& params, const cudaStream_t stream) const

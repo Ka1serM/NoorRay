@@ -212,7 +212,7 @@ add_custom_command(
         OUTPUT "${NR_OPTIX_PTX}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
         COMMAND "${CMAKE_CUDA_COMPILER}"
-                -ccbin "${CMAKE_CUDA_HOST_COMPILER}"
+                -ccbin "${CMAKE_CXX_COMPILER}"
                 --ptx --gpu-architecture=compute_${NR_CUDA_ARCH} --std=c++20
                 --use_fast_math --generate-line-info --expt-relaxed-constexpr
                 -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
@@ -412,4 +412,10 @@ if (MINGW)
             -static-libstdc++
             -static
     )
+endif()
+
+option(BUILD_TESTING "Build and register end-to-end tests" OFF)
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(tests)
 endif()

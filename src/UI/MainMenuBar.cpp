@@ -1,5 +1,6 @@
 ﻿#include "MainMenuBar.h"
 #include "imgui.h"
+#include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
 #include <SDL3/SDL.h>
 #include <iostream>
@@ -26,20 +27,17 @@ void MainMenuBar::renderAddMenu() const {
     if (ImGui::BeginMenu("Add")) {
         if (ImGui::BeginMenu("Primitives")) {
             if (ImGui::MenuItem("Cube")) {
-                auto cube = MeshAsset::CreateCube(scene, "Cube", {});
-                scene.add(cube);
+                const uint32_t cube = scene.add(MeshAsset::CreateCube(scene, "Cube", {}));
                 auto instance = std::make_unique<MeshInstance>(scene, "Cube Instance", cube, Transform(vec3(0, 0, 0)));
                 scene.setActiveObjectId(scene.add(std::move(instance)));
             }
             if (ImGui::MenuItem("Plane")) {
-                auto plane = MeshAsset::CreatePlane(scene, "Plane", {});
-                scene.add(plane);
+                const uint32_t plane = scene.add(MeshAsset::CreatePlane(scene, "Plane", {}));
                 auto instance = std::make_unique<MeshInstance>(scene, "Plane Instance", plane, Transform(vec3(0, 0, 0)));
                 scene.setActiveObjectId(scene.add(std::move(instance)));
             }
             if (ImGui::MenuItem("Sphere")) {
-                auto sphere = MeshAsset::CreateSphere(scene, "Sphere", {}, 24, 48);
-                scene.add(sphere);
+                const uint32_t sphere = scene.add(MeshAsset::CreateSphere(scene, "Sphere", {}, 24, 48));
                 auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
                 scene.setActiveObjectId(scene.add(std::move(instance)));
             }
@@ -47,32 +45,25 @@ void MainMenuBar::renderAddMenu() const {
         }
 
         if (ImGui::BeginMenu("Lights")) {
-            if (ImGui::MenuItem("Sphere Light")) {
-                Material material{};
-                material.emission = vec3(1, 1, 1);
-                material.emissionStrength = 10.0f;
-                auto sphere = MeshAsset::CreateSphere(scene, "SphereLight", material, 24, 48);
-                scene.add(sphere);
-                auto instance = std::make_unique<MeshInstance>(scene, "SphereLight Instance", sphere, Transform(vec3(0, 0, 0)));
-                scene.setActiveObjectId(scene.add(std::move(instance)));
+            if (ImGui::MenuItem("Directional Light")) {
+                auto light = std::make_unique<LightInstance>(scene, "Directional Light",
+                    Transform(vec3(0, 0, 0)), LightInstance::TypeDirectional);
+                scene.setActiveObjectId(scene.add(std::move(light)));
+            }
+            if (ImGui::MenuItem("Point Light")) {
+                auto light = std::make_unique<LightInstance>(scene, "Point Light",
+                    Transform(vec3(0, 0, 0)), LightInstance::TypePoint);
+                scene.setActiveObjectId(scene.add(std::move(light)));
+            }
+            if (ImGui::MenuItem("Spot Light")) {
+                auto light = std::make_unique<LightInstance>(scene, "Spot Light",
+                    Transform(vec3(0, 0, 0)), LightInstance::TypeSpot);
+                scene.setActiveObjectId(scene.add(std::move(light)));
             }
             if (ImGui::MenuItem("Rect Light")) {
-                Material material{};
-                material.emission = vec3(1, 1, 1);
-                material.emissionStrength = 10.0f;
-                auto plane = MeshAsset::CreatePlane(scene, "RectLight", material);
-                scene.add(plane);
-                auto instance = std::make_unique<MeshInstance>(scene, "RectLight Instance", plane, Transform(vec3(0, 0, 0)));
-                scene.setActiveObjectId(scene.add(std::move(instance)));
-            }
-            if (ImGui::MenuItem("Disk Light")) {
-                Material material{};
-                material.emission = vec3(1, 1, 1);
-                material.emissionStrength = 10.0f;
-                auto disk = MeshAsset::CreateDisk(scene, "DiskLight", material, 48);
-                scene.add(disk);
-                auto instance = std::make_unique<MeshInstance>(scene, "DiskLight Instance", disk, Transform(vec3(0, 0, 0)));
-                scene.setActiveObjectId(scene.add(std::move(instance)));
+                auto light = std::make_unique<LightInstance>(scene, "Rect Light",
+                    Transform(vec3(0, 0, 0)), LightInstance::TypeRect);
+                scene.setActiveObjectId(scene.add(std::move(light)));
             }
             ImGui::EndMenu();
         }

@@ -11,9 +11,6 @@
 
 #include "Camera/Sensor.h"
 
-class CameraInstance;
-
-
 class PerspectiveCamera;
 class ThinLensCamera;
 class OrthographicCamera;
@@ -46,10 +43,15 @@ public:
         direction = glm::normalize(glm::vec3(cameraToWorld * glm::vec4(direction, 0.f)));
     }
 
-    bool renderUi(CameraInstance& instance, bool supportsDepthOfField);
+    Sensor& getSensor();
+    const Sensor& getSensor() const;
+    void setFocalLength(float focalLength);
+    void setFStop(float v);
+    void setFocusDistance(float v);
+    void setBokehBias(float v);
+    bool renderUi();
     float focalLengthForFov(float fovDegrees) const;
     float fovForFocalLength(float focalLength) const;
-    void setFocalLength(float focalLength);
 };
 
 #include "Camera/PerspectiveCamera.h"

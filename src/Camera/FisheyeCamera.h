@@ -4,13 +4,12 @@
 #include "Camera/Camera.h"
 #include "Kernels/Samplers.h"
 
-class CameraInstance;
-
 class FisheyeCamera : public Camera {
 public:
-    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction,
+    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, uint32_t& rng, uint32_t) const
     {
+        weight = 1.0f;
         const float aspect = sensor.widthMm / sensor.heightMm;
         const float sx = nx * aspect;
         const float sy = ny;
@@ -39,5 +38,5 @@ public:
         return true;
     }
 
-    void renderUi(CameraInstance& inst);
+    bool renderUi();
 };

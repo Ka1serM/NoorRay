@@ -2,15 +2,13 @@
 
 #include "GPU/Annotations.h"
 #include "Camera/Camera.h"
-#include "Scene/SceneTypes.h"
-
-class CameraInstance;
 
 class OrthographicCamera : public Camera {
 public:
-    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction,
+    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, uint32_t&, uint32_t) const
     {
+        weight = 1.0f;
         constexpr float referenceHeight = 10.f;
         constexpr float referenceFocalLengthMm = 21.f;
         const float height = referenceHeight * referenceFocalLengthMm / fmaxf(0.001f, focalLengthMm);
@@ -20,5 +18,5 @@ public:
         return true;
     }
 
-    void renderUi(CameraInstance& inst);
+    bool renderUi();
 };

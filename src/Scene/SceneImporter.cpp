@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <glaze/glaze.hpp>
 #include "Camera/CameraInstance.h"
-#include "Scene/SceneTypes.h"
 #include "Vulkan/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
@@ -85,12 +84,25 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             const tinygltf::Texture& tex = model.textures[textureIndex];
             if (tex.source < 0) return;
             const tinygltf::Image& image = model.images[tex.source];
-            const std::filesystem::path texturePath = gltfDir / image.uri;
-            if (std::filesystem::exists(texturePath)) {
-                scene.add(Texture(scene.getContext(), texturePath.string()));
+
+            if (!image.uri.empty()) {
+                const std::filesystem::path texturePath = gltfDir / image.uri;
+                if (std::filesystem::exists(texturePath)) {
+                    scene.add(Texture(scene.getContext(), texturePath.string()));
+                    materialIndex = static_cast<int>(scene.getTextures().size() - 1);
+                } else {
+                    LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
+                }
+            } else if (!image.image.empty()) {
+                const vk::Format fmt = vk::Format::eR8G8B8A8Unorm;
+                const std::string texName = image.name.empty()
+                    ? "texture_" + std::to_string(textureIndex)
+                    : image.name;
+                scene.add(Texture(scene.getContext(), texName,
+                    image.image.data(), image.width, image.height, fmt));
                 materialIndex = static_cast<int>(scene.getTextures().size() - 1);
             } else {
-               LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
+                LOG_ERROR("Warning: Embedded texture has no decoded data");
             }
         };
 
@@ -105,7 +117,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         globalMaterials.emplace_back(); // Default material
 
     // Load Meshes
-    std::vector<std::vector<std::shared_ptr<MeshAsset>>> loadedMeshAssets(model.meshes.size());
+    nr::rstd::vector<nr::rstd::vector<uint32_t>> loadedMeshAssets(model.meshes.size());
     for (size_t i = 0; i < model.meshes.size(); ++i) {
         const auto& mesh = model.meshes[i];
         for (size_t j = 0; j < mesh.primitives.size(); ++j) {
@@ -160,9 +172,9 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             int materialID = (primitive.material < 0) ? 0 : primitive.material;
             std::string meshName = mesh.name.empty() ? (nameFromPath(filepath) + "_mesh" + std::to_string(i) + "_" + std::to_string(j)) : mesh.name;
             
-            auto meshAsset = std::make_shared<MeshAsset>(scene, meshName, std::move(vertices), std::move(indices), std::vector<Face>(indices.size() / 3), std::vector<Material>{globalMaterials[materialID]});
-            scene.add(meshAsset);
-            loadedMeshAssets[i].push_back(meshAsset);
+            const uint32_t meshIndex = scene.add(MeshAsset(scene, meshName, vertices, indices,
+                std::vector<Face>(indices.size() / 3), std::vector<Material>{globalMaterials[materialID]}));
+            loadedMeshAssets[i].push_back(meshIndex);
         }
     }
 
@@ -216,11 +228,73 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         
         // If the node has a mesh, create instances and attach them as children
         if (node.mesh >= 0 && node.mesh < loadedMeshAssets.size()) {
-            for (const auto& asset : loadedMeshAssets[node.mesh]) {
-                // Give the instance the node's world transform so reparent computes identity local
-                auto instance = std::make_unique<MeshInstance>(scene, asset->getName() + "_inst", asset, Transform{worldTransforms[i]});
-                const uint64_t instId = scene.add(std::move(instance));
-                scene.reparentObject(instId, objPtr->getId());
+            // Check for GPU instancing extension (EXT_mesh_gpu_instancing)
+            bool hasInstancing = node.extensions.contains("EXT_mesh_gpu_instancing");
+            std::vector<mat4> perInstanceTransforms;
+
+            if (hasInstancing) {
+                const auto& instExt = node.extensions.at("EXT_mesh_gpu_instancing");
+                if (instExt.Has("attributes")) {
+                    const auto& attrs = instExt.Get("attributes");
+                    int transAcc = attrs.Has("TRANSLATION") ? attrs.Get("TRANSLATION").Get<int>() : -1;
+                    int rotAcc   = attrs.Has("ROTATION")    ? attrs.Get("ROTATION").Get<int>()    : -1;
+                    int scaleAcc = attrs.Has("SCALE")       ? attrs.Get("SCALE").Get<int>()       : -1;
+                    int matrixAcc = attrs.Has("MATRIX")     ? attrs.Get("MATRIX").Get<int>()      : -1;
+
+                    auto readAccData = [&](int idx) -> const float* {
+                        if (idx < 0) return nullptr;
+                        const auto& acc = model.accessors[idx];
+                        const auto& bv = model.bufferViews[acc.bufferView];
+                        const auto& buf = model.buffers[bv.buffer];
+                        return reinterpret_cast<const float*>(&buf.data[bv.byteOffset + acc.byteOffset]);
+                    };
+
+                    size_t instanceCount = 0;
+                    if (matrixAcc >= 0)       instanceCount = model.accessors[matrixAcc].count;
+                    else if (transAcc >= 0)   instanceCount = model.accessors[transAcc].count;
+                    else if (rotAcc >= 0)     instanceCount = model.accessors[rotAcc].count;
+                    else if (scaleAcc >= 0)   instanceCount = model.accessors[scaleAcc].count;
+
+                    if (matrixAcc >= 0) {
+                        const float* matrices = readAccData(matrixAcc);
+                        for (size_t inst = 0; inst < instanceCount; ++inst)
+                            perInstanceTransforms.push_back(glm::make_mat4(&matrices[inst * 16]));
+                    } else {
+                        const float* translations = readAccData(transAcc);
+                        const float* rotations    = readAccData(rotAcc);
+                        const float* scales       = readAccData(scaleAcc);
+                        for (size_t inst = 0; inst < instanceCount; ++inst) {
+                            vec3 T = translations ? glm::make_vec3(&translations[inst * 3]) : vec3(0.0f);
+                            quat R = rotations
+                                ? quat(rotations[inst * 4 + 3], rotations[inst * 4], rotations[inst * 4 + 1], rotations[inst * 4 + 2])
+                                : quat(1.0f, 0.0f, 0.0f, 0.0f);
+                            vec3 S = scales ? glm::make_vec3(&scales[inst * 3]) : vec3(1.0f);
+                            perInstanceTransforms.push_back(translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S));
+                        }
+                    }
+                }
+            }
+
+            if (!perInstanceTransforms.empty()) {
+                // GPU instancing: one MeshInstance per entry
+                for (size_t inst = 0; inst < perInstanceTransforms.size(); ++inst) {
+                    const mat4 finalWorld = worldTransforms[i] * perInstanceTransforms[inst];
+                    for (const uint32_t meshIndex : loadedMeshAssets[node.mesh]) {
+                        const MeshAsset& asset = scene.getMeshAsset(meshIndex);
+                        auto instance = std::make_unique<MeshInstance>(
+                            scene, asset.getName() + "_inst_" + std::to_string(inst), meshIndex, Transform{finalWorld});
+                        const uint64_t instId = scene.add(std::move(instance));
+                        scene.reparentObject(instId, objPtr->getId());
+                    }
+                }
+            } else {
+                // Single instance with the node's world transform
+                for (const uint32_t meshIndex : loadedMeshAssets[node.mesh]) {
+                    const MeshAsset& asset = scene.getMeshAsset(meshIndex);
+                    auto instance = std::make_unique<MeshInstance>(scene, asset.getName() + "_inst", meshIndex, Transform{worldTransforms[i]});
+                    const uint64_t instId = scene.add(std::move(instance));
+                    scene.reparentObject(instId, objPtr->getId());
+                }
             }
         }
     }
@@ -443,12 +517,11 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
 
         // Create the final assets and instances for this shape 
         std::string meshName = shape.name.empty() ? (parentName + "_shape") : shape.name;
-        auto meshAsset = std::make_shared<MeshAsset>(scene, meshName, std::move(vertices), std::move(indices), std::move(faces), std::move(localMaterials));
-        scene.add(meshAsset);
+        const uint32_t meshIndex = scene.add(MeshAsset(scene, meshName, vertices, indices, faces, localMaterials));
 
         Transform transform;
         transform.setPosition(center);
-        auto instance = std::make_unique<MeshInstance>(scene, meshName, meshAsset, transform);
+        auto instance = std::make_unique<MeshInstance>(scene, meshName, meshIndex, transform);
         const uint64_t instanceId = scene.add(std::move(instance));
         scene.reparentObject(instanceId, parentId);
     }
@@ -513,35 +586,7 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
                  a.size() > 2 ? jfloat(a[2], def.z) : def.z };
     };
 
-    // Render resolution — stored on the camera sensor
-    const auto& render = at(j, "render");
-    const uint32_t renderW = static_cast<uint32_t>(jint(at(render, "width"),  1920));
-    const uint32_t renderH = static_cast<uint32_t>(jint(at(render, "height"), 1080));
-
-    // Camera
-    const auto& cam = at(j, "camera");
-    Transform camT{ jvec3(at(cam, "position"), {0, 0, 5}),
-                    jvec3(at(cam, "rotation_euler")),
-                    vec3(1.f) };
-    const std::string camType = jstr(at(cam, "type"), "perspective");
-    const std::string camName = jstr(at(cam, "name"), "Camera");
-
-    CameraProjectionType projection = CameraProjectionType::Perspective;
-    if (camType == "thinlens") projection = CameraProjectionType::ThinLens;
-    else if (camType == "fisheye") projection = CameraProjectionType::Fisheye;
-    else if (camType == "orthographic") projection = CameraProjectionType::Orthographic;
-
-    auto camera = std::make_unique<CameraInstance>(scene, camName, camT, projection);
-    camera->setFocalLength(jfloat(at(cam, "focal_length_mm"), 28.f));
-    camera->getCamera()->DispatchCPU([&](auto* managedCamera) {
-        managedCamera->fStop = jfloat(at(cam, "fstop"));
-        managedCamera->focusDistance = jfloat(at(cam, "focus_distance"), 4.f);
-        managedCamera->bokehBias = jfloat(at(cam, "bokeh_bias"), 1.f);
-    });
-    CameraInstance* addedCam = camera.get();
-    scene.add(std::move(camera));
-
-    addedCam->setRenderResolution(renderW, renderH);
+    // Camera — disabled: cameras come from NoorRay.cpp default setup
 
     // Objects
     if (!j.contains("objects") || !j["objects"].is_array()) return;
@@ -569,13 +614,12 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
             mat.emission         = jvec3(at(md, "emission"));
             mat.emissionStrength = jfloat(at(md, "emission_strength"));
 
-            std::shared_ptr<MeshAsset> asset;
-            if      (type == "cube")  asset = MeshAsset::CreateCube(scene, name, mat);
-            else if (type == "plane") asset = MeshAsset::CreatePlane(scene, name, mat);
-            else if (type == "disk")  asset = MeshAsset::CreateDisk(scene, name, mat);
-            else                      asset = MeshAsset::CreateSphere(scene, name, mat);
-            scene.add(asset);
-            scene.add(std::make_unique<MeshInstance>(scene, name, asset, t));
+            uint32_t meshIndex;
+            if      (type == "cube")  meshIndex = scene.add(MeshAsset::CreateCube(scene, name, mat));
+            else if (type == "plane") meshIndex = scene.add(MeshAsset::CreatePlane(scene, name, mat));
+            else if (type == "disk")  meshIndex = scene.add(MeshAsset::CreateDisk(scene, name, mat));
+            else                      meshIndex = scene.add(MeshAsset::CreateSphere(scene, name, mat));
+            scene.add(std::make_unique<MeshInstance>(scene, name, meshIndex, t));
         }
     }
 }

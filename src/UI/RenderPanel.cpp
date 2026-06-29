@@ -18,7 +18,7 @@
 #include "Raytracing/Raytracer.h"
 #include "Scene/Scene.h"
 #include "Vulkan/Buffer.h"
-#include "Vulkan/Tonemapper.h"
+#include "Vulkan/Viewport.h"
 
 // Helper function to convert 16-bit half float to 32-bit float.
 static float halfToFloat(const uint16_t half) {
@@ -54,12 +54,12 @@ RenderPanel::RenderPanel(
     Scene& scene,
     Raytracer& raytracer,
     Renderer& renderer,
-    Tonemapper& tonemapper
+    Viewport& viewport
 )
     : ImGuiComponent(std::move(name)), context(context), scene(scene),
       raytracer(raytracer),
       renderer(renderer),
-      tonemapper(tonemapper)
+      viewport(viewport)
 {
 }
 
@@ -212,7 +212,7 @@ void RenderPanel::executeSave() {
         }
     };
 
-    addJob(beautyFilenameBuffer, ".png", [&]()->const Image& { return tonemapper.getOutputImage(); });
+    addJob(beautyFilenameBuffer, ".png", [&]()->const Image& { return viewport.getOutputImage(); });
     addJob(rawFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputColor(); });
     addJob(albedoFilenameBuffer, ".png", [&]()->const Image& { return raytracer.getOutputAlbedo(); });
     addJob(normalFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputNormal(); });

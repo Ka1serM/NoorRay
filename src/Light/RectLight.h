@@ -1,0 +1,61 @@
+#pragma once
+
+#include <glm/vec3.hpp>
+#include "Light/LightSample.h"
+
+class RectLight {
+public:
+    glm::vec3 position{};
+    glm::vec3 direction{};
+    glm::vec3 tangent{1.f, 0.f, 0.f};
+    glm::vec3 color{1.f};
+    float intensity{1.f};
+    float width{1.f};
+    float height{1.f};
+    int twoSided{};
+    float barnDoorAngle{90.f};
+    float barnDoorLength{};
+
+    NR_CPU_GPU LightSample sampleLi(const glm::vec3 surfacePosition, uint32_t& rng) const
+    {
+        LightSample sample{};
+        const glm::vec3 normal = glm::normalize(direction);
+        const glm::vec3 u = glm::normalize(tangent);
+        const glm::vec3 v = glm::normalize(glm::cross(normal, u));
+        const glm::vec3 sampledPosition = position
+            + u * ((randomFloat(rng) - 0.5f) * width)
+            + v * ((randomFloat(rng) - 0.5f) * height);
+        const glm::vec3 delta = sampledPosition - surfacePosition;
+        sample.distance = glm::length(delta);
+        if (sample.distance <= 0.0f)
+            return sample;
+        sample.direction = delta / sample.distance;
+
+        float emitterCosine = glm::dot(normal, -sample.direction);
+        emitterCosine = twoSided != 0 ? fabsf(emitterCosine) : fmaxf(emitterCosine, 0.0f);
+        float barnDoorMask = 1.0f;
+        if (barnDoorLength > 0.0f && barnDoorAngle < 89.9f && emitterCosine > 0.0f)
+        {
+            const glm::vec3 outgoing = -sample.direction;
+            const float forward = fmaxf(fabsf(glm::dot(normal, outgoing)), 1e-5f);
+            const float localU = glm::dot(sampledPosition - position, u);
+            const float localV = glm::dot(sampledPosition - position, v);
+            const float projectedU = localU
+                + barnDoorLength * glm::dot(outgoing, u) / forward;
+            const float projectedV = localV
+                + barnDoorLength * glm::dot(outgoing, v) / forward;
+            const float expansion = barnDoorLength * tanf(
+                fmaxf(barnDoorAngle, 0.0f) * LightPi / 180.0f);
+            if (fabsf(projectedU) > width * 0.5f + expansion
+                || fabsf(projectedV) > height * 0.5f + expansion)
+                barnDoorMask = 0.0f;
+        }
+        const float area = fmaxf(width * height, 0.0f);
+        sample.radiance = color * (intensity * emitterCosine * barnDoorMask * area /
+            fmaxf(sample.distance * sample.distance, 1e-6f));
+        return sample;
+    }
+
+    bool renderUi();
+};
+static_assert(sizeof(RectLight) == 72);

@@ -14,7 +14,6 @@ Environment::Environment()
     nr::rstd::allocator<EnvironmentSettings> allocator;
     settings = allocator.allocate(1);
     allocator.construct(settings);
-    settings->textureIndex = 0;
     updateDerivedSettings();
 }
 

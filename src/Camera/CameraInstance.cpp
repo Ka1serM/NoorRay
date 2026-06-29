@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <type_traits>
+#include <utility>
 #include <imgui.h>
 #include "Camera/RealisticCamera.h"
 #include "GPU/rstd/Allocator.h"
@@ -55,13 +56,13 @@ void CameraInstance::freeCamera()
 // ── constructor / destructor ──────────────────────────────────────────────────
 
 CameraInstance::CameraInstance(Scene& scene, const std::string& name, Transform transform,
-                               CameraProjectionType type)
+                               Camera camera)
     : SceneObject(scene, name, transform)
 {
     nr::rstd::allocator<Camera> allocator;
     gpuCamera = allocator.allocate(1);
     allocator.construct(gpuCamera);
-    allocateCamera(type);
+    *gpuCamera = camera;
     rebuildCamera();
 }
 
@@ -90,21 +91,6 @@ CameraInstance::~CameraInstance()
 }
 
 // ── core ──────────────────────────────────────────────────────────────────────
-
-void CameraInstance::setRenderResolution(uint32_t width, uint32_t height)
-{
-    gpuCamera->DispatchCPU([&](auto* cam) {
-        cam->sensor.resolutionWidth = std::max(1u, width);
-        cam->sensor.resolutionHeight = std::max(1u, height);
-    });
-    scene.setDirtyFlag(Accumulation);
-}
-
-void CameraInstance::setFocalLength(float mm)
-{
-    gpuCamera->DispatchCPU([&](auto* camera) { camera->setFocalLength(mm); });
-    markDirty();
-}
 
 void CameraInstance::markDirty()
 {
@@ -177,26 +163,11 @@ const char* CameraInstance::getProjectionName() const
     return "Perspective";
 }
 
-bool CameraInstance::supportsDOF() const
-{
-    return gpuCamera->Is<ThinLensCamera>() || gpuCamera->Is<FisheyeCamera>() || gpuCamera->Is<RealisticCamera>();
-}
-
-glm::uvec2 CameraInstance::getRenderResolution() const
-{
-    return gpuCamera->DispatchCPU([](const auto* camera) { return camera->sensor.resolution(); });
-}
-
 mat4 CameraInstance::getViewMatrix() const
 {
     const vec3 dir = normalize(getRotation() * LocalForward);
     const vec3 up  = normalize(getRotation() * LocalUp);
     return lookAt(getPosition(), getPosition() + dir, up);
-}
-
-mat4 CameraInstance::getCameraToWorld() const
-{
-    return gpuCamera->DispatchCPU([](const auto* cam) { return cam->cameraToWorld; });
 }
 
 mat4 CameraInstance::getProjectionMatrix() const
@@ -279,26 +250,40 @@ void CameraInstance::update()
 
 // ── UI ────────────────────────────────────────────────────────────────────────
 
-void CameraInstance::renderUi()
+bool CameraInstance::renderUi()
 {
-    SceneObject::renderUi();
+    const bool instanceChanged = SceneObject::renderUi();
 
-    // projection type switcher
-    ImGuiManager::tableRowLabel("Projection");
-    static const CameraProjectionType projectionTypes[] = {
-        CameraProjectionType::Perspective, CameraProjectionType::ThinLens,
-        CameraProjectionType::Realistic,   CameraProjectionType::Orthographic,
-        CameraProjectionType::Fisheye,
-    };
-    static const char* projectionNames[] = {"Perspective", "Thin Lens", "Realistic", "Orthographic", "Fisheye"};
-    constexpr int projectionCount = 5;
-    int projectionIndex = 0;
-    for (int i = 0; i < projectionCount; ++i)
-        if (projectionTypes[i] == getProjectionType()) { projectionIndex = i; break; }
-    if (ImGui::Combo("##CameraProjection", &projectionIndex, projectionNames, projectionCount)) {
-        switchTo(projectionTypes[projectionIndex]);
-        scene.setDirtyFlag(Accumulation);
+    ImGuiManager::tableRowLabel("Camera");
+    const std::string cameraLabel = std::string(getProjectionName()) + "###CameraProperties";
+    if (!ImGui::TreeNodeEx(cameraLabel.c_str(), ImGuiTreeNodeFlags_Framed))
+        return instanceChanged;
+
+    bool changed = false;
+    if (ImGui::BeginTable("CameraTable", 2, ImGuiTableFlags_SizingStretchProp)) {
+        // projection type switcher
+        ImGuiManager::tableRowLabel("Projection");
+        static const CameraProjectionType projectionTypes[] = {
+            CameraProjectionType::Perspective, CameraProjectionType::ThinLens,
+            CameraProjectionType::Realistic,   CameraProjectionType::Orthographic,
+            CameraProjectionType::Fisheye,
+        };
+        static const char* projectionNames[] = {"Perspective", "Thin Lens", "Realistic", "Orthographic", "Fisheye"};
+        constexpr int projectionCount = 5;
+        int projectionIndex = 0;
+        for (int i = 0; i < projectionCount; ++i)
+            if (projectionTypes[i] == getProjectionType()) { projectionIndex = i; break; }
+        if (ImGui::Combo("##CameraProjection", &projectionIndex, projectionNames, projectionCount)) {
+            switchTo(projectionTypes[projectionIndex]);
+            changed = true;
+        }
+
+        changed |= gpuCamera->DispatchCPU([](auto* cam) { return cam->renderUi(); });
+        ImGui::EndTable();
     }
+    ImGui::TreePop();
 
-    gpuCamera->DispatchCPU([&](auto* cam) { cam->renderUi(*this); });
+    if (changed)
+        scene.setDirtyFlag(Accumulation);
+    return instanceChanged || changed;
 }

@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
-#include "Camera/CameraInstance.h"
 #include "UI/ImGuiManager.h"
 
 float Camera::focalLengthForFov(const float fovDegrees) const
@@ -15,17 +15,65 @@ float Camera::focalLengthForFov(const float fovDegrees) const
 float Camera::fovForFocalLength(const float focalLength) const
 {
     const float fov = 2.f * std::atan(sensor.widthMm / (2.f * std::max(0.001f, focalLength)))
-        * (180.f / glm::pi<float>());
+        * (180.f / std::numbers::pi_v<float>);
     return std::clamp(fov, 1.f, 179.f);
 }
 
 void Camera::setFocalLength(const float focalLength)
 {
-    focalLengthMm = std::max(0.001f, focalLength);
-    fieldOfView = fovForFocalLength(focalLengthMm);
+    if (ptr()) {
+        DispatchCPU([focalLength](auto* cam) {
+            cam->focalLengthMm = std::max(0.001f, focalLength);
+            cam->fieldOfView = cam->fovForFocalLength(cam->focalLengthMm);
+        });
+    } else {
+        focalLengthMm = std::max(0.001f, focalLength);
+        fieldOfView = fovForFocalLength(focalLengthMm);
+    }
 }
 
-bool Camera::renderUi(CameraInstance& instance, const bool supportsDepthOfField)
+void Camera::setFStop(const float v)
+{
+    const float clamped = std::max(0.f, v);
+    if (ptr())
+        DispatchCPU([clamped](auto* cam) { cam->fStop = clamped; });
+    else
+        fStop = clamped;
+}
+
+void Camera::setFocusDistance(const float v)
+{
+    const float clamped = std::max(0.001f, v);
+    if (ptr())
+        DispatchCPU([clamped](auto* cam) { cam->focusDistance = clamped; });
+    else
+        focusDistance = clamped;
+}
+
+void Camera::setBokehBias(const float v)
+{
+    const float clamped = std::max(0.001f, v);
+    if (ptr())
+        DispatchCPU([clamped](auto* cam) { cam->bokehBias = clamped; });
+    else
+        bokehBias = clamped;
+}
+
+Sensor& Camera::getSensor()
+{
+    if (ptr())
+        return DispatchCPU([](auto* cam) -> Sensor& { return cam->sensor; });
+    return sensor;
+}
+
+const Sensor& Camera::getSensor() const
+{
+    if (ptr())
+        return DispatchCPU([](const auto* cam) -> const Sensor& { return cam->sensor; });
+    return sensor;
+}
+
+bool Camera::renderUi()
 {
     bool changed = false;
     ImGuiManager::dragFloatRow("Field of View", fieldOfView, 0.1f, 1.f, 179.f, [&](float value) {
@@ -37,23 +85,5 @@ bool Camera::renderUi(CameraInstance& instance, const bool supportsDepthOfField)
         setFocalLength(value);
         changed = true;
     });
-
-    if (supportsDepthOfField) {
-        ImGuiManager::dragFloatRow("F-Stop", fStop, 0.1f, 0.f, 32.f, [&](float value) {
-            fStop = std::max(0.f, value);
-            changed = true;
-        });
-        ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 1000.f, [&](float value) {
-            focusDistance = std::max(0.001f, value);
-            changed = true;
-        });
-        ImGuiManager::dragFloatRow("Bokeh Bias", bokehBias, 0.01f, 0.001f, 10.f, [&](float value) {
-            bokehBias = std::max(0.001f, value);
-            changed = true;
-        });
-    }
-
-    if (changed)
-        instance.markDirty();
     return changed;
 }

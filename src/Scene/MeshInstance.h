@@ -1,7 +1,5 @@
 ﻿#pragma once
 
-#include <memory>
-
 #include "Scene.h"
 #include "Mesh/MeshAsset.h"
 #include "SceneObject.h"
@@ -10,15 +8,16 @@ class Scene;
 class MeshAsset;
 
 class MeshInstance : public SceneObject {
-    const std::shared_ptr<MeshAsset> meshAsset;
+    uint32_t meshIndex;
 public:
-    MeshInstance(Scene& scene, const std::string& name, std::shared_ptr<MeshAsset> asset, const Transform& transf);
+    MeshInstance(Scene& scene, const std::string& name, uint32_t meshIndex, const Transform& transf);
     MeshInstance(const MeshInstance& other);
     
-    void renderUi() override;
+    bool renderUi() override;
 
     std::unique_ptr<SceneObject> clone() const override;
 
-    const MeshAsset& getMeshAsset() const { return *meshAsset.get(); }
+    uint32_t getMeshIndex() const { return meshIndex; }
+    const MeshAsset& getMeshAsset() const { return scene.getMeshAsset(meshIndex); }
     void onTransformUpdated() override;
 };

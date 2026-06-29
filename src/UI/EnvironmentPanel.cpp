@@ -60,12 +60,6 @@ void EnvironmentPanel::renderUi() {
         }
 
         ImGuiManager::checkboxRow("Visible", settings.visible, [&](const bool v) { settings.visible = v; anyChanged = true; });
-        ImGuiManager::dragFloatRow("Sun Intensity", settings.directionalIntensity, 0.01f, 0.0f, 1000000.0f, [&](const float v) { settings.directionalIntensity = v; anyChanged = true; });
-        ImGuiManager::dragFloatRow("Sun Soft Angle", settings.directionalSoftAngle, 0.01f, 0.0f, 90.0f, [&](const float v) { settings.directionalSoftAngle = v; anyChanged = true; });
-        ImGuiManager::dragFloatRow("Sun Direction X", settings.directionalDirection.x, 0.01f, -1.0f, 1.0f, [&](const float v) { settings.directionalDirection.x = v; anyChanged = true; });
-        ImGuiManager::dragFloatRow("Sun Direction Y", settings.directionalDirection.y, 0.01f, -1.0f, 1.0f, [&](const float v) { settings.directionalDirection.y = v; anyChanged = true; });
-        ImGuiManager::dragFloatRow("Sun Direction Z", settings.directionalDirection.z, 0.01f, -1.0f, 1.0f, [&](const float v) { settings.directionalDirection.z = v; anyChanged = true; });
-        
         ImGui::EndTable();
     }
     

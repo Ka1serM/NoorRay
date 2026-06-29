@@ -16,7 +16,6 @@
 #include <unordered_map>
 #include <utility>
 #include "glm/gtx/norm.hpp"
-#include "Camera/CameraInstance.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
 
@@ -155,167 +154,24 @@ struct CpuRay {
     vec3 direction{};
 };
 
-float selectSurfaceT(float radius, const CpuRay& ray, float t0, float t1)
-{
-    const bool useCloserT = (ray.direction.z > 0.0f) != (radius < 0.0f);
-    return useCloserT ? std::min(t0, t1) : std::max(t0, t1);
-}
-
-bool intersectRossSphere(const RealisticLensElement& element, float surfaceOffset, const CpuRay& ray, float& t, vec3& normal)
-{
-    t = 0.0f;
-    normal = vec3(0.0f, 0.0f, 1.0f);
-    const float surfaceCenter = element.vertexZ + surfaceOffset;
-    const float zCenter = surfaceCenter + element.radius;
-    if (std::abs(element.radius) <= 1e-7f) {
-        if (std::abs(ray.direction.z) <= 1e-7f)
-            return false;
-        t = (surfaceCenter - ray.origin.z) / ray.direction.z;
-        normal = ray.direction.z > 0.0f ? vec3(0.0f, 0.0f, -1.0f) : vec3(0.0f, 0.0f, 1.0f);
-        return t >= 0.0f;
-    }
-
-    const vec3 o = ray.origin - vec3(0.0f, 0.0f, zCenter);
-    const float a = glm::dot(ray.direction, ray.direction);
-    const float b = 2.0f * glm::dot(ray.direction, o);
-    const float c = glm::dot(o, o) - element.radius * element.radius;
-    const float discriminant = b * b - 4.0f * a * c;
-    if (discriminant < 0.0f)
-        return false;
-
-    const float root = std::sqrt(discriminant);
-    const float invDenom = 1.0f / (2.0f * a);
-    const float t0 = (-b - root) * invDenom;
-    const float t1 = (-b + root) * invDenom;
-    t = selectSurfaceT(element.radius, ray, t0, t1);
-    if (t < 0.0f)
-        return false;
-
-    normal = glm::normalize(o + ray.direction * t);
-    if (glm::dot(normal, -ray.direction) < 0.0f)
-        normal = -normal;
-    return true;
-}
-
-bool refractRoss(const vec3& point, vec3 normal, const CpuRay& ray, float iorIn, float iorOut, CpuRay& result)
-{
-    normal = -normal;
-    float cosThetaI = glm::dot(normal, ray.direction);
-    float eta = iorIn / iorOut;
-    if (cosThetaI < 0.0f) {
-        eta = 1.0f / eta;
-        cosThetaI = -cosThetaI;
-        normal = -normal;
-    }
-
-    const float sin2ThetaI = std::max(0.0f, 1.0f - cosThetaI * cosThetaI);
-    const float sin2ThetaT = sin2ThetaI / (eta * eta);
-    if (sin2ThetaT >= 1.0f)
-        return false;
-
-    const float cosThetaT = std::sqrt(1.0f - sin2ThetaT);
-    const vec3 f = -ray.direction / eta;
-    const vec3 f1 = normal * (cosThetaI / eta - cosThetaT);
-    result.origin = point;
-    result.direction = glm::normalize(f + f1);
-    return true;
-}
-
 bool traceFromFilmRoss(const std::vector<RealisticLensElement>& elements, float surfaceOffset, const CpuRay& inputRay, CpuRay& outputRay)
 {
-    if (elements.empty())
-        return false;
-
-    CpuRay tracedRay = inputRay;
-
-    for (int i = static_cast<int>(elements.size()) - 1; i >= 0; --i) {
-        const RealisticLensElement& element = elements[static_cast<size_t>(i)];
-        const float surfaceCenter = element.vertexZ + surfaceOffset;
-        if (element.isAperture != 0) {
-            if (std::abs(tracedRay.direction.z) <= 1e-7f)
-                return false;
-            const float t = (surfaceCenter - tracedRay.origin.z) / tracedRay.direction.z;
-            if (t < 0.0f)
-                return false;
-            const vec3 p = tracedRay.origin + tracedRay.direction * t;
-            if (glm::length2(vec2(p.x, p.y)) > element.apertureRadius * element.apertureRadius)
-                return false;
-            continue;
-        }
-
-        float t = 0.0f;
-        vec3 normal{};
-        if (!intersectRossSphere(element, surfaceOffset, tracedRay, t, normal))
-            return false;
-
-        const vec3 point = tracedRay.origin + tracedRay.direction * t;
-        if (glm::length2(vec2(point.x, point.y)) > element.apertureRadius * element.apertureRadius)
-            return false;
-
-        const float etaI = element.ior;
-        const float etaT = (i > 0 && elements[static_cast<size_t>(i - 1)].ior != 0.0f)
-            ? elements[static_cast<size_t>(i - 1)].ior
-            : 1.0f;
-
-        CpuRay refracted{};
-        if (!refractRoss(point, normal, tracedRay, etaT, etaI, refracted))
-            return false;
-        tracedRay = {refracted.origin, -refracted.direction};
-    }
-
-    outputRay = tracedRay;
-    return true;
+    return traceFromFilm(elements.data(), static_cast<int>(elements.size()), surfaceOffset,
+        inputRay.origin, inputRay.direction, outputRay.origin, outputRay.direction);
 }
 
 bool traceFromSceneRoss(const std::vector<RealisticLensElement>& elements, float surfaceOffset, const CpuRay& inputRay, CpuRay& outputRay)
 {
-    if (elements.empty())
-        return false;
-
-    CpuRay tracedRay = inputRay;
-
-    for (size_t i = 0; i < elements.size(); ++i) {
-        const RealisticLensElement& element = elements[i];
-        const float surfaceCenter = element.vertexZ + surfaceOffset;
-        if (element.isAperture != 0) {
-            if (std::abs(tracedRay.direction.z) <= 1e-7f)
-                return false;
-            const float t = (surfaceCenter - tracedRay.origin.z) / tracedRay.direction.z;
-            if (t < 0.0f)
-                return false;
-            const vec3 p = tracedRay.origin + tracedRay.direction * t;
-            if (glm::length2(vec2(p.x, p.y)) > element.apertureRadius * element.apertureRadius)
-                return false;
-            continue;
-        }
-
-        float t = 0.0f;
-        vec3 normal{};
-        if (!intersectRossSphere(element, surfaceOffset, tracedRay, t, normal))
-            return false;
-
-        const vec3 point = tracedRay.origin + tracedRay.direction * t;
-        if (glm::length2(vec2(point.x, point.y)) > element.apertureRadius * element.apertureRadius)
-            return false;
-
-        const float etaI = element.ior;
-        const float etaT = (i > 0 && elements[i - 1].ior != 0.0f) ? elements[i - 1].ior : 1.0f;
-        CpuRay refracted{};
-        if (!refractRoss(point, normal, tracedRay, etaI, etaT, refracted))
-            return false;
-        tracedRay = {refracted.origin, -refracted.direction};
-    }
-
-    outputRay = tracedRay;
-    return true;
+    return traceLensSystem(elements.data(), static_cast<int>(elements.size()), surfaceOffset,
+        false, inputRay.origin, inputRay.direction, outputRay.origin, outputRay.direction);
 }
 
 void computeCardinalPoints(const CpuRay& rayIn, const CpuRay& rayOut, float& pz, float& fz)
 {
     const float tf = -rayOut.origin.x / rayOut.direction.x;
-    fz = -(rayOut.origin + rayOut.direction * tf).z;
+    fz = (rayOut.origin + rayOut.direction * tf).z;
     const float tp = (rayIn.origin.x - rayOut.origin.x) / rayOut.direction.x;
-    pz = -(rayOut.origin + rayOut.direction * tp).z;
+    pz = (rayOut.origin + rayOut.direction * tp).z;
 }
 }
 
@@ -332,15 +188,31 @@ RealisticCamera::~RealisticCamera()
 {
 }
 
-void RealisticCamera::renderUi(CameraInstance& inst)
+bool RealisticCamera::renderUi()
 {
-    const bool opticsChanged = Camera::renderUi(inst, true);
+    bool opticsChanged = false;
+    ImGuiManager::dragFloatRow("F-Stop", fStop, 0.1f, 0.f, 64.f, [&](float value) {
+        fStop = std::max(0.f, value);
+        opticsChanged = true;
+    });
+    ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
+        focusDistance = std::max(0.001f, value);
+        opticsChanged = true;
+    });
     if (opticsChanged && !lensElements.empty()) {
         applyAperture();
         applyFocus();
         rebuildExitPupilBounds();
-        updateGpuData();
     }
+
+    const bool sensorChanged = sensor.renderUi();
+    if (sensorChanged && !lensElements.empty()) {
+        rebuildLensMetadata();
+        applyAperture();
+        applyFocus();
+        rebuildExitPupilBounds();
+    }
+
     bool changed = false;
 
     if (lensDialog && lensDialog->ready(0)) {
@@ -374,41 +246,6 @@ void RealisticCamera::renderUi(CameraInstance& inst)
     std::snprintf(lensBuffer.data(), lensBuffer.size(), "%s", lensPath.c_str());
     std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensorPath.c_str());
     std::snprintf(glassCatalogBuffer.data(), glassCatalogBuffer.size(), "%s", glassCatalogPaths.c_str());
-
-    auto* rs = &sensor;
-    ImGuiManager::dragFloatRow("Sensor Width", rs->widthMm, 0.01f, 0.001f, 500.0f, [&](float v) {
-        rs->widthMm = std::max(v, 0.001f);
-        rebuildLensMetadata();
-        applyAperture();
-        applyFocus();
-        rebuildExitPupilBounds();
-        changed = true;
-    });
-    ImGuiManager::dragFloatRow("Sensor Height", rs->heightMm, 0.01f, 0.001f, 500.0f, [&](float v) {
-        rs->heightMm = std::max(v, 0.001f);
-        rebuildLensMetadata();
-        applyAperture();
-        applyFocus();
-        rebuildExitPupilBounds();
-        changed = true;
-    });
-
-    ImGuiManager::tableRowLabel("Resolution");
-    {
-        int w = static_cast<int>(rs->resolutionWidth);
-        int h = static_cast<int>(rs->resolutionHeight);
-        ImGui::PushItemWidth((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("x").x - ImGui::GetStyle().ItemSpacing.x * 2.0f) * 0.5f);
-        if (ImGui::DragInt("##ResW", &w, 1.0f, 1, 16384))
-            changed = true;
-        ImGui::SameLine();
-        ImGui::TextUnformatted("x");
-        ImGui::SameLine();
-        if (ImGui::DragInt("##ResH", &h, 1.0f, 1, 16384))
-            changed = true;
-        ImGui::PopItemWidth();
-        rs->resolutionWidth  = static_cast<uint32_t>(std::max(w, 1));
-        rs->resolutionHeight = static_cast<uint32_t>(std::max(h, 1));
-    }
 
     ImGuiManager::tableRowLabel("Lens File");
     const float lensButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -477,7 +314,7 @@ void RealisticCamera::renderUi(CameraInstance& inst)
 
     ImGuiManager::tableRowLabel("Lens Elements");
     if (lensElements.empty()) {
-        ImGui::TextUnformatted("Thin lens fallback");
+        ImGui::TextUnformatted("No lens loaded");
     } else {
         constexpr float metersToMillimeters = 1000.0f;
         const float tableHeight = std::min(320.0f, 28.0f + static_cast<float>(lensElements.size()) * ImGui::GetTextLineHeightWithSpacing());
@@ -524,10 +361,10 @@ void RealisticCamera::renderUi(CameraInstance& inst)
         ImGui::EndChild();
     }
 
-    if (changed) {
+    if (opticsChanged || sensorChanged || changed) {
         updateGpuData();
-        inst.markDirty();
     }
+    return opticsChanged || sensorChanged || changed;
 }
 
 void RealisticCamera::updateGpuData()
@@ -540,6 +377,7 @@ void RealisticCamera::updateGpuData()
         exitPupilBounds[i] = pupilBounds[static_cast<size_t>(i)];
     elementCount = count;
     pupilBoundCount = pupilCount;
+    onAxisPupilArea = pupilCount > 0 ? pupilBounds.front().pupilArea : 0.0f;
     const auto* rs = &sensor;
     sensorWidth = rs->widthMm * 0.001f;
     sensorHeight = rs->heightMm * 0.001f;
@@ -564,12 +402,11 @@ bool RealisticCamera::loadLensAndSensor()
         lensElements.clear();
         maximumLensElements.clear();
         pupilBounds.clear();
-        auto* rs0 = &sensor;
         apertureIndex = -1;
         focusSurfaceOffsetM = 0.0f;
-        loadStatus = "Thin lens fallback";
+        loadStatus = "No lens loaded";
         updateGpuData();
-        std::cout << "[INFO] RealisticCamera: no lens/sensor file loaded, using thin lens fallback" << std::endl;
+        std::cout << "[INFO] RealisticCamera: no lens/sensor file loaded" << std::endl;
         return true;
     }
 
@@ -682,6 +519,9 @@ bool RealisticCamera::parseDatFile(const std::string& text, std::vector<Realisti
             !parseFloat(tokens[2], element.ior) ||
             !parseFloat(tokens[3], element.apertureRadius))
             continue;
+        // PBRT-style DAT files store aperture diameter; the internal lens
+        // representation consistently stores radius.
+        element.apertureRadius *= 0.5f;
         element.isAperture = (std::abs(element.radius) < 1e-6f || element.ior <= 0.0f) ? 1 : 0;
         elements.push_back(element);
     }
@@ -842,7 +682,7 @@ void RealisticCamera::rebuildLensMetadata()
         }
     }
 
-    effectiveFocalLengthM = std::max(focalLengthMm * 0.001f, 0.001f);
+    effectiveFocalLengthM = 0.0f;
     const std::vector<RealisticLensElement>& metadataElements =
         maximumLensElements.empty() ? lensElements : maximumLensElements;
     if (metadataElements.size() < 2)
@@ -866,9 +706,11 @@ void RealisticCamera::rebuildLensMetadata()
     computeCardinalPoints(sceneRay, filmRay, pz0, fz0);
     computeCardinalPoints(filmProbe, sceneOut, pz1, fz1);
     const float focalLength = fz0 - pz0;
-    if (std::isfinite(focalLength) && focalLength > 0.0f &&
+    if (std::isfinite(focalLength) && focalLength > 1e-6f &&
         std::isfinite(pz0) && std::isfinite(pz1)) {
         effectiveFocalLengthM = focalLength;
+        focalLengthMm = focalLength * 1000.0f;
+        fieldOfView = fovForFocalLength(focalLengthMm);
         firstPrincipalZ = pz0;
         secondPrincipalZ = pz1;
         thickLensValid = true;
@@ -883,7 +725,7 @@ void RealisticCamera::applyAperture()
     const float maxRadius = apertureIndex < static_cast<int>(maximumLensElements.size())
         ? maximumLensElements[static_cast<size_t>(apertureIndex)].apertureRadius
         : lensElements[static_cast<size_t>(apertureIndex)].apertureRadius;
-    const float requestedRadius = fStop > 0.0f
+    const float requestedRadius = fStop > 0.0f && effectiveFocalLengthM > 0.0f
         ? effectiveFocalLengthM / (2.0f * fStop)
         : maxRadius;
     lensElements[static_cast<size_t>(apertureIndex)].apertureRadius = std::clamp(requestedRadius, 0.0f, maxRadius);
@@ -911,7 +753,7 @@ void RealisticCamera::rebuildExitPupilBounds()
         return;
 
     constexpr int boundsCount = MaxRealisticExitPupilBounds;
-    constexpr int samplesPerDimension = 48;
+    constexpr int samplesPerDimension = 96;
     const auto* rs = &sensor;
     const float filmDiagonal = std::sqrt(rs->widthMm * rs->widthMm + rs->heightMm * rs->heightMm) * 0.001f;
     const float rearRadius = lensElements.back().apertureRadius;
@@ -931,6 +773,7 @@ void RealisticCamera::rebuildExitPupilBounds()
         vec2 minBounds(std::numeric_limits<float>::max());
         vec2 maxBounds(-std::numeric_limits<float>::max());
         bool anyRayExited = false;
+        int exitingRayCount = 0;
 
         for (int y = 0; y < samplesPerDimension; ++y) {
             for (int x = 0; x < samplesPerDimension; ++x) {
@@ -943,27 +786,27 @@ void RealisticCamera::rebuildExitPupilBounds()
                 const vec2 u((static_cast<float>(x) + 0.5f) / samplesPerDimension,
                              (static_cast<float>(y) + 0.5f) / samplesPerDimension);
                 const vec2 rearPoint = rearMin + (rearMax - rearMin) * u;
-                if (rearPoint.x >= minBounds.x && rearPoint.y >= minBounds.y &&
-                    rearPoint.x <= maxBounds.x && rearPoint.y <= maxBounds.y)
-                    continue;
-
                 CpuRay testRay{filmPoint, glm::normalize(vec3(rearPoint.x, rearPoint.y, rearZ) - filmPoint)};
                 CpuRay tracedRay{};
                 if (traceFromFilmRoss(lensElements, focusSurfaceOffsetM, testRay, tracedRay)) {
                     minBounds = glm::min(minBounds, rearPoint);
                     maxBounds = glm::max(maxBounds, rearPoint);
                     anyRayExited = true;
+                    ++exitingRayCount;
                 }
             }
         }
 
         if (!anyRayExited) {
-            pupilBounds[static_cast<size_t>(interval)] = {rearMin, rearMax};
+            pupilBounds[static_cast<size_t>(interval)] = {rearMin, rearMax, 0.0f, 0.0f};
             continue;
         }
 
         minBounds = glm::max(minBounds - vec2(expandAmount), rearMin);
         maxBounds = glm::min(maxBounds + vec2(expandAmount), rearMax);
-        pupilBounds[static_cast<size_t>(interval)] = {minBounds, maxBounds};
+        const float projectedRearArea = (rearMax.x - rearMin.x) * (rearMax.y - rearMin.y);
+        const float pupilArea = projectedRearArea * static_cast<float>(exitingRayCount)
+            / static_cast<float>(samplesPerDimension * samplesPerDimension);
+        pupilBounds[static_cast<size_t>(interval)] = {minBounds, maxBounds, pupilArea, 0.0f};
     }
 }

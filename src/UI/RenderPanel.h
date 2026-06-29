@@ -8,7 +8,7 @@
 #include <vector>
 #include <functional>
 
-#include "Vulkan/Tonemapper.h"
+#include "Vulkan/Viewport.h"
 
 namespace vk { class Image; enum class Format; }
 class Context;
@@ -19,7 +19,7 @@ class Scene;
 
 class RenderPanel : public ImGuiComponent {
 public:
-    RenderPanel(std::string name, Context& context, Scene& scene, Raytracer& raytracer, Renderer& renderer, Tonemapper& tonemapper);
+    RenderPanel(std::string name, Context& context, Scene& scene, Raytracer& raytracer, Renderer& renderer, Viewport& viewport);
 
     void renderUi() override;
 
@@ -56,7 +56,7 @@ private:
     Scene& scene;
     Raytracer& raytracer;
     Renderer& renderer;
-    Tonemapper& tonemapper;
+    Viewport& viewport;
 
     // UI State
     std::string saveLocation = ".";

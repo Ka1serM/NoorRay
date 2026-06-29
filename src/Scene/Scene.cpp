@@ -2,7 +2,12 @@
 #include <algorithm>
 #include "Camera/CameraInstance.h"
 #include "GPU/rstd/Allocator.h"
+#include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
+#include "Light/PointLight.h"
+#include "Light/RectLight.h"
+#include "Light/SpotLight.h"
+#include "Light/DirectionalLight.h"
 #include "Scene/SceneObject.h"
 
 Scene::Scene(Context& context) : context(context) {
@@ -21,6 +26,7 @@ Scene::~Scene()
     nr::rstd::allocator<RenderSettings> allocator;
     allocator.destroy(renderSettings);
     allocator.deallocate(renderSettings, 1);
+
 }
 
 void Scene::notifyGeometryChanged() {
@@ -37,6 +43,9 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     if (auto camera = std::dynamic_pointer_cast<CameraInstance>(sharedObject))
         activeCamera = camera;
 
+    if (auto light = std::dynamic_pointer_cast<LightInstance>(sharedObject))
+        registerLight(*light);
+
     notifyGeometryChanged();
     sceneObjects.push_back(std::move(sharedObject));
     return static_cast<uint32_t>(sceneObjects.size() - 1);
@@ -49,10 +58,12 @@ uint64_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     return sceneObjects[index]->getId();
 }
 
-void Scene::add(const std::shared_ptr<MeshAsset>& meshAsset) {
-    meshAsset->setMeshIndex(static_cast<uint32_t>(meshAssets.size()));
-    meshAssets.push_back(meshAsset);
+uint32_t Scene::add(MeshAsset meshAsset) {
+    const uint32_t index = static_cast<uint32_t>(meshAssets.size());
+    meshAsset.setMeshIndex(index);
+    meshAssets.push_back(std::move(meshAsset));
     setDirtyFlag(Meshes);
+    return index;
 }
 
 void Scene::add(Texture&& texture) {
@@ -74,6 +85,9 @@ bool Scene::remove(SceneObject* objToRemove) {
 
     if (objToRemove->getParent())
         objToRemove->getParent()->removeChild(objToRemove);
+
+    if (auto* light = dynamic_cast<LightInstance*>(objToRemove))
+        unregisterLight(*light);
 
     const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) {
         return ptr.get() == objToRemove;
@@ -123,6 +137,84 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 
     notifyGeometryChanged();
     return true;
+}
+
+// ── Light management ─────────────────────────────────────────────────────────
+
+uint32_t Scene::registerLight(LightInstance& light)
+{
+    uint32_t idx = UINT32_MAX;
+    switch (light.lightType) {
+    case LightInstance::TypePoint:
+        idx = static_cast<uint32_t>(pointLights.size());
+        pointLights.push_back(std::get<PointLight>(light.light));
+        break;
+    case LightInstance::TypeSpot:
+        idx = static_cast<uint32_t>(spotLights.size());
+        spotLights.push_back(std::get<SpotLight>(light.light));
+        break;
+    case LightInstance::TypeRect:
+        idx = static_cast<uint32_t>(rectLights.size());
+        rectLights.push_back(std::get<RectLight>(light.light));
+        break;
+    case LightInstance::TypeDirectional:
+        idx = static_cast<uint32_t>(directionalLights.size());
+        directionalLights.push_back(std::get<DirectionalLight>(light.light));
+        break;
+    }
+    light.lightIndex = idx;
+    setDirtyFlag(Lights);
+    setDirtyFlag(Accumulation);
+    return idx;
+}
+
+void Scene::unregisterLight(const LightInstance& light)
+{
+    const uint32_t idx = light.lightIndex;
+    switch (light.lightType) {
+    case LightInstance::TypePoint:
+        { const uint32_t displaced = static_cast<uint32_t>(pointLights.size() - 1);
+        if (idx != displaced) pointLights[idx] = std::move(pointLights.back());
+        pointLights.pop_back();
+        for (auto& obj : sceneObjects)
+            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
+                if (li->lightType == LightInstance::TypePoint && li->lightIndex == displaced)
+                    { li->lightIndex = idx; break; }
+        }
+        break;
+    case LightInstance::TypeSpot:
+        { const uint32_t displaced = static_cast<uint32_t>(spotLights.size() - 1);
+        if (idx != displaced) spotLights[idx] = std::move(spotLights.back());
+        spotLights.pop_back();
+        for (auto& obj : sceneObjects)
+            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
+                if (li->lightType == LightInstance::TypeSpot && li->lightIndex == displaced)
+                    { li->lightIndex = idx; break; }
+        }
+        break;
+    case LightInstance::TypeRect:
+        { const uint32_t displaced = static_cast<uint32_t>(rectLights.size() - 1);
+        if (idx != displaced) rectLights[idx] = std::move(rectLights.back());
+        rectLights.pop_back();
+        for (auto& obj : sceneObjects)
+            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
+                if (li->lightType == LightInstance::TypeRect && li->lightIndex == displaced)
+                    { li->lightIndex = idx; break; }
+        }
+        break;
+    case LightInstance::TypeDirectional:
+        { const uint32_t displaced = static_cast<uint32_t>(directionalLights.size() - 1);
+        if (idx != displaced) directionalLights[idx] = std::move(directionalLights.back());
+        directionalLights.pop_back();
+        for (auto& obj : sceneObjects)
+            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
+                if (li->lightType == LightInstance::TypeDirectional && li->lightIndex == displaced)
+                    { li->lightIndex = idx; break; }
+        }
+        break;
+    }
+    setDirtyFlag(Lights);
+    setDirtyFlag(Accumulation);
 }
 
 // ── Hierarchy ────────────────────────────────────────────────────────────────
@@ -213,10 +305,17 @@ std::vector<std::shared_ptr<MeshInstance>> Scene::getMeshInstances() const {
     return result;
 }
 
-std::shared_ptr<MeshAsset> Scene::getMeshAsset(const std::string& name) const {
+MeshAsset* Scene::getMeshAsset(const std::string& name) {
+    for (auto& asset : meshAssets)
+        if (asset.getPath() == name)
+            return &asset;
+    return nullptr;
+}
+
+const MeshAsset* Scene::getMeshAsset(const std::string& name) const {
     for (const auto& asset : meshAssets)
-        if (asset->getPath() == name)
-            return asset;
+        if (asset.getPath() == name)
+            return &asset;
     return nullptr;
 }
 

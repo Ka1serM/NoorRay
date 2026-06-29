@@ -32,7 +32,7 @@ public:
     uint64_t getId() const { return id; }
     const std::string& getName() const override { return name; }
     std::string getType() const override { return "Scene Object"; }
-    virtual void renderUi();
+    bool renderUi() override;
 
     bool isVisible() const { return visible; }
     void setVisible(const bool v) { visible = v; }

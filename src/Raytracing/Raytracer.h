@@ -10,6 +10,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "GPU/ImageInterop.h"
+#include "GPU/rstd/Vector.h"
 #include "Kernels/SceneData.h"
 #include "Kernels/cuda/TriangleBlas.h"
 #include "Kernels/cuda/TlasBuilder.h"
@@ -37,7 +38,7 @@ struct PushData
 class Raytracer
 {
 public:
-    Raytracer(Context& context, Scene& scene, uint32_t width, uint32_t height);
+    Raytracer(Context& context, Scene& scene);
     ~Raytracer();
 
     Raytracer(const Raytracer&) = delete;
@@ -49,6 +50,7 @@ public:
     void updateMeshes();
     void updateTextures();
     void updateEnvironmentCdf();
+    void updateLights();
     void updateTLAS();
 
     FrameInfo getFrameInfo() const;
@@ -67,14 +69,6 @@ public:
 private:
     static constexpr uint32_t MaxBounces = 66;
 
-    struct DeviceMeshAllocation
-    {
-        Vertex* vertices{};
-        uint32_t* indices{};
-        Face* faces{};
-        GpuMaterial* materials{};
-    };
-
     Context& context;
     Scene& scene;
     uint32_t width{};
@@ -84,14 +78,11 @@ private:
     TriangleBlas triangleBlas;
     TlasBuilder tlas;
     WavefrontQueues queues{};
-    GpuMesh* deviceMeshes{};
-    GpuInstance* deviceInstances{};
-    cudaTextureObject_t* deviceTextureObjects{};
+    nr::rstd::vector<GpuInstance> gpuInstances;
     glm::vec4* accumulation{};
     glm::vec4* adaptiveState{};
-    std::vector<DeviceMeshAllocation> meshAllocations;
-    std::vector<cudaArray_t> textureArrays;
-    std::vector<cudaTextureObject_t> textureObjects;
+    nr::rstd::vector<cudaArray_t> textureArrays;
+    nr::rstd::vector<cudaTextureObject_t> textureObjects;
     cudaArray_t environmentCdfArray{};
     cudaTextureObject_t environmentCdfTexture{};
     GpuSceneData gpuScene{};
@@ -125,7 +116,7 @@ private:
     void freeSceneData() noexcept;
     std::vector<AccelInstanceInput> buildInstanceInputs(
         const std::vector<OptixTraversableHandle>& meshHandles,
-        std::vector<GpuInstance>* gpuInstances = nullptr) const;
+        nr::rstd::vector<GpuInstance>* instances = nullptr) const;
     void launchGenerate(const KernelParams& params, cudaStream_t stream) const;
     void launchFinalize(const KernelParams& params, cudaStream_t stream) const;
     void launchShade(const KernelParams& params, cudaStream_t stream) const;

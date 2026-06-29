@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include "Camera/CameraInstance.h"
 
-void OrthographicCamera::renderUi(CameraInstance& inst)
+bool OrthographicCamera::renderUi()
 {
-    Camera::renderUi(inst, false);
-    sensor.renderUi(inst);
+    const bool cameraChanged = Camera::renderUi();
+    const bool sensorChanged = sensor.renderUi();
+    return cameraChanged || sensorChanged;
 }

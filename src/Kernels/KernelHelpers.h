@@ -15,25 +15,26 @@ NR_GPU inline glm::vec3 sampleTexture(
     const GpuSceneData scene,
     const int index,
     const glm::vec2 uv,
-    const glm::vec3 fallback)
+    const glm::vec3 factor)
 {
     if (index < 0)
-        return fallback;
+        return factor;
     const float4 value = tex2D<float4>(scene.textures[index], uv.x, uv.y);
-    return {value.x, value.y, value.z};
+    return factor * glm::vec3(value.x, value.y, value.z);
 }
 
 NR_GPU inline float sampleTextureScalar(
     const GpuSceneData scene,
     const int index,
     const glm::vec2 uv,
-    const float fallback,
+    const float factor,
     const int channel = 0)
 {
     if (index < 0)
-        return fallback;
+        return factor;
     const float4 value = tex2D<float4>(scene.textures[index], uv.x, uv.y);
-    return channel == 1 ? value.y : channel == 2 ? value.z : value.x;
+    const float sampled = channel == 1 ? value.y : channel == 2 ? value.z : value.x;
+    return factor * sampled;
 }
 
 NR_GPU inline glm::vec3 environmentRadiance(

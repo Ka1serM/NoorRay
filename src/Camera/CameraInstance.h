@@ -8,7 +8,6 @@
 #include "glm/gtc/quaternion.hpp"
 #include "Camera/Camera.h"
 #include "Scene/SceneObject.h"
-#include "Scene/SceneTypes.h"
 
 enum class CameraProjectionType : int {
     Perspective,
@@ -25,29 +24,23 @@ public:
     static constexpr vec3 LocalUp{0.f, 1.f, 0.f};
     static constexpr vec3 LocalRight{1.f, 0.f, 0.f};
 
-    CameraInstance(Scene& scene, const std::string& name, Transform transform,
-                   CameraProjectionType type = CameraProjectionType::Perspective);
+    CameraInstance(Scene& scene, const std::string& name, Transform transform, Camera camera);
     CameraInstance(const CameraInstance& other);
     ~CameraInstance();
 
     std::string getType() const override { return "Camera"; }
-    void renderUi() override;
+    bool renderUi() override;
     void update();
     void onTransformUpdated() override;
 
     CameraProjectionType getProjectionType() const;
     const char* getProjectionName() const;
-    glm::uvec2 getRenderResolution() const;
-    bool supportsDOF() const;
 
     Camera* getCamera() { return gpuCamera; }
     const Camera* getCamera() const { return gpuCamera; }
-    mat4 getCameraToWorld() const;
     mat4 getViewMatrix() const;
     virtual mat4 getProjectionMatrix() const;
 
-    void setRenderResolution(uint32_t width, uint32_t height);
-    void setFocalLength(float mm);
     void markDirty();
 
     void setArcballPivot(const vec3& pivot);

@@ -4,17 +4,46 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include "GPU/rstd/Vector.h"
+#include "Mesh/MeshAsset.h"
+#include "Light/PointLight.h"
+#include "Light/SpotLight.h"
+#include "Light/RectLight.h"
+#include "Light/DirectionalLight.h"
 #include "Vulkan/Context.h"
 #include "Vulkan/Texture.h"
 #include <vulkan/vulkan.hpp>
 
-#include "Scene/SceneTypes.h"
+#include <glm/mat4x4.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
+
+using glm::ivec2;
+using glm::mat4;
+using glm::quat;
+using glm::vec2;
+using glm::vec3;
+using glm::vec4;
+using glm::angleAxis;
+using glm::cross;
+using glm::dot;
+using glm::inverse;
+using glm::length;
+using glm::mat4_cast;
+using glm::normalize;
+using glm::perspective;
+using glm::quat_cast;
+using glm::radians;
+using glm::transpose;
+
 #include "Scene/Environment.h"
 
 class SceneObject;
 class MeshInstance;
-class MeshAsset;
 class CameraInstance;
+class LightInstance;
 class Buffer;
 
 enum DirtyFlag : uint8_t {
@@ -23,6 +52,7 @@ enum DirtyFlag : uint8_t {
     Textures     = 1 << 2,
     Accumulation = 1 << 3,
     EnvironmentCdf = 1 << 4,
+    Lights       = 1 << 5,
 };
 
 struct RenderSettings
@@ -44,13 +74,20 @@ struct RenderSettings
 };
 
 class Scene {
+    friend class LightInstance;
     Context& context;
 
     std::vector<Texture> textures;
     std::vector<std::string> textureNames;
-    std::vector<std::shared_ptr<MeshAsset>> meshAssets;
+    nr::rstd::vector<MeshAsset> meshAssets;
     Environment environment{};
     RenderSettings* renderSettings{};
+
+    // Light GPU data — unified memory arrays, one per type
+    nr::rstd::vector<PointLight> pointLights;
+    nr::rstd::vector<SpotLight> spotLights;
+    nr::rstd::vector<RectLight> rectLights;
+    nr::rstd::vector<DirectionalLight> directionalLights;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
 
@@ -76,7 +113,7 @@ public:
 
     // Object lifetime
     uint64_t add(std::unique_ptr<SceneObject> sceneObject);
-    void add(const std::shared_ptr<MeshAsset>& meshAsset);
+    uint32_t add(MeshAsset meshAsset);
     void add(Texture&& texture);
     bool removeObject(uint64_t objectId);
     bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
@@ -94,8 +131,12 @@ public:
     const std::vector<std::shared_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
     std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
     std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
-    std::shared_ptr<MeshAsset> getMeshAsset(const std::string& name) const;
-    const std::vector<std::shared_ptr<MeshAsset>>& getMeshAssets() const { return meshAssets; }
+    MeshAsset* getMeshAsset(const std::string& name);
+    const MeshAsset* getMeshAsset(const std::string& name) const;
+    MeshAsset& getMeshAsset(uint32_t index) { return meshAssets[index]; }
+    const MeshAsset& getMeshAsset(uint32_t index) const { return meshAssets[index]; }
+    const nr::rstd::vector<MeshAsset>& getMeshAssets() const { return meshAssets; }
+    nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets; }
     const std::vector<Texture>& getTextures() const { return textures; }
     std::vector<std::string> getTextureNames() const { return textureNames; }
 
@@ -109,6 +150,20 @@ public:
     // Camera
     CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }
 
+    // Light GPU data (unified memory, one array per type)
+    const PointLight* getPointLights() const { return pointLights.data(); }
+    const SpotLight* getSpotLights() const { return spotLights.data(); }
+    const RectLight* getRectLights() const { return rectLights.data(); }
+    const DirectionalLight* getDirectionalLights() const { return directionalLights.data(); }
+    uint32_t getPointLightCount() const { return static_cast<uint32_t>(pointLights.size()); }
+    uint32_t getSpotLightCount() const { return static_cast<uint32_t>(spotLights.size()); }
+    uint32_t getRectLightCount() const { return static_cast<uint32_t>(rectLights.size()); }
+    uint32_t getDirectionalLightCount() const { return static_cast<uint32_t>(directionalLights.size()); }
+
+    // Light registration (called by Scene internals)
+    uint32_t registerLight(LightInstance& light);
+    void unregisterLight(const LightInstance& light);
+
     // Context
     Context& getContext() const { return context; }
     Environment& getEnvironment() { return environment; }
@@ -120,7 +175,7 @@ public:
     void setDirtyFlag(DirtyFlag flag) { dirtyFlags |= flag; }
     void clearDirtyFlag(DirtyFlag flag) { dirtyFlags &= ~flag; }
     bool isDirty(DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
-    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf); }
+    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf | Lights); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
 };

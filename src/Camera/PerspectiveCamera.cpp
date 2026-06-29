@@ -1,10 +1,10 @@
 #include "PerspectiveCamera.h"
 
 #include <cmath>
-#include "Camera/CameraInstance.h"
 
-void PerspectiveCamera::renderUi(CameraInstance& inst)
+bool PerspectiveCamera::renderUi()
 {
-    Camera::renderUi(inst, false);
-    sensor.renderUi(inst);
+    const bool cameraChanged = Camera::renderUi();
+    const bool sensorChanged = sensor.renderUi();
+    return cameraChanged || sensorChanged;
 }

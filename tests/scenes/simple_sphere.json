@@ -1,0 +1,16 @@
+{
+  "objects": [
+    {
+      "type": "sphere",
+      "name": "Sphere",
+      "position": [0.0, 0.0, 0.0],
+      "rotation_euler": [0.0, 0.0, 0.0],
+      "scale": [1.0, 1.0, 1.0],
+      "material": {
+        "albedo": [0.8, 0.2, 0.2],
+        "roughness": 0.3,
+        "metallic": 0.0
+      }
+    }
+  ]
+}

@@ -9,43 +9,10 @@
 #include "Kernels/Types.h"
 #include "Kernels/Output.h"
 #include "Mesh/MeshAsset.h"
-#include "Scene/SceneTypes.h"
-
-struct GpuMaterial
-{
-    glm::vec3 albedo;
-    int albedoIndex;
-    float specular;
-    float metallic;
-    float roughness;
-    float ior;
-    int specularIndex;
-    int metallicIndex;
-    int roughnessIndex;
-    int normalIndex;
-    glm::vec3 transmissionColor;
-    int emissionIndex;
-    float transmission;
-    int transmissionIndex;
-    glm::vec3 emission;
-    float emissionStrength;
-    int opacityIndex;
-    float opacity;
-    int _pad0;
-    int _pad1;
-};
-
-struct GpuMesh
-{
-    const Vertex* vertices{};
-    const uint32_t* indices{};
-    const Face* faces{};
-    const GpuMaterial* materials{};
-    uint32_t vertexCount{};
-    uint32_t triangleCount{};
-    uint32_t materialCount{};
-    uint32_t _pad0{};
-};
+#include "Scene/Scene.h"
+#include "Light/PointLight.h"
+#include "Light/SpotLight.h"
+#include "Light/RectLight.h"
 
 struct GpuInstance
 {
@@ -58,9 +25,12 @@ struct GpuInstance
 
 struct GpuSceneData
 {
-    const GpuMesh* meshes{};
+    const MeshAsset* meshes{};
     const GpuInstance* instances{};
-    const LightGpu* lights{};
+    const PointLight* pointLights{};
+    const SpotLight* spotLights{};
+    const RectLight* rectLights{};
+    const DirectionalLight* directionalLights{};
     const cudaTextureObject_t* textures{};
     cudaTextureObject_t environmentCdf{};
     const RenderSettings* renderSettings{};
@@ -69,7 +39,10 @@ struct GpuSceneData
     R2Sampler sampler{};
     uint32_t meshCount{};
     uint32_t instanceCount{};
-    uint32_t lightCount{};
+    uint32_t pointLightCount{};
+    uint32_t spotLightCount{};
+    uint32_t rectLightCount{};
+    uint32_t directionalLightCount{};
     uint32_t textureCount{};
 };
 

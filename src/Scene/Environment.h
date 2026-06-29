@@ -2,7 +2,8 @@
 
 #include <vector>
 
-#include "Scene/SceneTypes.h"
+#include <glm/vec3.hpp>
+using glm::vec3;
 
 struct EnvironmentSettings
 {
@@ -13,12 +14,9 @@ struct EnvironmentSettings
     float visibleExposureScale{1.0f};
     float lightingExposureScale{1.0f};
     int visible{1};
-    vec3 directionalDirection{0.0f, 1.0f, 0.0f};
-    float directionalIntensity{};
     float rotation{};
     float visibleExposure{};
     float lightingExposure{1.0f};
-    float directionalSoftAngle{};
 };
 
 class Environment {

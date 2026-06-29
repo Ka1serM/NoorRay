@@ -17,16 +17,22 @@
 #include "stb_image_write.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "Camera/CameraInstance.h"
+#include "GPU/rstd/Allocator.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneImporter.h"
 #include "Raytracing/Raytracer.h"
-#include "Vulkan/Tonemapper.h"
+#include "Vulkan/Viewport.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Image.h"
 
 namespace
 {
+
+static constexpr unsigned char noorRayDefaultHdri[] = {
+    #embed "/home/marcel/GitRepositories/NoorRay/assets/textures/whipple_creek_regional_park_04_2k.hdr"
+};
+static constexpr size_t noorRayDefaultHdriLength = sizeof(noorRayDefaultHdri);
 constexpr uint32_t InvalidInstanceIndex = ~0u;
 
 uint32_t getSelectedInstanceIndex(const Scene& scene)
@@ -42,19 +48,31 @@ uint32_t getSelectedInstanceIndex(const Scene& scene)
 
 // ── GUI constructor ───────────────────────────────────────────────────────────
 
-NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int renderWidth, const int renderHeight)
+NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     : context(windowWidth, windowHeight)
     , scene(context)
     , renderer(std::make_unique<Renderer>(context, windowWidth, windowHeight))
     , imGuiManager(std::make_unique<ImGuiManager>(context, renderer->getNumSwapchainImages(), renderer->getColorImageFormat()))
 {
-    const float dpiScale = context.getDPIScale();
-    const int scaledW = static_cast<int>(renderWidth  * dpiScale);
-    const int scaledH = static_cast<int>(renderHeight * dpiScale);
+    SceneImporter::ImportGltfScene(scene, "/home/marcel/GitRepositories/NoorRay/assets/slanted_edge_target.glb");
 
-    raytracer = std::make_unique<Raytracer>(context, scene, scaledW, scaledH);
+    nr::rstd::allocator<FisheyeCamera> alc;
+    FisheyeCamera* fisheye = alc.allocate(1);
+    alc.construct(fisheye);
+    Camera cam(fisheye);
+    cam.setFocalLength(2.0f);
+    cam.setFStop(2.8f);
+    cam.setFocusDistance(2.0f);
+    cam.setBokehBias(2.0f);
+    auto camera = std::make_unique<CameraInstance>(
+        scene, "Camera",
+        Transform{vec3(0.0f, 0.0f, 2.0f), vec3(0.0f), vec3(1.0f)},
+        cam);
+    scene.add(std::move(camera));
 
-    tonemapper = std::make_unique<Tonemapper>(
+    raytracer = std::make_unique<Raytracer>(context, scene);
+
+    viewport = std::make_unique<Viewport>(
         context, raytracer->getWidth(), raytracer->getHeight(),
         raytracer->getOutputImage(0, Aov::Color), raytracer->getOutputImage(1, Aov::Color),
         raytracer->getOutputImage(0, Aov::Cryptomatte), raytracer->getOutputImage(1, Aov::Cryptomatte),
@@ -65,28 +83,10 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight, const int render
     imGuiManager->addComponent<EnvironmentPanel>("Environment", scene);
     imGuiManager->addComponent<SceneGraphPanel>("Scene Graph", scene);
     imGuiManager->addComponent<DetailsPanel>("Details", scene);
-    imGuiManager->addComponent<RenderPanel>("Render", context, scene, *raytracer, *renderer, *tonemapper);
+    imGuiManager->addComponent<RenderPanel>("Render", context, scene, *raytracer, *renderer, *viewport);
     imGuiManager->addComponent<ViewportPanel>("Viewport", context, scene,
-        tonemapper->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(),
+        viewport->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(),
         raytracer->getWidth(), raytracer->getHeight());
-
-    SceneImporter::ImportGltfScene(scene, "/home/marcel/GitRepositories/NoorRay/assets/slanted_edge_target.glb");
-
-    auto camera = std::make_unique<CameraInstance>(
-        scene, "Camera",
-        Transform{vec3(0.0f, 0.0f, 12.0f), vec3(0.0f), vec3(1.0f)},
-        CameraProjectionType::ThinLens);
-    camera->setFocalLength(45.0f);
-    camera->getCamera()->DispatchCPU([](auto* managedCamera) {
-        managedCamera->fStop = 2.8f;
-        managedCamera->focusDistance = 39.0f;
-        managedCamera->bokehBias = 2.0f;
-    });
-    //camera->loadRealisticLens(
-    //    "/home/marcel/GitRepositories/ROSS/resources/lenses/laikin/Wide1.zmx",
-    //    "/home/marcel/GitRepositories/ROSS/resources/sensors/onsemi_AR0237.json",
-    //    "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/schott.AGF;/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/ohara.AGF");
-    scene.add(std::move(camera));
 }
 
 // ── Headless constructor ──────────────────────────────────────────────────────
@@ -97,14 +97,22 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
 {
     SceneImporter::ImportJsonScene(scene, argv[1]);
 
-    const glm::uvec2 resolution = scene.getActiveCamera()->getRenderResolution();
-    const uint32_t w = resolution.x;
-    const uint32_t h = resolution.y;
+    if (!scene.getActiveCamera()) {
+        nr::rstd::allocator<FisheyeCamera> alc;
+        FisheyeCamera* fisheye = alc.allocate(1);
+        alc.construct(fisheye);
+        Camera cam(fisheye);
+        auto camera = std::make_unique<CameraInstance>(
+            scene, "Camera",
+            Transform{vec3(0.0f, 0.0f, 5.0f), vec3(0.0f), vec3(1.0f)},
+            cam);
+        scene.add(std::move(camera));
+    }
 
-    raytracer = std::make_unique<Raytracer>(context, scene, w, h);
+    raytracer = std::make_unique<Raytracer>(context, scene);
 
-    tonemapper = std::make_unique<Tonemapper>(
-        context, w, h, raytracer->getOutputImage(0, Aov::Color),
+    viewport = std::make_unique<Viewport>(
+        context, raytracer->getWidth(), raytracer->getHeight(), raytracer->getOutputImage(0, Aov::Color),
         raytracer->getOutputImage(1, Aov::Color),
         raytracer->getOutputImage(0, Aov::Cryptomatte),
         raytracer->getOutputImage(1, Aov::Cryptomatte), vk::Format::eR8G8B8A8Unorm);
@@ -141,11 +149,11 @@ void NoorRay::runUi() {
 
             {
                 if (auto* cam = scene.getActiveCamera()) {
-                    const glm::uvec2 resolution = cam->getRenderResolution();
+                    const glm::uvec2 resolution = cam->getCamera()->getSensor().resolution();
                     if (resolution.x != raytracer->getWidth() || resolution.y != raytracer->getHeight()) {
                         context.getDevice().waitIdle();
                         raytracer->resize(resolution.x, resolution.y);
-                        tonemapper->resize(
+                        viewport->resize(
                             raytracer->getWidth(), raytracer->getHeight(),
                             raytracer->getOutputImage(0, Aov::Color),
                             raytracer->getOutputImage(1, Aov::Color),
@@ -153,7 +161,7 @@ void NoorRay::runUi() {
                             raytracer->getOutputImage(1, Aov::Cryptomatte),
                             renderer->getColorImageFormat());
                         viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(),
-                                              tonemapper->getOutputImage().getFormat());
+                                              viewport->getOutputImage().getFormat());
                         frame = 0; firstFrame = true;
                     }
                 }
@@ -165,6 +173,7 @@ void NoorRay::runUi() {
                     if (scene.isDirty(Meshes))   raytracer->updateMeshes();
                     if (scene.isDirty(Textures)) raytracer->updateTextures();
                     else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
+                    if (scene.isDirty(Lights))   raytracer->updateLights();
                     if (scene.isDirty(TLAS))     raytracer->updateTLAS();
 
                     const int pixelPct = std::max(renderPanel->getPixelSizePercent(),
@@ -187,9 +196,9 @@ void NoorRay::runUi() {
 
                     raytracer->render(push);
                     const FrameInfo frameInfo = raytracer->getFrameInfo();
-                    tonemapper->dispatch(
+                    viewport->dispatch(
                         cmd, frameInfo.bufferIndex, getSelectedInstanceIndex(scene));
-                    viewportPanel->onComputeFinished(cmd, tonemapper->getOutputImage());
+                    viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
                     viewportPanel->setAovImages(
                         raytracer->getOutputImage(frameInfo.bufferIndex, Aov::Cryptomatte),
                         raytracer->getOutputImage(frameInfo.bufferIndex, Aov::Position));
@@ -235,19 +244,17 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
 
         context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
             raytracer->render(push);
-            tonemapper->dispatch(
-                cmd, raytracer->getFrameInfo().bufferIndex, InvalidInstanceIndex);
         });
     }
     context.getDevice().waitIdle();
     std::cout << "  100%\n";
 
-    const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(w) * h * 4;
+    Image& out = raytracer->getOutputColor();
+    const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(w) * h * 4 * sizeof(float);
     Buffer staging(context, Buffer::Type::Custom, bytes, nullptr,
                    vk::BufferUsageFlagBits::eTransferDst,
                    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
-    Image& out = tonemapper->getOutputImage();
     context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
         out.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
         vk::BufferImageCopy region{};
@@ -258,8 +265,10 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
                               staging.getBuffer(), region);
     });
 
-    stbi_write_png(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h),
-                   4, staging.getMappedData(), static_cast<int>(w) * 4);
+    const void* mapped = context.getDevice().mapMemory(staging.getMemory(), 0, bytes);
+    stbi_write_hdr(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4,
+                   reinterpret_cast<const float*>(mapped));
+    context.getDevice().unmapMemory(staging.getMemory());
 
     std::cout << "Saved: " << outputPath << "\n";
 }

@@ -1,11 +1,16 @@
 ﻿#pragma once
 
-#include <memory>
 #include <string>
 #include <vector>
 
-#include "Scene/Scene.h"
+#include "GPU/rstd/Vector.h"
 #include "Scene/Inspectable.h"
+
+#include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
+
+using glm::vec2;
+using glm::vec3;
 
 class Scene;
 
@@ -58,16 +63,20 @@ static_assert(sizeof(Material) == 112);
 class MeshAsset : public Inspectable
 {
 public:
-    static std::shared_ptr<MeshAsset> CreateCube(Scene& scene, const std::string& name, const Material& material);
-    static std::shared_ptr<MeshAsset> CreatePlane(Scene& scene, const std::string& name, const Material& material);
-    static std::shared_ptr<MeshAsset> CreateSphere(Scene& scene, const std::string& name,  const Material& material, uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
-    static std::shared_ptr<MeshAsset> CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments = 64);
+    static MeshAsset CreateCube(Scene& scene, const std::string& name, const Material& material);
+    static MeshAsset CreatePlane(Scene& scene, const std::string& name, const Material& material);
+    static MeshAsset CreateSphere(Scene& scene, const std::string& name,  const Material& material, uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
+    static MeshAsset CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments = 64);
     
     MeshAsset(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials);
+    MeshAsset(MeshAsset&& other) noexcept;
+    MeshAsset(const MeshAsset&) = delete;
+    MeshAsset& operator=(const MeshAsset&) = delete;
+    MeshAsset& operator=(MeshAsset&&) = delete;
 
     const std::string& getName() const override { return path; }
     std::string getType() const override { return "Mesh Asset"; }
-    void renderUi();
+    bool renderUi() override;
     void updateMaterials();
 
     // Getters & Setters-
@@ -75,10 +84,10 @@ public:
     uint32_t getMeshIndex() const;
     void setMeshIndex(uint32_t newIndex);
     
-    const std::vector<Vertex>& getVertices() const { return vertices; }
-    const std::vector<uint32_t>& getIndices() const { return indices; }
-    const std::vector<Face>& getFaces() const { return faces; }
-    const std::vector<Material>& getMaterials() const { return materials; }
+    NR_CPU_GPU const nr::rstd::vector<Vertex>& getVertices() const { return vertices; }
+    NR_CPU_GPU const nr::rstd::vector<uint32_t>& getIndices() const { return indices; }
+    NR_CPU_GPU const nr::rstd::vector<Face>& getFaces() const { return faces; }
+    NR_CPU_GPU const nr::rstd::vector<Material>& getMaterials() const { return materials; }
 
     // Dirty Flag
     bool isDirty() const { return dirty; }
@@ -91,9 +100,9 @@ private:
     bool dirty = false;
 
     // CPU-side data
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<Face> faces;
-    std::vector<Material> materials;
+    nr::rstd::vector<Vertex> vertices;
+    nr::rstd::vector<uint32_t> indices;
+    nr::rstd::vector<Face> faces;
+    nr::rstd::vector<Material> materials;
 
 };

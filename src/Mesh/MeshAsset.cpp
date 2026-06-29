@@ -1,5 +1,6 @@
 ﻿#include "MeshAsset.h"
 #include <utility>
+#include "Scene/Scene.h"
 #include <vector>
 #include <string>
 #include <memory>
@@ -10,7 +11,7 @@
 #include "glm/gtc/type_ptr.inl"
 #include "UI/ImGuiManager.h"
 
-std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string& name, const Material& material) {
+MeshAsset MeshAsset::CreateCube(Scene& scene, const std::string& name, const Material& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
@@ -72,10 +73,10 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateCube(Scene& scene, const std::string
         vertexStart += 4;
     }
 
-    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
+    return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
-std::shared_ptr<MeshAsset> MeshAsset::CreatePlane(Scene& scene, const std::string& name, const Material& material) {
+MeshAsset MeshAsset::CreatePlane(Scene& scene, const std::string& name, const Material& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
     std::vector<Face> faces;
@@ -109,10 +110,10 @@ std::shared_ptr<MeshAsset> MeshAsset::CreatePlane(Scene& scene, const std::strin
         faces.push_back({0});
     }
 
-    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
+    return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
-std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::string& name, const Material& material, uint32_t latSeg, uint32_t lonSeg) {
+MeshAsset MeshAsset::CreateSphere(Scene& scene, const std::string& name, const Material& material, uint32_t latSeg, uint32_t lonSeg) {
     // Ensure the sphere has enough segments to be properly formed.
     if (latSeg < 2 || lonSeg < 3)
         throw std::runtime_error("Sphere segments too low. Use at least 2 latitude and 3 longitude segments.");
@@ -184,10 +185,10 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateSphere(Scene& scene, const std::stri
         faces.push_back({0});
     }
 
-    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
+    return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
-std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments) {
+MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments) {
     if (segments < 3)
         throw std::runtime_error("Disk requires at least 3 segments");
 
@@ -231,13 +232,21 @@ std::shared_ptr<MeshAsset> MeshAsset::CreateDisk(Scene& scene, const std::string
 
     materials.push_back(material);
 
-    return std::make_shared<MeshAsset>(scene, name, vertices, indices, faces, materials);
+    return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
 MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
-    : scene(scene), path(std::move(name)), vertices(vertices), indices(indices), faces(faces), materials(materials)
+    : scene(scene), path(std::move(name)),
+      vertices(vertices.begin(), vertices.end()), indices(indices.begin(), indices.end()),
+      faces(faces.begin(), faces.end()), materials(materials.begin(), materials.end())
 {
 }
+
+MeshAsset::MeshAsset(MeshAsset&& other) noexcept
+    : scene(other.scene), path(std::move(other.path)), index(other.index), dirty(other.dirty),
+      vertices(std::move(other.vertices)), indices(std::move(other.indices)),
+      faces(std::move(other.faces)), materials(std::move(other.materials))
+{}
 
 uint32_t MeshAsset::getMeshIndex() const {
     return index;
@@ -248,7 +257,7 @@ void MeshAsset::setMeshIndex(uint32_t newIndex) {
 }
 
 
-void MeshAsset::renderUi() {
+bool MeshAsset::renderUi() {
     ImGuiManager::tableRowLabel("Source");
 
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
@@ -258,7 +267,7 @@ void MeshAsset::renderUi() {
     ImGui::PopStyleColor();
 
     if (materials.empty())
-        return;
+        return false;
     
     ImGuiManager::tableRowLabel("Materials");
 
@@ -349,8 +358,9 @@ void MeshAsset::renderUi() {
 
     if (anyMaterialChanged) {
         dirty = true;
-        scene.setDirtyFlag(Meshes);
+        scene.setDirtyFlag(Accumulation);
     }
+    return anyMaterialChanged;
 }
 
 //this gets called from the renderer when the scene material flag is dirty

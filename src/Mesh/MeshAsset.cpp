@@ -345,7 +345,18 @@ bool MeshAsset::renderUi() {
                 drawTextureCombo("Normal Texture", mat.normalIndex, i);
 
                 
-                ImGuiManager::dragFloatRow("IOR", mat.ior, 0.01f, 1.0f, 3.0f, [&](const float v) { mat.ior = v; anyMaterialChanged = true; });
+                glm::vec3 fraunhoferIors = sellmeierFraunhoferIors(mat.sellmeier);
+                auto updateIor = [&](const int channel, const float value) {
+                    fraunhoferIors[channel] = value;
+                    mat.sellmeier = fitSellmeierFromFraunhofer(fraunhoferIors);
+                    anyMaterialChanged = true;
+                };
+                ImGuiManager::dragFloatRow("Red IOR (C 656.27 nm)", fraunhoferIors.x,
+                    0.001f, 1.0f, 3.0f, [&](const float v) { updateIor(0, v); });
+                ImGuiManager::dragFloatRow("Green IOR (e 546.07 nm)", fraunhoferIors.y,
+                    0.001f, 1.0f, 3.0f, [&](const float v) { updateIor(1, v); });
+                ImGuiManager::dragFloatRow("Blue IOR (F 486.13 nm)", fraunhoferIors.z,
+                    0.001f, 1.0f, 3.0f, [&](const float v) { updateIor(2, v); });
                 ImGuiManager::dragFloatRow("Transmission Strength", mat.transmission, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.transmission = v; anyMaterialChanged = true; });
                 drawTextureCombo("Transmission Texture", mat.transmissionIndex, i);
                 ImGuiManager::colorEdit3Row("Transmission Color", mat.transmissionColor, [&](const vec3 v) { mat.transmissionColor = v; anyMaterialChanged = true; });

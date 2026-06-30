@@ -106,6 +106,16 @@ void CameraInstance::loadRealisticLens(const std::string& lensPath, const std::s
     scene.setDirtyFlag(Accumulation);
 }
 
+void CameraInstance::setApertureDiameter(float mm)
+{
+    if (auto* rc = gpuCamera->CastOrNullptr<RealisticCamera>()) {
+        rc->apertureDiameterMm = mm;
+        rc->applyAperture();
+        rc->rebuildExitPupilBounds();
+    }
+    scene.setDirtyFlag(Accumulation);
+}
+
 void CameraInstance::rebuildCamera()
 {
     const quat  rot    = getRotation();

@@ -15,6 +15,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <utility>
+#include <tbb/parallel_for.h>
 #include "glm/gtx/norm.hpp"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
@@ -131,20 +132,62 @@ std::string joinPaths(const std::vector<std::string>& paths)
     return result;
 }
 
-std::unordered_map<std::string, float> loadAgfCatalogs(const std::string& paths)
+struct GlassCatalogEntry
 {
-    std::unordered_map<std::string, float> catalog;
+    float ior{1.0f};
+    SellmeierCoefficients sellmeier{constantIorSellmeier(1.0f)};
+};
+
+std::unordered_map<std::string, GlassCatalogEntry> loadAgfCatalogs(const std::string& paths)
+{
+    std::unordered_map<std::string, GlassCatalogEntry> catalog;
     for (const std::string& path : splitPathList(paths)) {
         std::istringstream stream(readTextFile(path));
+        std::string glassName;
+        int formula = 0;
+        float nd = 1.0f;
+        std::vector<float> coefficients;
+        auto finishGlass = [&]() {
+            if (glassName.empty() || nd <= 1.0f)
+                return;
+            GlassCatalogEntry entry;
+            entry.ior = nd;
+            entry.sellmeier = constantIorSellmeier(nd);
+            if (formula == 2 && coefficients.size() >= 6) {
+                // Zemax Sellmeier 1 CD records are B1 C1 B2 C2 B3 C3.
+                entry.sellmeier.b = glm::vec3(
+                    coefficients[0], coefficients[2], coefficients[4]);
+                entry.sellmeier.c = glm::vec3(
+                    coefficients[1], coefficients[3], coefficients[5]);
+                entry.ior = sellmeierIor(entry.sellmeier, FraunhoferGreenNm);
+            }
+            catalog[normalizeGlassName(glassName)] = entry;
+        };
+
         std::string line;
         while (std::getline(stream, line)) {
             const auto tokens = splitTokens(trimCopy(line));
-            if (tokens.size() < 5 || tokens[0] != "NM")
+            if (tokens.empty())
                 continue;
-            float ior = 0.0f;
-            if (parseFloat(tokens[4], ior) && ior > 1.0f)
-                catalog[normalizeGlassName(tokens[1])] = ior;
+            if (tokens[0] == "NM" && tokens.size() >= 5) {
+                finishGlass();
+                glassName = tokens[1];
+                coefficients.clear();
+                float parsedFormula = 0.0f;
+                formula = parseFloat(tokens[2], parsedFormula)
+                    ? static_cast<int>(parsedFormula) : 0;
+                if (!parseFloat(tokens[4], nd))
+                    nd = 1.0f;
+            } else if (tokens[0] == "CD" && !glassName.empty()) {
+                coefficients.clear();
+                for (size_t i = 1; i < tokens.size(); ++i) {
+                    float coefficient = 0.0f;
+                    if (parseFloat(tokens[i], coefficient))
+                        coefficients.push_back(coefficient);
+                }
+            }
         }
+        finishGlass();
     }
     return catalog;
 }
@@ -157,13 +200,15 @@ struct CpuRay {
 bool traceFromFilmRoss(const std::vector<RealisticLensElement>& elements, float surfaceOffset, const CpuRay& inputRay, CpuRay& outputRay)
 {
     return traceFromFilm(elements.data(), static_cast<int>(elements.size()), surfaceOffset,
-        inputRay.origin, inputRay.direction, outputRay.origin, outputRay.direction);
+        FraunhoferGreenNm, inputRay.origin, inputRay.direction,
+        outputRay.origin, outputRay.direction);
 }
 
 bool traceFromSceneRoss(const std::vector<RealisticLensElement>& elements, float surfaceOffset, const CpuRay& inputRay, CpuRay& outputRay)
 {
     return traceLensSystem(elements.data(), static_cast<int>(elements.size()), surfaceOffset,
-        false, inputRay.origin, inputRay.direction, outputRay.origin, outputRay.direction);
+        false, FraunhoferGreenNm, inputRay.origin, inputRay.direction,
+        outputRay.origin, outputRay.direction);
 }
 
 void computeCardinalPoints(const CpuRay& rayIn, const CpuRay& rayOut, float& pz, float& fz)
@@ -191,8 +236,8 @@ RealisticCamera::~RealisticCamera()
 bool RealisticCamera::renderUi()
 {
     bool opticsChanged = false;
-    ImGuiManager::dragFloatRow("F-Stop", fStop, 0.1f, 0.f, 64.f, [&](float value) {
-        fStop = std::max(0.f, value);
+    ImGuiManager::dragFloatRow("Aperture Diameter (mm)", apertureDiameterMm, 0.1f, 0.f, 64.f, [&](float value) {
+        apertureDiameterMm = std::max(0.f, value);
         opticsChanged = true;
     });
     ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
@@ -332,7 +377,7 @@ bool RealisticCamera::renderUi()
                 ImGui::TableSetupColumn("Radius mm");
                 ImGui::TableSetupColumn("Thickness mm");
                 ImGui::TableSetupColumn("Aperture mm");
-                ImGui::TableSetupColumn("IOR");
+                ImGui::TableSetupColumn("Sellmeier (B / C)", ImGuiTableColumnFlags_WidthStretch, 2.0f);
                 ImGui::TableSetupColumn("Z mm");
                 ImGui::TableHeadersRow();
 
@@ -350,7 +395,13 @@ bool RealisticCamera::renderUi()
                     ImGui::TableSetColumnIndex(4);
                     ImGui::Text("%.4g", element.apertureRadius * metersToMillimeters);
                     ImGui::TableSetColumnIndex(5);
-                    ImGui::Text("%.4g", element.ior);
+                    if (element.isAperture != 0) {
+                        ImGui::TextUnformatted("Aperture");
+                    } else {
+                        ImGui::Text("B %.6g, %.6g, %.6g / C %.6g, %.6g, %.6g",
+                            element.sellmeier.b.x, element.sellmeier.b.y, element.sellmeier.b.z,
+                            element.sellmeier.c.x, element.sellmeier.c.y, element.sellmeier.c.z);
+                    }
                     ImGui::TableSetColumnIndex(6);
                     ImGui::Text("%.4g", element.vertexZ * metersToMillimeters);
                 }
@@ -377,23 +428,13 @@ void RealisticCamera::updateGpuData()
         exitPupilBounds[i] = pupilBounds[static_cast<size_t>(i)];
     elementCount = count;
     pupilBoundCount = pupilCount;
-    onAxisPupilArea = pupilCount > 0 ? pupilBounds.front().pupilArea : 0.0f;
+    onAxisPupilArea = pupilCount > 0 ? pupilBounds.front().transmissiveArea : 0.0f;
     const auto* rs = &sensor;
     sensorWidth = rs->widthMm * 0.001f;
     sensorHeight = rs->heightMm * 0.001f;
     filmDiagonal = std::sqrt(sensorWidth * sensorWidth + sensorHeight * sensorHeight);
     rearElementZ = count > 0 ? lensElements.back().vertexZ + focusSurfaceOffsetM : 0.0f;
-    apertureRadius = 0.0f;
     surfaceOffset = focusSurfaceOffsetM;
-    for (int i = 0; i < count; ++i) {
-        const RealisticLensElement& element = lensElements[static_cast<size_t>(i)];
-        if (element.isAperture != 0) {
-            apertureRadius = element.apertureRadius;
-            break;
-        }
-        if (apertureRadius <= 0.0f || element.apertureRadius < apertureRadius)
-            apertureRadius = element.apertureRadius;
-    }
 }
 
 bool RealisticCamera::loadLensAndSensor()
@@ -492,6 +533,8 @@ bool RealisticCamera::parseOlioFile(const std::string& text, std::vector<Realist
             !parseFloat(tokens[3], element.apertureRadius))
             continue;
         element.isAperture = (std::abs(element.radius) < 1e-6f || element.ior <= 0.0f) ? 1 : 0;
+        element.sellmeier = constantIorSellmeier(
+            element.isAperture ? 1.0f : element.ior);
         elements.push_back(element);
     }
 
@@ -523,6 +566,8 @@ bool RealisticCamera::parseDatFile(const std::string& text, std::vector<Realisti
         // representation consistently stores radius.
         element.apertureRadius *= 0.5f;
         element.isAperture = (std::abs(element.radius) < 1e-6f || element.ior <= 0.0f) ? 1 : 0;
+        element.sellmeier = constantIorSellmeier(
+            element.isAperture ? 1.0f : element.ior);
         elements.push_back(element);
     }
 
@@ -539,6 +584,7 @@ bool RealisticCamera::parseZmxFile(const std::string& text, std::vector<Realisti
         float curvature = 0.0f;
         float thickness = 0.0f;
         float ior = 1.0f;
+        SellmeierCoefficients sellmeier{constantIorSellmeier(1.0f)};
         float diameter = 0.0f;
         std::string glassName;
         bool hasData = false;
@@ -582,11 +628,15 @@ bool RealisticCamera::parseZmxFile(const std::string& text, std::vector<Realisti
                 current.glassName = tokens[1];
                 const auto catalogIt = glassCatalog.find(normalizeGlassName(current.glassName));
                 if (catalogIt != glassCatalog.end()) {
-                    current.ior = catalogIt->second;
+                    current.ior = catalogIt->second.ior;
+                    current.sellmeier = catalogIt->second.sellmeier;
                 } else if (tokens.size() > 4) {
                     float explicitIor = 0.0f;
                     if (parseFloat(tokens[4], explicitIor) && explicitIor > 1.0f)
+                    {
                         current.ior = explicitIor;
+                        current.sellmeier = constantIorSellmeier(explicitIor);
+                    }
                 }
             }
             current.hasData = true;
@@ -607,6 +657,8 @@ bool RealisticCamera::parseZmxFile(const std::string& text, std::vector<Realisti
         element.radius = std::abs(surface.curvature) > 1e-8f ? 1.0f / surface.curvature : 0.0f;
         element.thickness = surface.thickness;
         element.ior = surface.stop ? 0.0f : surface.ior;
+        element.sellmeier = surface.stop
+            ? constantIorSellmeier(1.0f) : surface.sellmeier;
         element.apertureRadius = surface.diameter * 0.5f;
         element.isAperture = (surface.stop || element.ior <= 0.0f) ? 1 : 0;
         elements.push_back(element);
@@ -666,8 +718,10 @@ void RealisticCamera::finalizeElements(std::vector<RealisticLensElement>& elemen
         element.apertureRadius *= 0.001f;
         if (element.ior <= 0.0f)
             element.isAperture = 1;
-        if (element.isAperture)
+        if (element.isAperture) {
             element.ior = 1.0f;
+            element.sellmeier = constantIorSellmeier(1.0f);
+        }
     }
 }
 
@@ -725,8 +779,8 @@ void RealisticCamera::applyAperture()
     const float maxRadius = apertureIndex < static_cast<int>(maximumLensElements.size())
         ? maximumLensElements[static_cast<size_t>(apertureIndex)].apertureRadius
         : lensElements[static_cast<size_t>(apertureIndex)].apertureRadius;
-    const float requestedRadius = fStop > 0.0f && effectiveFocalLengthM > 0.0f
-        ? effectiveFocalLengthM / (2.0f * fStop)
+    const float requestedRadius = apertureDiameterMm > 0.0f
+        ? apertureDiameterMm * 0.5f * 0.001f
         : maxRadius;
     lensElements[static_cast<size_t>(apertureIndex)].apertureRadius = std::clamp(requestedRadius, 0.0f, maxRadius);
 }
@@ -753,7 +807,7 @@ void RealisticCamera::rebuildExitPupilBounds()
         return;
 
     constexpr int boundsCount = MaxRealisticExitPupilBounds;
-    constexpr int samplesPerDimension = 96;
+    constexpr int samplesPerDimension = 1024;
     const auto* rs = &sensor;
     const float filmDiagonal = std::sqrt(rs->widthMm * rs->widthMm + rs->heightMm * rs->heightMm) * 0.001f;
     const float rearRadius = lensElements.back().apertureRadius;
@@ -767,7 +821,7 @@ void RealisticCamera::rebuildExitPupilBounds()
     const float rearDiagonal = glm::length(rearMax - rearMin);
     const float expandAmount = 2.0f * rearDiagonal / static_cast<float>(samplesPerDimension);
 
-    for (int interval = 0; interval < boundsCount; ++interval) {
+    tbb::parallel_for(0, boundsCount, [&](const int interval) {
         const float filmStart = (static_cast<float>(interval) / boundsCount) * (filmDiagonal * 0.5f);
         const float filmEnd = (static_cast<float>(interval + 1) / boundsCount) * (filmDiagonal * 0.5f);
         vec2 minBounds(std::numeric_limits<float>::max());
@@ -783,9 +837,13 @@ void RealisticCamera::rebuildExitPupilBounds()
                 const float filmX = std::lerp(filmStart, filmEnd, filmT);
                 const vec3 filmPoint(filmX, 0.0f, 0.0f);
 
-                const vec2 u((static_cast<float>(x) + 0.5f) / samplesPerDimension,
-                             (static_cast<float>(y) + 0.5f) / samplesPerDimension);
+                uint32_t sampleState = pcgHash(static_cast<uint32_t>(sampleIndex));
+                const vec2 u(randomFloat(sampleState), randomFloat(sampleState));
                 const vec2 rearPoint = rearMin + (rearMax - rearMin) * u;
+                if (interval != 0 && anyRayExited && rearPoint.x >= minBounds.x && rearPoint.x <= maxBounds.x &&
+                    rearPoint.y >= minBounds.y && rearPoint.y <= maxBounds.y)
+                    continue;
+
                 CpuRay testRay{filmPoint, glm::normalize(vec3(rearPoint.x, rearPoint.y, rearZ) - filmPoint)};
                 CpuRay tracedRay{};
                 if (traceFromFilmRoss(lensElements, focusSurfaceOffsetM, testRay, tracedRay)) {
@@ -799,14 +857,18 @@ void RealisticCamera::rebuildExitPupilBounds()
 
         if (!anyRayExited) {
             pupilBounds[static_cast<size_t>(interval)] = {rearMin, rearMax, 0.0f, 0.0f};
-            continue;
+            return;
         }
 
         minBounds = glm::max(minBounds - vec2(expandAmount), rearMin);
         maxBounds = glm::min(maxBounds + vec2(expandAmount), rearMax);
+        const float pupilArea = (maxBounds.x - minBounds.x) * (maxBounds.y - minBounds.y);
         const float projectedRearArea = (rearMax.x - rearMin.x) * (rearMax.y - rearMin.y);
-        const float pupilArea = projectedRearArea * static_cast<float>(exitingRayCount)
-            / static_cast<float>(samplesPerDimension * samplesPerDimension);
-        pupilBounds[static_cast<size_t>(interval)] = {minBounds, maxBounds, pupilArea, 0.0f};
-    }
+        const float transmissiveArea = interval == 0
+            ? projectedRearArea * static_cast<float>(exitingRayCount)
+                / static_cast<float>(samplesPerDimension * samplesPerDimension)
+            : 0.0f;
+        pupilBounds[static_cast<size_t>(interval)] = {
+            minBounds, maxBounds, pupilArea, transmissiveArea};
+    });
 }

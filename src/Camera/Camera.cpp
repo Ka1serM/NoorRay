@@ -32,15 +32,6 @@ void Camera::setFocalLength(const float focalLength)
     }
 }
 
-void Camera::setFStop(const float v)
-{
-    const float clamped = std::max(0.f, v);
-    if (ptr())
-        DispatchCPU([clamped](auto* cam) { cam->fStop = clamped; });
-    else
-        fStop = clamped;
-}
-
 void Camera::setFocusDistance(const float v)
 {
     const float clamped = std::max(0.001f, v);
@@ -50,13 +41,12 @@ void Camera::setFocusDistance(const float v)
         focusDistance = clamped;
 }
 
-void Camera::setBokehBias(const float v)
+void Camera::setAntiAliasingDisabled(const bool disabled)
 {
-    const float clamped = std::max(0.001f, v);
     if (ptr())
-        DispatchCPU([clamped](auto* cam) { cam->bokehBias = clamped; });
+        DispatchCPU([disabled](auto* cam) { cam->disableAntiAliasing = disabled; });
     else
-        bokehBias = clamped;
+        disableAntiAliasing = disabled;
 }
 
 Sensor& Camera::getSensor()
@@ -83,6 +73,10 @@ bool Camera::renderUi()
     });
     ImGuiManager::dragFloatRow("Focal Length", focalLengthMm, 0.1f, 0.001f, 500.f, [&](float value) {
         setFocalLength(value);
+        changed = true;
+    });
+    ImGuiManager::checkboxRow("Disable Anti-Aliasing", disableAntiAliasing, [&](bool value) {
+        disableAntiAliasing = value;
         changed = true;
     });
     return changed;

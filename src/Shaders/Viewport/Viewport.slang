@@ -14,6 +14,7 @@ struct PushConstants
     uint  selectedIndex;
     float exposure;
     int   bufferVisualization;
+    int   tonemappingEnabled;
 };
 
 [[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
@@ -101,7 +102,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         const float3 straight = alpha > 0.0
             ? hdr.rgb / alpha * exp2(clamp(pushConstants.exposure, -20.0, 20.0))
             : float3(0.0);
-        color = acesFitted(straight);
+        color = pushConstants.tonemappingEnabled != 0 ? acesFitted(straight) : straight;
 
         static const int outlineRadius = 3;
         if (pushConstants.selectedIndex != ~0u && idImage[pixel] != pushConstants.selectedIndex)

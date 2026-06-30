@@ -14,6 +14,7 @@ struct ViewportPushConstants
     uint32_t selectedIndex;
     float    exposure;
     int32_t  bufferVisualization;
+    int32_t  tonemappingEnabled;
 };
 }
 
@@ -99,13 +100,15 @@ void Viewport::dispatch(
     const uint32_t bufferIndex,
     const uint32_t selectedIndex,
     const float exposure,
-    const int bufferVisualization)
+    const int bufferVisualization,
+    const int tonemappingEnabled)
 {
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0,
                                      descriptorSets[bufferIndex].get(), {});
-    const ViewportPushConstants pushConstants{selectedIndex, exposure, bufferVisualization};
+    const ViewportPushConstants pushConstants{
+        selectedIndex, exposure, bufferVisualization, tonemappingEnabled};
     commandBuffer.pushConstants(
         *pipelineLayout, vk::ShaderStageFlagBits::eCompute,
         0, sizeof(pushConstants), &pushConstants);

@@ -43,7 +43,7 @@ int main()
 
     failures += test("simple_sphere",
                      TEST_SCENE_DIR "/scenes/simple_sphere.json",
-                     4, "simple_sphere.hdr");
+                     4, "simple_sphere.exr");
 
     std::cout << "--- " << (failures ? "FAILED" : "PASSED")
               << " (" << failures << " failures) ---\n";

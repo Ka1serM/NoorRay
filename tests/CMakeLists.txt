@@ -8,3 +8,11 @@ target_compile_definitions(noorray_test PRIVATE
 add_test(NAME noorray_e2e
     COMMAND noorray_test
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+add_executable(sampler_test
+    sampler.cpp
+)
+target_include_directories(sampler_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+)
+add_test(NAME sampler_regression COMMAND sampler_test)

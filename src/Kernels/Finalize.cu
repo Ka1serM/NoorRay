@@ -10,8 +10,21 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
         return;
 
     const PathState state = params.queues.pathStates[pixel];
-    glm::vec3 radiance = state.radiance;
     const float alpha = static_cast<float>((state.packedCounters >> CounterHitShift) & 1u);
+
+    // Reconstruct wavelengths for spectral→XYZ conversion.
+    SampledWavelengths wl;
+    for (int i = 0; i < NrSpectrumSamples; ++i)
+    {
+        wl.lambda[i] = state.lambda[i];
+        wl.pdf[i]    = state.lambdaPdf[i];
+    }
+
+    // Spectral radiance → linear sRGB via CIE XYZ.
+    const glm::vec3 xyz = spectrumToXYZ(
+        state.radiance, wl, params.scene.cieX, params.scene.cieY, params.scene.cieZ);
+    glm::vec3 radiance = xyzToLinearSRGB(xyz);
+    const glm::vec3 sampleRadiance = radiance;
 
     const uint32_t x = pixel % params.frame.width;
     const uint32_t y = pixel / params.frame.width;
@@ -38,9 +51,11 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
     if (params.frame.sampleIndex == 0)
         surf2Dwrite(primary.primaryObjectIndex, params.output.cryptomatte, x * sizeof(uint32_t), y);
 
-    const float luminance = radiance.x * 0.2126f + radiance.y * 0.7152f + radiance.z * 0.0722f;
+    // Luminance from linear sRGB for adaptive sampling statistics.
+    const float luminance = sampleRadiance.x * 0.2126f
+        + sampleRadiance.y * 0.7152f + sampleRadiance.z * 0.0722f;
     float mean = luminance;
-    float m2 = 0.0f;
+    float m2   = 0.0f;
     float count = 1.0f;
     if (params.frame.totalAccumulated > 0)
     {
@@ -48,7 +63,7 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
         count = old.z + 1.0f;
         const float delta = luminance - old.x;
         mean = old.x + delta / count;
-        m2 = old.y + delta * (luminance - mean);
+        m2   = old.y + delta * (luminance - mean);
     }
     params.adaptiveState[pixel] = glm::vec4(mean, m2, count, 0.0f);
 }

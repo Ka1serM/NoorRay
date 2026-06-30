@@ -20,7 +20,8 @@ private:
         NONE,
         OBJ,
         GLTF,
-        TEXTURE
+        TEXTURE,
+        NRSCENE
     };
 
     void renderFileMenu();

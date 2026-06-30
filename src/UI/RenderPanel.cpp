@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "Log.h"
+#include "IO/ExrWriter.h"
 #include "Raytracing/Raytracer.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Viewport.h"
@@ -130,8 +131,8 @@ void RenderPanel::renderUi() {
         ImGui::TableSetupColumn("Widget", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Beauty (.png)");
         ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##beauty", "e.g., final_render.png", beautyFilenameBuffer, sizeof(beautyFilenameBuffer)); ImGui::PopItemWidth();
-        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Raw (.hdr)");
-        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##raw", "e.g., final_raw.hdr", rawFilenameBuffer, sizeof(rawFilenameBuffer)); ImGui::PopItemWidth();
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Raw FP32 (.exr)");
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##raw", "e.g., final_raw.exr", rawFilenameBuffer, sizeof(rawFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Albedo (.png)");
         ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##albedo", "e.g., albedo_pass.png", albedoFilenameBuffer, sizeof(albedoFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Normals (.hdr)");
@@ -186,7 +187,7 @@ void RenderPanel::executeSave() {
     };
 
     addJob(beautyFilenameBuffer, ".png", [&]()->const Image& { return viewport.getOutputImage(); });
-    addJob(rawFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputColor(); });
+    addJob(rawFilenameBuffer, ".exr", [&]()->const Image& { return raytracer.getOutputColor(); });
     addJob(albedoFilenameBuffer, ".png", [&]()->const Image& { return raytracer.getOutputAlbedo(); });
     addJob(normalFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputNormal(); });
     addJob(cryptoFilenameBuffer, ".bin", [&]()->const Image& { return raytracer.getOutputCrypto(); });
@@ -241,8 +242,14 @@ void RenderPanel::writeDataToFile(std::vector<uint8_t>& imageData, const vk::For
     bool success = false;
     switch (format) {
         case vk::Format::eR32G32B32A32Sfloat:
-            success = stbi_write_hdr(filename.c_str(), width, height, 4, reinterpret_cast<const float*>(imageData.data())) != 0;
+        {
+            std::string exrError;
+            success = writeFloatExr(filename,
+                reinterpret_cast<const float*>(imageData.data()), width, height, &exrError);
+            if (!success)
+                LOG_ERROR("TinyEXR: " << exrError);
             break;
+        }
         case vk::Format::eR16G16B16A16Sfloat: {
             std::vector<float> floatData(width * height * 4);
             const auto* halfData = reinterpret_cast<const uint16_t*>(imageData.data());

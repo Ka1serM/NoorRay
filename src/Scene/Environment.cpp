@@ -26,6 +26,8 @@ void Environment::destroyCdf() noexcept
         cudaFreeArray(cdfArray);
     cdfTexture = 0;
     cdfArray = nullptr;
+    cdfWidth = 0;
+    cdfHeight = 0;
 }
 
 void Environment::updateDerivedSettings()
@@ -35,6 +37,9 @@ void Environment::updateDerivedSettings()
     rotationCos = std::cos(rotationRadians);
     lightingExposureScale = lightingExposure;
     visibleExposureScale = std::pow(2.f, visibleExposure);
+    const float luminance = std::max(
+        0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b, 0.0f);
+    importanceWeight = 4.0f * kPi * luminance * std::max(lightingExposureScale, 0.0f);
 }
 
 std::vector<float> Environment::computeCdf(const float* hdr, const int w, const int h)

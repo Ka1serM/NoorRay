@@ -13,14 +13,15 @@ class RenderSettings
 {
 public:
     int samples{1};
-    int diffuseBounces{3};
-    int specularBounces{3};
-    int transmissionBounces{3};
+    int diffuseBounces{64};
+    int specularBounces{64};
+    int transmissionBounces{64};
     int adaptiveSamplingEnabled{};
     int adaptiveMinSamples{4};
     float adaptiveTargetError{0.001f};
     int russianRouletteStartBounce{3};
     float exposure{};
+    int tonemappingEnabled{1};
     int transparentBackground{};
     BufferVisualization bufferVisualization{BufferVisualization::Beauty};
 };

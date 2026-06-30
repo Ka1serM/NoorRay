@@ -23,6 +23,10 @@
 #include "Scene/Scene.h"
 #include "Vulkan/Context.h"
 
+extern const float sRGBToSpectrumTable_Scale[64];
+extern const float sRGBToSpectrumTable_Data[3][64][64][64][3];
+#include "Raytracing/Spectrum.h"
+
 namespace
 {
 template <typename Data = uint32_t>
@@ -179,6 +183,33 @@ Raytracer::Raytracer(
     cudaRenderReady = importSemaphore(renderReady.get());
     cudaBufferReleased = importSemaphore(bufferReleased.get());
 
+    // Upload Jakob & Hanika sRGB-to-spectrum table once (9 MB coefficients + 64-element scale).
+    constexpr size_t kScaleBytes = 64 * sizeof(float);
+    constexpr size_t kCoeffBytes = sizeof(sRGBToSpectrumTable_Data);
+    NR_GPU_CHECK(cudaMalloc(&spectrumTableScaleDevice, kScaleBytes));
+    NR_GPU_CHECK(cudaMalloc(&spectrumTableCoeffsDevice, kCoeffBytes));
+    NR_GPU_CHECK(cudaMemcpy(spectrumTableScaleDevice, sRGBToSpectrumTable_Scale, kScaleBytes, cudaMemcpyHostToDevice));
+    NR_GPU_CHECK(cudaMemcpy(spectrumTableCoeffsDevice, sRGBToSpectrumTable_Data, kCoeffBytes, cudaMemcpyHostToDevice));
+    gpuScene.spectrumTableScale  = spectrumTableScaleDevice;
+    gpuScene.spectrumTableCoeffs = spectrumTableCoeffsDevice;
+
+    constexpr size_t kD65Bytes = NrD65Samples * sizeof(float);
+    NR_GPU_CHECK(cudaMalloc(&d65Device, kD65Bytes));
+    NR_GPU_CHECK(cudaMemcpy(d65Device, NrD65, kD65Bytes, cudaMemcpyHostToDevice));
+    gpuScene.d65 = d65Device;
+
+    // Upload CIE 1931 2-degree CMF tables (471 floats × 3, ~5.5 KB).
+    constexpr size_t kCieBytes = NrCIESamples * sizeof(float);
+    NR_GPU_CHECK(cudaMalloc(&cieXDevice, kCieBytes));
+    NR_GPU_CHECK(cudaMalloc(&cieYDevice, kCieBytes));
+    NR_GPU_CHECK(cudaMalloc(&cieZDevice, kCieBytes));
+    NR_GPU_CHECK(cudaMemcpy(cieXDevice, NrCIE_X, kCieBytes, cudaMemcpyHostToDevice));
+    NR_GPU_CHECK(cudaMemcpy(cieYDevice, NrCIE_Y, kCieBytes, cudaMemcpyHostToDevice));
+    NR_GPU_CHECK(cudaMemcpy(cieZDevice, NrCIE_Z, kCieBytes, cudaMemcpyHostToDevice));
+    gpuScene.cieX = cieXDevice;
+    gpuScene.cieY = cieYDevice;
+    gpuScene.cieZ = cieZDevice;
+
     auto* cam = scene.getActiveCamera();
     auto* c = cam ? cam->getCamera() : nullptr;
     auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
@@ -291,6 +322,12 @@ void Raytracer::freeSceneData() noexcept
     scene.getCudaTexturesRef().clear();
     scene.getEnvironment().destroyCdf();
     scene.getGpuInstancesRef().clear();
+    if (spectrumTableScaleDevice)  { cudaFree(spectrumTableScaleDevice);  spectrumTableScaleDevice  = nullptr; }
+    if (spectrumTableCoeffsDevice) { cudaFree(spectrumTableCoeffsDevice); spectrumTableCoeffsDevice = nullptr; }
+    if (d65Device) { cudaFree(d65Device); d65Device = nullptr; }
+    if (cieXDevice) { cudaFree(cieXDevice); cieXDevice = nullptr; }
+    if (cieYDevice) { cudaFree(cieYDevice); cieYDevice = nullptr; }
+    if (cieZDevice) { cudaFree(cieZDevice); cieZDevice = nullptr; }
     gpuScene = {};
 }
 
@@ -327,6 +364,25 @@ void Raytracer::updateEnvironmentCdf()
         return;
 
     const Texture& texture = textures[textureIndex];
+    env.cdfWidth = texture.getWidth();
+    env.cdfHeight = texture.getHeight();
+    double integral = 0.0;
+    const auto& pixels = texture.getPixels();
+    for (int y = 0; y < env.cdfHeight; ++y) {
+        const double sinTheta = std::sin((static_cast<double>(y) + 0.5)
+            / static_cast<double>(env.cdfHeight) * 3.14159265358979323846);
+        for (int x = 0; x < env.cdfWidth; ++x) {
+            const size_t offset = static_cast<size_t>(y * env.cdfWidth + x) * 4;
+            integral += (0.2126 * pixels[offset] + 0.7152 * pixels[offset + 1]
+                + 0.0722 * pixels[offset + 2]) * sinTheta;
+        }
+    }
+    integral *= 2.0 * 3.14159265358979323846 * 3.14159265358979323846
+        / static_cast<double>(env.cdfWidth * env.cdfHeight);
+    const float colorLuminance = std::max(
+        0.2126f * env.color.r + 0.7152f * env.color.g + 0.0722f * env.color.b, 0.0f);
+    env.importanceWeight = static_cast<float>(integral) * colorLuminance
+        * std::max(env.lightingExposureScale, 0.0f);
     const std::vector<float> cdf = Environment::computeCdf(
         texture.getPixels().data(), texture.getWidth(), texture.getHeight());
     const cudaChannelFormatDesc format = cudaCreateChannelDesc<float4>();
@@ -432,6 +488,10 @@ void Raytracer::launchConnect(const KernelParams& params, const cudaStream_t str
 
 void Raytracer::render(const PushData& pushData)
 {
+    CameraInstance* activeCamera = scene.getActiveCamera();
+    if (!activeCamera)
+        return;
+
     gpuScene.renderSettings = scene.getRenderSettings();
     const uint32_t buffer = nextBuffer;
     const uint64_t frameValue = ++submittedFrame;
@@ -456,7 +516,7 @@ void Raytracer::render(const PushData& pushData)
     KernelParams params{};
     params.scene = gpuScene;
     params.scene.renderSettings = scene.getRenderSettings();
-    params.scene.camera = scene.getActiveCamera()->getCamera();
+    params.scene.camera = activeCamera->getCamera();
     params.queues = queues;
     params.output = {
         color[buffer].getSurface(),

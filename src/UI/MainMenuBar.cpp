@@ -2,6 +2,9 @@
 #include "imgui.h"
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
+#include "Camera/CameraInstance.h"
+#include "Camera/ThinLensCamera.h"
+#include "CUDA/rstd/Allocator.h"
 #include <SDL3/SDL.h>
 #include <iostream>
 #include "Log.h"
@@ -67,6 +70,14 @@ void MainMenuBar::renderAddMenu() const {
             }
             ImGui::EndMenu();
         }
+        if (ImGui::MenuItem("Camera")) {
+            nr::rstd::allocator<ThinLensCamera> allocator;
+            ThinLensCamera* thinLens = allocator.allocate(1);
+            allocator.construct(thinLens);
+            auto camera = std::make_unique<CameraInstance>(
+                scene, "Camera", Transform(vec3(0.f, 0.f, 5.f)), Camera(thinLens));
+            scene.setActiveObjectId(scene.add(std::move(camera)));
+        }
         ImGui::EndMenu();
     }
 }
@@ -86,6 +97,9 @@ void MainMenuBar::handleFileImport(const std::string& filePath, const FileType t
                 break;
             case FileType::TEXTURE:
                 scene.add(Texture(context, filePath));
+                break;
+            case FileType::NRSCENE:
+                SceneImporter::ImportJsonScene(scene, filePath);
                 break;
             default:
                 break;
@@ -127,6 +141,13 @@ void MainMenuBar::renderFileMenu() {
             if (ImGui::MenuItem("Bitmap Texture")) {
                 openDialog = std::make_unique<pfd::open_file>("Import Texture", ".", std::vector<std::string>{"Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic", "All Files", "*"});
                 pendingFileType = FileType::TEXTURE;
+            }
+
+            if (ImGui::MenuItem("NoorRay Scene (.nrscene)")) {
+                openDialog = std::make_unique<pfd::open_file>(
+                    "Import Scene", ".",
+                    std::vector<std::string>{"NoorRay Scene", "*.nrscene"});
+                pendingFileType = FileType::NRSCENE;
             }
             
             ImGui::EndDisabled();

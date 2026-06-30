@@ -33,6 +33,13 @@ void RenderSettingsPanel::renderUi()
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Tonemapping");
+        ImGui::TableSetColumnIndex(1);
+        changed |= ImGui::Checkbox(
+            "##Tonemapping", reinterpret_cast<bool*>(&settings.tonemappingEnabled));
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Samples Per Pixel");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);

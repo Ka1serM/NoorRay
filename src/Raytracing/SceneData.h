@@ -8,9 +8,6 @@
 #include "CUDA/Texture.h"
 #include "Raytracing/Output.h"
 #include "Raytracing/Types.h"
-#include "Samplers/R2Sampler.h"
-
-using ActiveSampler = R2Sampler;
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
 #include "Mesh/MeshAsset.h"
@@ -33,6 +30,14 @@ struct GpuSceneData
     RenderSettings renderSettings{};
     const Environment* environment{};
     const Camera* camera{};
+    // Jakob & Hanika sRGB→spectrum table (64^3, 9 MB on device).
+    const float* spectrumTableScale{};   // 64 floats (z-nodes, non-uniform)
+    const float* spectrumTableCoeffs{};  // float[3][64][64][64][3]
+    const float* d65{};                  // CIE D65, 300--830 nm at 5 nm
+    // CIE 1931 2-degree CMFs (471 floats each, device pointers).
+    const float* cieX{};
+    const float* cieY{};
+    const float* cieZ{};
     uint32_t meshCount{};
     uint32_t instanceCount{};
     uint32_t pointLightCount{};
@@ -40,6 +45,7 @@ struct GpuSceneData
     uint32_t rectLightCount{};
     uint32_t directionalLightCount{};
     uint32_t textureCount{};
+    uint32_t _pad{};
 };
 
 struct GpuFrameSettings

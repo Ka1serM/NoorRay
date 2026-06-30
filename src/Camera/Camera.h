@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include "Camera/Sensor.h"
+#include "Samplers/RandomSampler.h"
 
 class PerspectiveCamera;
 class ThinLensCamera;
@@ -33,9 +34,8 @@ public:
     glm::mat4 cameraToWorld{1.f};
     float fieldOfView{90.f};
     float focalLengthMm{2.892f};
-    float fStop{};
     float focusDistance{4.f};
-    float bokehBias{1.f};
+    bool disableAntiAliasing{false};
 
     NR_CPU_GPU void transformRay(glm::vec3& origin, glm::vec3& direction) const
     {
@@ -46,9 +46,8 @@ public:
     Sensor& getSensor();
     const Sensor& getSensor() const;
     void setFocalLength(float focalLength);
-    void setFStop(float v);
     void setFocusDistance(float v);
-    void setBokehBias(float v);
+    void setAntiAliasingDisabled(bool disabled);
     bool renderUi();
     float focalLengthForFov(float fovDegrees) const;
     float fovForFocalLength(float focalLength) const;

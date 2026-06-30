@@ -26,6 +26,9 @@ public:
     float lightingExposure{1.0f};
     cudaArray_t cdfArray{};
     cudaTextureObject_t cdfTexture{};
+    int cdfWidth{};
+    int cdfHeight{};
+    float importanceWeight{};
 
     Environment();
     ~Environment();

@@ -88,6 +88,12 @@ private:
     WavefrontQueues queues{};
     glm::vec4* accumulation{};
     glm::vec4* adaptiveState{};
+    float* spectrumTableScaleDevice{};
+    float* spectrumTableCoeffsDevice{};
+    float* d65Device{};
+    float* cieXDevice{};
+    float* cieYDevice{};
+    float* cieZDevice{};
     GpuSceneData gpuScene{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};

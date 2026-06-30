@@ -6,8 +6,11 @@
 
 class ThinLensCamera : public Camera {
 public:
+    float fStop{0.f};
+    float bokehBias{1.f};
+
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, uint32_t& rng, uint32_t) const
+        float nx, float ny, RandomState& rng, uint32_t, float) const
     {
         weight = 1.0f;
         const glm::vec2 scale{

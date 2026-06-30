@@ -39,10 +39,12 @@ NR_GPU inline SurfaceData loadSurface(
     const float w = 1.0f - u - v;
     const glm::vec3 objectPosition = a.position * w + b.position * u + c.position * v;
     const glm::vec3 objectNormal = a.normal * w + b.normal * u + c.normal * v;
-    surface.position = glm::vec3(instance.objectToWorld * glm::vec4(objectPosition, 1.0f));
-    surface.normal = instance.normalToWorld * objectNormal;
-    surface.geometricNormal = glm::normalize(glm::vec3(instance.objectToWorld * glm::vec4(
-        glm::cross(b.position - a.position, c.position - a.position), 0.0f)));
+    const glm::vec3 worldA = glm::vec3(instance.objectToWorld * glm::vec4(a.position, 1.0f));
+    const glm::vec3 worldB = glm::vec3(instance.objectToWorld * glm::vec4(b.position, 1.0f));
+    const glm::vec3 worldC = glm::vec3(instance.objectToWorld * glm::vec4(c.position, 1.0f));
+    surface.position = worldA * w + worldB * u + worldC * v;
+    surface.normal = glm::normalize(instance.normalToWorld * objectNormal);
+    surface.geometricNormal = glm::normalize(glm::cross(worldB - worldA, worldC - worldA));
     surface.tangent = glm::normalize(glm::vec3(instance.objectToWorld * glm::vec4(
         a.tangent * w + b.tangent * u + c.tangent * v, 0.0f)));
     surface.uv = glm::vec2(a.uv.x * w + b.uv.x * u + c.uv.x * v,

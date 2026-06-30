@@ -18,7 +18,10 @@ set(NR_CUDA_ARCH "89" CACHE STRING "CUDA architecture (e.g. 89 for sm_89)")
 set(CMAKE_CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
-find_package(CUDAToolkit 13.2 EXACT REQUIRED)
+find_package(CUDAToolkit 13 REQUIRED)
+if(NOT CUDAToolkit_VERSION_MAJOR EQUAL 13)
+    message(FATAL_ERROR "NoorRay requires CUDA Toolkit 13.x")
+endif()
 set(OPTIX_ROOT "/home/marcel/Programs/OptixSDK" CACHE PATH "OptiX 9.1 installation")
 find_path(OPTIX_INCLUDE_DIR optix.h HINTS "${OPTIX_ROOT}/include" REQUIRED)
 file(STRINGS "${OPTIX_INCLUDE_DIR}/optix.h" OPTIX_VERSION_LINE
@@ -101,11 +104,12 @@ if(DEFINED ENV{VULKAN_SDK})
 endif()
 find_package(Vulkan REQUIRED)
 
-find_program(SLANGC_EXECUTABLE
+find_program(NR_SLANGC_EXECUTABLE
         NAMES slangc
         HINTS
         "${VULKAN_SDK_ROOT}/bin"
         "$ENV{VULKAN_SDK}/bin"
+        NO_CACHE
         REQUIRED
 )
 
@@ -127,7 +131,7 @@ set(SHADER_OUTPUTS
 
 add_custom_command(
         OUTPUT ${SHADER_OUTPUTS}
-        COMMAND "${SLANGC_EXECUTABLE}" "${SHADER_DIR}/Viewport/Viewport.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Viewport/Viewport.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${SHADER_DIR}/Viewport/Viewport.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Viewport/Viewport.spv"
         DEPENDS
         "${SHADER_DIR}/Viewport/Viewport.slang"
         COMMENT "Compiling the Vulkan viewport shader"

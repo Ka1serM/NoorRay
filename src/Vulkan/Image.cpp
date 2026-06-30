@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <iostream>
+#include "Log.h"
 
 // Move Constructor Implementation
 Image::Image(Image&& other) noexcept
@@ -317,9 +318,8 @@ vk::PipelineStageFlags Image::pipelineStageForAccessFlags(vk::AccessFlags access
         return vk::PipelineStageFlagBits::eHost; // Typically for host reads like present
     }
     
-    std::cerr << "[WARNING] Unsupported access flags encountered in pipelineStageForAccessFlags. "
-              << "Using a conservative 'eAllCommands' pipeline stage. Consider adding a specific case for better performance."
-              << std::endl;
+    LOG_WARN("Unsupported access flags encountered in pipelineStageForAccessFlags. "
+             "Using a conservative 'eAllCommands' pipeline stage. Consider adding a specific case for better performance.");
               
     return vk::PipelineStageFlagBits::eAllCommands;
 }

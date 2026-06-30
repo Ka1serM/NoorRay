@@ -34,6 +34,7 @@ class Context {
     int windowHeight;
     float dpiScale = 1;
     bool headless = false;
+    bool validationEnabled = false;
 
     vk::UniqueInstance instance;
     vk::UniqueDebugUtilsMessengerEXT messenger;
@@ -58,8 +59,7 @@ class Context {
     void createLogicalDevice();
     void createAllocator();
 public:
-    // headless = true: creates a hidden off-screen window, skips DPI scaling and
-    // swapchain requirements so the Context can be used without a display.
+    // headless = true: skips window, surface, presentation, and swapchain requirements.
     Context(int width, int height, bool headless = false);
     ~Context();
 

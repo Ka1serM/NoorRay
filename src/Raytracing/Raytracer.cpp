@@ -5,17 +5,21 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "stb_image_write.h"
 
 #include <cuda_runtime.h>
+#include <optix_stack_size.h>
 #include <optix_stubs.h>
 
 #include "Camera/CameraInstance.h"
 #include "CUDA/Checks.h"
 #include "CUDA/rstd/Memory.h"
+#include "Log.h"
 #include "Raytracing/Shade.h"
 #include "NoorRayOptixIr.h"
 #include "Mesh/MeshAsset.h"
@@ -136,7 +140,20 @@ Raytracer::Raytracer(
         log.data(), &logSize, &optixPipeline);
     if (result != OPTIX_SUCCESS)
         throw std::runtime_error(std::string("OptiX pipeline creation failed: ") + log.data());
-    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixPipeline, 0, 0, 0, 2));
+
+    OptixStackSizes stackSizes{};
+    for (const OptixProgramGroup group : groups)
+        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(group, &stackSizes, optixPipeline));
+    unsigned int directCallableStackSizeFromTraversal = 0;
+    unsigned int directCallableStackSizeFromState = 0;
+    unsigned int continuationStackSize = 0;
+    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
+        &stackSizes, linkOptions.maxTraceDepth, 0, 0,
+        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
+        &continuationStackSize));
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixPipeline,
+        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
+        continuationStackSize, 2));
 
     optixExtendRecord = uploadRecord(optixExtendGroup);
     optixConnectRecord = uploadRecord(optixConnectGroup);
@@ -214,6 +231,8 @@ Raytracer::Raytracer(
     auto* c = cam ? cam->getCamera() : nullptr;
     auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
     resize(res.x, res.y);
+    updateLights();
+    updateTLAS();
 }
 
 Raytracer::~Raytracer()
@@ -469,9 +488,9 @@ void Raytracer::launchExtend(const KernelParams& params, const cudaStream_t stre
     void* deviceParams = nullptr;
     NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
     NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
-    optixLaunch(optixPipeline, stream,
+    NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
         reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
-        &optixExtendSbt, params.queues.capacity, 1, 1);
+        &optixExtendSbt, params.queues.capacity, 1, 1));
     NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
@@ -480,9 +499,9 @@ void Raytracer::launchConnect(const KernelParams& params, const cudaStream_t str
     void* deviceParams = nullptr;
     NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
     NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
-    optixLaunch(optixPipeline, stream,
+    NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
         reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
-        &optixConnectSbt, params.queues.capacity, 1, 1);
+        &optixConnectSbt, params.queues.capacity, 1, 1));
     NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
@@ -575,6 +594,35 @@ void Raytracer::render(const PushData& pushData)
     nextBuffer = 1 - buffer;
 }
 
+Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
+{
+    if (sampleCount == 0)
+        throw std::invalid_argument("Offline render sample count must be greater than zero");
+    if (sampleCount > static_cast<uint32_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("Offline render sample count exceeds the supported range");
+
+    CameraInstance* camera = scene.getActiveCamera();
+    if (camera == nullptr)
+        throw std::runtime_error("Cannot render a scene without an active camera");
+
+    RenderSettings& settings = scene.getRenderSettings();
+    const int previousSamplesPerFrame = settings.samples;
+    settings.samples = static_cast<int>(sampleCount);
+    try {
+        render(PushData{.frame = 0, .isMoving = 1});
+        NR_GPU_CHECK(cudaStreamSynchronize(stream));
+    } catch (...) {
+        settings.samples = previousSamplesPerFrame;
+        throw;
+    }
+    settings.samples = previousSamplesPerFrame;
+
+    std::vector<glm::vec4> pixels(static_cast<size_t>(width) * height);
+    NR_GPU_CHECK(cudaMemcpy(
+        pixels.data(), accumulation, pixels.size() * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
+    return Bitmap(width, height, std::move(pixels));
+}
+
 void Raytracer::debugSave(const std::string& path) const
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
@@ -582,11 +630,11 @@ void Raytracer::debugSave(const std::string& path) const
     // Read back ray count for depth 0 to check if any rays were generated
     uint32_t rayCount0 = 0;
     NR_GPU_CHECK(cudaMemcpy(&rayCount0, queues.rayCounts, sizeof(uint32_t), cudaMemcpyDeviceToHost));
-    std::cout << "[debug] rayCounts[0]=" << rayCount0
+    LOG_DEBUG("rayCounts[0]=" << rayCount0
               << " meshCount=" << scene.getMeshAssets().size()
               << " instanceCount=" << scene.getGpuInstanceCount()
               << " traversable=" << tlas.getTraversable()
-              << " size=" << width << "x" << height << "\n";
+              << " size=" << width << "x" << height);
 
     const size_t pixelCount = static_cast<size_t>(width) * height;
     std::vector<glm::vec4> host(pixelCount);
@@ -602,14 +650,14 @@ void Raytracer::debugSave(const std::string& path) const
         sumR += p.x; sumG += p.y; sumB += p.z;
     }
     const float n = static_cast<float>(pixelCount);
-    std::cout << "[debug] R: max=" << maxR << " avg=" << sumR/n
+    LOG_DEBUG("R: max=" << maxR << " avg=" << sumR/n
               << "  G: max=" << maxG << " avg=" << sumG/n
               << "  B: max=" << maxB << " avg=" << sumB/n
-              << "  A: min=" << minA << " max=" << maxA << "\n";
+              << "  A: min=" << minA << " max=" << maxA);
     // Print first 4 pixel values
     for (int i = 0; i < 4; ++i)
-        printf("[debug] pixel[%d] r=%.4f g=%.4f b=%.4f a=%.4f\n", i,
-            host[i].x, host[i].y, host[i].z, host[i].w);
+        LOG_DEBUG("pixel[" << i << "] r=" << host[i].x << " g=" << host[i].y
+                  << " b=" << host[i].z << " a=" << host[i].w);
     const float maxVal = std::max({maxR, maxG, maxB, maxA});
 
     std::vector<uint8_t> pixels(pixelCount * 4);
@@ -627,9 +675,9 @@ void Raytracer::debugSave(const std::string& path) const
     }
     if (stbi_write_png(path.c_str(), static_cast<int>(width), static_cast<int>(height), 4,
                        pixels.data(), static_cast<int>(width) * 4))
-        std::cout << "[debug] saved " << path << "\n";
+        LOG_DEBUG("Saved " << path);
     else
-        std::cerr << "[debug] failed to write " << path << "\n";
+        LOG_ERROR("Failed to write " << path);
 }
 
 FrameInfo Raytracer::getFrameInfo() const

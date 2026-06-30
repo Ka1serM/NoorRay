@@ -1,0 +1,10 @@
+{
+  "preferred_line_length": 160,
+  "soft_wrap": "none",
+  "languages": {
+    "C++": {
+      "preferred_line_length": 160,
+      "soft_wrap": "none",
+    },
+  },
+}

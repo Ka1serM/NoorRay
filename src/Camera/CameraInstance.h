@@ -54,8 +54,6 @@ public:
     void setApertureDiameter(float mm);
     std::unique_ptr<SceneObject> clone() const override;
 
-
-protected:
     void rebuildCamera();
 
 private:

@@ -7,11 +7,13 @@
 #include <glm/geometric.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 #include "CUDA/Texture.h"
 #include "Raytracing/Bsdf.h"
 #include "Raytracing/RgbToSpectrum.h"
 #include "Raytracing/Sellmeier.h"
+#include "Samplers/HemisphereSampler.h"
 #include "Samplers/RandomSampler.h"
 
 class Material
@@ -40,29 +42,21 @@ public:
     int opacityIndex{-1};
     float opacity{1.0f};
 
-private:
+    // BSDF math below is exposed (not private) so CPU-side tests
+    // (tests/BsdfTests.cpp) can exercise it directly, e.g. furnace and
+    // PDF-normalization tests, without going through the GPU-only spectral
+    // wrappers further down.
     NR_CPU_GPU static void buildBasis(
         const glm::vec3 normal, glm::vec3& tangent, glm::vec3& bitangent)
     {
-        const glm::vec3 helper = fabsf(normal.z) < 0.999f
-            ? glm::vec3(0.0f, 0.0f, 1.0f)
-            : glm::vec3(0.0f, 1.0f, 0.0f);
-        tangent = glm::normalize(glm::cross(normal, helper));
-        bitangent = glm::cross(tangent, normal);
+        nr::sampling::buildBasis(normal, tangent, bitangent);
     }
 
     NR_CPU_GPU static glm::vec3 sampleDiffuseDirection(const glm::vec3 normal, RandomState& rng)
     {
         const float u1 = randomFloat(rng);
         const float u2 = randomFloat(rng);
-        const float radius = sqrtf(u1);
-        const float phi = 2.0f * BsdfPi * u2;
-        glm::vec3 tangent{}, bitangent{};
-        buildBasis(normal, tangent, bitangent);
-        return glm::normalize(
-            tangent * (radius * cosf(phi))
-            + bitangent * (radius * sinf(phi))
-            + normal * sqrtf(fmaxf(0.0f, 1.0f - u1)));
+        return nr::sampling::cosineHemisphere(normal, glm::vec2(u1, u2));
     }
 
     NR_CPU_GPU static glm::vec3 sampleGgxVndfLocal(
@@ -125,11 +119,7 @@ private:
             shadingNormal = -shadingNormal;
         if (glm::dot(geometricNormal, light) <= 0.0f)
             return 0.0f;
-        const float numerator = fabsf(glm::dot(light, shadingNormal)
-            * glm::dot(view, geometricNormal));
-        const float denominator = fabsf(glm::dot(light, geometricNormal)
-            * glm::dot(view, shadingNormal));
-        return numerator / fmaxf(denominator, BsdfEpsilon);
+        return glm::dot(shadingNormal, light) > 0.0f ? 1.0f : 0.0f;
     }
 
     NR_CPU_GPU static float geometrySmith(
@@ -176,6 +166,21 @@ private:
         return f0 + (1.0f - f0) * f;
     }
 
+    // UE4 split-sum approximation of the directional GGX Fresnel integral.
+    // This reserves the energy reflected by the microfacet lobe before the
+    // remaining energy is assigned to the diffuse substrate.
+    NR_CPU_GPU static float directionalGgxReflectance(
+        const float ndv, const float roughness, const float f0)
+    {
+        const glm::vec4 c0(-1.0f, -0.0275f, -0.572f, 0.022f);
+        const glm::vec4 c1(1.0f, 0.0425f, 1.04f, -0.04f);
+        const glm::vec4 r = roughness * c0 + c1;
+        const float a004 = fminf(r.x * r.x, exp2f(-9.28f * ndv)) * r.x + r.y;
+        const float scale = -1.04f * a004 + r.z;
+        const float bias = 1.04f * a004 + r.w;
+        return fminf(fmaxf(f0 * scale + bias, 0.0f), 1.0f);
+    }
+
     // Per-wavelength spectral BSDF evaluation (opaque PBR).
     NR_CPU_GPU static SampledSpectrum evaluateOpaqueSpectral(
         const glm::vec3 normal,
@@ -203,7 +208,8 @@ private:
             const float f0 = dielectricF0 + (albedoSpec[i] - dielectricF0) * metallic;
             const float F = fresnelSchlickS(vdh, f0);
             const float specBrdf = F * geomFactor;
-            const float diffuse = (1.0f - F) * (1.0f - metallic) * albedoSpec[i] / BsdfPi;
+            const float reflectedEnergy = directionalGgxReflectance(ndv, roughness, f0);
+            const float diffuse = (1.0f - reflectedEnergy) * (1.0f - metallic) * albedoSpec[i] / BsdfPi;
             result[i] = diffuse + specBrdf;
         }
         return result;
@@ -218,82 +224,6 @@ private:
         const float ndv = fmaxf(glm::dot(normal, view), BsdfEpsilon);
         return smithG1Ggx(ndv, roughness)
             * distributionGgx(normal, halfVector, roughness) / (4.0f * ndv);
-    }
-
-    NR_CPU_GPU static glm::vec3 evaluateGgxReflection(
-        const glm::vec3 normal,
-        const glm::vec3 view,
-        const glm::vec3 light,
-        const glm::vec3 fresnel,
-        const float roughness,
-        const glm::vec3 halfVector)
-    {
-        const float ndv = fmaxf(glm::dot(normal, view), 0.0f);
-        const float ndl = fmaxf(glm::dot(normal, light), 0.0f);
-        if (ndv <= 0.0f || ndl <= 0.0f)
-            return glm::vec3(0.0f);
-        const float distribution = distributionGgx(normal, halfVector, roughness);
-        const float geometry = geometrySmith(normal, view, light, roughness);
-        return fresnel * (distribution * geometry / fmaxf(4.0f * ndv * ndl, BsdfEpsilon));
-    }
-
-    NR_CPU_GPU static glm::vec3 evaluateOpaque(
-        const glm::vec3 normal,
-        const glm::vec3 view,
-        const glm::vec3 light,
-        const glm::vec3 albedo,
-        const float metallic,
-        const float specular,
-        const float roughness)
-    {
-        const float ndv = fmaxf(glm::dot(normal, view), 0.0f);
-        const float ndl = fmaxf(glm::dot(normal, light), 0.0f);
-        if (ndv <= 0.0f || ndl <= 0.0f)
-            return glm::vec3(0.0f);
-        const glm::vec3 halfVector = glm::normalize(view + light);
-        const glm::vec3 f0 = glm::mix(
-            glm::vec3(fminf(fmaxf(0.08f * specular, 0.0f), 1.0f)), albedo, metallic);
-        const glm::vec3 fresnel = fresnelSchlick(fmaxf(glm::dot(view, halfVector), 0.0f), f0);
-        const glm::vec3 specularBrdf = evaluateGgxReflection(
-            normal, view, light, fresnel, roughness, halfVector);
-        const glm::vec3 diffuseWeight = (glm::vec3(1.0f) - fresnel) * (1.0f - metallic);
-        return diffuseWeight * albedo / BsdfPi + specularBrdf;
-    }
-
-    NR_CPU_GPU static BsdfSample sampleOpaque(
-        const glm::vec3 view,
-        glm::vec3 normal,
-        const glm::vec3 albedo,
-        const float metallic,
-        const float specular,
-        const float roughness,
-        RandomState& rng)
-    {
-        if (glm::dot(normal, view) < 0.0f)
-            normal = -normal;
-        const glm::vec3 dielectricF0(fminf(fmaxf(0.08f * specular, 0.0f), 1.0f));
-        const glm::vec3 samplingFresnel = fresnelSchlick(
-            fabsf(glm::dot(normal, view)), glm::mix(dielectricF0, albedo, metallic));
-        const float specularProbability = fminf(fmaxf(
-            fmaxf(samplingFresnel.x, fmaxf(samplingFresnel.y, samplingFresnel.z)),
-            0.02f), 0.98f);
-
-        BsdfSample sample{};
-        glm::vec3 halfVector{};
-        if (randomFloat(rng) < specularProbability)
-        {
-            sample.event = BsdfEvent::Specular;
-            halfVector = sampleGgxHalfVector(view, normal, roughness, rng);
-            sample.direction = glm::reflect(-view, halfVector);
-        }
-        else
-        {
-            sample.event = BsdfEvent::Diffuse;
-            sample.direction = sampleDiffuseDirection(normal, rng);
-            halfVector = glm::normalize(view + sample.direction);
-        }
-
-        return sample; // weight computed by caller (spectral)
     }
 
     NR_CPU_GPU static BsdfSample sampleDielectric(

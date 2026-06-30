@@ -6,12 +6,14 @@
 #include <vector>
 
 #include <cuda_runtime_api.h>
+#include <glm/vec4.hpp>
 #include <optix.h>
 #include <vulkan/vulkan.hpp>
 
 #include "CUDA/Texture.h"
 #include "CUDA/Tlas.h"
 #include "CUDA/SharedImage.h"
+#include "IO/Bitmap.h"
 #include "Raytracing/SceneData.h"
 
 class CameraInstance;
@@ -44,6 +46,7 @@ public:
 
     void resize(uint32_t width, uint32_t height);
     void render(const PushData& pushData);
+    Bitmap renderOffline(uint32_t sampleCount);
     void updateMeshes();
     void updateTextures();
     void updateEnvironmentCdf();

@@ -9,12 +9,14 @@
 #include <fstream>
 #include <future>
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 #include <memory>
 #include <utility>
 
 #include "Log.h"
-#include "IO/ExrWriter.h"
+#include "IO/Bitmap.h"
+#include "IO/BitmapWriter.h"
 #include "Raytracing/Raytracer.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Viewport.h"
@@ -243,11 +245,13 @@ void RenderPanel::writeDataToFile(std::vector<uint8_t>& imageData, const vk::For
     switch (format) {
         case vk::Format::eR32G32B32A32Sfloat:
         {
-            std::string exrError;
-            success = writeFloatExr(filename,
-                reinterpret_cast<const float*>(imageData.data()), width, height, &exrError);
+            std::vector<glm::vec4> pixels(static_cast<size_t>(width) * height);
+            std::memcpy(pixels.data(), imageData.data(), imageData.size());
+            const Bitmap bitmap(width, height, std::move(pixels));
+            std::string writeError;
+            success = BitmapWriter::write(filename, bitmap, {}, &writeError);
             if (!success)
-                LOG_ERROR("TinyEXR: " << exrError);
+                LOG_ERROR("Bitmap writer: " << writeError);
             break;
         }
         case vk::Format::eR16G16B16A16Sfloat: {

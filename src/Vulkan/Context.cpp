@@ -16,13 +16,14 @@
 #include <optix_stubs.h>
 
 #include "CUDA/Checks.h"
+#include "Log.h"
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 static void optixLogCallback(unsigned int level, const char* tag, const char* message, void*)
 {
     if (level <= 2)
-        std::fprintf(stderr, "[OptiX][%s] %s\n", tag, message);
+        LOG_ERROR("OptiX[" << tag << "] " << message);
 }
 
 static int selectCudaDeviceForVulkan(const vk::PhysicalDevice physicalDevice)
@@ -52,11 +53,7 @@ Context::Context(const int width, const int height, const bool isHeadless)
     : windowWidth(width), windowHeight(height), headless(isHeadless)
 {
     try {
-        if (headless) {
-            // Headless mode: use SDL offscreen driver so we can still load the Vulkan
-            // library and create a hidden window for surface-based device selection.
-            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
-        } else {
+        if (!headless) {
 #ifdef __linux__
             SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
             SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
@@ -65,40 +62,34 @@ Context::Context(const int width, const int height, const bool isHeadless)
                 SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
             }
 #endif
-        }
+            if (!SDL_Init(SDL_INIT_VIDEO)) {
+                LOG_FATAL("Failed to initialize SDL: " << SDL_GetError());
+                throw std::runtime_error("Failed to initialize SDL.");
+            }
+            if (!SDL_Vulkan_LoadLibrary(nullptr)) {
+                LOG_FATAL("Failed to load Vulkan library via SDL: " << SDL_GetError());
+                throw std::runtime_error("Failed to load Vulkan library.");
+            }
 
-        if (!SDL_Init(SDL_INIT_VIDEO)) {
-            std::cerr << "[FATAL] Failed to initialize SDL: " << SDL_GetError() << std::endl;
-            throw std::runtime_error("Failed to initialize SDL.");
-        }
-
-        if (!SDL_Vulkan_LoadLibrary(nullptr)) {
-            std::cerr << "[FATAL] Failed to load Vulkan library via SDL: " << SDL_GetError() << std::endl;
-            throw std::runtime_error("Failed to load Vulkan library.");
-        }
-
-        if (!headless) {
             const float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
             if (dpiScaleFloat != 0.0f) {
                 dpiScale = dpiScaleFloat;
                 windowWidth  = static_cast<int>(static_cast<float>(windowWidth)  * dpiScale);
                 windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
             }
+            window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight,
+                SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+            if (!window) {
+                LOG_FATAL("Failed to create SDL window: " << SDL_GetError());
+                throw std::runtime_error("Failed to create SDL window.");
+            }
         }
 
-        const SDL_WindowFlags windowFlags = headless
-            ? (SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN)
-            : (SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-
-        window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight, windowFlags);
-        if (!window) {
-            std::cerr << "[FATAL] Failed to create SDL window: " << SDL_GetError() << std::endl;
-            throw std::runtime_error("Failed to create SDL window.");
-        }
-
-        const auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+        const auto vkGetInstanceProcAddr = headless
+            ? &::vkGetInstanceProcAddr
+            : reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
         if (!vkGetInstanceProcAddr) {
-            std::cerr << "[FATAL] Failed to get vkGetInstanceProcAddr: " << SDL_GetError() << std::endl;
+            LOG_FATAL("Failed to get vkGetInstanceProcAddr");
             throw std::runtime_error("Failed to get vkGetInstanceProcAddr.");
         }
 
@@ -110,6 +101,7 @@ Context::Context(const int width, const int height, const bool isHeadless)
         VULKAN_HPP_DEFAULT_DISPATCHER.init(instance.get());
 
 #ifdef DEBUG
+        if (validationEnabled) {
         vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
         messengerInfo.setMessageSeverity(
             vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
@@ -123,14 +115,17 @@ Context::Context(const int width, const int height, const bool isHeadless)
         );
         messengerInfo.pfnUserCallback = &debugUtilsMessengerCallback;
         messenger = instance->createDebugUtilsMessengerEXTUnique(messengerInfo);
+        }
 #endif
 
-        VkSurfaceKHR _surface;
-        if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &_surface)) {
-            std::cerr << "[FATAL] Failed to create window surface with SDL: " << SDL_GetError() << std::endl;
-            throw std::runtime_error("Failed to create window surface.");
+        if (!headless) {
+            VkSurfaceKHR rawSurface;
+            if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &rawSurface)) {
+                LOG_FATAL("Failed to create window surface with SDL: " << SDL_GetError());
+                throw std::runtime_error("Failed to create window surface.");
+            }
+            surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(rawSurface), {instance.get()});
         }
-        surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(_surface), {instance.get()});
         
         pickPhysicalDevice();
         createLogicalDevice();
@@ -186,10 +181,10 @@ Context::Context(const int width, const int height, const bool isHeadless)
         NR_OPTIX_CHECK(optixDeviceContextCreate(currentCtx, &ctxOpts, &optixCtx));
 
     } catch (const vk::Error& e) {
-        std::cerr << "[FATAL] Vulkan Error in Context constructor: " << e.what() << std::endl;
+        LOG_FATAL("Vulkan Error in Context constructor: " << e.what());
         throw std::runtime_error("Vulkan initialization failed.");
     } catch (const std::exception& e) {
-        std::cerr << "[FATAL] Error in Context constructor: " << e.what() << std::endl;
+        LOG_FATAL("Error in Context constructor: " << e.what());
         throw;
     }
 }
@@ -217,18 +212,20 @@ void Context::createAllocator() {
     if (vmaCreateAllocator(&allocatorCreateInfo, &allocator) != VK_SUCCESS)
         throw std::runtime_error("Failed to create VMA allocator!");
     
-    std::cout << "[INFO] VMA Allocator created successfully." << std::endl;
+    LOG_INFO("VMA Allocator created successfully.");
 }
 
 void Context::createVulkanInstance() {
-unsigned int sdlExtensionCount = 0;
-const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-if (!sdlExtensions) {
-    std::cerr << "[FATAL] Failed to get Vulkan instance extensions from SDL: " << SDL_GetError() << std::endl;
-    throw std::runtime_error("Failed to get Vulkan instance extensions.");
+std::vector<const char*> extensions;
+if (!headless) {
+    unsigned int sdlExtensionCount = 0;
+    const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
+    if (!sdlExtensions) {
+        LOG_FATAL("Failed to get Vulkan instance extensions from SDL: " << SDL_GetError());
+        throw std::runtime_error("Failed to get Vulkan instance extensions.");
+    }
+    extensions.assign(sdlExtensions, sdlExtensions + sdlExtensionCount);
 }
-
-std::vector extensions(sdlExtensions, sdlExtensions + sdlExtensionCount);
 std::vector<const char*> layers;
 
 // --- Create the Debug Messenger Info ---
@@ -236,9 +233,19 @@ std::vector<const char*> layers;
 vk::DebugUtilsMessengerCreateInfoEXT messengerInfo;
 
 #ifdef DEBUG
-std::cout << "[INFO] Enabling Vulkan validation layers." << std::endl;
-layers.push_back("VK_LAYER_KHRONOS_validation");
-extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+for (const vk::LayerProperties& layer : vk::enumerateInstanceLayerProperties()) {
+    if (std::string_view(layer.layerName) == "VK_LAYER_KHRONOS_validation") {
+        validationEnabled = true;
+        break;
+    }
+}
+if (validationEnabled) {
+    LOG_INFO("Enabling Vulkan validation layers.");
+    layers.push_back("VK_LAYER_KHRONOS_validation");
+    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+} else {
+    LOG_INFO("Vulkan validation layer unavailable; continuing without it.");
+}
 
 messengerInfo.setMessageSeverity(
     vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
@@ -282,9 +289,11 @@ std::vector<vk::ValidationFeatureEnableEXT> enabledFeatures = {
     // Adds extra, more intensive checks for synchronization bugs (race conditions).
     vk::ValidationFeatureEnableEXT::eSynchronizationValidation
 };
-validationFeatures.setEnabledValidationFeatures(enabledFeatures);
-validationFeatures.pNext = &messengerInfo;
-instanceInfo.pNext = &validationFeatures;
+if (validationEnabled) {
+    validationFeatures.setEnabledValidationFeatures(enabledFeatures);
+    validationFeatures.pNext = &messengerInfo;
+    instanceInfo.pNext = &validationFeatures;
+}
 #endif
 
 instance = vk::createInstanceUnique(instanceInfo);
@@ -293,11 +302,11 @@ instance = vk::createInstanceUnique(instanceInfo);
 void Context::pickPhysicalDevice() {
     const std::vector<vk::PhysicalDevice> devices = instance->enumeratePhysicalDevices();
     if (devices.empty()) {
-        std::cerr << "[FATAL] Failed to find GPUs with Vulkan support!" << std::endl;
+        LOG_FATAL("Failed to find GPUs with Vulkan support!");
         throw std::runtime_error("Failed to find GPUs with Vulkan support!");
     }
 
-    std::cout << "[INFO] Available GPUs:\n";
+    LOG_INFO("Available GPUs:");
 
     struct Candidate {
         vk::PhysicalDevice device;
@@ -322,15 +331,13 @@ void Context::pickPhysicalDevice() {
                 if (memProps.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal)
                     vramSize += memProps.memoryHeaps[i].size;
 
-            std::cout << "  - " << props.deviceName
-                      << " (Type: " << vk::to_string(props.deviceType)
-                      << ", VRAM: " << (vramSize / (1024 * 1024)) << "MB"
-                      << ", Extensions OK: " << (hasAllExtensions ? "Yes" : "No") << ")"
-                      << std::endl;
+            LOG_INFO(props.deviceName << " (Type: " << vk::to_string(props.deviceType)
+                     << ", VRAM: " << (vramSize / (1024 * 1024)) << "MB"
+                     << ", Extensions OK: " << (hasAllExtensions ? "Yes" : "No") << ")");
 
             if (!hasAllExtensions) {
                 for (const auto& extName : missing) {
-                    std::cout << "      [MISSING] " << extName << std::endl;
+                    LOG_WARN("Missing device extension: " << extName);
                 }
             }
 
@@ -363,12 +370,12 @@ void Context::pickPhysicalDevice() {
     auto best = findBestDevice(RequiredDeviceExtensions);
 
     if (!best) {
-        std::cerr << "[FATAL] No suitable GPU found that supports required Vulkan extensions!" << std::endl;
+        LOG_FATAL("No suitable GPU found that supports required Vulkan extensions!");
         throw std::runtime_error("No suitable GPU found!");
     }
 
     physicalDevice = best->device;
-    std::cout << "\n[INFO] Picked display GPU: " << physicalDevice.getProperties().deviceName << std::endl;
+    LOG_INFO("Picked GPU: " << physicalDevice.getProperties().deviceName);
 }
 
 void Context::createLogicalDevice() {
@@ -382,7 +389,7 @@ void Context::createLogicalDevice() {
             foundGraphicsFamily = i;
         if (flags & vk::QueueFlagBits::eCompute)
             foundComputeFamily = i;
-        if (physicalDevice.getSurfaceSupportKHR(i, surface.get()))
+        if (headless || physicalDevice.getSurfaceSupportKHR(i, surface.get()))
             foundPresentFamily = i;
         
         if (foundGraphicsFamily == i && foundComputeFamily == i && foundPresentFamily == i)
@@ -450,7 +457,7 @@ uint32_t Context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags pr
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i)
         if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
             return i;
-    std::cerr << "[FATAL] Failed to find suitable memory type!" << std::endl;
+    LOG_FATAL("Failed to find suitable memory type!");
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
@@ -468,10 +475,10 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
         graphicsQueue.submit(submitInfo, *fence);
 
         if (device->waitForFences(*fence, VK_TRUE, UINT64_MAX) != vk::Result::eSuccess)
-            std::cerr << "[ERROR] Fence wait failed during one-time submit." << std::endl;
+            LOG_ERROR("Fence wait failed during one-time submit.");
         
     } catch (const vk::Error& e) {
-        std::cerr << "[ERROR] Vulkan error during one-time submit: " << e.what() << std::endl;
+        LOG_ERROR("Vulkan error during one-time submit: " << e.what());
     }
 }
 
@@ -480,17 +487,17 @@ vk::PresentModeKHR Context::chooseSwapPresentMode() const {
 
     for (const auto& mode : availablePresentModes)
         if (mode == vk::PresentModeKHR::eImmediate) {
-            std::cout << "Present Mode: Immediate (Unlocked, Tearing)" << std::endl;
+            LOG_INFO("Present Mode: Immediate (Unlocked, Tearing)");
             return mode;
         }
 
     for (const auto& mode : availablePresentModes)
         if (mode == vk::PresentModeKHR::eMailbox) {
-            std::cout << "Present Mode: Mailbox (Low-latency, No Tearing)" << std::endl;
+            LOG_INFO("Present Mode: Mailbox (Low-latency, No Tearing)");
             return mode;
         }
     
-    std::cout << "Present Mode: FIFO (V-Sync)" << std::endl;
+    LOG_INFO("Present Mode: FIFO (V-Sync)");
     return vk::PresentModeKHR::eFifo;
 }
 
@@ -506,22 +513,24 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
     else
         severity = "[VULKAN WARN]";
     
-    std::cerr << severity << ": " << pCallbackData->pMessage << std::endl;
+    LOG_ERROR(severity << ": " << pCallbackData->pMessage);
     return vk::False;
 }
 
 Context::~Context() {
-    std::cout << "[INFO] Destroying Context..." << std::endl;
+    LOG_INFO("Destroying Context...");
     if (optixCtx != nullptr) { optixDeviceContextDestroy(optixCtx); optixCtx = nullptr; }
     if (cudaStream != nullptr) { cudaStreamDestroy(cudaStream); cudaStream = nullptr; }
     try {
         if (device)
             device->waitIdle();
     } catch (const vk::Error& e) {
-        std::cerr << "[ERROR] Vulkan error during device->waitIdle(): " << e.what() << std::endl;
+        LOG_ERROR("Vulkan error during device->waitIdle(): " << e.what());
     }
 
-    SDL_DestroyWindow(window);
-    SDL_Vulkan_UnloadLibrary();
-    SDL_Quit();
+    if (!headless) {
+        SDL_DestroyWindow(window);
+        SDL_Vulkan_UnloadLibrary();
+        SDL_Quit();
+    }
 }

@@ -18,13 +18,12 @@
 #include "stb_image_write.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "Camera/CameraInstance.h"
-#include "IO/ExrWriter.h"
+#include "IO/BitmapWriter.h"
+#include "Log.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/SceneImporter.h"
 #include "Raytracing/Raytracer.h"
 #include "Vulkan/Viewport.h"
-#include "Vulkan/Buffer.h"
-#include "Vulkan/Image.h"
 
 // ── GUI constructor ───────────────────────────────────────────────────────────
 
@@ -34,6 +33,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     , renderer(std::make_unique<Renderer>(context, windowWidth, windowHeight))
     , imGuiManager(std::make_unique<ImGuiManager>(context, renderer->getNumSwapchainImages(), renderer->getColorImageFormat()))
 {
+    SceneImporter::ImportJsonScene(scene, NOORRAY_ASSET_DIR "/slanted_edge_target.nrscene");
     raytracer = std::make_unique<Raytracer>(context, scene);
 
     viewport = std::make_unique<Viewport>(
@@ -66,15 +66,6 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
     SceneImporter::ImportJsonScene(scene, argv[1]);
 
     raytracer = std::make_unique<Raytracer>(context, scene);
-
-    viewport = std::make_unique<Viewport>(
-        context, raytracer->getWidth(), raytracer->getHeight(),
-        raytracer->getOutputColor(0),    raytracer->getOutputColor(1),
-        raytracer->getOutputAlbedo(0),   raytracer->getOutputAlbedo(1),
-        raytracer->getOutputNormal(0),   raytracer->getOutputNormal(1),
-        raytracer->getOutputCrypto(0),   raytracer->getOutputCrypto(1),
-        raytracer->getOutputPosition(0), raytracer->getOutputPosition(1),
-        vk::Format::eR8G8B8A8Unorm);
 }
 
 NoorRay::~NoorRay() = default;
@@ -180,59 +171,18 @@ void NoorRay::runUi() {
 // ── runCli ────────────────────────────────────────────────────────────────────
 
 void NoorRay::runCli(const int spp, const std::string& outputPath) {
-    raytracer->updateMeshes();
-    raytracer->updateTextures();
-    raytracer->updateTLAS();
+    if (spp <= 0)
+        throw std::invalid_argument("Samples per pixel must be greater than zero");
 
-    auto* cam = scene.getActiveCamera();
-    if (!cam) { std::cerr << "No camera in scene.\n"; return; }
+    LOG_INFO("Rendering " << raytracer->getWidth() << "x" << raytracer->getHeight()
+             << " @ " << spp << " spp");
+    const Bitmap bitmap = raytracer->renderOffline(static_cast<uint32_t>(spp));
 
-    const uint32_t w = raytracer->getWidth(), h = raytracer->getHeight();
-    cam->update();
-
-    scene.getRenderSettings().samples = 1;
-
-    std::cout << "Rendering " << w << "x" << h << " @ " << spp << " spp\n";
-
-    for (int frame = 0; frame < spp; ++frame) {
-        if (frame % std::max(1, spp / 20) == 0)
-            std::cout << "  " << (frame * 100 / spp) << "%\r" << std::flush;
-
-        PushData push{};
-        push.frame            = frame;
-        push.isMoving         = (frame == 0) ? 1 : 0;
-
-        context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
-            raytracer->render(push);
-        });
-    }
-    context.getDevice().waitIdle();
-    std::cout << "  100%\n";
-
-    Image& out = raytracer->getOutputColor();
-    const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(w) * h * 4 * sizeof(float);
-    Buffer staging(context, Buffer::Type::Custom, bytes, nullptr,
-                   vk::BufferUsageFlagBits::eTransferDst,
-                   vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-
-    context.oneTimeSubmit([&](vk::CommandBuffer cmd) {
-        out.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-        vk::BufferImageCopy region{};
-        region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-        region.imageSubresource.layerCount = 1;
-        region.imageExtent = vk::Extent3D{w, h, 1};
-        cmd.copyImageToBuffer(out.getImage(), vk::ImageLayout::eTransferSrcOptimal,
-                              staging.getBuffer(), region);
-    });
-
-    const void* mapped = context.getDevice().mapMemory(staging.getMemory(), 0, bytes);
-    std::string exrError;
-    const bool saved = writeFloatExr(
-        outputPath, static_cast<const float*>(mapped), w, h, &exrError);
-    context.getDevice().unmapMemory(staging.getMemory());
+    std::string writeError;
+    const bool saved = BitmapWriter::write(outputPath, bitmap, {}, &writeError);
 
     if (!saved)
-        throw std::runtime_error("Failed to save EXR: " + exrError);
+        throw std::runtime_error("Failed to save bitmap: " + writeError);
 
-    std::cout << "Saved: " << outputPath << "\n";
+    LOG_INFO("Saved: " << outputPath);
 }

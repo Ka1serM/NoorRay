@@ -18,6 +18,7 @@
 #include <tbb/parallel_for.h>
 #include "glm/gtx/norm.hpp"
 #include "Scene/Scene.h"
+#include "Log.h"
 #include "UI/ImGuiManager.h"
 
 namespace {
@@ -447,7 +448,7 @@ bool RealisticCamera::loadLensAndSensor()
         focusSurfaceOffsetM = 0.0f;
         loadStatus = "No lens loaded";
         updateGpuData();
-        std::cout << "[INFO] RealisticCamera: no lens/sensor file loaded" << std::endl;
+        LOG_INFO("RealisticCamera: no lens/sensor file loaded");
         return true;
     }
 
@@ -468,9 +469,9 @@ bool RealisticCamera::loadLensAndSensor()
         rebuildExitPupilBounds();
         updateGpuData();
         loadStatus = std::to_string(lensElements.size()) + " surfaces";
-        std::cout << "[INFO] RealisticCamera: loaded " << lensElements.size() << " surfaces"
-                  << ", pupil bounds: " << pupilBounds.size()
-                  << ", effective focal length: " << effectiveFocalLengthM * 1000.0f << " mm" << std::endl;
+        LOG_INFO("RealisticCamera: loaded " << lensElements.size() << " surfaces"
+                 << ", pupil bounds: " << pupilBounds.size()
+                 << ", effective focal length: " << effectiveFocalLengthM * 1000.0f << " mm");
         return true;
     }
 
@@ -481,7 +482,7 @@ bool RealisticCamera::loadLensAndSensor()
     focusSurfaceOffsetM = 0.0f;
     loadStatus = !lensOk ? lensError : sensorError;
     updateGpuData();
-    std::cerr << "[ERROR] RealisticCamera: " << loadStatus << std::endl;
+    LOG_ERROR("RealisticCamera: " << loadStatus);
     return false;
 }
 

@@ -4,6 +4,7 @@
 
 #include "Raytracing/RgbToSpectrum.h"
 #include "Raytracing/SceneData.h"
+#include "Samplers/HemisphereSampler.h"
 #include "Samplers/RandomSampler.h"
 
 static constexpr float Pi = 3.14159265358979323846f;
@@ -133,20 +134,6 @@ NR_GPU inline SampledSpectrum environmentRadiance(
     rgb *= cameraRay ? environment.visibleExposureScale : environment.lightingExposureScale;
     return rgbIlluminantToSpectrum(
         rgb, wl, scene.spectrumTableScale, scene.spectrumTableCoeffs, scene.d65);
-}
-
-NR_GPU inline glm::vec3 cosineHemisphere(const glm::vec3 normal, RandomState& rng)
-{
-    const float r1 = randomFloat(rng);
-    const float r2 = randomFloat(rng);
-    const float radius = sqrtf(r1);
-    const float angle = 2.0f * Pi * r2;
-    const glm::vec3 helper = fabsf(normal.z) < 0.999f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
-    const glm::vec3 tangent = glm::normalize(glm::cross(helper, normal));
-    const glm::vec3 bitangent = glm::cross(normal, tangent);
-    return glm::normalize(tangent * (radius * cosf(angle)) +
-                           bitangent * (radius * sinf(angle)) +
-                           normal * sqrtf(fmaxf(0.0f, 1.0f - r1)));
 }
 
 NR_GPU inline ushort4 packHalf4(const glm::vec3 value, const float w)

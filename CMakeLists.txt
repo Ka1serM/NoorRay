@@ -224,6 +224,17 @@ file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 list(FILTER SRC_FILES EXCLUDE REGEX "/CUDA/")
 list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/RgbSpectrumTableData\\.cpp$")
+list(FILTER SRC_FILES EXCLUDE REGEX "/IO/BitmapReader\\.cpp$")
+list(FILTER SRC_FILES EXCLUDE REGEX "/IO/BitmapWriter\\.cpp$")
+list(FILTER SRC_FILES EXCLUDE REGEX "/StbImpl\\.cpp$")
+
+add_library(NoorRayIO STATIC
+        src/IO/BitmapReader.cpp
+        src/IO/BitmapWriter.cpp
+        src/StbImpl.cpp)
+target_compile_features(NoorRayIO PUBLIC cxx_std_23)
+target_include_directories(NoorRayIO PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 
 set(NR_OPTIX_DEPFILE "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.d")
 
@@ -313,6 +324,7 @@ target_include_directories(NoorRay PRIVATE
 # Link against all libraries
 target_link_libraries(NoorRay PRIVATE
         NoorRayCuda
+        NoorRayIO
         portable_file_dialogs
         glm
         imgui
@@ -328,7 +340,10 @@ target_link_libraries(NoorRay PRIVATE
         TBB::tbb
 )
 
-target_compile_definitions(NoorRay PRIVATE SDL_MAIN_HANDLED NR_BACKEND_CUDA=1)
+target_compile_definitions(NoorRay PRIVATE
+        SDL_MAIN_HANDLED
+        NR_BACKEND_CUDA=1
+        NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
 target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 
 if(NR_ENABLE_UNITY_BUILD)

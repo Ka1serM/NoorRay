@@ -28,7 +28,7 @@
 
 void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 {
-    // Boilerplate: Load GLTF file from disk 
+    // Boilerplate: Load GLTF file from disk
     const std::filesystem::path filePath(filepath);
     if (!std::filesystem::exists(filePath))
         throw std::runtime_error("File not found: " + filepath);
@@ -48,8 +48,8 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         LOG_ERROR("TinyGLTF Warning: " << warn);
     if (!err.empty())
         LOG_ERROR("TinyGLTF Info/Error: " << err);
-       
-    // STEP 1: Import all unique assets (meshes and materials) 
+
+    // STEP 1: Import all unique assets (meshes and materials)
 
     // Load Materials
     std::vector<Material> globalMaterials;
@@ -121,7 +121,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                    vk::Format::eR8G8B8A8Unorm);
         addTexture(mat.emissiveTexture.index, material.emissionIndex,
                    vk::Format::eR8G8B8A8Srgb);
-        
+
         globalMaterials.push_back(material);
     }
     if (globalMaterials.empty())
@@ -179,27 +179,27 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:   for (size_t k = 0; k < indexAccessor.count; ++k) indices.push_back(static_cast<const uint32_t*>(dataPtr)[k]); break;
                 default: continue;
             }
-            
+
             int materialID = (primitive.material < 0) ? 0 : primitive.material;
             std::string meshName = mesh.name.empty() ? (nameFromPath(filepath) + "_mesh" + std::to_string(i) + "_" + std::to_string(j)) : mesh.name;
-            
+
             const uint32_t meshIndex = scene.add(MeshAsset(scene, meshName, vertices, indices,
                 std::vector<Face>(indices.size() / 3), std::vector<Material>{globalMaterials[materialID]}));
             loadedMeshAssets[i].push_back(meshIndex);
         }
     }
 
-    // STEP 2: Import nodes with final world transforms 
-    // First, traverse the GLTF hierarchy to compute the world transform for every node. 
+    // STEP 2: Import nodes with final world transforms
+    // First, traverse the GLTF hierarchy to compute the world transform for every node.
     // Then, create a flat list of SceneObjects, each with its correct world transform.
     // At this stage, all objects are temporarily added to the scene as root objects.
 
     std::vector<mat4> worldTransforms(model.nodes.size());
     std::vector<SceneObject*> nodeMap(model.nodes.size(), nullptr);
 
-    std::function<void(int, const mat4&)> calculateWorldTransforms = 
+    std::function<void(int, const mat4&)> calculateWorldTransforms =
         [&](int nodeIndex, const mat4& parentWorld) {
-        
+
         const auto& node = model.nodes[nodeIndex];
         mat4 localTransform;
         if (node.matrix.size() == 16) {
@@ -212,31 +212,31 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             vec3 S = node.scale.size() == 3 ? vec3(glm::make_vec3(node.scale.data())) : vec3(1.0f);
             localTransform = translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S);
         }
-        
+
         worldTransforms[nodeIndex] = parentWorld * localTransform;
 
         for (int childIndex : node.children) {
             calculateWorldTransforms(childIndex, worldTransforms[nodeIndex]);
         }
     };
-    
+
     // Start traversal from the root nodes of the default scene
     if (model.defaultScene >= 0) {
         for (int nodeIndex : model.scenes[model.defaultScene].nodes) {
             calculateWorldTransforms(nodeIndex, mat4(1.0f));
         }
     }
-    
+
     // Create all SceneObjects and attach their meshes
     for (size_t i = 0; i < model.nodes.size(); ++i) {
         const auto& node = model.nodes[i];
         std::string name = node.name.empty() ? ("Node_" + std::to_string(i)) : node.name;
-        
+
         auto sceneObject = std::make_unique<SceneObject>(scene, name, Transform{worldTransforms[i]});
         SceneObject* objPtr = sceneObject.get();
         nodeMap[i] = objPtr;
         scene.add(std::move(sceneObject)); // Add as a root object for now
-        
+
         // If the node has a mesh, create instances and attach them as children
         if (node.mesh >= 0 && node.mesh < loadedMeshAssets.size()) {
             // Check for GPU instancing extension (EXT_mesh_gpu_instancing)
@@ -310,7 +310,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         }
     }
 
-    // STEP 3: Assemble the final scene hierarchy 
+    // STEP 3: Assemble the final scene hierarchy
     // With all nodes created, build the hierarchy by reparenting each node. The 'reparent'
     // operation should preserve the node's world transform by calculating the correct
     // new local transform relative to its parent.
@@ -335,7 +335,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         for (int rootNodeIndex : model.scenes[model.defaultScene].nodes)
             if (nodeMap[rootNodeIndex])
                 scene.reparentObject(nodeMap[rootNodeIndex]->getId(), rootId);
-    
+
     scene.setActiveObjectId(rootId);
 }
 
@@ -344,7 +344,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
     std::filesystem::path filePath(filepath);
     if (!std::filesystem::exists(filePath))
         throw std::runtime_error("File not found: " + filepath);
-    
+
     // The directory containing the .obj file, used for finding .mtl and textures
     std::filesystem::path objDir = filePath.has_parent_path() ? filePath.parent_path() : ".";
 
@@ -361,7 +361,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
     if (!err.empty())
        LOG_ERROR("TinyObjLoader Info/Error: " << err);
 
-    // Load Global Materials from the MTL file (if it was found) 
+    // Load Global Materials from the MTL file (if it was found)
     std::vector<Material> globalMaterials;
     for (const auto& mat : mats) {
         Material material{};
@@ -407,7 +407,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
 
         globalMaterials.push_back(material);
     }
-    
+
     if (globalMaterials.empty())
         globalMaterials.emplace_back(); // Adds a default-constructed Material if the .mtl was missing
 
@@ -424,7 +424,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
         std::vector<uint32_t> indices;
         std::vector<Face> faces;
 
-        // Collect and remap materials used ONLY by this shape 
+        // Collect and remap materials used ONLY by this shape
         std::unordered_map<int, int> matRemap; // Global material index -> Local material index
         std::vector<Material> localMaterials;
 
@@ -433,7 +433,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
         auto getLocalMaterialIndex = [&](int globalMatId) {
             // Sanitize: if ID is out of bounds or negative, map it to the first global material (our default).
             const int sanitizedGlobalId = (globalMatId < 0 || static_cast<size_t>(globalMatId) >= globalMaterials.size()) ? 0 : globalMatId;
-            
+
             if (const auto it = matRemap.find(sanitizedGlobalId); it != matRemap.end())
                 return it->second;
 
@@ -442,13 +442,13 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
             matRemap[sanitizedGlobalId] = localIndex;
             return localIndex;
         };
-        
-        // Load vertex and face data for the current shape 
+
+        // Load vertex and face data for the current shape
         size_t indexOffset = 0;
         for (size_t faceIndex = 0; faceIndex < shape.mesh.num_face_vertices.size(); ++faceIndex) {
             // Because we enabled triangulation, 'fv' will always be 3.
             const unsigned int fv = shape.mesh.num_face_vertices[faceIndex];
-            
+
             Face face{};
             face.materialIndex = getLocalMaterialIndex(shape.mesh.material_ids[faceIndex]);
 
@@ -488,7 +488,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
                 indices.push_back(triIndices[v]);
             }
 
-            // Accumulate tangent data for later averaging 
+            // Accumulate tangent data for later averaging
             Vertex& v0 = vertices[triIndices[0]];
             Vertex& v1 = vertices[triIndices[1]];
             Vertex& v2 = vertices[triIndices[2]];
@@ -521,7 +521,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
             v.tangentSign = 1.0f;
         }
 
-        // Compute mesh pivot and center the vertex positions 
+        // Compute mesh pivot and center the vertex positions
         vec3 minPos = vertices[0].position;
         vec3 maxPos = vertices[0].position;
         for (const auto& v : vertices) {
@@ -533,7 +533,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
         for (auto& v : vertices)
             v.position -= center;
 
-        // Create the final assets and instances for this shape 
+        // Create the final assets and instances for this shape
         std::string meshName = shape.name.empty() ? (parentName + "_shape") : shape.name;
         const uint32_t meshIndex = scene.add(MeshAsset(scene, meshName, vertices, indices, faces, localMaterials));
 
@@ -607,6 +607,16 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
                  a.size() > 2 ? jfloat(a[2], def.z) : def.z };
     };
 
+    if (j.contains("environment")) {
+        const auto& jenv = j["environment"];
+        Environment& environment = scene.getEnvironment();
+        environment.color = jvec3(at(jenv, "color"), {1.0f, 1.0f, 1.0f});
+        environment.lightingExposure = jfloat(at(jenv, "lighting_exposure"), 1.0f);
+        environment.visibleExposure = jfloat(at(jenv, "visible_exposure"), 0.0f);
+        environment.visible = jbool(at(jenv, "visible"), true) ? 1 : 0;
+        environment.updateDerivedSettings();
+    }
+
     // Camera
     if (j.contains("camera")) {
         const auto& jcam = j["camera"];
@@ -657,6 +667,13 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
         cam.setFocalLength(focalLength);
         cam.setFocusDistance(focusDist);
         cam.setAntiAliasingDisabled(disableAntiAliasing);
+        if (at(jcam, "resolution").is_array()) {
+            const auto& resolution = at(jcam, "resolution").get_array();
+            if (resolution.size() >= 2)
+                cam.getSensor().setResolution(
+                    static_cast<uint32_t>(std::max(jint(resolution[0]), 1)),
+                    static_cast<uint32_t>(std::max(jint(resolution[1]), 1)));
+        }
         if (auto* thinLens = cam.CastOrNullptr<ThinLensCamera>())
             thinLens->bokehBias = std::max(0.001f, bokehBias);
         else if (auto* fisheye = cam.CastOrNullptr<FisheyeCamera>())

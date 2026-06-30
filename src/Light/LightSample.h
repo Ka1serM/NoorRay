@@ -7,15 +7,22 @@
 #include <glm/vec3.hpp>
 
 #include "CUDA/Annotations.h"
+#include "Raytracing/Spectrum.h"
 #include "Samplers/RandomSampler.h"
 
 inline constexpr float LightPi = 3.14159265358979323846f;
 
+NR_CPU_GPU inline float lightSelectionLuminance(const glm::vec3 color)
+{
+    const float luminance = glm::dot(color, glm::vec3(0.2126f, 0.7152f, 0.0722f));
+    return fmaxf(luminance, 0.0f);
+}
+
 struct LightSample
 {
     glm::vec3 direction{};
-    glm::vec3 radiance{};
     float distance{};
+    SampledSpectrum radiance{};
 };
 
 NR_CPU_GPU inline void makeLightBasis(

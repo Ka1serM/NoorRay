@@ -68,7 +68,7 @@ void Scene::add(Texture&& texture) {
 }
 
 bool Scene::remove(SceneObject* objToRemove) {
-    if (!objToRemove || objToRemove == getActiveCamera())
+    if (!objToRemove)
         return false;
 
     // Recursively remove children first
@@ -92,6 +92,8 @@ bool Scene::remove(SceneObject* objToRemove) {
 
     if (activeObjectId == (*it)->getId())
         activeObjectId = 0;
+    if (objToRemove == getActiveCamera())
+        activeCamera.reset();
 
     sceneObjects.erase(it);
     notifyGeometryChanged();

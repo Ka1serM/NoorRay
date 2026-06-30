@@ -46,3 +46,6 @@
 [submodule "external/tbb"]
 	path = external/tbb
 	url = https://github.com/oneapi-src/oneTBB.git
+[submodule "external/tinyexr"]
+	path = external/tinyexr
+	url = https://github.com/syoyo/tinyexr.git

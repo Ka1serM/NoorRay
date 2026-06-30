@@ -12,7 +12,7 @@ class Texture {
     std::vector<float> pixels;
 
 public:
-    Texture(Context& context, const std::string& filepath);
+    Texture(Context& context, const std::string& filepath, vk::Format format = vk::Format::eR8G8B8A8Unorm);
     Texture(Context& context, const std::string& name, const void* data, int width, int height, vk::Format format);
     
     const std::string& getName() const { return name; }

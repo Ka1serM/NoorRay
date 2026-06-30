@@ -12,22 +12,31 @@
 #include <glm/vec4.hpp>
 
 #include "CUDA/Annotations.h"
+#include "Raytracing/Spectrum.h"
+#include "Samplers/RandomSampler.h"
 
 
 static constexpr uint32_t InvalidIndex = ~0u;
 
 using TlasHandle = uint64_t;
 
+// PathState now carries wavelengths + spectral throughput/radiance.
+// lambda[]/lambdaPdf[] mirror SampledWavelengths fields and are stored
+// inline to keep the struct self-contained without a separate queue buffer.
+// Layout: 96 bytes (6 × 16-byte aligned lines).
 struct alignas(16) PathState
 {
-    glm::vec3 throughput;
-    glm::vec3 radiance;
-    uint32_t rngState;
+    SampledSpectrum throughput;
+    SampledSpectrum radiance;
+    float lambda[NrSpectrumSamples];
+    float lambdaPdf[NrSpectrumSamples];
+    RandomState rngState;
     uint32_t depth;
     uint32_t flags;
     uint32_t packedCounters;
     uint32_t lastBsdfPdfBits;
-    uint32_t _pad0;
+    float etaScale;
+    uint32_t _pad1;
 };
 
 struct alignas(16) PrimaryState
@@ -64,8 +73,10 @@ struct alignas(16) ShadowWorkItem
     float tMin;
     glm::vec3 direction;
     float tMax;
-    glm::vec3 contribution;
+    SampledSpectrum contribution;
+    RandomState rngState;
     uint32_t sampleIndex;
+    uint32_t _pad0;
 };
 
 struct WavefrontQueues

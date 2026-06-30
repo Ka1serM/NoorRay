@@ -18,7 +18,7 @@
 #include "stb_image_write.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "Camera/CameraInstance.h"
-#include "CUDA/rstd/Allocator.h"
+#include "IO/ExrWriter.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/SceneImporter.h"
 #include "Raytracing/Raytracer.h"
@@ -34,22 +34,6 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     , renderer(std::make_unique<Renderer>(context, windowWidth, windowHeight))
     , imGuiManager(std::make_unique<ImGuiManager>(context, renderer->getNumSwapchainImages(), renderer->getColorImageFormat()))
 {
-    SceneImporter::ImportGltfScene(scene, "/home/marcel/GitRepositories/NoorRay/assets/slanted_edge_target.glb");
-
-    nr::rstd::allocator<FisheyeCamera> alc;
-    FisheyeCamera* fisheye = alc.allocate(1);
-    alc.construct(fisheye);
-    Camera cam(fisheye);
-    cam.setFocalLength(2.0f);
-    cam.setFStop(2.8f);
-    cam.setFocusDistance(2.0f);
-    cam.setBokehBias(2.0f);
-    auto camera = std::make_unique<CameraInstance>(
-        scene, "Camera",
-        Transform{vec3(0.0f, 0.0f, 2.0f), vec3(0.0f), vec3(1.0f)},
-        cam);
-    scene.add(std::move(camera));
-
     raytracer = std::make_unique<Raytracer>(context, scene);
 
     viewport = std::make_unique<Viewport>(
@@ -80,18 +64,6 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
     , scene(context)
 {
     SceneImporter::ImportJsonScene(scene, argv[1]);
-
-    if (!scene.getActiveCamera()) {
-        nr::rstd::allocator<FisheyeCamera> alc;
-        FisheyeCamera* fisheye = alc.allocate(1);
-        alc.construct(fisheye);
-        Camera cam(fisheye);
-        auto camera = std::make_unique<CameraInstance>(
-            scene, "Camera",
-            Transform{vec3(0.0f, 0.0f, 5.0f), vec3(0.0f), vec3(1.0f)},
-            cam);
-        scene.add(std::move(camera));
-    }
 
     raytracer = std::make_unique<Raytracer>(context, scene);
 
@@ -154,10 +126,13 @@ void NoorRay::runUi() {
                     }
                 }
 
-                debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
-                if (renderPanel->isSaveRequested()) {
+                if (!scene.getActiveCamera()) {
+                    frame = 0;
+                    firstFrame = true;
+                } else if (renderPanel->isSaveRequested()) {
                     renderPanel->executeSave();
                 } else {
+                    debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
                     if (scene.isDirty(Meshes))   raytracer->updateMeshes();
                     if (scene.isDirty(Textures)) raytracer->updateTextures();
                     else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
@@ -166,8 +141,6 @@ void NoorRay::runUi() {
 
                     PushData push{};
                     push.frame            = frame;
-                    auto* cam = scene.getActiveCamera();
-
                     if (firstFrame || scene.isDirty(Accumulation))
                         frame = 0;
                     else
@@ -184,7 +157,8 @@ void NoorRay::runUi() {
                     viewport->dispatch(
                         cmd, frameInfo.bufferIndex, scene.getActiveMeshInstanceIndex(),
                         scene.getRenderSettings().exposure,
-                        static_cast<int>(scene.getRenderSettings().bufferVisualization));
+                        static_cast<int>(scene.getRenderSettings().bufferVisualization),
+                        scene.getRenderSettings().tonemappingEnabled);
                     viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
                     viewportPanel->setAovImages(
                         raytracer->getOutputCrypto(frameInfo.bufferIndex),
@@ -252,9 +226,13 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
     });
 
     const void* mapped = context.getDevice().mapMemory(staging.getMemory(), 0, bytes);
-    stbi_write_hdr(outputPath.c_str(), static_cast<int>(w), static_cast<int>(h), 4,
-                   reinterpret_cast<const float*>(mapped));
+    std::string exrError;
+    const bool saved = writeFloatExr(
+        outputPath, static_cast<const float*>(mapped), w, h, &exrError);
     context.getDevice().unmapMemory(staging.getMemory());
+
+    if (!saved)
+        throw std::runtime_error("Failed to save EXR: " + exrError);
 
     std::cout << "Saved: " << outputPath << "\n";
 }

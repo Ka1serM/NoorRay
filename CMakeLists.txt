@@ -63,6 +63,14 @@ target_include_directories(stb INTERFACE
         ${PROJECT_SOURCE_DIR}/external/stb
 )
 
+# TinyEXR + miniz (32-bit floating-point OpenEXR output)
+add_library(tinyexr STATIC
+        external/tinyexr/tinyexr.cc
+        external/tinyexr/deps/miniz/miniz.c)
+target_include_directories(tinyexr PUBLIC
+        ${PROJECT_SOURCE_DIR}/external/tinyexr
+        ${PROJECT_SOURCE_DIR}/external/tinyexr/deps/miniz)
+
 # ImViewGuizmo (header-only)
 add_library(ImViewGuizmo INTERFACE)
 target_include_directories(ImViewGuizmo INTERFACE
@@ -215,6 +223,7 @@ target_link_libraries(imgui PUBLIC
 file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 list(FILTER SRC_FILES EXCLUDE REGEX "/CUDA/")
 list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
+list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/RgbSpectrumTableData\\.cpp$")
 
 set(NR_OPTIX_DEPFILE "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.d")
 
@@ -250,6 +259,7 @@ add_library(NoorRayCuda STATIC
         src/Kernels/Shade.cu
         src/Kernels/Finalize.cu
         src/CUDA/Tlas.cpp
+        src/Raytracing/RgbSpectrumTableData.cpp
         src/Raytracing/Raytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
@@ -310,6 +320,7 @@ target_link_libraries(NoorRay PRIVATE
         SDL3::SDL3-static
         tinygltf
         tinyobjloader
+        tinyexr
         stb
         ImViewGuizmo
         GPUOpen::VulkanMemoryAllocator

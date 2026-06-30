@@ -182,6 +182,12 @@ void ViewportPanel::endMouseCapture() {
 }
 
 void ViewportPanel::handleInput() {
+    if (!scene.getActiveCamera()) {
+        if (isCapturingMouse)
+            endMouseCapture();
+        return;
+    }
+
     // Stop capturing mouse
     if (isCapturingMouse && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
         endMouseCapture();
@@ -209,6 +215,8 @@ void ViewportPanel::handleTransformGizmo() {
         return;
 
     auto* camera = scene.getActiveCamera();
+    if (!camera)
+        return;
     
     ImGuizmo::Style& style = ImGuizmo::GetStyle();
     style.TranslationLineThickness = 4.0f * uiScale;
@@ -327,8 +335,10 @@ void ViewportPanel::renderUi() {
     handleViewGizmo();
     handleInput();
     
-    if (isCapturingMouse)
-        scene.getActiveCamera()->update();
+    if (isCapturingMouse) {
+        if (auto* camera = scene.getActiveCamera())
+            camera->update();
+    }
     
     ImGui::End();
 }

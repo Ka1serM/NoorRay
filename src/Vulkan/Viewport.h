@@ -21,7 +21,8 @@ public:
         uint32_t bufferIndex,
         uint32_t selectedIndex,
         float exposure,
-        int bufferVisualization);
+        int bufferVisualization,
+        int tonemappingEnabled);
     void resize(uint32_t width, uint32_t height,
                 const Image& color0,    const Image& color1,
                 const Image& albedo0,   const Image& albedo1,

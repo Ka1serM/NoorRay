@@ -7,7 +7,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 3) {
         try {
             NoorRay app(argc, argv);
-            app.runCli(std::stoi(argv[2]), argc >= 4 ? argv[3] : "output.png");
+            app.runCli(std::stoi(argv[2]), argc >= 4 ? argv[3] : "output.exr");
         } catch (const std::exception& e) {
             std::cerr << e.what() << "\n";
             return 1;

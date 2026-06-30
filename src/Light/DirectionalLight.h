@@ -2,6 +2,7 @@
 
 #include <glm/vec3.hpp>
 #include "Light/LightSample.h"
+#include "Raytracing/RgbToSpectrum.h"
 
 class DirectionalLight {
 public:
@@ -10,14 +11,23 @@ public:
     float intensity{1.f};
     float softAngle{0.53f};
 
-    NR_CPU_GPU LightSample sampleLi(const glm::vec3 surfacePosition, uint32_t& rng) const
+    NR_CPU_GPU float selectionWeight() const
+    {
+        return lightSelectionLuminance(color) * fmaxf(intensity, 0.0f);
+    }
+
+    NR_CPU_GPU LightSample sampleLi(
+        const glm::vec3 surfacePosition, RandomState& rng,
+        const SampledWavelengths& wl,
+        const float* spectrumScale, const float* spectrumCoeffs, const float* d65) const
     {
         (void)surfacePosition;
         LightSample sample{};
         const glm::vec3 centerDirection = -glm::normalize(direction);
         sample.direction = centerDirection;
         sample.distance = 1e16f;
-        sample.radiance = color * intensity;
+        sample.radiance = rgbIlluminantToSpectrum(
+            color * intensity, wl, spectrumScale, spectrumCoeffs, d65);
         if (softAngle <= 0.0f)
             return sample;
 

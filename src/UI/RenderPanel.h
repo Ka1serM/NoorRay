@@ -53,7 +53,7 @@ private:
     // UI State
     std::string saveLocation = ".";
     char beautyFilenameBuffer[256] = "render_beauty.png";
-    char rawFilenameBuffer[256] = "render_hdr.hdr";
+    char rawFilenameBuffer[256] = "render_hdr.exr";
     char albedoFilenameBuffer[256] = "render_albedo.png";
     char normalFilenameBuffer[256] = "render_normals.hdr";
     char cryptoFilenameBuffer[256] = "render_crypto.bin";

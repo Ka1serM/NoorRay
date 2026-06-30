@@ -51,6 +51,7 @@ public:
     void switchTo(CameraProjectionType type);
     void loadRealisticLens(const std::string& lensPath, const std::string& sensorPath,
                            const std::string& glassCatalogPaths);
+    void setApertureDiameter(float mm);
     std::unique_ptr<SceneObject> clone() const override;
 
 

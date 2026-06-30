@@ -2,6 +2,7 @@
 
 #include <glm/vec3.hpp>
 #include "Light/LightSample.h"
+#include "Raytracing/RgbToSpectrum.h"
 
 class RectLight {
 public:
@@ -16,7 +17,17 @@ public:
     float barnDoorAngle{90.f};
     float barnDoorLength{};
 
-    NR_CPU_GPU LightSample sampleLi(const glm::vec3 surfacePosition, uint32_t& rng) const
+    NR_CPU_GPU float selectionWeight() const
+    {
+        const float sidedness = twoSided != 0 ? 2.0f : 1.0f;
+        return lightSelectionLuminance(color) * fmaxf(intensity, 0.0f)
+            * fmaxf(width * height, 0.0f) * LightPi * sidedness;
+    }
+
+    NR_CPU_GPU LightSample sampleLi(
+        const glm::vec3 surfacePosition, RandomState& rng,
+        const SampledWavelengths& wl,
+        const float* spectrumScale, const float* spectrumCoeffs, const float* d65) const
     {
         LightSample sample{};
         const glm::vec3 normal = glm::normalize(direction);
@@ -51,11 +62,11 @@ public:
                 barnDoorMask = 0.0f;
         }
         const float area = fmaxf(width * height, 0.0f);
-        sample.radiance = color * (intensity * emitterCosine * barnDoorMask * area /
+        const glm::vec3 rgb = color * (intensity * emitterCosine * barnDoorMask * area /
             fmaxf(sample.distance * sample.distance, 1e-6f));
+        sample.radiance = rgbIlluminantToSpectrum(rgb, wl, spectrumScale, spectrumCoeffs, d65);
         return sample;
     }
 
     bool renderUi();
 };
-

@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <glaze/glaze.hpp>
 #include "Camera/CameraInstance.h"
+#include "CUDA/rstd/Allocator.h"
 #include "Vulkan/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
@@ -76,25 +77,31 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         if (mat.extensions.contains("KHR_materials_ior")) {
              const auto& ext = mat.extensions.at("KHR_materials_ior");
              if (ext.Has("ior"))
-                 material.ior = static_cast<float>(ext.Get("ior").Get<double>());
+                 material.sellmeier = constantIorSellmeier(
+                     static_cast<float>(ext.Get("ior").Get<double>()));
         }
 
-        auto addTexture = [&](int textureIndex, int& materialIndex) {
+        auto addTexture = [&](int textureIndex, int& materialIndex, vk::Format fmt) {
             if (textureIndex < 0) return;
             const tinygltf::Texture& tex = model.textures[textureIndex];
             if (tex.source < 0) return;
             const tinygltf::Image& image = model.images[tex.source];
 
+            // Images named *_linear contain already-linear data; skip sRGB decode.
+            if (fmt == vk::Format::eR8G8B8A8Srgb &&
+                (image.name.find("_linear") != std::string::npos ||
+                 image.uri.find("_linear")   != std::string::npos))
+                fmt = vk::Format::eR8G8B8A8Unorm;
+
             if (!image.uri.empty()) {
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
-                    scene.add(Texture(scene.getContext(), texturePath.string()));
+                    scene.add(Texture(scene.getContext(), texturePath.string(), fmt));
                     materialIndex = static_cast<int>(scene.getTextures().size() - 1);
                 } else {
                     LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
                 }
             } else if (!image.image.empty()) {
-                const vk::Format fmt = vk::Format::eR8G8B8A8Unorm;
                 const std::string texName = image.name.empty()
                     ? "texture_" + std::to_string(textureIndex)
                     : image.name;
@@ -106,10 +113,14 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             }
         };
 
-        addTexture(pbr.baseColorTexture.index, material.albedoIndex);
-        addTexture(pbr.metallicRoughnessTexture.index, material.roughnessIndex);
-        addTexture(mat.normalTexture.index, material.normalIndex);
-        addTexture(mat.emissiveTexture.index, material.emissionIndex);
+        addTexture(pbr.baseColorTexture.index, material.albedoIndex,
+                   vk::Format::eR8G8B8A8Srgb);
+        addTexture(pbr.metallicRoughnessTexture.index, material.roughnessIndex,
+                   vk::Format::eR8G8B8A8Unorm);
+        addTexture(mat.normalTexture.index, material.normalIndex,
+                   vk::Format::eR8G8B8A8Unorm);
+        addTexture(mat.emissiveTexture.index, material.emissionIndex,
+                   vk::Format::eR8G8B8A8Srgb);
         
         globalMaterials.push_back(material);
     }
@@ -326,9 +337,6 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 scene.reparentObject(nodeMap[rootNodeIndex]->getId(), rootId);
     
     scene.setActiveObjectId(rootId);
-
-    const mat4 correctionMatrix = scale(mat4(1.0f), vec3(1.0f, -1.0f, -1.0f));
-    scene.getActiveObject()->setLocalTransform(Transform(correctionMatrix));
 }
 
 void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
@@ -361,7 +369,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
         material.specular = mat.specular[0];
         material.metallic = mat.metallic;
         material.roughness = mat.roughness;
-        material.ior = mat.ior;
+        material.sellmeier = constantIorSellmeier(mat.ior);
         material.transmissionColor = vec3(mat.transmittance[0], mat.transmittance[1], mat.transmittance[2]);
         material.transmission = (mat.illum == 4 || mat.illum == 7) ? 1.0f : 0.0f;
         material.opacity = mat.dissolve;
@@ -369,23 +377,33 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
         material.emissionStrength = (length2(material.emission) > 1e-6f) ? 1.0f : 0.0f;
 
         // Lambda to safely find and load a texture
-        auto addTexture = [&](const std::string& texname, int& index) {
+        auto addTexture = [&](const std::string& texname, int& index, vk::Format fmt) {
             if (!texname.empty()) {
+                // Images named *_linear contain already-linear data; skip sRGB decode.
+                if (fmt == vk::Format::eR8G8B8A8Srgb &&
+                    texname.find("_linear") != std::string::npos)
+                    fmt = vk::Format::eR8G8B8A8Unorm;
                 const std::filesystem::path texturePath = objDir / texname;
                 if (std::filesystem::exists(texturePath)) {
-                    scene.add(Texture(scene.getContext(), texturePath.string()));
+                    scene.add(Texture(scene.getContext(), texturePath.string(), fmt));
                     index = static_cast<int>(scene.getTextures().size() - 1);
                 } else
                    LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
             }
         };
 
-        addTexture(mat.diffuse_texname, material.albedoIndex);
-        addTexture(mat.specular_texname, material.specularIndex);
-        addTexture(mat.roughness_texname, material.roughnessIndex);
-        addTexture(mat.normal_texname, material.normalIndex);
-        addTexture(mat.alpha_texname, material.opacityIndex);
-        addTexture(mat.emissive_texname, material.emissionIndex);
+        addTexture(mat.diffuse_texname, material.albedoIndex,
+                   vk::Format::eR8G8B8A8Srgb);
+        addTexture(mat.specular_texname, material.specularIndex,
+                   vk::Format::eR8G8B8A8Srgb);
+        addTexture(mat.roughness_texname, material.roughnessIndex,
+                   vk::Format::eR8G8B8A8Unorm);
+        addTexture(mat.normal_texname, material.normalIndex,
+                   vk::Format::eR8G8B8A8Unorm);
+        addTexture(mat.alpha_texname, material.opacityIndex,
+                   vk::Format::eR8G8B8A8Unorm);
+        addTexture(mat.emissive_texname, material.emissionIndex,
+                   vk::Format::eR8G8B8A8Srgb);
 
         globalMaterials.push_back(material);
     }
@@ -575,6 +593,9 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
     auto jint = [](const glz::generic& v, int def = 0) {
         return v.is_number() ? v.as<int>() : def;
     };
+    auto jbool = [](const glz::generic& v, bool def = false) {
+        return v.is_boolean() ? v.get<bool>() : def;
+    };
     auto jstr = [](const glz::generic& v, std::string_view def = "") -> std::string {
         return v.is_string() ? v.get<std::string>() : std::string(def);
     };
@@ -586,7 +607,73 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
                  a.size() > 2 ? jfloat(a[2], def.z) : def.z };
     };
 
-    // Camera — disabled: cameras come from NoorRay.cpp default setup
+    // Camera
+    if (j.contains("camera")) {
+        const auto& jcam = j["camera"];
+        const std::string camType = jstr(at(jcam, "type"), "perspective");
+        const Transform camTransform{
+            jvec3(at(jcam, "position")),
+            jvec3(at(jcam, "rotation_euler")),
+            jvec3(at(jcam, "scale"), {1, 1, 1})
+        };
+        const float focalLength = jfloat(at(jcam, "focal_length"), 50.f);
+        const float focusDist   = jfloat(at(jcam, "focus_distance"), 2.f);
+        const float bokehBias   = jfloat(at(jcam, "bokeh_bias"), 1.f);
+        const float aperture    = jfloat(at(jcam, "aperture_diameter"), 0.f);
+        const bool disableAntiAliasing = jbool(
+            at(jcam, "disable_anti_aliasing"), false);
+
+        Camera cam;
+        if (camType == "realistic") {
+            nr::rstd::allocator<RealisticCamera> alc;
+            RealisticCamera* rc = alc.allocate(1);
+            alc.construct(rc);
+            rc->apertureDiameterMm = aperture;
+            cam = Camera(rc);
+        } else if (camType == "thinlens") {
+            nr::rstd::allocator<ThinLensCamera> alc;
+            ThinLensCamera* tc = alc.allocate(1);
+            alc.construct(tc);
+            tc->fStop = aperture;
+            cam = Camera(tc);
+        } else if (camType == "fisheye") {
+            nr::rstd::allocator<FisheyeCamera> alc;
+            FisheyeCamera* fc = alc.allocate(1);
+            alc.construct(fc);
+            fc->fStop = aperture;
+            cam = Camera(fc);
+        } else if (camType == "orthographic") {
+            nr::rstd::allocator<OrthographicCamera> alc;
+            OrthographicCamera* oc = alc.allocate(1);
+            alc.construct(oc);
+            cam = Camera(oc);
+        } else {
+            nr::rstd::allocator<PerspectiveCamera> alc;
+            PerspectiveCamera* pc = alc.allocate(1);
+            alc.construct(pc);
+            cam = Camera(pc);
+        }
+
+        cam.setFocalLength(focalLength);
+        cam.setFocusDistance(focusDist);
+        cam.setAntiAliasingDisabled(disableAntiAliasing);
+        if (auto* thinLens = cam.CastOrNullptr<ThinLensCamera>())
+            thinLens->bokehBias = std::max(0.001f, bokehBias);
+        else if (auto* fisheye = cam.CastOrNullptr<FisheyeCamera>())
+            fisheye->bokehBias = std::max(0.001f, bokehBias);
+
+        auto camInst = std::make_unique<CameraInstance>(scene, "Camera", camTransform, cam);
+        if (camType == "realistic") {
+            const std::string lens   = jstr(at(jcam, "lens"));
+            const std::string sensor = jstr(at(jcam, "sensor"));
+            const std::string glass  = jstr(at(jcam, "glass_catalogs"));
+            if (!lens.empty() && !sensor.empty())
+                camInst->loadRealisticLens(lens, sensor, glass);
+            if (aperture > 0.f)
+                camInst->setApertureDiameter(aperture);
+        }
+        scene.add(std::move(camInst));
+    }
 
     // Objects
     if (!j.contains("objects") || !j["objects"].is_array()) return;
@@ -608,7 +695,12 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
             mat.roughness        = jfloat(at(md, "roughness"),       0.5f);
             mat.metallic         = jfloat(at(md, "metallic"));
             mat.specular         = jfloat(at(md, "specular"),        0.5f);
-            mat.ior              = jfloat(at(md, "ior"),             1.5f);
+            const float ior = jfloat(at(md, "ior"), 1.5f);
+            const glm::vec3 iorRgb(
+                jfloat(at(md, "ior_r"), ior),
+                jfloat(at(md, "ior_g"), ior),
+                jfloat(at(md, "ior_b"), ior));
+            mat.sellmeier        = fitSellmeierFromFraunhofer(iorRgb);
             mat.transmission     = jfloat(at(md, "transmission"));
             mat.opacity          = jfloat(at(md, "opacity"),         1.f);
             mat.emission         = jvec3(at(md, "emission"));

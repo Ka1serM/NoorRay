@@ -5,6 +5,20 @@
 #include "Raytracing/Queues.h"
 #include "Samplers/RandomSampler.h"
 
+NR_GPU inline float analyticLightSelectionWeight(const GpuSceneData& scene)
+{
+    float weight = 0.0f;
+    for (uint32_t i = 0; i < scene.pointLightCount; ++i)
+        weight += scene.pointLights[i].selectionWeight();
+    for (uint32_t i = 0; i < scene.spotLightCount; ++i)
+        weight += scene.spotLights[i].selectionWeight();
+    for (uint32_t i = 0; i < scene.rectLightCount; ++i)
+        weight += scene.rectLights[i].selectionWeight();
+    for (uint32_t i = 0; i < scene.directionalLightCount; ++i)
+        weight += scene.directionalLights[i].selectionWeight();
+    return weight;
+}
+
 NR_GPU_KERNEL void shadeKernel(const KernelParams params)
 {
     const uint32_t index = NR_GPU_LAUNCH_IDX;
@@ -20,14 +34,38 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         shadow.tMax = 0.0f;
         params.queues.shadowQueue[index] = shadow;
         PathState state = params.queues.pathStates[hit.sampleIndex];
+
+        // Reconstruct sampled wavelengths from PathState.
+        SampledWavelengths wl;
+        for (int i = 0; i < NrSpectrumSamples; ++i)
+        {
+            wl.lambda[i] = state.lambda[i];
+            wl.pdf[i]    = state.lambdaPdf[i];
+        }
+
         if (hit.primitiveIndex == InvalidIndex)
         {
-            const bool cameraRay = state.depth == 0;
+            const bool cameraRay       = state.depth == 0;
             const bool backgroundVisible = params.scene.environment->visible != 0 &&
                 params.scene.renderSettings.transparentBackground == 0;
-            if (!cameraRay || backgroundVisible)
-                state.radiance = state.radiance + state.throughput *
-                    environmentRadiance(params.scene, hit.rayDirection, cameraRay);
+            if (!cameraRay || backgroundVisible) {
+                float misWeight = 1.0f;
+                if (!cameraRay) {
+                    const float bsdfPdf = __uint_as_float(state.lastBsdfPdfBits);
+                    const float environmentWeight = fmaxf(
+                        params.scene.environment->importanceWeight, 0.0f);
+                    const float totalWeight = analyticLightSelectionWeight(params.scene)
+                        + environmentWeight;
+                    if (bsdfPdf > 0.0f && environmentWeight > 0.0f && totalWeight > 0.0f) {
+                        const float lightPdf = (environmentWeight / totalWeight)
+                            * environmentPdf(*params.scene.environment, hit.rayDirection);
+                        misWeight = powerHeuristic(bsdfPdf, lightPdf);
+                    }
+                }
+                state.radiance += state.throughput *
+                    environmentRadiance(params.scene, hit.rayDirection, cameraRay, wl)
+                    * misWeight;
+            }
             if (cameraRay && backgroundVisible)
                 state.packedCounters |= 1u << CounterHitShift;
             params.queues.pathStates[hit.sampleIndex] = state;
@@ -50,14 +88,22 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         tangent * tangentNormal.x + bitangent * tangentNormal.y
                         + shadingNormal * tangentNormal.z);
                 }
-                uint32_t rng = state.rngState;
-                const glm::vec3 directThroughput = state.throughput;
+                // Independent per-bounce streams keep conditional BSDF/light
+                // branches from shifting opacity, lighting, or RR dimensions.
+                const RandomState bounceKey = state.rngState;
+                state.rngState = splitMix64(bounceKey);
+                RandomState opacityRng = seedRandom(bounceKey ^ 0x243f6a8885a308d3ull);
+                RandomState bsdfRng = seedRandom(bounceKey ^ 0x13198a2e03707344ull);
+                RandomState lightRng = seedRandom(bounceKey ^ 0xa4093822299f31d0ull);
+                RandomState shadowRng = seedRandom(bounceKey ^ 0x082efa98ec4e6c89ull);
+                RandomState rouletteRng = seedRandom(bounceKey ^ 0x452821e638d01377ull);
+                const SampledSpectrum directThroughput = state.throughput;
                 glm::vec3 nextDirection{};
                 float opacity = material.opacity;
                 if (material.opacityIndex >= 0)
                     opacity *= params.scene.textures[material.opacityIndex].sample(surface.uv).w;
                 opacity = fminf(fmaxf(opacity, 0.0f), 1.0f);
-                const bool transparentSurface = randomFloat(rng) > opacity;
+                const bool transparentSurface = randomFloat(opacityRng) > opacity;
                 if (transparentSurface)
                 {
                     nextDirection = hit.rayDirection;
@@ -72,16 +118,23 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         surface.geometricNormal = -surface.geometricNormal;
                     const glm::vec3 viewDirection = -hit.rayDirection;
 
-                    const BsdfSample bsdfSample = material.sampleBsdf(
+                    const BsdfSample bsdfSample = material.sampleBsdfSpectral(
                         params.scene.textures, surface.uv,
-                        viewDirection, originalGeometricNormal, shadingNormal, rng);
+                        viewDirection, originalGeometricNormal, shadingNormal, bsdfRng, wl,
+                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                        params.scene.d65);
 
-                    state.radiance = state.radiance + state.throughput * bsdfSample.emission;
+                    state.radiance += state.throughput * bsdfSample.emission;
+
                     if (state.depth == 0)
                     {
+                        // Convert spectral albedo to sRGB for denoiser AOV.
+                        const glm::vec3 albedoXYZ = spectrumToXYZ(
+                            bsdfSample.albedo, wl,
+                            params.scene.cieX, params.scene.cieY, params.scene.cieZ);
                         PrimaryState primary{};
-                        primary.primaryAlbedo = bsdfSample.albedo;
-                        primary.primaryNormal = shadingNormal;
+                        primary.primaryAlbedo   = glm::clamp(xyzToLinearSRGB(albedoXYZ), 0.f, 1.f);
+                        primary.primaryNormal   = shadingNormal;
                         primary.primaryPosition = surface.position;
                         primary.primaryObjectIndex = surface.objectIndex;
                         params.queues.primaryStates[hit.sampleIndex] = primary;
@@ -91,6 +144,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                     {
                         state.packedCounters += 1u << CounterTransmissionShift;
                         state.flags = 4u;
+                        state.etaScale *= bsdfSample.eta * bsdfSample.eta;
                     }
                     else if (bsdfSample.event == BsdfEvent::Specular)
                     {
@@ -103,72 +157,141 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         state.flags = 1u;
                     }
                     nextDirection = bsdfSample.direction;
-                    state.throughput = state.throughput * bsdfSample.weight;
+                    state.throughput *= bsdfSample.weight;
+                    state.lastBsdfPdfBits = __float_as_uint(bsdfSample.pdf);
 
+                    // Direct light sampling.
                     {
                         LightSample lightSample{};
-                        const uint32_t pl = params.scene.pointLightCount;
-                        const uint32_t sl = params.scene.spotLightCount;
-                        const uint32_t rl = params.scene.rectLightCount;
-                        const uint32_t dl = params.scene.directionalLightCount;
-                        const uint32_t total = pl + sl + rl + dl;
-                        if (total > 0)
+                        const uint32_t pl    = params.scene.pointLightCount;
+                        const uint32_t sl    = params.scene.spotLightCount;
+                        const uint32_t rl    = params.scene.rectLightCount;
+                        const uint32_t dl    = params.scene.directionalLightCount;
+                        const float analyticWeight = analyticLightSelectionWeight(params.scene);
+                        const float environmentWeight = bsdfSample.transmission <= 0.0f
+                            ? fmaxf(params.scene.environment->importanceWeight, 0.0f) : 0.0f;
+                        const float totalWeight = analyticWeight + environmentWeight;
+                        if (totalWeight > 0.0f)
                         {
-                            uint32_t choice = static_cast<uint32_t>(
-                                randomFloat(rng) * static_cast<float>(total));
-                            if (choice >= total)
-                                choice = total - 1;
-                            if (choice < pl)
-                                lightSample = params.scene.pointLights[choice].sampleLi(surface.position, rng);
-                            else if (choice < pl + sl)
-                                lightSample = params.scene.spotLights[choice - pl].sampleLi(surface.position, rng);
-                            else if (choice < pl + sl + rl)
-                                lightSample = params.scene.rectLights[choice - pl - sl].sampleLi(surface.position, rng);
-                            else
-                                lightSample = params.scene.directionalLights[choice - pl - sl - rl]
-                                    .sampleLi(surface.position, rng);
-                            lightSample.radiance *= static_cast<float>(total);
+                            float target = randomFloat(lightRng) * totalWeight;
+                            float selectedWeight = 0.0f;
+                            bool environmentSelected = false;
+                            float sampledEnvironmentPdf = 0.0f;
+                            for (uint32_t i = 0; i < pl && selectedWeight == 0.0f; ++i) {
+                                const float w = params.scene.pointLights[i].selectionWeight();
+                                if (target < w) {
+                                    selectedWeight = w;
+                                    lightSample = params.scene.pointLights[i].sampleLi(
+                                        surface.position, lightRng, wl,
+                                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                                        params.scene.d65);
+                                } else target -= w;
+                            }
+                            for (uint32_t i = 0; i < sl && selectedWeight == 0.0f; ++i) {
+                                const float w = params.scene.spotLights[i].selectionWeight();
+                                if (target < w) {
+                                    selectedWeight = w;
+                                    lightSample = params.scene.spotLights[i].sampleLi(
+                                        surface.position, lightRng, wl,
+                                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                                        params.scene.d65);
+                                } else target -= w;
+                            }
+                            for (uint32_t i = 0; i < rl && selectedWeight == 0.0f; ++i) {
+                                const float w = params.scene.rectLights[i].selectionWeight();
+                                if (target < w) {
+                                    selectedWeight = w;
+                                    lightSample = params.scene.rectLights[i].sampleLi(
+                                        surface.position, lightRng, wl,
+                                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                                        params.scene.d65);
+                                } else target -= w;
+                            }
+                            for (uint32_t i = 0; i < dl && selectedWeight == 0.0f; ++i) {
+                                const float w = params.scene.directionalLights[i].selectionWeight();
+                                if (target < w) {
+                                    selectedWeight = w;
+                                    lightSample = params.scene.directionalLights[i].sampleLi(
+                                        surface.position, lightRng, wl,
+                                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                                        params.scene.d65);
+                                } else target -= w;
+                            }
+                            if (selectedWeight == 0.0f && environmentWeight > 0.0f) {
+                                const EnvironmentDirectionSample environmentSample =
+                                    sampleEnvironmentDirection(*params.scene.environment, lightRng);
+                                if (environmentSample.pdf > 0.0f) {
+                                    selectedWeight = environmentWeight;
+                                    environmentSelected = true;
+                                    sampledEnvironmentPdf = environmentSample.pdf;
+                                    lightSample.direction = environmentSample.direction;
+                                    lightSample.distance = 1e16f;
+                                    lightSample.radiance = environmentRadiance(
+                                        params.scene, environmentSample.direction, false, wl);
+                                }
+                            }
+                            if (selectedWeight > 0.0f) {
+                                const float selectionPdf = selectedWeight / totalWeight;
+                                if (environmentSelected) {
+                                    const float lightPdf = selectionPdf * sampledEnvironmentPdf;
+                                    const float bsdfPdf = material.pdfDirectSpectral(
+                                        bsdfSample, surface.geometricNormal,
+                                        shadingNormal, viewDirection,
+                                        lightSample.direction);
+                                    lightSample.radiance *= powerHeuristic(lightPdf, bsdfPdf)
+                                        / fmaxf(lightPdf, 1e-20f);
+                                } else {
+                                    lightSample.radiance *= 1.0f / selectionPdf;
+                                }
+                            }
                         }
                         const float cosine = fmaxf(glm::dot(shadingNormal, lightSample.direction), 0.0f);
-                        if (cosine > 0.0f && fmaxf(lightSample.radiance.x,
-                            fmaxf(lightSample.radiance.y, lightSample.radiance.z)) > 0.0f)
+                        if (cosine > 0.0f && lightSample.radiance.maxComponent() > 0.0f)
                         {
-                            const glm::vec3 brdf = material.evaluateDirect(
-                                bsdfSample, shadingNormal, viewDirection, lightSample.direction);
-                            shadow.origin = surface.position + surface.geometricNormal * 0.001f;
+                            const SampledSpectrum brdf = material.evaluateDirectSpectral(
+                                bsdfSample, surface.geometricNormal, shadingNormal,
+                                viewDirection, lightSample.direction, wl);
+                            shadow.origin    = surface.position + surface.geometricNormal * 0.001f;
                             shadow.direction = lightSample.direction;
-                            shadow.tMin = 0.001f;
-                            shadow.tMax = lightSample.distance - 0.002f;
-                            shadow.contribution = directThroughput * brdf
-                                * lightSample.radiance * cosine;
-                            shadow.sampleIndex = hit.sampleIndex;
+                            shadow.tMin      = 0.001f;
+                            shadow.tMax      = lightSample.distance - 0.002f;
+                            shadow.contribution = directThroughput * brdf * lightSample.radiance * cosine;
+                            shadow.rngState     = shadowRng;
+                            shadow.sampleIndex  = hit.sampleIndex;
                             params.queues.shadowQueue[index] = shadow;
                         }
                     }
+
+                    if (bsdfSample.event == BsdfEvent::Transmission)
+                    {
+                        wl.terminateSecondary();
+                        for (int i = 0; i < NrSpectrumSamples; ++i)
+                            state.lambdaPdf[i] = wl.pdf[i];
+                    }
                 }
 
-                state.rngState = rng;
                 state.depth++;
                 const RenderSettings render = params.scene.renderSettings;
-                const uint32_t diffuse = (state.packedCounters >> CounterDiffuseShift) & 0xffu;
-                const uint32_t specular = (state.packedCounters >> CounterSpecularShift) & 0xffu;
+                const uint32_t diffuse    = (state.packedCounters >> CounterDiffuseShift)     & 0xffu;
+                const uint32_t specular   = (state.packedCounters >> CounterSpecularShift)    & 0xffu;
                 const uint32_t transmitted = (state.packedCounters >> CounterTransmissionShift) & 0xffu;
-                continuePath = diffuse <= static_cast<uint32_t>(render.diffuseBounces) &&
-                    specular <= static_cast<uint32_t>(render.specularBounces) &&
-                    transmitted <= static_cast<uint32_t>(render.transmissionBounces) &&
-                    params.depth + 1 < 256;
+                continuePath = diffuse   <= static_cast<uint32_t>(render.diffuseBounces)    &&
+                               specular  <= static_cast<uint32_t>(render.specularBounces)   &&
+                               transmitted <= static_cast<uint32_t>(render.transmissionBounces) &&
+                               params.depth + 1 < 256;
                 if (continuePath && static_cast<int>(state.depth) >= render.russianRouletteStartBounce)
                 {
-                    const float survival = fminf(fmaxf(fmaxf(state.throughput.x, fmaxf(state.throughput.y, state.throughput.z)), 0.05f), 0.95f);
-                    continuePath = randomFloat(state.rngState) <= survival;
+                    const float survival = fminf(fmaxf(
+                        state.throughput.maxComponent() * state.etaScale, 0.05f), 0.95f);
+                    continuePath = randomFloat(rouletteRng) <= survival;
                     if (continuePath)
-                        state.throughput = state.throughput / survival;
+                        state.throughput *= (1.0f / survival);
                 }
                 if (continuePath)
                 {
                     continuation.origin = surface.position + surface.geometricNormal *
                         (glm::dot(nextDirection, surface.geometricNormal) >= 0.0f ? 0.001f : -0.001f);
-                    continuation.direction = nextDirection;
+                    continuation.direction  = nextDirection;
                     continuation.sampleIndex = hit.sampleIndex;
                 }
             }

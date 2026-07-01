@@ -110,8 +110,7 @@ void CameraInstance::setApertureDiameter(float mm)
 {
     if (auto* rc = gpuCamera->CastOrNullptr<RealisticCamera>()) {
         rc->apertureDiameterMm = mm;
-        rc->applyAperture();
-        rc->rebuildExitPupilBounds();
+        rc->loadLensAndSensor();
     }
     scene.setDirtyFlag(Accumulation);
 }

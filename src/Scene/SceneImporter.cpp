@@ -709,8 +709,6 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
             const std::string glass  = jstr(at(jcam, "glass_catalogs"));
             if (!lens.empty() && !sensor.empty())
                 camInst->loadRealisticLens(lens, sensor, glass);
-            if (aperture > 0.f)
-                camInst->setApertureDiameter(aperture);
         }
         scene.add(std::move(camInst));
     }

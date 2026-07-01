@@ -96,6 +96,9 @@ set(TBB_STRICT   OFF CACHE BOOL "" FORCE)
 set(TBBMALLOC_BUILD OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/tbb)
 
+# ROSS camera-lens ray tracing (kept as an unmodified submodule).
+include(cmake/ROSS.cmake)
+
 # Restore normal log level for project-own messages
 set(CMAKE_MESSAGE_LOG_LEVEL STATUS)
 
@@ -219,6 +222,8 @@ add_library(imgui STATIC
 target_include_directories(imgui PUBLIC
         ${PROJECT_SOURCE_DIR}/external/imgui
         ${PROJECT_SOURCE_DIR}/external/ImGuizmo
+        ${PROJECT_SOURCE_DIR}/external/SDL/include
+        ${Vulkan_INCLUDE_DIR}
 )
 target_link_libraries(imgui PUBLIC
         Vulkan::Vulkan
@@ -283,7 +288,9 @@ add_library(NoorRayCuda STATIC
         src/Raytracing/Raytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
-set_target_properties(NoorRayCuda PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
+set_target_properties(NoorRayCuda PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS OFF)
 target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
 target_compile_definitions(NoorRayCuda PUBLIC
         NR_BACKEND_CUDA=1
@@ -291,6 +298,10 @@ target_compile_definitions(NoorRayCuda PUBLIC
 target_include_directories(NoorRayCuda PUBLIC
         "${PROJECT_SOURCE_DIR}/src"
         "${PROJECT_SOURCE_DIR}/external/glm"
+        "${PROJECT_SOURCE_DIR}/external/SDL/include"
+        "${PROJECT_SOURCE_DIR}/external/VulkanMemoryAllocator/include"
+        "${PROJECT_SOURCE_DIR}/external/portable-file-dialogs"
+        "${Vulkan_INCLUDE_DIR}"
         "${OPTIX_INCLUDE_DIR}"
         "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_options(NoorRayCuda PRIVATE
@@ -305,6 +316,7 @@ target_link_libraries(NoorRayCuda PUBLIC
         portable_file_dialogs
         GPUOpen::VulkanMemoryAllocator)
 target_link_libraries(NoorRayCuda PUBLIC openpbr)
+target_link_libraries(NoorRayCuda PUBLIC libross)
 
 # Resource handling on Windows
 if(WIN32)
@@ -353,7 +365,8 @@ target_link_libraries(NoorRay PRIVATE
 target_compile_definitions(NoorRay PRIVATE
         SDL_MAIN_HANDLED
         NR_BACKEND_CUDA=1
-        NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
+        NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
+        NR_ROSS_RESOURCE_DIR="${PROJECT_SOURCE_DIR}/external/ROSS/resources")
 target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 
 if(NR_ENABLE_UNITY_BUILD)

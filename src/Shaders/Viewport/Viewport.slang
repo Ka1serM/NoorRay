@@ -46,9 +46,14 @@ float3 acesFitted(float3 color)
 
 float3 hashIdToColor(uint id)
 {
-    if (id == ~0u) return float3(0.0);
-    uint h = id * 2654435761u;
+    // Invalid / background pixel
+    if (id == ~0u)
+        return float3(0.0, 0.0, 0.0);
+
+    // Offset valid IDs so object ID 0 does not hash to black.
+    uint h = (id + 1u) * 2654435761u;
     h ^= h >> 16;
+
     return float3(
         float((h >> 16) & 0xFFu) / 255.0,
         float((h >>  8) & 0xFFu) / 255.0,

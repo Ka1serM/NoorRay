@@ -137,8 +137,8 @@ void RenderPanel::renderUi() {
         ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##raw", "e.g., final_raw.exr", rawFilenameBuffer, sizeof(rawFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Albedo (.png)");
         ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##albedo", "e.g., albedo_pass.png", albedoFilenameBuffer, sizeof(albedoFilenameBuffer)); ImGui::PopItemWidth();
-        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Normals (.hdr)");
-        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##normal", "e.g., world_normals.hdr", normalFilenameBuffer, sizeof(normalFilenameBuffer)); ImGui::PopItemWidth();
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Normals (.exr)");
+        ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##normal", "e.g., world_normals.exr", normalFilenameBuffer, sizeof(normalFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Crypto (.bin)");
         ImGui::TableSetColumnIndex(1); ImGui::PushItemWidth(-FLT_MIN); ImGui::InputTextWithHint("##crypto", "e.g., object_ids.bin", cryptoFilenameBuffer, sizeof(cryptoFilenameBuffer)); ImGui::PopItemWidth();
         ImGui::EndTable();
@@ -191,7 +191,7 @@ void RenderPanel::executeSave() {
     addJob(beautyFilenameBuffer, ".png", [&]()->const Image& { return viewport.getOutputImage(); });
     addJob(rawFilenameBuffer, ".exr", [&]()->const Image& { return raytracer.getOutputColor(); });
     addJob(albedoFilenameBuffer, ".png", [&]()->const Image& { return raytracer.getOutputAlbedo(); });
-    addJob(normalFilenameBuffer, ".hdr", [&]()->const Image& { return raytracer.getOutputNormal(); });
+    addJob(normalFilenameBuffer, ".exr", [&]()->const Image& { return raytracer.getOutputNormal(); });
     addJob(cryptoFilenameBuffer, ".bin", [&]()->const Image& { return raytracer.getOutputCrypto(); });
 
     if (!m_saveJobs.empty())
@@ -255,12 +255,16 @@ void RenderPanel::writeDataToFile(std::vector<uint8_t>& imageData, const vk::For
             break;
         }
         case vk::Format::eR16G16B16A16Sfloat: {
-            std::vector<float> floatData(width * height * 4);
+            std::vector<glm::vec4> pixels(static_cast<size_t>(width) * height);
             const auto* halfData = reinterpret_cast<const uint16_t*>(imageData.data());
             for (size_t i = 0; i < width * height * 4; ++i) {
-                floatData[i] = halfToFloat(halfData[i]);
+                reinterpret_cast<float*>(pixels.data())[i] = halfToFloat(halfData[i]);
             }
-            success = stbi_write_hdr(filename.c_str(), width, height, 4, floatData.data()) != 0;
+            const Bitmap bitmap(width, height, std::move(pixels));
+            std::string writeError;
+            success = BitmapWriter::write(filename, bitmap, {}, &writeError);
+            if (!success)
+                LOG_ERROR("Bitmap writer: " << writeError);
             break;
         }
         case vk::Format::eR8G8B8A8Unorm:

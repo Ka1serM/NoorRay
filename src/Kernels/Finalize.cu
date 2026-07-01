@@ -37,20 +37,6 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
     surf2Dwrite(make_float4(radiance.x, radiance.y, radiance.z, accAlpha),
         params.output.color, x * sizeof(float4), y);
 
-    const PrimaryState primary = params.queues.primaryStates[pixel];
-    const glm::vec3 albedo = glm::clamp(primary.primaryAlbedo, 0.0f, 1.0f);
-    surf2Dwrite(make_uchar4(static_cast<unsigned char>(albedo.x * 255.0f + 0.5f),
-                            static_cast<unsigned char>(albedo.y * 255.0f + 0.5f),
-                            static_cast<unsigned char>(albedo.z * 255.0f + 0.5f), 255),
-                params.output.albedo, x * sizeof(uchar4), y);
-    surf2Dwrite(packHalf4(primary.primaryNormal, 0.0f), params.output.normal, x * sizeof(ushort4), y);
-    surf2Dwrite(packHalf4(primary.primaryPosition,
-        primary.primaryObjectIndex == InvalidIndex ? 0.0f : 1.0f),
-        params.output.position, x * sizeof(ushort4), y);
-
-    if (params.frame.sampleIndex == 0)
-        surf2Dwrite(primary.primaryObjectIndex, params.output.cryptomatte, x * sizeof(uint32_t), y);
-
     // Luminance from linear sRGB for adaptive sampling statistics.
     const float luminance = sampleRadiance.x * 0.2126f
         + sampleRadiance.y * 0.7152f + sampleRadiance.z * 0.0722f;

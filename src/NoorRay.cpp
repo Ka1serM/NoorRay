@@ -176,6 +176,9 @@ void NoorRay::runCli(const int spp, const std::string& outputPath) {
 
     LOG_INFO("Rendering " << raytracer->getWidth() << "x" << raytracer->getHeight()
              << " @ " << spp << " spp");
+    // The CLI only ever saves the final beauty/HDR bitmap below — the AOV pass
+    // (ID/normal/position/albedo) exists purely for interactive viewport features.
+    raytracer->setAovEnabled(false);
     const Bitmap bitmap = raytracer->renderOffline(static_cast<uint32_t>(spp));
 
     std::string writeError;

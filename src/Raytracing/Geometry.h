@@ -54,3 +54,22 @@ NR_GPU inline SurfaceData loadSurface(
     surface.material = &mesh.getMaterials()[materialIndex];
     return surface;
 }
+
+// Perturbs a shading normal using the material's tangent-space normal map, if any.
+NR_GPU inline glm::vec3 applyNormalMap(
+    const Material& material,
+    const CudaTexture* textures,
+    const glm::vec2 uv,
+    const glm::vec3 tangent,
+    const glm::vec3 shadingNormal)
+{
+    if (material.normalIndex < 0)
+        return shadingNormal;
+    const glm::vec4 encoded = textures[material.normalIndex].sample(uv);
+    const glm::vec3 tangentNormal = glm::vec3(encoded) * 2.0f - 1.0f;
+    const glm::vec3 t = glm::normalize(tangent);
+    const glm::vec3 bitangent = glm::normalize(glm::cross(shadingNormal, t));
+    return glm::normalize(
+        t * tangentNormal.x + bitangent * tangentNormal.y
+        + shadingNormal * tangentNormal.z);
+}

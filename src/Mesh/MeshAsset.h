@@ -19,14 +19,10 @@ class Scene;
 struct Vertex
 {
     vec3 position;
-    int _pad0;
     vec3 normal;
-    int _pad1;
     vec3 tangent;
-    int _pad2;
     float tangentSign;
     vec2 uv;
-    int _pad3;
 };
 struct Face
 {

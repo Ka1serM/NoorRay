@@ -55,7 +55,7 @@ private:
     char beautyFilenameBuffer[256] = "render_beauty.png";
     char rawFilenameBuffer[256] = "render_hdr.exr";
     char albedoFilenameBuffer[256] = "render_albedo.png";
-    char normalFilenameBuffer[256] = "render_normals.hdr";
+    char normalFilenameBuffer[256] = "render_normals.exr";
     char cryptoFilenameBuffer[256] = "render_crypto.bin";
 
     // Save Process Management

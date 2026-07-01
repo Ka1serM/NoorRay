@@ -7,11 +7,11 @@
   },
   "camera": {
     "type": "perspective",
-    "position": [0.0, 0.0, 12.0],
+    "position": [0.0, 0.0, 16.0],
     "rotation_euler": [0.0, 0.0, 0.0],
     "focal_length": 50.0,
     "disable_anti_aliasing": false,
-    "resolution": [64, 64]
+    "resolution": [1920, 1080]
   },
   "objects": [
     {

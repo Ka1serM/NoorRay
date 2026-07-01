@@ -77,17 +77,8 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             {
                 const Material material = *surface.material;
                 const glm::vec3 originalGeometricNormal = surface.geometricNormal;
-                glm::vec3 shadingNormal = surface.normal;
-                if (material.normalIndex >= 0)
-                {
-                    const glm::vec4 encoded = params.scene.textures[material.normalIndex].sample(surface.uv);
-                    const glm::vec3 tangentNormal = glm::vec3(encoded) * 2.0f - 1.0f;
-                    const glm::vec3 tangent = glm::normalize(surface.tangent);
-                    const glm::vec3 bitangent = glm::normalize(glm::cross(shadingNormal, tangent));
-                    shadingNormal = glm::normalize(
-                        tangent * tangentNormal.x + bitangent * tangentNormal.y
-                        + shadingNormal * tangentNormal.z);
-                }
+                glm::vec3 shadingNormal = applyNormalMap(
+                    material, params.scene.textures, surface.uv, surface.tangent, surface.normal);
                 // Independent per-bounce streams keep conditional BSDF/light
                 // branches from shifting opacity, lighting, or RR dimensions.
                 const RandomState bounceKey = state.rngState;
@@ -118,6 +109,9 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         surface.geometricNormal = -surface.geometricNormal;
                     const glm::vec3 viewDirection = -hit.rayDirection;
 
+                    shadingNormal = Material::clampShadingNormal(
+                        surface.geometricNormal, shadingNormal, viewDirection);
+
                     const BsdfSample bsdfSample = material.sampleBsdfSpectral(
                         params.scene.textures, surface.uv,
                         viewDirection, originalGeometricNormal, shadingNormal, bsdfRng, wl,
@@ -125,20 +119,6 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         params.scene.d65);
 
                     state.radiance += state.throughput * bsdfSample.emission;
-
-                    if (state.depth == 0)
-                    {
-                        // Convert spectral albedo to sRGB for denoiser AOV.
-                        const glm::vec3 albedoXYZ = spectrumToXYZ(
-                            bsdfSample.albedo, wl,
-                            params.scene.cieX, params.scene.cieY, params.scene.cieZ);
-                        PrimaryState primary{};
-                        primary.primaryAlbedo   = glm::clamp(xyzToLinearSRGB(albedoXYZ), 0.f, 1.f);
-                        primary.primaryNormal   = shadingNormal;
-                        primary.primaryPosition = surface.position;
-                        primary.primaryObjectIndex = surface.objectIndex;
-                        params.queues.primaryStates[hit.sampleIndex] = primary;
-                    }
 
                     if (bsdfSample.event == BsdfEvent::Transmission)
                     {

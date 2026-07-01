@@ -12,7 +12,7 @@ protected:
     {
         const std::string path = output;
         const std::string command = std::string("\"") + NOORRAY_EXECUTABLE + "\" \""
-            + TEST_SCENE_DIR "/scenes/" + scene + "\" " + std::to_string(spp)
+            + TEST_SCENE_DIR "/" + scene + "\" " + std::to_string(spp)
             + " \"" + path + "\"";
         INFO("Command: " << command);
         REQUIRE(std::system(command.c_str()) == 0);

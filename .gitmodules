@@ -52,3 +52,6 @@
 [submodule "external/Catch2"]
 	path = external/Catch2
 	url = https://github.com/catchorg/Catch2.git
+[submodule "external/openpbr-bsdf"]
+	path = external/openpbr-bsdf
+	url = https://github.com/adobe/openpbr-bsdf.git

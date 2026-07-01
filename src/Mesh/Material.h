@@ -10,6 +10,7 @@
 #include <glm/vec4.hpp>
 
 #include "CUDA/Texture.h"
+#include "Mesh/OpenPbrEnergy.h"
 #include "Raytracing/Bsdf.h"
 #include "Raytracing/RgbToSpectrum.h"
 #include "Raytracing/Sellmeier.h"
@@ -30,13 +31,9 @@ public:
     int roughnessIndex{-1};
     int normalIndex{-1};
     glm::vec3 transmissionColor{1.0f};
-    int _pad0{};
     float transmission{};
-    float _pad1{};
     glm::vec3 emission{1.0f};
-    int _pad2{};
     float emissionStrength{};
-    int _pad3{};
     int emissionIndex{-1};
     int transmissionIndex{-1};
     int opacityIndex{-1};
@@ -107,6 +104,39 @@ public:
         return 2.0f * cosTheta / fmaxf(cosTheta + root, BsdfEpsilon);
     }
 
+    // Rotates a shading normal minimally toward the geometric normal so that
+    // reflecting `view` about it does not punch below the geometric
+    // hemisphere. This is the "ensure valid reflection" technique (as used in
+    // Blender Cycles) that fixes energy loss from smooth-normal divergence
+    // near silhouettes of coarsely tessellated meshes, complementing (not
+    // replacing) shadingNormalCorrection's hard zero cutoff below.
+    // geometricNormal/shadingNormal must already satisfy dot(N, view) >= 0.
+    NR_CPU_GPU static glm::vec3 clampShadingNormal(
+        const glm::vec3 geometricNormal,
+        const glm::vec3 shadingNormal,
+        const glm::vec3 view)
+    {
+        const glm::vec3 reflected = glm::reflect(-view, shadingNormal);
+        const float ndv = fmaxf(glm::dot(geometricNormal, view), 0.0f);
+        const float threshold = fminf(0.9f * ndv, 0.01f);
+        if (glm::dot(geometricNormal, reflected) >= threshold)
+            return shadingNormal;
+
+        const glm::vec3 rawTangent = geometricNormal * ndv - view;
+        const float tangentLenSq = glm::dot(rawTangent, rawTangent);
+        if (tangentLenSq < 1e-8f)
+            return shadingNormal;
+        const glm::vec3 tangent = rawTangent * (1.0f / sqrtf(tangentLenSq));
+
+        const float sinThreshold = sqrtf(fmaxf(1.0f - threshold * threshold, 0.0f));
+        const glm::vec3 correctedReflection = geometricNormal * threshold + tangent * sinThreshold;
+        const glm::vec3 clamped = view + correctedReflection;
+        const float clampedLenSq = glm::dot(clamped, clamped);
+        if (clampedLenSq < 1e-12f)
+            return geometricNormal;
+        return clamped * (1.0f / sqrtf(clampedLenSq));
+    }
+
     NR_CPU_GPU static float shadingNormalCorrection(
         glm::vec3 geometricNormal,
         glm::vec3 shadingNormal,
@@ -143,13 +173,15 @@ public:
         if (sin2ThetaT >= 1.0f)
             return 1.0f;
         const float cosThetaT = sqrtf(1.0f - sin2ThetaT);
-        const float a = etaT * cosThetaI;
-        const float b = etaI * cosThetaT;
-        const float rs = (a - b) / fmaxf(a + b, BsdfEpsilon);
-        const float rpNumerator = a * cosThetaT - b * cosThetaI;
-        const float rpDenominator = a * cosThetaT + b * cosThetaI;
-        const float rp = rpNumerator / fmaxf(fabsf(rpDenominator), BsdfEpsilon);
-        return 0.5f * (rs * rs + rp * rp);
+        const float parallelNumerator = etaT * cosThetaI - etaI * cosThetaT;
+        const float parallelDenominator = etaT * cosThetaI + etaI * cosThetaT;
+        const float perpendicularNumerator = etaI * cosThetaI - etaT * cosThetaT;
+        const float perpendicularDenominator = etaI * cosThetaI + etaT * cosThetaT;
+        const float parallel = parallelNumerator
+            / fmaxf(fabsf(parallelDenominator), BsdfEpsilon);
+        const float perpendicular = perpendicularNumerator
+            / fmaxf(fabsf(perpendicularDenominator), BsdfEpsilon);
+        return 0.5f * (parallel * parallel + perpendicular * perpendicular);
     }
 
     NR_CPU_GPU static glm::vec3 fresnelSchlick(const float cosTheta, const glm::vec3 f0)
@@ -164,21 +196,6 @@ public:
         const float omc = 1.0f - fminf(fmaxf(cosTheta, 0.0f), 1.0f);
         const float f = omc * omc * omc * omc * omc;
         return f0 + (1.0f - f0) * f;
-    }
-
-    // UE4 split-sum approximation of the directional GGX Fresnel integral.
-    // This reserves the energy reflected by the microfacet lobe before the
-    // remaining energy is assigned to the diffuse substrate.
-    NR_CPU_GPU static float directionalGgxReflectance(
-        const float ndv, const float roughness, const float f0)
-    {
-        const glm::vec4 c0(-1.0f, -0.0275f, -0.572f, 0.022f);
-        const glm::vec4 c1(1.0f, 0.0425f, 1.04f, -0.04f);
-        const glm::vec4 r = roughness * c0 + c1;
-        const float a004 = fminf(r.x * r.x, exp2f(-9.28f * ndv)) * r.x + r.y;
-        const float scale = -1.04f * a004 + r.z;
-        const float bias = 1.04f * a004 + r.w;
-        return fminf(fmaxf(f0 * scale + bias, 0.0f), 1.0f);
     }
 
     // Per-wavelength spectral BSDF evaluation (opaque PBR).
@@ -201,16 +218,45 @@ public:
         const float G = geometrySmith(normal, view, light, roughness);
         const float geomFactor = D * G / fmaxf(4.0f * ndv * ndl, BsdfEpsilon);
         const float dielectricF0 = fminf(fmaxf(0.08f * specular, 0.0f), 1.0f);
+        const float sqrtF0 = sqrtf(dielectricF0);
+        const float dielectricIor = (1.0f + sqrtF0)
+            / fmaxf(1.0f - sqrtF0, BsdfEpsilon);
+        const float alpha = roughness * roughness;
+        const float availableView = nr::openpbr::opaqueDielectricEnergyComplement(
+            dielectricIor, alpha, ndv);
+        const float availableLight = nr::openpbr::opaqueDielectricEnergyComplement(
+            dielectricIor, alpha, ndl);
+        const float averageAvailable = nr::openpbr::opaqueDielectricAverageEnergyComplement(
+            dielectricIor, alpha);
+        const float diffuseEnergy = availableView * availableLight
+            / fmaxf(averageAvailable, BsdfEpsilon);
+        const float idealMissingView = nr::openpbr::idealDielectricEnergyComplement(
+            dielectricIor, alpha, ndv);
+        const float idealMissingLight = nr::openpbr::idealDielectricEnergyComplement(
+            dielectricIor, alpha, ndl);
+        const float idealAverageMissing = nr::openpbr::idealDielectricAverageEnergyComplement(
+            dielectricIor, alpha);
+        const float dielectricReflectionRatio = nr::openpbr::idealDielectricReflectionRatio(
+            dielectricIor, alpha);
+        const float dielectricMultipleScatter = idealMissingView * idealMissingLight
+            * dielectricReflectionRatio
+            / fmaxf(idealAverageMissing * BsdfPi, BsdfEpsilon);
 
         SampledSpectrum result;
         for (int i = 0; i < NrSpectrumSamples; ++i)
         {
-            const float f0 = dielectricF0 + (albedoSpec[i] - dielectricF0) * metallic;
-            const float F = fresnelSchlickS(vdh, f0);
+            const float dielectricF = fresnelDielectric(vdh, 1.0f, dielectricIor);
+            const float conductorF = fresnelSchlickS(vdh, albedoSpec[i]);
+            const float F = dielectricF + (conductorF - dielectricF) * metallic;
             const float specBrdf = F * geomFactor;
-            const float reflectedEnergy = directionalGgxReflectance(ndv, roughness, f0);
-            const float diffuse = (1.0f - reflectedEnergy) * (1.0f - metallic) * albedoSpec[i] / BsdfPi;
-            result[i] = diffuse + specBrdf;
+            // OpenPBR's reciprocal layered compensation accounts for light
+            // passing through the rough dielectric interface in both
+            // directions. Its tabulated hemispherical average normalizes the
+            // layer so a white substrate passes the furnace test.
+            const float diffuse = diffuseEnergy * (1.0f - metallic)
+                * albedoSpec[i] / BsdfPi;
+            result[i] = diffuse + specBrdf
+                + (1.0f - metallic) * dielectricMultipleScatter;
         }
         return result;
     }

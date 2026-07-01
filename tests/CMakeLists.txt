@@ -9,6 +9,7 @@ function(add_noorray_test target source prefix)
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain)
+    target_link_libraries(${target} PRIVATE openpbr)
     catch_discover_tests(${target}
         TEST_PREFIX "${prefix}:"
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -30,7 +31,7 @@ target_link_libraries(dielectric_bsdf_test PRIVATE glm CUDA::cudart)
 function(add_noorray_render_test target source)
     add_noorray_test(${target} ${source} e2e)
     target_compile_definitions(${target} PRIVATE
-        TEST_SCENE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        TEST_SCENE_DIR="${CMAKE_SOURCE_DIR}/assets/tests"
         NOORRAY_EXECUTABLE="$<TARGET_FILE:NoorRay>"
     )
     target_link_libraries(${target} PRIVATE NoorRayIO)

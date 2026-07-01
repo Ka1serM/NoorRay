@@ -2,220 +2,67 @@
 
 #include "CUDA/Annotations.h"
 #include "Camera/Camera.h"
-#include "Raytracing/Sellmeier.h"
-#include "Samplers/RandomSampler.h"
+#if !defined(NR_OPTIX_PTX_BUILD)
+#include "libross/imaging/cameralens/CameraLens.h"
+#include "libross/imaging/cameralens/raytracing/sequential/FromFilmToWorldRaytracer.h"
+#include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupil.h"
+#include "libross/imaging/imagesensor/ImageSensor.h"
+#else
+namespace ross {
+struct CameraLens;
+struct ImageSensor;
+struct ExitPupil;
+}
+#endif
 #include <glm/vec2.hpp>
 using glm::vec2;
 
-static constexpr int MaxRealisticLensElements = 64;
-static constexpr int MaxRealisticExitPupilBounds = 64;
-
-struct RealisticLensElement
-{
-    float radius{};
-    float thickness{};
-    float apertureRadius{};
-    float ior{};
-    SellmeierCoefficients sellmeier{};
-    float vertexZ{};
-    int isAperture{};
-};
-
-struct RealisticPupilBound
-{
-    vec2 minBounds{};
-    vec2 maxBounds{};
-    float pupilArea{};
-    float transmissiveArea{};
-};
-
-NR_CPU_GPU inline bool intersectLensElement(
-    const RealisticLensElement& elem, float surfaceOffset,
-    glm::vec3 ro, glm::vec3 rd, float& t, glm::vec3& n)
-{
-    t = 0.0f; n = glm::vec3(0.0f, 0.0f, 1.0f);
-
-    const float centerZ = elem.vertexZ + surfaceOffset;
-
-    if (std::abs(elem.radius) <= 1e-7f)
-    {
-        if (std::abs(rd.z) <= 1e-7f) return false;
-        t = (centerZ - ro.z) / rd.z;
-        n = rd.z > 0.0f ? glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f, 0.0f, 1.0f);
-        return t >= 0.0f;
-    }
-
-    const float zCenter = centerZ + elem.radius;
-    const glm::vec3 o = ro - glm::vec3(0.0f, 0.0f, zCenter);
-    const float a = glm::dot(rd, rd);
-    const float b = 2.0f * glm::dot(rd, o);
-    const float c = glm::dot(o, o) - elem.radius * elem.radius;
-    const float disc = b * b - 4.0f * a * c;
-    if (disc < 0.0f) return false;
-
-    const float root = std::sqrt(disc);
-    const float t0 = (-b - root) / (2.0f * a);
-    const float t1 = (-b + root) / (2.0f * a);
-    const bool useSmaller = (rd.z > 0.0f) != (elem.radius < 0.0f);
-    t = useSmaller ? std::min(t0, t1) : std::max(t0, t1);
-    if (t < 0.0f) return false;
-
-    n = glm::normalize(o + rd * t);
-    if (glm::dot(n, -rd) < 0.0f) n = -n;
-    return true;
-}
-
-NR_CPU_GPU inline bool refractLens(
-    const glm::vec3 incident, glm::vec3 normal,
-    const float etaIncident, const float etaTransmitted, glm::vec3& transmitted)
-{
-    if (glm::dot(normal, incident) > 0.0f)
-        normal = -normal;
-    const float cosIncident = fmaxf(-glm::dot(normal, incident), 0.0f);
-    const float eta = etaIncident / fmaxf(etaTransmitted, 1e-7f);
-    const float sin2Transmitted = eta * eta * fmaxf(0.0f, 1.0f - cosIncident * cosIncident);
-    if (sin2Transmitted >= 1.0f)
-        return false;
-    const float cosTransmitted = sqrtf(1.0f - sin2Transmitted);
-    transmitted = glm::normalize(
-        eta * incident + (eta * cosIncident - cosTransmitted) * normal);
-    return true;
-}
-
-NR_CPU_GPU inline bool traceLensSystem(
-    const RealisticLensElement* elements, int elementCount,
-    float surfaceOffset, bool fromFilm, float wavelengthNm,
-    glm::vec3 ro, glm::vec3 rd,
-    glm::vec3& outOrigin, glm::vec3& outDir)
-{
-    outOrigin = ro; outDir = rd;
-    if (elementCount <= 0) return false;
-
-    glm::vec3 tracedO = ro;
-    glm::vec3 tracedD = rd;
-
-    for (int step = 0; step < elementCount; ++step)
-    {
-        const int i = fromFilm ? elementCount - 1 - step : step;
-        const RealisticLensElement& elem = elements[i];
-        const float surfaceCenter = elem.vertexZ + surfaceOffset;
-
-        if (elem.isAperture != 0)
-        {
-            if (std::abs(tracedD.z) <= 1e-7f) return false;
-            const float t = (surfaceCenter - tracedO.z) / tracedD.z;
-            if (t < 0.0f) return false;
-            const glm::vec3 p = tracedO + tracedD * t;
-            if (p.x * p.x + p.y * p.y > elem.apertureRadius * elem.apertureRadius) return false;
-            continue;
-        }
-
-        float t; glm::vec3 n;
-        if (!intersectLensElement(elem, surfaceOffset, tracedO, tracedD, t, n)) return false;
-        const glm::vec3 pt = tracedO + tracedD * t;
-        if (pt.x * pt.x + pt.y * pt.y > elem.apertureRadius * elem.apertureRadius) return false;
-
-        const float elementIor = sellmeierIor(elem.sellmeier, wavelengthNm);
-        const float previousIor = i == 0
-            ? 1.0f : sellmeierIor(elements[i - 1].sellmeier, wavelengthNm);
-        const float etaIncident = fromFilm ? elementIor : previousIor;
-        const float etaTransmitted = fromFilm ? previousIor : elementIor;
-
-        glm::vec3 refracted{};
-        if (!refractLens(tracedD, n, etaIncident, etaTransmitted, refracted))
-            return false;
-        tracedO = pt;
-        tracedD = refracted;
-    }
-
-    outOrigin = tracedO;
-    outDir    = tracedD;
-    return true;
-}
-
-NR_CPU_GPU inline bool traceFromFilm(
-    const RealisticLensElement* elements, const int elementCount,
-    const float surfaceOffset, const float wavelengthNm,
-    const glm::vec3 ro, const glm::vec3 rd,
-    glm::vec3& outOrigin, glm::vec3& outDir)
-{
-    return traceLensSystem(elements, elementCount, surfaceOffset, true, wavelengthNm,
-        ro, rd, outOrigin, outDir);
-}
-
-NR_CPU_GPU inline glm::vec2 sampleExitPupil(
-    const RealisticPupilBound* exitPupilBounds,
-    int pupilBoundCount,
-    float filmDiagonal,
-    glm::vec2 filmPos,
-    glm::vec2 u, float& pupilArea)
-{
-    const float rFilm = glm::length(filmPos);
-    const float halfDiag = std::max(filmDiagonal * 0.5f, 1e-7f);
-    int boundIndex = static_cast<int>(
-        (rFilm / halfDiag) * static_cast<float>(pupilBoundCount));
-    boundIndex = glm::clamp(boundIndex, 0, pupilBoundCount - 1);
-    const RealisticPupilBound& bound = exitPupilBounds[boundIndex];
-    pupilArea = bound.pupilArea;
-    const glm::vec2 p = bound.minBounds + (bound.maxBounds - bound.minBounds) * u;
-    const float sinTh = rFilm > 0.0f ? filmPos.y / rFilm : 0.0f;
-    const float cosTh = rFilm > 0.0f ? filmPos.x / rFilm : 1.0f;
-    return glm::vec2(cosTh * p.x - sinTh * p.y, sinTh * p.x + cosTh * p.y);
-}
-
-#ifndef NR_GPU_CODE
-#include <memory>
-#include <string>
-#include <vector>
-#include "portable-file-dialogs.h"
-#endif
-
 class RealisticCamera : public Camera {
 public:
-    RealisticLensElement elements[MaxRealisticLensElements]{};
-    RealisticPupilBound exitPupilBounds[MaxRealisticExitPupilBounds]{};
-    int elementCount{};
-    int pupilBoundCount{};
-    float sensorWidth{};
-    float sensorHeight{};
-    float apertureDiameterMm{0.f};
-    float filmDiagonal{};
-    float rearElementZ{};
-    float surfaceOffset{};
-    float onAxisPupilArea{};
+    ross::CameraLens* rossLens{};
+    ross::ExitPupil* exitPupil{};
+    float sensorWidthCm{};
+    float sensorHeightCm{};
+    float filmDiagonalCm{};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, RandomState& rng, uint32_t, const float wavelengthNm,
         bool centered = false) const
     {
+#if defined(NR_OPTIX_PTX_BUILD)
+        return false;
+#else
         weight = 0.0f;
-        if (elementCount <= 0 || pupilBoundCount <= 0)
+        if (rossLens == nullptr || exitPupil == nullptr || exitPupil->pupilBounds.empty())
             return false;
 
-        const glm::vec2 filmPos(-nx * sensorWidth * 0.5f, -ny * sensorHeight * 0.5f);
+        const ross::Vector2f filmPos(-nx * sensorWidthCm * 0.5f, -ny * sensorHeightCm * 0.5f);
 
-        const glm::vec3 ro(filmPos.x, filmPos.y, 0.0f);
-        glm::vec3 outO{}, outD{};
-        float pupilArea = 0.0f;
-        const glm::vec2 pupilPos = sampleExitPupil(
-            exitPupilBounds, pupilBoundCount, filmDiagonal, filmPos,
-            centered ? glm::vec2(0.5f) : glm::vec2(randomFloat(rng), randomFloat(rng)), pupilArea);
-        const glm::vec3 filmDir = glm::normalize(glm::vec3(
-            pupilPos.x - filmPos.x, pupilPos.y - filmPos.y, rearElementZ));
-        if (!traceFromFilm(
-                elements, elementCount, surfaceOffset, wavelengthNm,
-                ro, filmDir, outO, outD))
+        const ross::Vector2f sample(
+            centered ? 0.5f : randomFloat(rng),
+            centered ? 0.5f : randomFloat(rng));
+        const auto pupilSample = exitPupil->samplePupil(filmPos, filmDiagonalCm, sample);
+
+        const ross::Vector3f filmPoint(filmPos.x, filmPos.y, 0.0f);
+        const ross::Vector3f pupilPoint(
+            pupilSample.point.x, pupilSample.point.y,
+            rossLens->getLastSurface().center);
+        const ross::Ray filmRay = ross::Ray::betweenPoints(filmPoint, pupilPoint);
+
+        ross::FromFilmToWorldRaytracer raytracer(*rossLens);
+        const auto traced = raytracer.trace(filmRay, wavelengthNm);
+        if (!traced)
             return false;
 
-        const float cosTheta = fabsf(filmDir.z);
-        weight = pupilArea > 0.0f && onAxisPupilArea > 0.0f
-            ? (pupilArea / onAxisPupilArea) * cosTheta * cosTheta * cosTheta * cosTheta
-            : 1.0f;
+        weight = 1.0f;
 
-        origin = outO;
-        direction = glm::normalize(outD);
+        origin = glm::vec3(traced->startPoint.x * 0.01f, traced->startPoint.y * 0.01f,
+            -traced->startPoint.z * 0.01f);
+        direction = glm::normalize(glm::vec3(
+            traced->direction.x, traced->direction.y, -traced->direction.z));
         transformRay(origin, direction);
         return true;
+#endif
     }
 
 #ifndef NR_GPU_CODE
@@ -223,36 +70,16 @@ public:
     bool renderUi();
     void load(std::string lensPath, std::string sensorPath, std::string glassCatalogPaths);
     float derivedFocalLengthMm() const { return effectiveFocalLengthM * 1000.0f; }
-    void rebuildExitPupilBounds();
-    void applyAperture();
+    float apertureDiameterMm{0.f};
+    void loadLensAndSensor();
 
 private:
     std::string lensPath;
     std::string sensorPath;
     std::string glassCatalogPaths;
-    std::vector<RealisticLensElement> lensElements;
-    std::vector<RealisticLensElement> maximumLensElements;
-    std::vector<RealisticPupilBound> pupilBounds;
     float effectiveFocalLengthM = 0.045f;
-    float focusSurfaceOffsetM = 0.f;
-    float firstPrincipalZ{};
-    float secondPrincipalZ{};
-    bool thickLensValid{};
-    int apertureIndex = -1;
     std::string loadStatus;
-    std::unique_ptr<pfd::open_file> lensDialog;
-    std::unique_ptr<pfd::open_file> sensorDialog;
-    std::unique_ptr<pfd::open_file> glassCatalogDialog;
 
-    bool loadLensAndSensor();
-    bool parseLensFile(const std::string& path, std::vector<RealisticLensElement>& elements, std::string& error) const;
-    bool parseOlioFile(const std::string& text, std::vector<RealisticLensElement>& elements, std::string& error) const;
-    bool parseDatFile(const std::string& text, std::vector<RealisticLensElement>& elements, std::string& error) const;
-    bool parseZmxFile(const std::string& text, std::vector<RealisticLensElement>& elements, std::string& error) const;
-    bool parseSensorFile(const std::string& path, std::string& error);
-    void finalizeElements(std::vector<RealisticLensElement>& elements) const;
-    void rebuildLensMetadata();
-    void applyFocus();
-    void updateGpuData();
+    void freeRossLens();
 #endif
 };

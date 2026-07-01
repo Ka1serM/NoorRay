@@ -55,3 +55,6 @@
 [submodule "external/openpbr-bsdf"]
 	path = external/openpbr-bsdf
 	url = https://github.com/adobe/openpbr-bsdf.git
+[submodule "external/ROSS"]
+	path = external/ROSS
+	url = git@github.com:hs-duesseldorf/ROSS.git

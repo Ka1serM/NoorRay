@@ -61,10 +61,6 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
                 state.packedCounters |= 1u << CounterHitShift;
             state.rngState = rng;
             params.queues.pathStates[pixel] = state;
-
-            PrimaryState primary{};
-            primary.primaryObjectIndex = InvalidIndex;
-            params.queues.primaryStates[pixel] = primary;
         }
     }
 
@@ -85,9 +81,6 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         state.etaScale   = 1.0f;
 
         params.queues.pathStates[pixel] = state;
-        PrimaryState primary{};
-        primary.primaryObjectIndex = InvalidIndex;
-        params.queues.primaryStates[pixel] = primary;
         ray.origin      = origin;
         ray.direction   = direction;
         ray.sampleIndex = pixel;

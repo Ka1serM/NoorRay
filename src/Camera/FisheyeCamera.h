@@ -10,7 +10,7 @@ public:
     float bokehBias{1.f};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState& rng, uint32_t, float) const
+        float nx, float ny, RandomState& rng, uint32_t, float, bool centered = false) const
     {
         weight = 1.0f;
         const float aspect = sensor.widthMm / sensor.heightMm;
@@ -27,7 +27,7 @@ public:
         const float theta = (r / rMax) * glm::radians(fieldOfView) * 0.5f;
         const float scale = sinf(theta) / r;
         direction = glm::vec3(sx * scale, sy * scale, -cosf(theta));
-        const float aperture = fStop > 0.f ? (focalLengthMm / fStop) * 0.5f * 0.001f : 0.f;
+        const float aperture = !centered && fStop > 0.f ? (focalLengthMm / fStop) * 0.5f * 0.001f : 0.f;
         if (aperture > 0.f) {
             const float angle  = 6.28318530718f * randomFloat(rng);
             const float rAperture = aperture * sqrtf(randomFloat(rng));

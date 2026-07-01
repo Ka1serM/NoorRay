@@ -47,6 +47,12 @@ public:
     void resize(uint32_t width, uint32_t height);
     void render(const PushData& pushData);
     Bitmap renderOffline(uint32_t sampleCount);
+
+    // ID/normal/position/albedo AOVs are only needed for interactive viewport
+    // features (picking, outlines, buffer views) — skip that extra pass entirely
+    // when only the beauty/HDR output is wanted, e.g. headless CLI renders.
+    void setAovEnabled(bool enabled) { aovEnabled = enabled; }
+    bool getAovEnabled() const { return aovEnabled; }
     void updateMeshes();
     void updateTextures();
     void updateEnvironmentCdf();
@@ -75,6 +81,7 @@ private:
 
     Context& context;
     Scene& scene;
+    bool aovEnabled{true};
     uint32_t width{};
     uint32_t height{};
     cudaStream_t stream{};
@@ -131,4 +138,7 @@ private:
     void launchShade(const KernelParams& params, cudaStream_t stream) const;
     void launchExtend(const KernelParams& params, cudaStream_t stream) const;
     void launchConnect(const KernelParams& params, cudaStream_t stream) const;
+    void launchGenerateAov(const KernelParams& params, cudaStream_t stream) const;
+    void launchExtendAov(const KernelParams& params, cudaStream_t stream) const;
+    void launchShadeAov(const KernelParams& params, cudaStream_t stream) const;
 };

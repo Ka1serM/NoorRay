@@ -36,17 +36,6 @@ struct alignas(16) PathState
     uint32_t packedCounters;
     uint32_t lastBsdfPdfBits;
     float etaScale;
-    uint32_t _pad1;
-};
-
-struct alignas(16) PrimaryState
-{
-    glm::vec3 primaryAlbedo;
-    glm::vec3 primaryNormal;
-    glm::vec3 primaryPosition;
-    uint32_t primaryObjectIndex;
-    uint32_t _pad0;
-    uint32_t _pad1;
 };
 
 struct alignas(16) PathRayWorkItem
@@ -54,7 +43,6 @@ struct alignas(16) PathRayWorkItem
     glm::vec3 origin;
     uint32_t sampleIndex;
     glm::vec3 direction;
-    uint32_t _pad0;
 };
 
 struct alignas(16) HitWorkItem
@@ -76,16 +64,16 @@ struct alignas(16) ShadowWorkItem
     SampledSpectrum contribution;
     RandomState rngState;
     uint32_t sampleIndex;
-    uint32_t _pad0;
 };
 
 struct WavefrontQueues
 {
     uint32_t* rayCounts{};
     PathState* pathStates{};
-    PrimaryState* primaryStates{};
     PathRayWorkItem* rayQueues[2]{};
     HitWorkItem* hitQueue{};
     ShadowWorkItem* shadowQueue{};
+    PathRayWorkItem* aovRayQueue{};
+    HitWorkItem* aovHitQueue{};
     uint32_t capacity{};
 };

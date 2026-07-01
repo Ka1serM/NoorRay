@@ -45,7 +45,6 @@ struct GpuSceneData
     uint32_t rectLightCount{};
     uint32_t directionalLightCount{};
     uint32_t textureCount{};
-    uint32_t _pad{};
 };
 
 struct GpuFrameSettings

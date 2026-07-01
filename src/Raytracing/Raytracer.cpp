@@ -75,6 +75,8 @@ CUdeviceptr uploadRecord(const OptixProgramGroup group)
 extern NR_GPU_KERNEL void generateKernel(KernelParams);
 extern NR_GPU_KERNEL void finalizeKernel(KernelParams);
 extern NR_GPU_KERNEL void shadeKernel(KernelParams);
+extern NR_GPU_KERNEL void generateAovKernel(KernelParams);
+extern NR_GPU_KERNEL void shadeAovKernel(KernelParams);
 
 Raytracer::Raytracer(
     Context& context,
@@ -309,11 +311,12 @@ void Raytracer::allocateQueues()
     queues.capacity = width * height;
     queues.rayCounts = nr::rstd::allocate_device<uint32_t>(MaxBounces, stream);
     queues.pathStates = nr::rstd::allocate_device<PathState>(queues.capacity, stream);
-    queues.primaryStates = nr::rstd::allocate_device<PrimaryState>(queues.capacity, stream);
     queues.rayQueues[0] = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
     queues.rayQueues[1] = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
     queues.hitQueue = nr::rstd::allocate_device<HitWorkItem>(queues.capacity, stream);
     queues.shadowQueue = nr::rstd::allocate_device<ShadowWorkItem>(queues.capacity, stream);
+    queues.aovRayQueue = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
+    queues.aovHitQueue = nr::rstd::allocate_device<HitWorkItem>(queues.capacity, stream);
     accumulation = nr::rstd::allocate_device<glm::vec4>(static_cast<size_t>(width) * height, stream);
     adaptiveState = nr::rstd::allocate_device<glm::vec4>(static_cast<size_t>(width) * height, stream);
     NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
@@ -324,11 +327,12 @@ void Raytracer::freeQueues() noexcept
 {
     nr::rstd::deallocate_device(queues.rayCounts, stream);
     nr::rstd::deallocate_device(queues.pathStates, stream);
-    nr::rstd::deallocate_device(queues.primaryStates, stream);
     nr::rstd::deallocate_device(queues.rayQueues[0], stream);
     nr::rstd::deallocate_device(queues.rayQueues[1], stream);
     nr::rstd::deallocate_device(queues.hitQueue, stream);
     nr::rstd::deallocate_device(queues.shadowQueue, stream);
+    nr::rstd::deallocate_device(queues.aovRayQueue, stream);
+    nr::rstd::deallocate_device(queues.aovHitQueue, stream);
     nr::rstd::deallocate_device(accumulation, stream);
     nr::rstd::deallocate_device(adaptiveState, stream);
     queues = {};
@@ -505,6 +509,45 @@ void Raytracer::launchConnect(const KernelParams& params, const cudaStream_t str
     NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
+void Raytracer::launchGenerateAov(const KernelParams& params, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const uint32_t count = params.frame.width * params.frame.height;
+    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = { const_cast<KernelParams*>(&params) };
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&generateAovKernel), grid, blockSize, args, 0, stream));
+}
+
+// Reuses __raygen__extend/optixExtendSbt with the AOV's own dense ray/hit buffers
+// substituted in for depth 0, so no dedicated OptiX program group is needed.
+void Raytracer::launchExtendAov(const KernelParams& params, const cudaStream_t stream) const
+{
+    NR_GPU_CHECK(cudaMemcpyAsync(params.queues.rayCounts, &params.queues.capacity,
+        sizeof(uint32_t), cudaMemcpyHostToDevice, stream));
+
+    KernelParams aovParams = params;
+    aovParams.depth = 0;
+    aovParams.queues.rayQueues[0] = params.queues.aovRayQueue;
+    aovParams.queues.hitQueue = params.queues.aovHitQueue;
+
+    void* deviceParams = nullptr;
+    NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(aovParams), stream));
+    NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &aovParams, sizeof(aovParams), cudaMemcpyHostToDevice, stream));
+    NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
+        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
+        &optixExtendSbt, params.queues.capacity, 1, 1));
+    NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
+}
+
+void Raytracer::launchShadeAov(const KernelParams& params, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const uint32_t count = params.frame.width * params.frame.height;
+    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = { const_cast<KernelParams*>(&params) };
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&shadeAovKernel), grid, blockSize, args, 0, stream));
+}
+
 void Raytracer::render(const PushData& pushData)
 {
     CameraInstance* activeCamera = scene.getActiveCamera();
@@ -559,6 +602,16 @@ void Raytracer::render(const PushData& pushData)
                                         renderSettings.transmissionBounces, 1}) + 1));
 
     NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
+
+    // Deterministic AOV pass: one sharp, unjittered primary ray per pixel, independent
+    // of the noisy accumulation below, so ID/normal/position/albedo never flicker.
+    // Skipped entirely when nothing consumes these buffers (e.g. headless CLI renders).
+    if (aovEnabled)
+    {
+        launchGenerateAov(params, stream);
+        launchExtendAov(params, stream);
+        launchShadeAov(params, stream);
+    }
 
     for (uint32_t s = 0; s < samplesPerFrame; ++s)
     {

@@ -26,21 +26,39 @@
 
 //(x, y, z) -> (x, -y, -z)
 
+namespace {
+// Resolves an asset path referenced from a scene JSON. If the path does not
+// exist as given (e.g. relative to whatever the process cwd happens to be),
+// fall back to resolving it relative to the compiled-in asset directory, so
+// scenes can reference paths like "tests/utah_teapot.obj" regardless of cwd.
+std::filesystem::path resolveAssetPath(const std::string& filepath)
+{
+    const std::filesystem::path direct(filepath);
+    if (std::filesystem::exists(direct))
+        return direct;
+    const std::filesystem::path fallback = std::filesystem::path(NOORRAY_ASSET_DIR) / filepath;
+    if (std::filesystem::exists(fallback))
+        return fallback;
+    return direct;
+}
+}
+
 void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 {
     // Boilerplate: Load GLTF file from disk
-    const std::filesystem::path filePath(filepath);
+    const std::filesystem::path filePath = resolveAssetPath(filepath);
     if (!std::filesystem::exists(filePath))
         throw std::runtime_error("File not found: " + filepath);
 
     const std::filesystem::path gltfDir = filePath.parent_path();
+    const std::string resolvedFilepath = filePath.string();
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
     std::string warn, err;
 
     const bool success = filePath.extension() == ".glb"
-        ? loader.LoadBinaryFromFile(&model, &err, &warn, filepath)
-        : loader.LoadASCIIFromFile(&model, &err, &warn, filepath);
+        ? loader.LoadBinaryFromFile(&model, &err, &warn, resolvedFilepath)
+        : loader.LoadASCIIFromFile(&model, &err, &warn, resolvedFilepath);
 
     if (!success)
         throw std::runtime_error("Failed to load GLTF file: " + warn + err);
@@ -339,21 +357,22 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     scene.setActiveObjectId(rootId);
 }
 
-void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
+void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const Material* materialOverride)
 {
-    std::filesystem::path filePath(filepath);
+    const std::filesystem::path filePath = resolveAssetPath(filepath);
     if (!std::filesystem::exists(filePath))
         throw std::runtime_error("File not found: " + filepath);
 
     // The directory containing the .obj file, used for finding .mtl and textures
-    std::filesystem::path objDir = filePath.has_parent_path() ? filePath.parent_path() : ".";
+    const std::filesystem::path objDir = filePath.has_parent_path() ? filePath.parent_path() : ".";
+    const std::string resolvedFilepath = filePath.string();
 
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> mats;
     std::string warn, err;
 
-    if (!tinyobj::LoadObj(&attrib, &shapes, &mats, &warn, &err, filepath.c_str(), objDir.string().c_str(), true))
+    if (!tinyobj::LoadObj(&attrib, &shapes, &mats, &warn, &err, resolvedFilepath.c_str(), objDir.string().c_str(), true))
         throw std::runtime_error("Failed to load OBJ file: " + warn + err);
 
     if (!warn.empty())
@@ -410,6 +429,10 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath)
 
     if (globalMaterials.empty())
         globalMaterials.emplace_back(); // Adds a default-constructed Material if the .mtl was missing
+
+    if (materialOverride != nullptr)
+        for (auto& mat : globalMaterials)
+            mat = *materialOverride;
 
     // Create a parent object for this entire OBJ file to keep the scene organized
     std::string parentName = nameFromPath(filepath);
@@ -703,8 +726,31 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
 
         if (type == "gltf" || type == "glb") {
             ImportGltfScene(scene, jstr(at(obj, "path")));
+            if (SceneObject* root = scene.getActiveObject())
+                root->setLocalTransform(t);
         } else if (type == "obj") {
-            ImportObjScene(scene, jstr(at(obj, "path")));
+            Material matOverride{};
+            const bool hasMaterial = obj.contains("material");
+            if (hasMaterial) {
+                const auto& md = at(obj, "material");
+                matOverride.albedo           = jvec3(at(md, "albedo"),          {0.8f, 0.8f, 0.8f});
+                matOverride.roughness        = jfloat(at(md, "roughness"),       0.5f);
+                matOverride.metallic         = jfloat(at(md, "metallic"));
+                matOverride.specular         = jfloat(at(md, "specular"),        0.5f);
+                const float ior = jfloat(at(md, "ior"), 1.5f);
+                const glm::vec3 iorRgb(
+                    jfloat(at(md, "ior_r"), ior),
+                    jfloat(at(md, "ior_g"), ior),
+                    jfloat(at(md, "ior_b"), ior));
+                matOverride.sellmeier        = fitSellmeierFromFraunhofer(iorRgb);
+                matOverride.transmission     = jfloat(at(md, "transmission"));
+                matOverride.opacity          = jfloat(at(md, "opacity"),         1.f);
+                matOverride.emission         = jvec3(at(md, "emission"));
+                matOverride.emissionStrength = jfloat(at(md, "emission_strength"));
+            }
+            ImportObjScene(scene, jstr(at(obj, "path")), hasMaterial ? &matOverride : nullptr);
+            if (SceneObject* root = scene.getActiveObject())
+                root->setLocalTransform(t);
         } else {
             const auto& md = at(obj, "material");
             Material mat{};

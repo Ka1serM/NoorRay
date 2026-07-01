@@ -19,8 +19,6 @@ struct RealisticLensElement
     SellmeierCoefficients sellmeier{};
     float vertexZ{};
     int isAperture{};
-    int _pad0{};
-    int _pad1{};
 };
 
 struct RealisticPupilBound
@@ -187,7 +185,8 @@ public:
     float onAxisPupilArea{};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState& rng, uint32_t, const float wavelengthNm) const
+        float nx, float ny, RandomState& rng, uint32_t, const float wavelengthNm,
+        bool centered = false) const
     {
         weight = 0.0f;
         if (elementCount <= 0 || pupilBoundCount <= 0)
@@ -200,7 +199,7 @@ public:
         float pupilArea = 0.0f;
         const glm::vec2 pupilPos = sampleExitPupil(
             exitPupilBounds, pupilBoundCount, filmDiagonal, filmPos,
-            glm::vec2(randomFloat(rng), randomFloat(rng)), pupilArea);
+            centered ? glm::vec2(0.5f) : glm::vec2(randomFloat(rng), randomFloat(rng)), pupilArea);
         const glm::vec3 filmDir = glm::normalize(glm::vec3(
             pupilPos.x - filmPos.x, pupilPos.y - filmPos.y, rearElementZ));
         if (!traceFromFilm(

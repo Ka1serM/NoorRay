@@ -4,56 +4,64 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
 #include <array>
 #include <cmath>
-#include <vector>
 
 class WhiteFurnaceTest : public RenderTestFixture {};
 
-TEST_CASE_METHOD(WhiteFurnaceTest, "white furnace conserves energy", "[e2e][furnace]")
+namespace {
+void checkEnergyConservation(const Bitmap& bitmap)
 {
-    const std::string output = render("white_furnace.json", 1024, "white_furnace.exr");
-    const Bitmap bitmap = BitmapReader::read(output);
-    REQUIRE(bitmap.width() == 64);
-    REQUIRE(bitmap.height() == 64);
+    REQUIRE(bitmap.width() == 1920);
+    REQUIRE(bitmap.height() == 1080);
 
     std::array<float, 3> background{};
+    constexpr uint32_t patchSize = 128;
     for (int channel = 0; channel < 3; ++channel) {
-        for (int y = 0; y < 8; ++y)
-            for (int x = 0; x < 8; ++x)
-                background[channel] += bitmap.pixel(x, y)[channel] / 64.0f;
+        double backgroundSum = 0.0;
+        for (uint32_t y = 0; y < patchSize; ++y) {
+            for (uint32_t x = 0; x < patchSize; ++x) {
+                backgroundSum += bitmap.pixel(x, y)[channel];
+                backgroundSum += bitmap.pixel(bitmap.width() - 1 - x, y)[channel];
+                backgroundSum += bitmap.pixel(x, bitmap.height() - 1 - y)[channel];
+                backgroundSum += bitmap.pixel(
+                    bitmap.width() - 1 - x, bitmap.height() - 1 - y)[channel];
+            }
+        }
+        background[channel] = static_cast<float>(
+            backgroundSum / (4.0 * patchSize * patchSize));
         REQUIRE(background[channel] > 0.0f);
 
-        // A perfectly white object under a uniform white environment must be
-        // indistinguishable from the background across the entire image.
         double sum = 0.0;
-        std::vector<float> values;
+        double squaredError = 0.0;
         for (uint32_t y = 0; y < bitmap.height(); ++y) {
             for (uint32_t x = 0; x < bitmap.width(); ++x) {
                 const float value = bitmap.pixel(x, y)[channel];
                 sum += value;
-                values.push_back(value);
+                const double relativeError = value / background[channel] - 1.0;
+                squaredError += relativeError * relativeError;
             }
         }
 
-        std::ranges::sort(values);
-        const size_t trim = values.size() / 100;
-        double trimmedSquaredError = 0.0;
-        for (size_t index = trim; index < values.size() - trim; ++index) {
-            const double error = values[index] - background[channel];
-            trimmedSquaredError += error * error;
-        }
-        const float mean = static_cast<float>(sum / values.size());
-        const float firstPercentile = values[trim];
-        const float ninetyNinthPercentile = values[values.size() - trim - 1];
-        const float trimmedRelativeRms = static_cast<float>(std::sqrt(trimmedSquaredError / (values.size() - 2 * trim)) / background[channel]);
-        INFO("channel=" << channel << " mean=" << mean << " background=" << background[channel] << " p01=" << firstPercentile
-             << " p99=" << ninetyNinthPercentile << " trimmed relative RMS=" << trimmedRelativeRms);
-        CHECK(mean >= background[channel] * 0.97f);
-        CHECK(mean <= background[channel] * 1.03f);
-        CHECK(firstPercentile >= background[channel] * 0.95f);
-        CHECK(ninetyNinthPercentile <= background[channel] * 1.05f);
-        CHECK(trimmedRelativeRms <= 0.02f);
+        const double pixelCount = static_cast<double>(bitmap.width()) * bitmap.height();
+        const float relativeBias = static_cast<float>(sum / pixelCount / background[channel] - 1.0);
+        const float relativeRmse = static_cast<float>(std::sqrt(squaredError / pixelCount));
+        INFO("channel=" << channel << " background=" << background[channel]
+             << " relative bias=" << relativeBias << " relative RMSE=" << relativeRmse);
+        CHECK(std::abs(relativeBias) <= 0.001f);
+        CHECK(relativeRmse <= 0.0045f);
     }
+}
+}
+
+TEST_CASE_METHOD(WhiteFurnaceTest, "white furnace conserves energy", "[e2e][furnace]")
+{
+    const std::string output = render("white_furnace.json", 4096, "white_furnace.exr");
+    checkEnergyConservation(BitmapReader::read(output));
+}
+
+TEST_CASE_METHOD(WhiteFurnaceTest, "white furnace teapot conserves energy at silhouettes", "[e2e][furnace]")
+{
+    const std::string output = render("white_furnace_teapot.json", 4096, "white_furnace_teapot.exr");
+    checkEnergyConservation(BitmapReader::read(output));
 }

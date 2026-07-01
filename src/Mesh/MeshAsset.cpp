@@ -57,10 +57,10 @@ MeshAsset MeshAsset::CreateCube(Scene& scene, const std::string& name, const Mat
 
         for (int i = 0; i < 4; ++i) {
             vertices.push_back(Vertex{
-                corners[i], 0,
-                normal, 0,
-                tangent, 0,
-                1.0f, uvs[i], 0
+                corners[i],
+                normal,
+                tangent,
+                1.0f, uvs[i]
             });
         }
 
@@ -98,10 +98,10 @@ MeshAsset MeshAsset::CreatePlane(Scene& scene, const std::string& name, const Ma
 
     for (int i = 0; i < 4; ++i) {
         vertices.push_back(Vertex{
-            positions[i], 0,
-            normal, 0,
-            tangent, 0,
-            1.0f, uvs[i], 0
+            positions[i],
+            normal,
+            tangent,
+            1.0f, uvs[i]
         });
     }
 
@@ -158,10 +158,10 @@ MeshAsset MeshAsset::CreateSphere(Scene& scene, const std::string& name, const M
             }
 
             vertices.push_back(Vertex{
-                pos, 0,
-                normal, 0,
-                tangent, 0,
-                1.0f, uv, 0
+                pos,
+                normal,
+                tangent,
+                1.0f, uv
             });
         }
     }
@@ -202,10 +202,10 @@ MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Mat
     vec3 normal = {0.0f, 1.0f, 0.0f};
 
     vertices.push_back(Vertex{
-        {0.0f, 0.0f, 0.0f}, 0,
-        normal, 0,
-        {1.0f, 0.0f, 0.0f}, 0,
-        1.0f, {0.5f, 0.5f}, 0
+        {0.0f, 0.0f, 0.0f},
+        normal,
+        {1.0f, 0.0f, 0.0f},
+        1.0f, {0.5f, 0.5f}
     }); // center vertex with tangent along +X
 
     for (uint32_t i = 0; i <= segments; ++i) {
@@ -219,10 +219,10 @@ MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Mat
         vec2 uv = {0.5f + x, 0.5f + z};
 
         vertices.push_back(Vertex{
-            pos, 0,
-            normal, 0,
-            tangent, 0,
-            1.0f, uv, 0
+            pos,
+            normal,
+            tangent,
+            1.0f, uv
         });
     }
 

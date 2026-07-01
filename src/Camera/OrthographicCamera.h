@@ -6,7 +6,7 @@
 class OrthographicCamera : public Camera {
 public:
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState&, uint32_t, float) const
+        float nx, float ny, RandomState&, uint32_t, float, bool = false) const
     {
         weight = 1.0f;
         constexpr float referenceHeight = 10.f;

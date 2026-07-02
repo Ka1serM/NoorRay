@@ -105,12 +105,6 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             if (tex.source < 0) return;
             const tinygltf::Image& image = model.images[tex.source];
 
-            // Images named *_linear contain already-linear data; skip sRGB decode.
-            if (fmt == vk::Format::eR8G8B8A8Srgb &&
-                (image.name.find("_linear") != std::string::npos ||
-                 image.uri.find("_linear")   != std::string::npos))
-                fmt = vk::Format::eR8G8B8A8Unorm;
-
             if (!image.uri.empty()) {
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
@@ -638,6 +632,13 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
         environment.visibleExposure = jfloat(at(jenv, "visible_exposure"), 0.0f);
         environment.visible = jbool(at(jenv, "visible"), true) ? 1 : 0;
         environment.updateDerivedSettings();
+    }
+
+    // Render settings
+    if (j.contains("render_settings")) {
+        const auto& jrs = j["render_settings"];
+        RenderSettings& rs = scene.getRenderSettings();
+        rs.maxSamples = jint(at(jrs, "max_samples"), rs.maxSamples);
     }
 
     // Camera

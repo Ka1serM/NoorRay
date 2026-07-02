@@ -7,9 +7,9 @@
 #include "CUDA/Annotations.h"
 
 // Standard visible Fraunhofer lines used by optical-glass catalogs.
-static constexpr float FraunhoferRedNm   = 656.2725f; // C line, H
-static constexpr float FraunhoferGreenNm = 546.0740f; // e line, Hg
-static constexpr float FraunhoferBlueNm  = 486.1327f; // F line, H
+inline constexpr float FraunhoferRedNm   = 656.2725f; // C line, H
+inline constexpr float FraunhoferGreenNm = 546.0740f; // e line, Hg
+inline constexpr float FraunhoferBlueNm  = 486.1327f; // F line, H
 
 struct SellmeierCoefficients
 {

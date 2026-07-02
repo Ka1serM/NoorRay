@@ -13,6 +13,7 @@ class RenderSettings
 {
 public:
     int samples{1};
+    int maxSamples{3000};
     int diffuseBounces{64};
     int specularBounces{64};
     int transmissionBounces{64};

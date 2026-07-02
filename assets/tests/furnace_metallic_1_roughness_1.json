@@ -1,0 +1,30 @@
+{
+  "environment": {
+    "color": [1.0, 1.0, 1.0],
+    "lighting_exposure": 1.0,
+    "visible_exposure": 0.0,
+    "visible": true
+  },
+  "camera": {
+    "type": "perspective",
+    "position": [0.0, 0.0, 16.0],
+    "rotation_euler": [0.0, 0.0, 0.0],
+    "focal_length": 50.0,
+    "disable_anti_aliasing": false,
+    "resolution": [1920, 1080]
+  },
+  "objects": [
+    {
+      "type": "sphere",
+      "name": "White furnace sphere",
+      "position": [0.0, 0.0, 0.0],
+      "scale": [1.0, 1.0, 1.0],
+      "material": {
+        "albedo": [1.0, 1.0, 1.0],
+        "roughness": 1.0,
+        "metallic": 1.0,
+        "specular": 0.5
+      }
+    }
+  ]
+}

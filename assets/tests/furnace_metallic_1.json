@@ -21,8 +21,8 @@
       "scale": [1.0, 1.0, 1.0],
       "material": {
         "albedo": [1.0, 1.0, 1.0],
-        "roughness": 0.5,
-        "metallic": 0.0,
+        "roughness": 0.0,
+        "metallic": 1.0,
         "specular": 0.5
       }
     }

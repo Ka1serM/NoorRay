@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <SDL3/SDL.h>
+#include "OpenPbr/OpenPbrLuts.h"
 #include "Vulkan/Renderer.h"
 #include "UI/ImGuiManager.h"
 #include "UI/DebugPanel.h"
@@ -33,6 +34,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     , renderer(std::make_unique<Renderer>(context, windowWidth, windowHeight))
     , imGuiManager(std::make_unique<ImGuiManager>(context, renderer->getNumSwapchainImages(), renderer->getColorImageFormat()))
 {
+    uploadOpenPbrLuts();
     SceneImporter::ImportJsonScene(scene, NOORRAY_ASSET_DIR "/slanted_edge_target.nrscene");
     raytracer = std::make_unique<Raytracer>(context, scene);
 
@@ -63,12 +65,16 @@ NoorRay::NoorRay(int /*argc*/, char* argv[])
     : context(1, 1, /*headless=*/true)
     , scene(context)
 {
+    uploadOpenPbrLuts();
     SceneImporter::ImportJsonScene(scene, argv[1]);
 
     raytracer = std::make_unique<Raytracer>(context, scene);
 }
 
-NoorRay::~NoorRay() = default;
+NoorRay::~NoorRay()
+{
+    destroyOpenPbrLuts();
+}
 
 // ── runUi ─────────────────────────────────────────────────────────────────────
 

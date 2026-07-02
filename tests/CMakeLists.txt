@@ -28,9 +28,21 @@ add_noorray_test(bsdf_convention_test Bsdf/BsdfConvention.cpp bsdf)
 target_link_libraries(bsdf_convention_test PRIVATE glm CUDA::cudart)
 
 add_noorray_test(bsdf_cuda_test Bsdf/BsdfCuda.cu bsdf)
+target_sources(bsdf_cuda_test PRIVATE "${CMAKE_SOURCE_DIR}/src/OpenPbr/OpenPbrLuts.cu")
 target_link_libraries(bsdf_cuda_test PRIVATE glm CUDA::cudart)
 set_target_properties(bsdf_cuda_test PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
 target_compile_options(bsdf_cuda_test PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+
+add_executable(openpbr_diagnostic Bsdf/OpenPbrDiagnostic.cu "${CMAKE_SOURCE_DIR}/src/OpenPbr/OpenPbrLuts.cu")
+target_include_directories(openpbr_diagnostic PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(openpbr_diagnostic PRIVATE glm CUDA::cudart)
+set_target_properties(openpbr_diagnostic PROPERTIES
+    CUDA_ARCHITECTURES ${NR_CUDA_ARCH}
+    CUDA_SEPARABLE_COMPILATION ON)
+target_compile_options(openpbr_diagnostic PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
 
 add_noorray_test(spectrum_test Spectral/Spectrum.cpp spectral)

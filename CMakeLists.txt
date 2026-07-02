@@ -277,6 +277,7 @@ add_library(NoorRayCuda STATIC
         src/Kernels/GenerateAov.cu
         src/Kernels/ShadeAov.cu
         src/CUDA/Tlas.cpp
+        src/OpenPbr/OpenPbrLuts.cu
         src/Raytracing/RgbSpectrumTableData.cpp
         src/Raytracing/Raytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
@@ -294,6 +295,7 @@ target_include_directories(NoorRayCuda PUBLIC
         "${PROJECT_SOURCE_DIR}/external/SDL/include"
         "${PROJECT_SOURCE_DIR}/external/VulkanMemoryAllocator/include"
         "${PROJECT_SOURCE_DIR}/external/portable-file-dialogs"
+        "${PROJECT_SOURCE_DIR}/external/openpbr-bsdf"
         "${Vulkan_INCLUDE_DIR}"
         "${OPTIX_INCLUDE_DIR}"
         "${CMAKE_CURRENT_BINARY_DIR}/generated")

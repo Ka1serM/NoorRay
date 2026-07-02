@@ -1,5 +1,6 @@
 #include <cuda_fp16.h>
 
+#include "OpenPbr/OpenPbrSurface.h"
 #include "Raytracing/Geometry.h"
 #include "Raytracing/KernelHelpers.h"
 #include "Raytracing/Queues.h"
@@ -76,7 +77,6 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             if (surface.material != nullptr)
             {
                 const Material material = *surface.material;
-                const glm::vec3 originalGeometricNormal = surface.geometricNormal;
                 glm::vec3 shadingNormal = applyNormalMap(
                     material, params.scene.textures, surface.uv, surface.tangent, surface.normal);
                 // Independent per-bounce streams keep conditional BSDF/light
@@ -104,17 +104,19 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 else
                 {
                     state.packedCounters |= 1u << CounterHitShift;
-                    if (glm::dot(shadingNormal, hit.rayDirection) > 0.0f)
-                        shadingNormal = -shadingNormal;
+                    // OpenPBR handles back-facing internally via the basis normal;
+                    // do NOT face-forward the shading normal.  Keep geometricNormal
+                    // face-forwarded for continuation/shadow ray offsetting.
+                    const glm::vec3 nonFfShadingNormal = shadingNormal;
                     if (glm::dot(surface.geometricNormal, hit.rayDirection) > 0.0f)
                         surface.geometricNormal = -surface.geometricNormal;
                     const glm::vec3 viewDirection = -hit.rayDirection;
 
-                    const BsdfSample bsdfSample = material.sampleBsdfSpectral(
-                        params.scene.textures, surface.uv,
-                        viewDirection, originalGeometricNormal, shadingNormal, bsdfRng, wl,
-                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65);
+                    const BsdfSample bsdfSample = nr::openpbr::sample(
+                        material, params.scene.textures, surface.uv,
+                        viewDirection, nonFfShadingNormal,
+                        surface.tangent, bsdfRng, wl,
+                        1.0f, state.throughput);
 
                     state.radiance += state.throughput * bsdfSample.emission;
 
@@ -147,7 +149,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                     // weighting an eventual environment hit against its PDF would
                     // discard energy.
                     state.lastBsdfPdfBits = __float_as_uint(
-                        validContinuation && bsdfSample.transmission <= 0.0f
+                        validContinuation && material.transmission <= 0.0f
                             ? bsdfSample.pdf : 0.0f);
 
                     // Direct light sampling.
@@ -158,7 +160,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         const uint32_t rl    = params.scene.rectLightCount;
                         const uint32_t dl    = params.scene.directionalLightCount;
                         const float analyticWeight = analyticLightSelectionWeight(params.scene);
-                        const float environmentWeight = bsdfSample.transmission <= 0.0f
+                        const float environmentWeight = material.transmission <= 0.0f
                             ? fmaxf(params.scene.environment->importanceWeight, 0.0f) : 0.0f;
                         const float totalWeight = analyticWeight + environmentWeight;
                         if (totalWeight > 0.0f)
@@ -224,10 +226,10 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                                 const float selectionPdf = selectedWeight / totalWeight;
                                 if (environmentSelected) {
                                     const float lightPdf = selectionPdf * sampledEnvironmentPdf;
-                                    const float bsdfPdf = material.pdfDirectSpectral(
-                                        bsdfSample, surface.geometricNormal,
-                                        shadingNormal, viewDirection,
-                                        lightSample.direction);
+                                    const float bsdfPdf = nr::openpbr::pdf(
+                                        material, params.scene.textures, surface.uv,
+                                        viewDirection, lightSample.direction,
+                                        nonFfShadingNormal, surface.tangent, state.throughput);
                                     lightSample.radiance *= powerHeuristic(lightPdf, bsdfPdf)
                                         / fmaxf(lightPdf, 1e-20f);
                                 } else {
@@ -237,9 +239,11 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         }
                         if (lightSample.radiance.maxComponent() > 0.0f)
                         {
-                            const SampledSpectrum bsdfCosine = material.evaluateDirectSpectral(
-                                bsdfSample, surface.geometricNormal, shadingNormal,
-                                viewDirection, lightSample.direction, wl, lightRng);
+                            const SampledSpectrum bsdfCosine = nr::openpbr::evaluate(
+                                material, params.scene.textures, surface.uv,
+                                viewDirection, lightSample.direction,
+                                nonFfShadingNormal, surface.tangent, wl,
+                                1.0f, state.throughput);
                             if (bsdfCosine.maxComponent() > 0.0f)
                             {
                                 const float side = glm::dot(
@@ -259,12 +263,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         }
                     }
 
-                    if (validContinuation && bsdfSample.terminateSecondaryWavelengths)
-                    {
-                        wl.terminateSecondary();
-                        for (int i = 0; i < NrSpectrumSamples; ++i)
-                            state.lambdaPdf[i] = wl.pdf[i];
-                    }
+
                 }
 
                 state.depth++;

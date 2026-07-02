@@ -4,6 +4,8 @@
 
 class Renderer {
 public:
+    #define MAX_FRAMES_IN_FLIGHT 3
+    
     explicit Renderer(Context& context, uint32_t initial_width, uint32_t initial_height);
     ~Renderer();
 
@@ -28,13 +30,6 @@ public:
         uint64_t value);
 
 private:
-    // Upper bound on frames-in-flight. The actual count is clamped to the swapchain
-    // image count so that CPU submissions never lap a swapchain image (or an ImGui
-    // vertex/index buffer, which cycles once per swapchain image) that the GPU is
-    // still reading — otherwise the ImGui overlay shows torn/garbage geometry.
-    static constexpr uint32_t kMaxFramesInFlight = 3;
-    uint32_t queryDesiredSwapchainImageCount() const;
-
     void recreateSwapChain();
 
     Context& context;

@@ -5,11 +5,6 @@
 DebugPanel::DebugPanel(std::string name) 
     : ImGuiComponent(std::move(name)), lastTime(std::chrono::high_resolution_clock::now()) {}
 
-void DebugPanel::setSampleInfo(const int current, const int max) {
-    m_currentSample = current;
-    m_maxSamples = max;
-}
-
 void DebugPanel::onComputeFinished(const float raytraceMs) {
     const auto now = std::chrono::high_resolution_clock::now();
     const float deltaTime = std::chrono::duration<float>(now - lastTime).count();
@@ -37,9 +32,6 @@ void DebugPanel::renderUi() {
 
         ImGuiManager::tableRowLabel("Raytrace");
         ImGui::Text("%.2f ms", m_raytraceMs);
-
-        ImGuiManager::tableRowLabel("Samples");
-        ImGui::Text("%d / %d", m_currentSample, m_maxSamples);
 
         //ImGuiManager::tableRowLabel("Show BVH");
         //ImGui::Combo("##BVHMode", &visualizeBVH, modes, IM_ARRAYSIZE(modes));

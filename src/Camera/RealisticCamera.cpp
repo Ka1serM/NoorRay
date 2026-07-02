@@ -3,7 +3,6 @@
 #include <cmath>
 #include <imgui.h>
 #include <string>
-#include "Raytracing/Sellmeier.h"
 #include "Log.h"
 #include "UI/ImGuiManager.h"
 #include "libross/foundation/gpu/types/Allocator.h"

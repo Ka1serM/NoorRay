@@ -7,23 +7,23 @@
   },
   "camera": {
     "type": "perspective",
-    "position": [0.0, 0.0, 16.0],
-    "rotation_euler": [0.0, 0.0, 0.0],
+    "position": [0.0, 50.0, 50.0],
+    "rotation_euler": [-44.3, 0.0, 0.0],
     "focal_length": 50.0,
     "disable_anti_aliasing": false,
     "resolution": [1920, 1080]
   },
   "objects": [
     {
-      "type": "sphere",
-      "name": "White furnace sphere",
-      "position": [0.0, 0.0, 0.0],
-      "scale": [1.0, 1.0, 1.0],
+      "type": "obj",
+      "name": "White furnace teapot",
+      "path": "tests/utah_teapot.obj",
+      "rotation_euler": [180.0, 0.0, 0.0],
       "material": {
         "albedo": [1.0, 1.0, 1.0],
-        "roughness": 0.0,
+        "roughness": 0.5,
         "metallic": 0.0,
-        "specular": 0.0
+        "specular": 0.5
       }
     }
   ]

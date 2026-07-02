@@ -42,6 +42,7 @@ std::vector<AccelInstanceInput> Tlas::buildInstanceInputs(
         gpuInstance.objectToWorld = objectToWorld;
         gpuInstance.normalToWorld = glm::mat3(transpose(worldToObject));
         gpuInstance.meshIndex = meshIndex;
+        gpuInstance.objectIndex = index;
         instancesOut.push_back(gpuInstance);
     }
     return result;

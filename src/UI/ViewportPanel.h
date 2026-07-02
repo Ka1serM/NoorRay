@@ -53,8 +53,6 @@ private:
     
     bool isViewportHovered{false};
     float uiScale{1.0f};
-    // Precomputed baseGizmoSizeClipSpace * uiScale * referenceViewportWidth; only viewportSize.x varies per frame.
-    float gizmoSizeClipSpaceScale{1.0f};
 
     void drawBackground() const;
     void drawImageAndUpdateState();

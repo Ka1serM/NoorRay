@@ -90,7 +90,6 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 RandomState rouletteRng = seedRandom(bounceKey ^ 0x452821e638d01377ull);
                 const SampledSpectrum directThroughput = state.throughput;
                 glm::vec3 nextDirection{};
-                bool validContinuation = true;
                 float opacity = material.opacity;
                 if (material.opacityIndex >= 0)
                     opacity *= params.scene.textures[material.opacityIndex].sample(surface.uv).w;
@@ -110,6 +109,9 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         surface.geometricNormal = -surface.geometricNormal;
                     const glm::vec3 viewDirection = -hit.rayDirection;
 
+                    shadingNormal = Material::clampShadingNormal(
+                        surface.geometricNormal, shadingNormal, viewDirection);
+
                     const BsdfSample bsdfSample = material.sampleBsdfSpectral(
                         params.scene.textures, surface.uv,
                         viewDirection, originalGeometricNormal, shadingNormal, bsdfRng, wl,
@@ -118,37 +120,25 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
 
                     state.radiance += state.throughput * bsdfSample.emission;
 
-                    validContinuation = bsdfSample.pdf > 0.0f &&
-                        glm::dot(bsdfSample.direction, bsdfSample.direction) > 0.0f;
-
-                    if (validContinuation && bsdfSample.event == BsdfEvent::Transmission)
+                    if (bsdfSample.event == BsdfEvent::Transmission)
                     {
                         state.packedCounters += 1u << CounterTransmissionShift;
                         state.flags = 4u;
                         state.etaScale *= bsdfSample.eta * bsdfSample.eta;
                     }
-                    else if (validContinuation && bsdfSample.event == BsdfEvent::Specular)
+                    else if (bsdfSample.event == BsdfEvent::Specular)
                     {
                         state.packedCounters += 1u << CounterSpecularShift;
                         state.flags = 2u;
                     }
-                    else if (validContinuation)
+                    else
                     {
                         state.packedCounters += 1u << CounterDiffuseShift;
                         state.flags = 1u;
                     }
-                    if (validContinuation)
-                    {
-                        nextDirection = bsdfSample.direction;
-                        state.throughput *= bsdfSample.weight;
-                    }
-                    // Environment NEE is deliberately disabled for transmissive
-                    // materials below. With no competing light-sampling strategy,
-                    // weighting an eventual environment hit against its PDF would
-                    // discard energy.
-                    state.lastBsdfPdfBits = __float_as_uint(
-                        validContinuation && bsdfSample.transmission <= 0.0f
-                            ? bsdfSample.pdf : 0.0f);
+                    nextDirection = bsdfSample.direction;
+                    state.throughput *= bsdfSample.weight;
+                    state.lastBsdfPdfBits = __float_as_uint(bsdfSample.pdf);
 
                     // Direct light sampling.
                     {
@@ -235,31 +225,24 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                                 }
                             }
                         }
-                        if (lightSample.radiance.maxComponent() > 0.0f)
+                        const float cosine = fmaxf(glm::dot(shadingNormal, lightSample.direction), 0.0f);
+                        if (cosine > 0.0f && lightSample.radiance.maxComponent() > 0.0f)
                         {
-                            const SampledSpectrum bsdfCosine = material.evaluateDirectSpectral(
+                            const SampledSpectrum brdf = material.evaluateDirectSpectral(
                                 bsdfSample, surface.geometricNormal, shadingNormal,
-                                viewDirection, lightSample.direction, wl, lightRng);
-                            if (bsdfCosine.maxComponent() > 0.0f)
-                            {
-                                const float side = glm::dot(
-                                    lightSample.direction, surface.geometricNormal) >= 0.0f
-                                    ? 1.0f : -1.0f;
-                                shadow.origin = surface.position
-                                    + surface.geometricNormal * (0.001f * side);
-                                shadow.direction = lightSample.direction;
-                                shadow.tMin = 0.001f;
-                                shadow.tMax = lightSample.distance - 0.002f;
-                                shadow.contribution = directThroughput
-                                    * bsdfCosine * lightSample.radiance;
-                                shadow.rngState = shadowRng;
-                                shadow.sampleIndex = hit.sampleIndex;
-                                params.queues.shadowQueue[index] = shadow;
-                            }
+                                viewDirection, lightSample.direction, wl);
+                            shadow.origin    = surface.position + surface.geometricNormal * 0.001f;
+                            shadow.direction = lightSample.direction;
+                            shadow.tMin      = 0.001f;
+                            shadow.tMax      = lightSample.distance - 0.002f;
+                            shadow.contribution = directThroughput * brdf * lightSample.radiance * cosine;
+                            shadow.rngState     = shadowRng;
+                            shadow.sampleIndex  = hit.sampleIndex;
+                            params.queues.shadowQueue[index] = shadow;
                         }
                     }
 
-                    if (validContinuation && bsdfSample.terminateSecondaryWavelengths)
+                    if (bsdfSample.event == BsdfEvent::Transmission)
                     {
                         wl.terminateSecondary();
                         for (int i = 0; i < NrSpectrumSamples; ++i)
@@ -272,16 +255,14 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 const uint32_t diffuse    = (state.packedCounters >> CounterDiffuseShift)     & 0xffu;
                 const uint32_t specular   = (state.packedCounters >> CounterSpecularShift)    & 0xffu;
                 const uint32_t transmitted = (state.packedCounters >> CounterTransmissionShift) & 0xffu;
-                continuePath = validContinuation &&
-                               diffuse   <= static_cast<uint32_t>(render.diffuseBounces)    &&
+                continuePath = diffuse   <= static_cast<uint32_t>(render.diffuseBounces)    &&
                                specular  <= static_cast<uint32_t>(render.specularBounces)   &&
                                transmitted <= static_cast<uint32_t>(render.transmissionBounces) &&
                                params.depth + 1 < 256;
                 if (continuePath && static_cast<int>(state.depth) >= render.russianRouletteStartBounce)
                 {
                     const float survival = fminf(fmaxf(
-                        spectrumY(state.throughput, wl, params.scene.cieY)
-                            * state.etaScale, 0.05f), 0.95f);
+                        state.throughput.maxComponent() * state.etaScale, 0.05f), 0.95f);
                     continuePath = randomFloat(rouletteRng) <= survival;
                     if (continuePath)
                         state.throughput *= (1.0f / survival);

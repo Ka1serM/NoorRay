@@ -144,11 +144,6 @@ void NoorRay::runUi() {
                     push.isMoving = frame == 0 ? 1 : 0;
 
                     raytracer->render(push);
-                    {
-                        const int spp = std::max(1, scene.getRenderSettings().samples);
-                        const int cur = (push.frame + 1) * spp;
-                        debugPanel->setSampleInfo(cur, scene.getRenderSettings().maxSamples);
-                    }
                     const FrameInfo frameInfo = raytracer->getFrameInfo();
                     viewport->dispatch(
                         cmd, frameInfo.bufferIndex, scene.getActiveMeshInstanceIndex(),

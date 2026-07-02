@@ -57,6 +57,12 @@ target_include_directories(tinyobjloader INTERFACE
         ${PROJECT_SOURCE_DIR}/external/tinyobjloader
 )
 
+# Adobe OpenPBR 1.1 reference BSDF (header-only, Apache-2.0)
+add_library(openpbr INTERFACE)
+target_include_directories(openpbr INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/openpbr-bsdf
+)
+
 # stb (header-only)
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE
@@ -256,6 +262,7 @@ add_custom_command(
                 -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
                 "-I${PROJECT_SOURCE_DIR}/src"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
+                "-I${PROJECT_SOURCE_DIR}/external/openpbr-bsdf"
                 "-I${OPTIX_INCLUDE_DIR}"
                 -o "${NR_OPTIX_PTX}"
                 "${PROJECT_SOURCE_DIR}/src/Kernels/Extend.cu"
@@ -308,6 +315,7 @@ target_link_libraries(NoorRayCuda PUBLIC
         SDL3::SDL3-static
         portable_file_dialogs
         GPUOpen::VulkanMemoryAllocator)
+target_link_libraries(NoorRayCuda PUBLIC openpbr)
 target_link_libraries(NoorRayCuda PUBLIC libross)
 
 # Resource handling on Windows

@@ -660,8 +660,6 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
         const float focusDist   = jfloat(at(jcam, "focus_distance"), 2.f);
         const float bokehBias   = jfloat(at(jcam, "bokeh_bias"), 1.f);
         const float aperture    = jfloat(at(jcam, "aperture_diameter"), 0.f);
-        const bool disableAntiAliasing = jbool(
-            at(jcam, "disable_anti_aliasing"), false);
 
         Camera cam;
         if (camType == "realistic") {
@@ -696,7 +694,6 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
 
         cam.setFocalLength(focalLength);
         cam.setFocusDistance(focusDist);
-        cam.setAntiAliasingDisabled(disableAntiAliasing);
         if (at(jcam, "resolution").is_array()) {
             const auto& resolution = at(jcam, "resolution").get_array();
             if (resolution.size() >= 2)

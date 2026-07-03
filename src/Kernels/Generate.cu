@@ -34,10 +34,6 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         glm::vec2 jitter = R2Sampler::sample(params.frame.totalAccumulated) + rotation;
         jitter.x -= floorf(jitter.x);
         jitter.y -= floorf(jitter.y);
-        const bool disableAntiAliasing = params.scene.camera->Dispatch(
-            [](const auto* camera) { return camera->disableAntiAliasing; });
-        if (disableAntiAliasing)
-            jitter = glm::vec2(0.5f);
         const float nx = (static_cast<float>(x) + jitter.x) / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y) / static_cast<float>(params.frame.height) * 2.0f;
         active = params.scene.camera->Dispatch([&](const auto* camera) {

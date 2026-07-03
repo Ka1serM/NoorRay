@@ -35,7 +35,6 @@ struct alignas(16) PathState
     SampledWavelengths wl;
     RandomState rngState;
     uint32_t depth;
-    uint32_t flags;
     uint32_t packedCounters;
     uint32_t lastBsdfPdfBits;
     float etaScale;

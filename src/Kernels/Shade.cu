@@ -95,7 +95,6 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 if (transparentSurface)
                 {
                     nextDirection = hit.rayDirection;
-                    state.flags = 0u;
                 }
                 else
                 {
@@ -120,18 +119,15 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                     if (bsdfSample.event == BsdfEvent::Transmission)
                     {
                         state.packedCounters += 1u << CounterTransmissionShift;
-                        state.flags = 4u;
                         state.etaScale *= bsdfSample.eta * bsdfSample.eta;
                     }
                     else if (bsdfSample.event == BsdfEvent::Specular)
                     {
                         state.packedCounters += 1u << CounterSpecularShift;
-                        state.flags = 2u;
                     }
                     else
                     {
                         state.packedCounters += 1u << CounterDiffuseShift;
-                        state.flags = 1u;
                     }
                     nextDirection = bsdfSample.direction;
                     state.throughput *= bsdfSample.weight;

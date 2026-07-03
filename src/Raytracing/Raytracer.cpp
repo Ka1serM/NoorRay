@@ -427,7 +427,6 @@ void Raytracer::updateEnvironmentCdf()
 void Raytracer::updateMeshes()
 {
     gpuScene.meshes = scene.getMeshAssets().data();
-    gpuScene.meshCount = static_cast<uint32_t>(scene.getMeshAssets().size());
 }
 
 void Raytracer::updateTLAS()
@@ -437,7 +436,6 @@ void Raytracer::updateTLAS()
     tlas.build(optixCtx, stream, scene, gpuInstances);
     gpuScene.tlasHandle = tlas.getTraversable();
     gpuScene.instances = gpuInstances.data();
-    gpuScene.instanceCount = static_cast<uint32_t>(gpuInstances.size());
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
@@ -579,8 +577,6 @@ void Raytracer::render(const PushData& pushData)
         cryptomatte[buffer].getSurface(),
         position[buffer].getSurface(),
         width, height};
-    params.frame.frame = pushData.frame;
-    params.frame.isMoving = pushData.isMoving;
     params.frame.width = width;
     params.frame.height = height;
     params.accumulation = accumulation;
@@ -608,7 +604,6 @@ void Raytracer::render(const PushData& pushData)
     {
         NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0, sizeof(uint32_t) * MaxBounces, stream));
         NR_GPU_CHECK(cudaMemsetAsync(queues.pathStates, 0, sizeof(PathState) * queues.capacity, stream));
-        params.frame.sampleIndex = s;
         params.frame.totalAccumulated = static_cast<uint32_t>(pushData.frame) * samplesPerFrame + s;
 
         launchGenerate(params, stream);
@@ -653,7 +648,7 @@ Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
     const int previousSamplesPerFrame = settings.samples;
     settings.samples = static_cast<int>(sampleCount);
     try {
-        render(PushData{.frame = 0, .isMoving = 1});
+        render(PushData{.frame = 0});
         NR_GPU_CHECK(cudaStreamSynchronize(stream));
     } catch (...) {
         settings.samples = previousSamplesPerFrame;

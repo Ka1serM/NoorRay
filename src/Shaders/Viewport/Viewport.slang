@@ -109,7 +109,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
             : float3(0.0);
         color = pushConstants.tonemappingEnabled != 0 ? acesFitted(straight) : straight;
 
-        static const int outlineRadius = 3;
+        static const int outlineRadius = 6;
         if (pushConstants.selectedIndex != ~0u && idImage[pixel] != pushConstants.selectedIndex)
         {
             bool outline = false;
@@ -130,7 +130,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
                 }
             }
             if (outline)
-                color = float3(1.0, 0.42, 0.05);
+                color = float3(1.0, 1.00, 0.00);
         }
         break;
     }

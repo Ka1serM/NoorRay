@@ -640,6 +640,13 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
         environment.updateDerivedSettings();
     }
 
+    // Render settings
+    if (j.contains("render_settings")) {
+        const auto& jrs = j["render_settings"];
+        RenderSettings& rs = scene.getRenderSettings();
+        rs.maxSamples = jint(at(jrs, "max_samples"), rs.maxSamples);
+    }
+
     // Camera
     if (j.contains("camera")) {
         const auto& jcam = j["camera"];

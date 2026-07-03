@@ -48,17 +48,28 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     
     updateDisplayDescriptor();
 
+    // DPI scale is fixed for the lifetime of the window (see Context::dpiScale), so
+    // everything derived from it below only needs to be set up once, not per frame.
+    uiScale = context.getDPIScale();
+
     // ImGizmo Style
     ImGuizmo::Style& style = ImGuizmo::GetStyle();
     style.HatchedAxisLineThickness = 0;
+    style.TranslationLineThickness = 4.0f * uiScale;
+    style.TranslationLineArrowSize = 6.0f * uiScale;
+    style.RotationLineThickness = 6.0f * uiScale;
+    style.RotationOuterLineThickness = 2.0f * uiScale;
+    style.ScaleLineThickness = 4.0f * uiScale;
+    style.ScaleLineCircleSize = 8.0f * uiScale;
+    style.CenterCircleSize = 5.0f * uiScale;
 
-    // Colors similar to Blender
-    style.Colors[ImGuizmo::DIRECTION_X] = ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // X = red
-    style.Colors[ImGuizmo::DIRECTION_Y] = ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // Y = green
-    style.Colors[ImGuizmo::DIRECTION_Z] = ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // Z = blue
-    style.Colors[ImGuizmo::PLANE_X] = ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // plane fill
-    style.Colors[ImGuizmo::PLANE_Y] = ImVec4(0.2f, 0.9f, 0.2f, 1.0f); // plane fill
-    style.Colors[ImGuizmo::PLANE_Z] = ImVec4(0.2f, 0.5f, 1.0f, 1.0f); // plane fill
+    // Colors match ImViewGuizmo's axis colors 1:1 (IM_COL32(233,62,85) / (140,206,40) / (49,155,249))
+    style.Colors[ImGuizmo::DIRECTION_X] = ImVec4(0.9137f, 0.2431f, 0.3333f, 1.0f); // X = red
+    style.Colors[ImGuizmo::DIRECTION_Y] = ImVec4(0.5490f, 0.8078f, 0.1569f, 1.0f); // Y = green
+    style.Colors[ImGuizmo::DIRECTION_Z] = ImVec4(0.1922f, 0.6078f, 0.9765f, 1.0f); // Z = blue
+    style.Colors[ImGuizmo::PLANE_X] = ImVec4(0.9137f, 0.2431f, 0.3333f, 1.0f); // plane fill
+    style.Colors[ImGuizmo::PLANE_Y] = ImVec4(0.5490f, 0.8078f, 0.1569f, 1.0f); // plane fill
+    style.Colors[ImGuizmo::PLANE_Z] = ImVec4(0.1922f, 0.6078f, 0.9765f, 1.0f); // plane fill
 
     // Blender also fades inactive axes → make selection highlight bright
     style.Colors[ImGuizmo::SELECTION] = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); // yellow highlight
@@ -67,6 +78,21 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
     // Rotation circles usually more saturated
     style.Colors[ImGuizmo::ROTATION_USING_BORDER] = ImVec4(1.0f, 0.8f, 0.2f, 1.0f); // golden ring
     style.Colors[ImGuizmo::ROTATION_USING_FILL] = ImVec4(1.0f, 0.8f, 0.2f, 0.3f); // subtle fill
+
+    // Keep axis handles fixed to their world-space direction instead of flipping
+    // to always face the camera.
+    ImGuizmo::AllowAxisFlip(false);
+
+    // ImGuizmo's default gizmo size is a fraction of clip space, so it grows in
+    // screen pixels as the viewport gets bigger. Counteract that so it stays a
+    // constant pixel size (only DPI-scaled), matching ImViewGuizmo's behavior.
+    // Only viewportSize.x varies per frame, so precompute the rest here.
+    constexpr float referenceViewportWidth = 1080.0f;
+    constexpr float baseGizmoSizeClipSpace = 0.1f;
+    gizmoSizeClipSpaceScale = baseGizmoSizeClipSpace * uiScale * referenceViewportWidth;
+
+    ImViewGuizmo::Style& viewGizmoStyle = ImViewGuizmo::GetStyle();
+    viewGizmoStyle.scale = uiScale;
 }
 
 void ViewportPanel::updateDisplayDescriptor()
@@ -154,7 +180,6 @@ void ViewportPanel::drawBackground() const {
 void ViewportPanel::drawImageAndUpdateState() {
     ImGui::Image(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get()), viewportSize);
     isViewportHovered = ImGui::IsItemHovered();
-    uiScale = std::max(viewportSize.x / 1080.0f, 0.5f);
 }
 
 void ViewportPanel::beginMouseCapture() {
@@ -218,14 +243,7 @@ void ViewportPanel::handleTransformGizmo() {
     if (!camera)
         return;
     
-    ImGuizmo::Style& style = ImGuizmo::GetStyle();
-    style.TranslationLineThickness = 4.0f * uiScale;
-    style.TranslationLineArrowSize = 6.0f * uiScale;
-    style.RotationLineThickness = 6.0f * uiScale;
-    style.RotationOuterLineThickness = 2.0f * uiScale;
-    style.ScaleLineThickness = 4.0f * uiScale;
-    style.ScaleLineCircleSize = 8.0f * uiScale;
-    style.CenterCircleSize = 5.0f * uiScale;
+    ImGuizmo::SetGizmoSizeClipSpace(gizmoSizeClipSpaceScale / std::max(viewportSize.x, 1.0f));
 
     ImGuizmo::BeginFrame();
     ImGuizmo::SetRect(viewportPos.x, viewportPos.y, viewportSize.x, viewportSize.y);
@@ -250,9 +268,6 @@ void ViewportPanel::handleViewGizmo() const {
     if (!camera)
         return;
 
-    ImViewGuizmo::Style& style = ImViewGuizmo::GetStyle();
-    style.scale = uiScale;
-
     vec3 position = camera->getPosition();
     quat rotation = camera->getRotation();
 
@@ -262,15 +277,23 @@ void ViewportPanel::handleViewGizmo() const {
 
     ImViewGuizmo::BeginFrame();
     bool wasModified = false;
-    
+
+    // ImViewGuizmo draws straight to the window draw list with no clipping of its
+    // own (unlike ImGuizmo::Manipulate), so on a small/narrow viewport its fixed
+    // pixel offsets can push it outside the rendered image. Clip to the viewport
+    // image bounds, same as renderToolbar() does.
+    ImGui::PushClipRect(viewportPos, ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y), true);
+
     ImVec2 gizmoPos = {viewportPos.x + viewportSize.x - 110.f * uiScale, viewportPos.y + 110.f * uiScale};
     wasModified |= ImViewGuizmo::Rotate(position, rotation, pivot, gizmoPos);
-    
+
     gizmoPos.x += 30.f * uiScale; gizmoPos.y += 90.f * uiScale;
     wasModified |= ImViewGuizmo::Dolly(position, rotation, gizmoPos);
-    
+
     gizmoPos.y += 60.f * uiScale;
     wasModified |= ImViewGuizmo::Pan(position, rotation, gizmoPos);
+
+    ImGui::PopClipRect();
 
     if (wasModified && !ImGuizmo::IsUsing()) {
         camera->setPosition(position);
@@ -279,7 +302,11 @@ void ViewportPanel::handleViewGizmo() const {
 }
 
 void ViewportPanel::renderToolbar() {
-    const ImVec2 toolbarOffset(25.0f * uiScale, 25.0f * uiScale); 
+    // Clip to the viewport image bounds, same as ImGuizmo::Manipulate does internally,
+    // so the buttons can't spill outside the rendered image.
+    ImGui::PushClipRect(viewportPos, ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y), true);
+
+    const ImVec2 toolbarOffset(25.0f * uiScale, 25.0f * uiScale);
     ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x, viewportPos.y + toolbarOffset.y));
 
     const float buttonSize = 50.0f * uiScale;
@@ -320,6 +347,8 @@ void ViewportPanel::renderToolbar() {
     ImGui::PopStyleColor(2);
 
     ImGui::PopStyleVar(2);
+
+    ImGui::PopClipRect();
 }
 
 void ViewportPanel::renderUi() {

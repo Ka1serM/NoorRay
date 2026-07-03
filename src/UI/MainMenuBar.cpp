@@ -112,11 +112,11 @@ void MainMenuBar::handleFileImport(const std::string& filePath, const FileType t
 void MainMenuBar::renderFileMenu() {
     // Check if a dialog is open and has returned a result.
     if (openDialog && openDialog->ready(0)) {
-        
+
         const auto& selection = openDialog->result();
         if (!selection.empty())
             handleFileImport(selection[0], pendingFileType);
-        
+
         // Reset the unique_ptr to close the dialog and reset the state.
         openDialog.reset();
         pendingFileType = FileType::NONE;
@@ -127,7 +127,12 @@ void MainMenuBar::renderFileMenu() {
         if (ImGui::BeginMenu("Import")) {
             // Disable menu items if a dialog is currently running.
             ImGui::BeginDisabled(static_cast<bool>(openDialog));
-            
+
+            if (ImGui::MenuItem("Bitmap Texture")) {
+                openDialog = std::make_unique<pfd::open_file>("Import Texture", ".", std::vector<std::string>{"Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic", "All Files", "*"});
+                pendingFileType = FileType::TEXTURE;
+            }
+
             if (ImGui::MenuItem("Wavefront .obj")) {
                 openDialog = std::make_unique<pfd::open_file>("Import OBJ Model", ".", std::vector<std::string>{"OBJ Files", "*.obj", "All Files", "*"});
                 pendingFileType = FileType::OBJ;
@@ -138,18 +143,11 @@ void MainMenuBar::renderFileMenu() {
                 pendingFileType = FileType::GLTF;
             }
 
-            if (ImGui::MenuItem("Bitmap Texture")) {
-                openDialog = std::make_unique<pfd::open_file>("Import Texture", ".", std::vector<std::string>{"Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic", "All Files", "*"});
-                pendingFileType = FileType::TEXTURE;
-            }
-
             if (ImGui::MenuItem("NoorRay Scene (.nrscene)")) {
-                openDialog = std::make_unique<pfd::open_file>(
-                    "Import Scene", ".",
-                    std::vector<std::string>{"NoorRay Scene", "*.nrscene"});
+                openDialog = std::make_unique<pfd::open_file>("Import Scene", ".", std::vector<std::string>{"NoorRay Scene", "*.nrscene"});
                 pendingFileType = FileType::NRSCENE;
             }
-            
+
             ImGui::EndDisabled();
             ImGui::EndMenu(); // Correctly ends the "Import" menu
         }
@@ -171,16 +169,16 @@ void MainMenuBar::renderViewMenu() const
     if (ImGui::BeginMenu("View")) {
         if (ImGui::BeginMenu("Theme")) {
             const bool isDarkTheme = (imGuiManager.GetCurrentTheme() == ImGuiManager::Theme::Dark);
-            
+
             if (ImGui::MenuItem("Dark", nullptr, isDarkTheme))
                 imGuiManager.SetTheme(ImGuiManager::Theme::Dark);
-            
+
             if (ImGui::MenuItem("Light", nullptr, !isDarkTheme))
                 imGuiManager.SetTheme(ImGuiManager::Theme::Light);
-            
+
             ImGui::EndMenu(); // Ends "Theme"
         }
-    
+
         ImGui::EndMenu(); // Ends "View"
     }
 }

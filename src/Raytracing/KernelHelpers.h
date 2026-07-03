@@ -4,7 +4,6 @@
 
 #include "Raytracing/RgbToSpectrum.h"
 #include "Raytracing/SceneData.h"
-#include "Samplers/HemisphereSampler.h"
 #include "Samplers/RandomSampler.h"
 
 static constexpr float Pi = 3.14159265358979323846f;

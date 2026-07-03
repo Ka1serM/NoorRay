@@ -49,7 +49,7 @@ NR_GPU inline SurfaceData loadSurface(
         a.tangent * w + b.tangent * u + c.tangent * v, 0.0f)));
     surface.uv = glm::vec2(a.uv.x * w + b.uv.x * u + c.uv.x * v,
                        a.uv.y * w + b.uv.y * u + c.uv.y * v);
-    surface.objectIndex = instance.objectIndex;
+    surface.objectIndex = instanceIndex;
     const int materialIndex = mesh.getFaces()[primitiveIndex].materialIndex;
     surface.material = &mesh.getMaterials()[materialIndex];
     return surface;

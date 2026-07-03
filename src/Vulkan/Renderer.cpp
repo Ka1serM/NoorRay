@@ -4,20 +4,32 @@
 #include <vector>
 #include <algorithm>
 #include "Log.h"
+uint32_t Renderer::queryDesiredSwapchainImageCount() const {
+    const vk::SurfaceCapabilitiesKHR surfaceCapabilities = context.getPhysicalDevice().getSurfaceCapabilitiesKHR(context.getSurface());
+    uint32_t imageCount = surfaceCapabilities.minImageCount + 1;
+    if (surfaceCapabilities.maxImageCount > 0 && imageCount > surfaceCapabilities.maxImageCount)
+        imageCount = surfaceCapabilities.maxImageCount;
+    return imageCount;
+}
+
 Renderer::Renderer(Context& context, const uint32_t initial_width, const uint32_t initial_height)
     : context(context)
 {
     colorImageFormat = vk::Format::eB8G8R8A8Unorm;
     depthImageFormat = vk::Format::eD24UnormS8Uint;
-    
-    swapchainExtent = vk::Extent2D{ initial_width, initial_height };
-    
-    frames.resize(MAX_FRAMES_IN_FLIGHT);
 
-    const vk::CommandBufferAllocateInfo cmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, MAX_FRAMES_IN_FLIGHT);
+    swapchainExtent = vk::Extent2D{ initial_width, initial_height };
+
+    // Clamp frames-in-flight to the swapchain image count (never exceed it) so that
+    // ImGui's per-image vertex/index buffer ring can never be reused while the GPU
+    // is still reading from it. See kMaxFramesInFlight for details.
+    const uint32_t framesInFlight = std::min(queryDesiredSwapchainImageCount(), kMaxFramesInFlight);
+    frames.resize(framesInFlight);
+
+    const vk::CommandBufferAllocateInfo cmdAllocInfo(context.getCommandPool(), vk::CommandBufferLevel::ePrimary, framesInFlight);
     auto cmdBuffers = context.getDevice().allocateCommandBuffersUnique(cmdAllocInfo);
 
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    for (uint32_t i = 0; i < framesInFlight; ++i) {
         frames[i].commandBuffer = std::move(cmdBuffers[i]);
         frames[i].imageAcquiredSemaphore = context.getDevice().createSemaphoreUnique({});
         frames[i].renderFinishedSemaphore = context.getDevice().createSemaphoreUnique({});
@@ -251,7 +263,7 @@ void Renderer::endFrame() {
     } else if (result != vk::Result::eSuccess)
         LOG_ERROR("Failed to present swap chain image!");
 
-    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    m_currentFrame = (m_currentFrame + 1) % frames.size();
     externalTimelineValue = 0;
 }
 

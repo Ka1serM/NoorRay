@@ -46,7 +46,7 @@ TEST_CASE_METHOD(OpaqueBsdfTest, "shading normals keep reflections above the geo
     const glm::vec3 divergentNormal = glm::normalize(glm::vec3(-0.12f, 0.0f, 0.993f));
     REQUIRE(glm::dot(geometricNormal, glm::reflect(-view, divergentNormal)) < 0.0f);
 
-    const glm::vec3 corrected = Material::clampShadingNormal(
+    const glm::vec3 corrected = Bsdf::clampShadingNormal(
         geometricNormal, divergentNormal, view);
     const glm::vec3 reflected = glm::reflect(-view, corrected);
 
@@ -55,7 +55,7 @@ TEST_CASE_METHOD(OpaqueBsdfTest, "shading normals keep reflections above the geo
     CHECK(glm::length(corrected) == Catch::Approx(1.0f).margin(1e-5f));
 
     const glm::vec3 validNormal = glm::normalize(glm::vec3(0.12f, 0.0f, 0.993f));
-    const glm::vec3 unchanged = Material::clampShadingNormal(
+    const glm::vec3 unchanged = Bsdf::clampShadingNormal(
         geometricNormal, validNormal, view);
     CHECK(glm::dot(unchanged, validNormal) == Catch::Approx(1.0f).margin(1e-5f));
 }

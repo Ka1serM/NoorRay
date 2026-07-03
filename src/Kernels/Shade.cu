@@ -105,16 +105,20 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         surface.geometricNormal = -surface.geometricNormal;
                     const glm::vec3 viewDirection = -hit.rayDirection;
 
-                    shadingNormal = Material::clampShadingNormal(
+                    shadingNormal = Bsdf::clampShadingNormal(
                         surface.geometricNormal, shadingNormal, viewDirection);
 
-                    const BsdfSample bsdfSample = material.sampleBsdfSpectral(
+                    const Bsdf bsdf = material.makeBsdf(
                         params.scene.textures, surface.uv,
-                        viewDirection, originalGeometricNormal, shadingNormal, bsdfRng, wl,
+                        viewDirection, originalGeometricNormal, shadingNormal, wl,
                         params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65, params.scene.openPbrLuts);
+                        params.scene.openPbrLuts);
+                    const BsdfSample bsdfSample = bsdf.sample(bsdfRng);
 
-                    state.radiance += state.throughput * bsdfSample.emission;
+                    state.radiance += state.throughput * material.emissionSpectral(
+                        params.scene.textures, surface.uv, wl,
+                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                        params.scene.d65);
 
                     if (bsdfSample.event == BsdfEvent::Transmission)
                     {
@@ -141,7 +145,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         const uint32_t rl    = params.scene.rectLightCount;
                         const uint32_t dl    = params.scene.directionalLightCount;
                         const float analyticWeight = analyticLightSelectionWeight(params.scene);
-                        const float environmentWeight = bsdfSample.transmission <= 0.0f
+                        const float environmentWeight = bsdf.transmission <= 0.0f
                             ? fmaxf(params.scene.environment->importanceWeight, 0.0f) : 0.0f;
                         const float totalWeight = analyticWeight + environmentWeight;
                         if (totalWeight > 0.0f)
@@ -210,10 +214,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                                 const float selectionPdf = selectedWeight / totalWeight;
                                 if (environmentSelected) {
                                     const float lightPdf = selectionPdf * sampledEnvironmentPdf;
-                                    const float bsdfPdf = material.pdfDirectSpectral(
-                                        bsdfSample, surface.geometricNormal,
-                                        shadingNormal, viewDirection,
-                                        lightSample.direction);
+                                    const float bsdfPdf = bsdf.pdf(lightSample.direction);
                                     lightSample.radiance *= powerHeuristic(lightPdf, bsdfPdf)
                                         / fmaxf(lightPdf, 1e-20f);
                                 } else {
@@ -224,9 +225,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         const float cosine = fmaxf(glm::dot(shadingNormal, lightSample.direction), 0.0f);
                         if (cosine > 0.0f && lightSample.radiance.maxComponent() > 0.0f)
                         {
-                            const SampledSpectrum brdf = material.evaluateDirectSpectral(
-                                bsdfSample, surface.geometricNormal, shadingNormal,
-                                viewDirection, lightSample.direction, wl, params.scene.openPbrLuts);
+                            const SampledSpectrum brdf = bsdf.evaluate(lightSample.direction);
                             shadow.origin    = surface.position + surface.geometricNormal * 0.001f;
                             shadow.direction = lightSample.direction;
                             shadow.tMin      = 0.001f;

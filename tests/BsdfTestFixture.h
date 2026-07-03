@@ -20,7 +20,7 @@ protected:
             for (int x = 0; x < phiSamples; ++x) {
                 const glm::vec3 light = nr::sampling::uniformHemisphere({
                     (y + 0.5f) / thetaSamples, (x + 0.5f) / phiSamples});
-                const SampledSpectrum value = Material::evaluateOpaqueSpectral(
+                const SampledSpectrum value = Bsdf::evaluateOpaqueSpectral(
                     normal, viewDirection, light, albedoSpectrum, metallic, specular, roughness);
                 integral += value[0] * light.z;
             }

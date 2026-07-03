@@ -19,7 +19,7 @@
   },
   {
     "label": "run release",
-    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH=86 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/release --target NoorRay -j$(nproc) && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ./build/release/NoorRay",
+    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH=86 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/release --target NoorRay -j$(nproc) && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json ./build/release/NoorRay",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": true,
     "allow_concurrent_runs": false,
@@ -46,7 +46,7 @@
   },
   {
     "label": "run debug",
-    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Debug -DNR_CUDA_ARCH=86 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/debug --target NoorRay -j$(nproc) && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ./build/debug/NoorRay",
+    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Debug -DNR_CUDA_ARCH=86 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/debug --target NoorRay -j$(nproc) && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json ./build/debug/NoorRay",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": true,
     "allow_concurrent_runs": false,
@@ -55,7 +55,7 @@
   },
   {
     "label": "run tests",
-    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Debug -DNR_CUDA_ARCH=86 -DBUILD_TESTING=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/debug -j$(nproc) && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ctest --test-dir build/debug --output-on-failure",
+    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Debug -DNR_CUDA_ARCH=86 -DBUILD_TESTING=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build/debug -j$(nproc) && VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json ctest --test-dir build/debug --output-on-failure",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,

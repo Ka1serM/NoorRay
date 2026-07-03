@@ -15,7 +15,7 @@ TEST_CASE_METHOD(DielectricBsdfTest,
     RandomState rng = seedRandom(0x5eedu);
     int reflections = 0;
     for (int i = 0; i < sampleCount; ++i) {
-        const BsdfSample sample = Material::sampleDielectric(
+        const BsdfSample sample = Bsdf::sampleDielectric(
             view, normal, normal, 0.045f, 1.5f, rng);
         REQUIRE(std::isfinite(sample.pdf));
         REQUIRE(sample.pdf > 0.0f);

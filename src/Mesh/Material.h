@@ -184,18 +184,22 @@ public:
         return 0.5f * (parallel * parallel + perpendicular * perpendicular);
     }
 
-    NR_CPU_GPU static glm::vec3 fresnelSchlick(const float cosTheta, const glm::vec3 f0)
+    NR_CPU_GPU static float f0ToIor(const float f0)
     {
-        const float oneMinusCos = 1.0f - fminf(fmaxf(cosTheta, 0.0f), 1.0f);
-        const float factor = oneMinusCos * oneMinusCos * oneMinusCos * oneMinusCos * oneMinusCos;
-        return f0 + (glm::vec3(1.0f) - f0) * factor;
+        const float sqrtF0 = sqrtf(fminf(fmaxf(f0, 0.0f), 0.999999f));
+        return (1.0f + sqrtF0) / fmaxf(1.0f - sqrtF0, BsdfEpsilon);
     }
 
-    NR_CPU_GPU static float fresnelSchlickS(const float cosTheta, const float f0)
+    NR_CPU_GPU static float fresnelConductor(const float cosTheta, const float f0)
     {
-        const float omc = 1.0f - fminf(fmaxf(cosTheta, 0.0f), 1.0f);
-        const float f = omc * omc * omc * omc * omc;
-        return f0 + (1.0f - f0) * f;
+        return fresnelDielectric(cosTheta, 1.0f, f0ToIor(f0));
+    }
+
+    NR_CPU_GPU static glm::vec3 fresnelConductor(const float cosTheta, const glm::vec3& f0)
+    {
+        return { fresnelConductor(cosTheta, f0.x),
+                 fresnelConductor(cosTheta, f0.y),
+                 fresnelConductor(cosTheta, f0.z) };
     }
 
     // Per-wavelength spectral BSDF evaluation (opaque PBR).
@@ -247,7 +251,7 @@ public:
         for (int i = 0; i < NrSpectrumSamples; ++i)
         {
             const float dielectricF = fresnelDielectric(vdh, 1.0f, dielectricIor);
-            const float conductorF = fresnelSchlickS(vdh, albedoSpec[i]);
+            const float conductorF = fresnelConductor(vdh, albedoSpec[i]);
             const float F = dielectricF + (conductorF - dielectricF) * metallic;
             const float specBrdf = F * geomFactor;
             // OpenPBR's reciprocal layered compensation accounts for light
@@ -435,7 +439,7 @@ public:
         {
             // Opaque path — sample direction from RGB luminance albedo for importance sampling.
             const glm::vec3 dielectricF0v(fminf(fmaxf(0.08f * spec, 0.0f), 1.0f));
-            const glm::vec3 samplingFresnel = fresnelSchlick(
+            const glm::vec3 samplingFresnel = fresnelConductor(
                 fabsf(glm::dot(shadingNormal, view)),
                 glm::mix(dielectricF0v, rgbAlbedo, met));
             const float specProb = fminf(fmaxf(

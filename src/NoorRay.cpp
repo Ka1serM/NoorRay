@@ -141,8 +141,6 @@ void NoorRay::runUi() {
                     scene.clearDirtyFlags();
                     firstFrame = false;
 
-                    push.isMoving = frame == 0 ? 1 : 0;
-
                     raytracer->render(push);
                     {
                         const int spp = std::max(1, scene.getRenderSettings().samples);

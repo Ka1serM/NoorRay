@@ -32,7 +32,6 @@ struct FrameInfo
 struct PushData
 {
     int frame{};
-    int isMoving{};
 };
 
 class Raytracer

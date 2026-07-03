@@ -38,8 +38,6 @@ struct GpuSceneData
     const float* cieX{};
     const float* cieY{};
     const float* cieZ{};
-    uint32_t meshCount{};
-    uint32_t instanceCount{};
     uint32_t pointLightCount{};
     uint32_t spotLightCount{};
     uint32_t rectLightCount{};
@@ -49,11 +47,8 @@ struct GpuSceneData
 
 struct GpuFrameSettings
 {
-    int frame{};
-    int isMoving{};
     uint32_t width{};
     uint32_t height{};
-    uint32_t sampleIndex{};       // which sample within this frame (RNG seed diversity)
     uint32_t totalAccumulated{};  // total samples accumulated so far (blend weight)
 };
 

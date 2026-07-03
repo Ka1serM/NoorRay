@@ -15,7 +15,7 @@ TEST_CASE_METHOD(GgxBsdfTest,
             const glm::vec3 light = nr::sampling::uniformHemisphere({
                 (y + 0.5f) / thetaSamples, (x + 0.5f) / phiSamples});
             const glm::vec3 halfVector = glm::normalize(view + light);
-            integral += Material::pdfGgxReflection(view, normal, halfVector, 0.35f);
+            integral += Bsdf::pdfGgxReflection(view, normal, halfVector, 0.35f);
         }
     }
     integral *= 2.0 * BsdfPi / static_cast<double>(thetaSamples * phiSamples);

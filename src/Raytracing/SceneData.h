@@ -11,6 +11,7 @@
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
 #include "Mesh/MeshAsset.h"
+#include "Mesh/OpenPbrEnergy.h"
 #include "Scene/Environment.h"
 #include "Light/DirectionalLight.h"
 #include "Light/PointLight.h"
@@ -38,6 +39,8 @@ struct GpuSceneData
     const float* cieX{};
     const float* cieY{};
     const float* cieZ{};
+    // OpenPBR opaque-dielectric energy-compensation LUTs (hardware-filtered).
+    nr::openpbr::EnergyLutTextures openPbrLuts{};
     uint32_t pointLightCount{};
     uint32_t spotLightCount{};
     uint32_t rectLightCount{};

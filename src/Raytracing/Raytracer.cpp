@@ -228,6 +228,9 @@ Raytracer::Raytracer(
     gpuScene.cieY = cieYDevice;
     gpuScene.cieZ = cieZDevice;
 
+    // Upload OpenPBR opaque-dielectric energy-compensation LUTs as hardware-filtered textures.
+    nr::openpbr::uploadEnergyLuts(openPbrLutStorage, gpuScene.openPbrLuts, stream);
+
     auto* cam = scene.getActiveCamera();
     auto* c = cam ? cam->getCamera() : nullptr;
     auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
@@ -346,6 +349,7 @@ void Raytracer::freeSceneData() noexcept
     if (cieXDevice) { cudaFree(cieXDevice); cieXDevice = nullptr; }
     if (cieYDevice) { cudaFree(cieYDevice); cieYDevice = nullptr; }
     if (cieZDevice) { cudaFree(cieZDevice); cieZDevice = nullptr; }
+    nr::openpbr::destroyEnergyLuts(openPbrLutStorage, gpuScene.openPbrLuts);
     gpuScene = {};
 }
 

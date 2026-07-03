@@ -57,12 +57,6 @@ target_include_directories(tinyobjloader INTERFACE
         ${PROJECT_SOURCE_DIR}/external/tinyobjloader
 )
 
-# Adobe OpenPBR 1.1 reference BSDF (header-only, Apache-2.0)
-add_library(openpbr INTERFACE)
-target_include_directories(openpbr INTERFACE
-        ${PROJECT_SOURCE_DIR}/external/openpbr-bsdf
-)
-
 # stb (header-only)
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE
@@ -235,6 +229,7 @@ file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS src/*.cpp src/*.h)
 list(FILTER SRC_FILES EXCLUDE REGEX "/CUDA/")
 list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/RgbSpectrumTableData\\.cpp$")
+list(FILTER SRC_FILES EXCLUDE REGEX "/Mesh/OpenPbrEnergy\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX "/IO/BitmapReader\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX "/IO/BitmapWriter\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX "/StbImpl\\.cpp$")
@@ -262,7 +257,6 @@ add_custom_command(
                 -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
                 "-I${PROJECT_SOURCE_DIR}/src"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
-                "-I${PROJECT_SOURCE_DIR}/external/openpbr-bsdf"
                 "-I${OPTIX_INCLUDE_DIR}"
                 -o "${NR_OPTIX_PTX}"
                 "${PROJECT_SOURCE_DIR}/src/Kernels/Extend.cu"
@@ -278,6 +272,7 @@ add_library(NoorRayCuda STATIC
         src/CUDA/Texture.cpp
         src/CUDA/SharedImage.cpp
         src/CUDA/rstd/Memory.cpp
+        src/Mesh/OpenPbrEnergy.cpp
         src/Kernels/Generate.cu
         src/Kernels/Shade.cu
         src/Kernels/Finalize.cu
@@ -315,7 +310,6 @@ target_link_libraries(NoorRayCuda PUBLIC
         SDL3::SDL3-static
         portable_file_dialogs
         GPUOpen::VulkanMemoryAllocator)
-target_link_libraries(NoorRayCuda PUBLIC openpbr)
 target_link_libraries(NoorRayCuda PUBLIC libross)
 
 # Resource handling on Windows

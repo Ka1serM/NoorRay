@@ -206,7 +206,8 @@ public:
         const SampledSpectrum& albedoSpec,
         const float metallic,
         const float specular,
-        const float roughness)
+        const float roughness,
+        const nr::openpbr::EnergyLutTextures& openPbrLuts = {})
     {
         const float ndv = fmaxf(glm::dot(normal, view), 0.0f);
         const float ndl = fmaxf(glm::dot(normal, light), 0.0f);
@@ -223,21 +224,21 @@ public:
             / fmaxf(1.0f - sqrtF0, BsdfEpsilon);
         const float alpha = roughness * roughness;
         const float availableView = nr::openpbr::opaqueDielectricEnergyComplement(
-            dielectricIor, alpha, ndv);
+            openPbrLuts, dielectricIor, alpha, ndv);
         const float availableLight = nr::openpbr::opaqueDielectricEnergyComplement(
-            dielectricIor, alpha, ndl);
+            openPbrLuts, dielectricIor, alpha, ndl);
         const float averageAvailable = nr::openpbr::opaqueDielectricAverageEnergyComplement(
-            dielectricIor, alpha);
+            openPbrLuts, dielectricIor, alpha);
         const float diffuseEnergy = availableView * availableLight
             / fmaxf(averageAvailable, BsdfEpsilon);
         const float idealMissingView = nr::openpbr::idealDielectricEnergyComplement(
-            dielectricIor, alpha, ndv);
+            openPbrLuts, dielectricIor, alpha, ndv);
         const float idealMissingLight = nr::openpbr::idealDielectricEnergyComplement(
-            dielectricIor, alpha, ndl);
+            openPbrLuts, dielectricIor, alpha, ndl);
         const float idealAverageMissing = nr::openpbr::idealDielectricAverageEnergyComplement(
-            dielectricIor, alpha);
+            openPbrLuts, dielectricIor, alpha);
         const float dielectricReflectionRatio = nr::openpbr::idealDielectricReflectionRatio(
-            dielectricIor, alpha);
+            openPbrLuts, dielectricIor, alpha);
         const float dielectricMultipleScatter = idealMissingView * idealMissingLight
             * dielectricReflectionRatio
             / fmaxf(idealAverageMissing * BsdfPi, BsdfEpsilon);
@@ -352,7 +353,8 @@ public:
         const SampledWavelengths& wl,
         const float* spectrumScale,
         const float* spectrumCoeffs,
-        const float* d65) const
+        const float* d65,
+        const nr::openpbr::EnergyLutTextures& openPbrLuts) const
     {
         BsdfSample result{};
 
@@ -463,7 +465,7 @@ public:
                 return result;
 
             const SampledSpectrum brdfSpec = evaluateOpaqueSpectral(
-                sampleNormal, view, result.direction, result.albedo, met, spec, rough);
+                sampleNormal, view, result.direction, result.albedo, met, spec, rough, openPbrLuts);
             const float specPdf    = pdfGgxReflection(view, sampleNormal, halfVector, rough);
             const float diffusePdf = ndl / BsdfPi;
             const float pdf = fmaxf(
@@ -484,10 +486,11 @@ public:
         const glm::vec3 normal,
         const glm::vec3 view,
         const glm::vec3 light,
-        const SampledWavelengths& wl) const
+        const SampledWavelengths& wl,
+        const nr::openpbr::EnergyLutTextures& openPbrLuts) const
     {
         const SampledSpectrum opaque = evaluateOpaqueSpectral(
-            normal, view, light, bsdf.albedo, bsdf.metallic, bsdf.specular, bsdf.roughness);
+            normal, view, light, bsdf.albedo, bsdf.metallic, bsdf.specular, bsdf.roughness, openPbrLuts);
         const float normalCorrection = shadingNormalCorrection(
             geometricNormal, normal, view, light);
         if (bsdf.transmission <= 0.0f)

@@ -112,7 +112,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         params.scene.textures, surface.uv,
                         viewDirection, originalGeometricNormal, shadingNormal, bsdfRng, wl,
                         params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65);
+                        params.scene.d65, params.scene.openPbrLuts);
 
                     state.radiance += state.throughput * bsdfSample.emission;
 
@@ -226,7 +226,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         {
                             const SampledSpectrum brdf = material.evaluateDirectSpectral(
                                 bsdfSample, surface.geometricNormal, shadingNormal,
-                                viewDirection, lightSample.direction, wl);
+                                viewDirection, lightSample.direction, wl, params.scene.openPbrLuts);
                             shadow.origin    = surface.position + surface.geometricNormal * 0.001f;
                             shadow.direction = lightSample.direction;
                             shadow.tMin      = 0.001f;

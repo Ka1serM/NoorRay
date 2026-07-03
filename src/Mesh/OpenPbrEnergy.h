@@ -3,12 +3,21 @@
 #include <cmath>
 #include <cstdint>
 
+#include <cuda_runtime_api.h>
+
 #include "CUDA/Annotations.h"
 
 // Native NoorRay access to Adobe OpenPBR 1.1's opaque-dielectric energy
-// compensation data. The source tables are vendored unchanged under external/
-// and are Apache-2.0 licensed. Keeping the interpolation here avoids importing
-// OpenPBR's shading-language vector ABI into NoorRay's GLM CUDA kernels.
+// compensation data. The source tables are vendored unchanged under
+// Mesh/OpenPbrEnergyTables/ and are Apache-2.0 licensed. Keeping the
+// interpolation here avoids importing OpenPBR's shading-language vector ABI
+// into NoorRay's GLM CUDA kernels.
+//
+// On the GPU, lookups are done with hardware-filtered CUDA textures (linear
+// filtering does the tri-/bilinear blend for free), which is both faster and
+// simpler than the manual multi-tap lerp below. That manual path is kept as
+// the CPU fallback so host-side unit tests can exercise the exact same energy
+// data without a CUDA context.
 namespace nr::openpbr
 {
 inline constexpr int EnergyTableSize = 32;
@@ -17,51 +26,58 @@ inline constexpr float IorMax = 2.5f;
 
 static constexpr uint16_t OpaqueDielectricEnergyComplement[
     EnergyTableSize * EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_opaque_dielectric_energy_complement_data.h>
+#include "Mesh/OpenPbrEnergyTables/openpbr_opaque_dielectric_energy_complement_data.h"
 };
 
 static constexpr uint16_t OpaqueDielectricAverageEnergyComplement[
     EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_opaque_dielectric_avg_energy_complement_data.h>
+#include "Mesh/OpenPbrEnergyTables/openpbr_opaque_dielectric_avg_energy_complement_data.h"
 };
 
 static constexpr uint16_t IdealDielectricEnergyComplement[
     EnergyTableSize * EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_ideal_dielectric_energy_complement_data.h>
+#include "Mesh/OpenPbrEnergyTables/openpbr_ideal_dielectric_energy_complement_data.h"
 };
 
 static constexpr uint16_t IdealDielectricAverageEnergyComplement[
     EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_ideal_dielectric_avg_energy_complement_data.h>
+#include "Mesh/OpenPbrEnergyTables/openpbr_ideal_dielectric_avg_energy_complement_data.h"
 };
 
 static constexpr uint16_t IdealDielectricReflectionRatio[
     EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_ideal_dielectric_reflection_ratio_data.h>
+#include "Mesh/OpenPbrEnergyTables/openpbr_ideal_dielectric_reflection_ratio_data.h"
 };
 
-#if defined(__CUDACC__)
-static __device__ uint16_t OpaqueDielectricEnergyComplementDevice[
-    EnergyTableSize * EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_opaque_dielectric_energy_complement_data.h>
+// Device-visible texture handles, threaded through GpuSceneData like the
+// other global LUTs (spectrumTable*, cieX/Y/Z). Hardware linear filtering
+// with cudaReadModeNormalizedFloat replaces decode()+lerp() entirely.
+struct EnergyLutTextures
+{
+    cudaTextureObject_t opaqueEnergy{};
+    cudaTextureObject_t opaqueAverageEnergy{};
+    cudaTextureObject_t idealEnergy{};
+    cudaTextureObject_t idealAverageEnergy{};
+    cudaTextureObject_t idealReflectionRatio{};
 };
-static __device__ uint16_t OpaqueDielectricAverageEnergyComplementDevice[
-    EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_opaque_dielectric_avg_energy_complement_data.h>
+
+// Host-owned backing arrays for EnergyLutTextures; only the Raytracer needs
+// this, to free the arrays on teardown.
+struct EnergyLutStorage
+{
+    cudaArray_t opaqueEnergyArray{};
+    cudaArray_t opaqueAverageEnergyArray{};
+    cudaArray_t idealEnergyArray{};
+    cudaArray_t idealAverageEnergyArray{};
+    cudaArray_t idealReflectionRatioArray{};
 };
-static __device__ uint16_t IdealDielectricEnergyComplementDevice[
-    EnergyTableSize * EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_ideal_dielectric_energy_complement_data.h>
-};
-static __device__ uint16_t IdealDielectricAverageEnergyComplementDevice[
-    EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_ideal_dielectric_avg_energy_complement_data.h>
-};
-static __device__ uint16_t IdealDielectricReflectionRatioDevice[
-    EnergyTableSize * EnergyTableSize] = {
-#include <impl/data/openpbr_ideal_dielectric_reflection_ratio_data.h>
-};
-#endif
+
+// Uploads the tables above into 3D/2D CUDA arrays and creates linear-filtered
+// texture objects over them. Call once at startup.
+void uploadEnergyLuts(EnergyLutStorage& storage, EnergyLutTextures& textures, cudaStream_t stream);
+
+// Destroys the texture objects and frees the backing arrays. Call once at shutdown.
+void destroyEnergyLuts(EnergyLutStorage& storage, EnergyLutTextures& textures) noexcept;
 
 NR_CPU_GPU inline float decode(const uint16_t value)
 {
@@ -89,58 +105,49 @@ NR_CPU_GPU inline float lerp(const float a, const float b, const float t)
     return a + (b - a) * t;
 }
 
-NR_CPU_GPU inline float opaqueEnergyAt(const int ior, const int alpha, const int cosine)
+// CPU-only fallback path below: manual multi-tap lerp over the host arrays,
+// bit-identical to the pre-texture implementation.
+
+inline float opaqueEnergyAt(const int ior, const int alpha, const int cosine)
 {
-#if defined(__CUDA_ARCH__)
-    return decode(OpaqueDielectricEnergyComplementDevice[
-        ior * EnergyTableSize * EnergyTableSize + alpha * EnergyTableSize + cosine]);
-#else
     return decode(OpaqueDielectricEnergyComplement[
         ior * EnergyTableSize * EnergyTableSize + alpha * EnergyTableSize + cosine]);
-#endif
 }
 
-NR_CPU_GPU inline float opaqueAverageEnergyAt(const int ior, const int alpha)
+inline float opaqueAverageEnergyAt(const int ior, const int alpha)
 {
-#if defined(__CUDA_ARCH__)
-    return decode(OpaqueDielectricAverageEnergyComplementDevice[ior * EnergyTableSize + alpha]);
-#else
     return decode(OpaqueDielectricAverageEnergyComplement[ior * EnergyTableSize + alpha]);
-#endif
 }
 
-NR_CPU_GPU inline float idealEnergyAt(const int ior, const int alpha, const int cosine)
+inline float idealEnergyAt(const int ior, const int alpha, const int cosine)
 {
-#if defined(__CUDA_ARCH__)
-    return decode(IdealDielectricEnergyComplementDevice[
-        ior * EnergyTableSize * EnergyTableSize + alpha * EnergyTableSize + cosine]);
-#else
     return decode(IdealDielectricEnergyComplement[
         ior * EnergyTableSize * EnergyTableSize + alpha * EnergyTableSize + cosine]);
-#endif
 }
 
-NR_CPU_GPU inline float idealAverageEnergyAt(const int ior, const int alpha)
+inline float idealAverageEnergyAt(const int ior, const int alpha)
 {
-#if defined(__CUDA_ARCH__)
-    return decode(IdealDielectricAverageEnergyComplementDevice[ior * EnergyTableSize + alpha]);
-#else
     return decode(IdealDielectricAverageEnergyComplement[ior * EnergyTableSize + alpha]);
-#endif
 }
 
-NR_CPU_GPU inline float idealReflectionRatioAt(const int ior, const int alpha)
+inline float idealReflectionRatioAt(const int ior, const int alpha)
 {
-#if defined(__CUDA_ARCH__)
-    return decode(IdealDielectricReflectionRatioDevice[ior * EnergyTableSize + alpha]);
-#else
     return decode(IdealDielectricReflectionRatio[ior * EnergyTableSize + alpha]);
-#endif
 }
 
 NR_CPU_GPU inline float opaqueDielectricEnergyComplement(
-    const float ior, const float alpha, const float cosTheta)
+    const EnergyLutTextures& luts, const float ior, const float alpha, const float cosTheta)
 {
+#if defined(__CUDA_ARCH__)
+    // Host array is ior-major (ior*N*N + alpha*N + cosine): cosine varies
+    // fastest, ior slowest. CUDA's 3D array x/y/z map fastest→slowest, so the
+    // tex3D argument order is (cosine, alpha, ior), not (ior, alpha, cosine).
+    const float iorCoord = clampedIndex(iorIndex(ior)) + 0.5f;
+    const float alphaCoord = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne) + 0.5f;
+    const float cosineCoord = clampedIndex(cosTheta * EnergyTableSizeMinusOne) + 0.5f;
+    return tex3D<float>(luts.opaqueEnergy, cosineCoord, alphaCoord, iorCoord);
+#else
+    (void)luts;
     const float x = clampedIndex(iorIndex(ior));
     const float y = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne);
     const float z = clampedIndex(cosTheta * EnergyTableSizeMinusOne);
@@ -158,11 +165,21 @@ NR_CPU_GPU inline float opaqueDielectricEnergyComplement(
     const float v10 = lerp(opaqueEnergyAt(x0, y1, z0), opaqueEnergyAt(x1, y1, z0), tx);
     const float v11 = lerp(opaqueEnergyAt(x0, y1, z1), opaqueEnergyAt(x1, y1, z1), tx);
     return lerp(lerp(v00, v10, ty), lerp(v01, v11, ty), tz);
+#endif
 }
 
 NR_CPU_GPU inline float opaqueDielectricAverageEnergyComplement(
-    const float ior, const float alpha)
+    const EnergyLutTextures& luts, const float ior, const float alpha)
 {
+#if defined(__CUDA_ARCH__)
+    // Host array is ior-major (ior*N + alpha): alpha varies fastest, ior
+    // slowest. CUDA's 2D array x/y map fastest→slowest, so tex2D takes
+    // (alpha, ior), not (ior, alpha).
+    const float iorCoord = clampedIndex(iorIndex(ior)) + 0.5f;
+    const float alphaCoord = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne) + 0.5f;
+    return tex2D<float>(luts.opaqueAverageEnergy, alphaCoord, iorCoord);
+#else
+    (void)luts;
     const float x = clampedIndex(iorIndex(ior));
     const float y = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne);
     const int x0 = static_cast<int>(floorf(x));
@@ -173,11 +190,22 @@ NR_CPU_GPU inline float opaqueDielectricAverageEnergyComplement(
     const float ty = y - y0;
     return lerp(lerp(opaqueAverageEnergyAt(x0, y0), opaqueAverageEnergyAt(x1, y0), tx),
         lerp(opaqueAverageEnergyAt(x0, y1), opaqueAverageEnergyAt(x1, y1), tx), ty);
+#endif
 }
 
 NR_CPU_GPU inline float idealDielectricEnergyComplement(
-    const float ior, const float alpha, const float cosTheta)
+    const EnergyLutTextures& luts, const float ior, const float alpha, const float cosTheta)
 {
+#if defined(__CUDA_ARCH__)
+    // Host array is ior-major (ior*N*N + alpha*N + cosine): cosine varies
+    // fastest, ior slowest. CUDA's 3D array x/y/z map fastest→slowest, so the
+    // tex3D argument order is (cosine, alpha, ior), not (ior, alpha, cosine).
+    const float iorCoord = clampedIndex(iorIndex(ior)) + 0.5f;
+    const float alphaCoord = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne) + 0.5f;
+    const float cosineCoord = clampedIndex(cosTheta * EnergyTableSizeMinusOne) + 0.5f;
+    return tex3D<float>(luts.idealEnergy, cosineCoord, alphaCoord, iorCoord);
+#else
+    (void)luts;
     const float x = clampedIndex(iorIndex(ior));
     const float y = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne);
     const float z = clampedIndex(cosTheta * EnergyTableSizeMinusOne);
@@ -195,11 +223,21 @@ NR_CPU_GPU inline float idealDielectricEnergyComplement(
     const float v10 = lerp(idealEnergyAt(x0, y1, z0), idealEnergyAt(x1, y1, z0), tx);
     const float v11 = lerp(idealEnergyAt(x0, y1, z1), idealEnergyAt(x1, y1, z1), tx);
     return lerp(lerp(v00, v10, ty), lerp(v01, v11, ty), tz);
+#endif
 }
 
 NR_CPU_GPU inline float idealDielectricAverageEnergyComplement(
-    const float ior, const float alpha)
+    const EnergyLutTextures& luts, const float ior, const float alpha)
 {
+#if defined(__CUDA_ARCH__)
+    // Host array is ior-major (ior*N + alpha): alpha varies fastest, ior
+    // slowest. CUDA's 2D array x/y map fastest→slowest, so tex2D takes
+    // (alpha, ior), not (ior, alpha).
+    const float iorCoord = clampedIndex(iorIndex(ior)) + 0.5f;
+    const float alphaCoord = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne) + 0.5f;
+    return tex2D<float>(luts.idealAverageEnergy, alphaCoord, iorCoord);
+#else
+    (void)luts;
     const float x = clampedIndex(iorIndex(ior));
     const float y = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne);
     const int x0 = static_cast<int>(floorf(x));
@@ -210,11 +248,21 @@ NR_CPU_GPU inline float idealDielectricAverageEnergyComplement(
     const float ty = y - y0;
     return lerp(lerp(idealAverageEnergyAt(x0, y0), idealAverageEnergyAt(x1, y0), tx),
         lerp(idealAverageEnergyAt(x0, y1), idealAverageEnergyAt(x1, y1), tx), ty);
+#endif
 }
 
 NR_CPU_GPU inline float idealDielectricReflectionRatio(
-    const float ior, const float alpha)
+    const EnergyLutTextures& luts, const float ior, const float alpha)
 {
+#if defined(__CUDA_ARCH__)
+    // Host array is ior-major (ior*N + alpha): alpha varies fastest, ior
+    // slowest. CUDA's 2D array x/y map fastest→slowest, so tex2D takes
+    // (alpha, ior), not (ior, alpha).
+    const float iorCoord = clampedIndex(iorIndex(ior)) + 0.5f;
+    const float alphaCoord = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne) + 0.5f;
+    return tex2D<float>(luts.idealReflectionRatio, alphaCoord, iorCoord);
+#else
+    (void)luts;
     const float x = clampedIndex(iorIndex(ior));
     const float y = clampedIndex(sqrtf(fmaxf(alpha, 0.0f)) * EnergyTableSizeMinusOne);
     const int x0 = static_cast<int>(floorf(x));
@@ -225,5 +273,6 @@ NR_CPU_GPU inline float idealDielectricReflectionRatio(
     const float ty = y - y0;
     return lerp(lerp(idealReflectionRatioAt(x0, y0), idealReflectionRatioAt(x1, y0), tx),
         lerp(idealReflectionRatioAt(x0, y1), idealReflectionRatioAt(x1, y1), tx), ty);
+#endif
 }
 }

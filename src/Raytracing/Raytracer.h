@@ -102,6 +102,7 @@ private:
     float* cieXDevice{};
     float* cieYDevice{};
     float* cieZDevice{};
+    nr::openpbr::EnergyLutStorage openPbrLutStorage{};
     GpuSceneData gpuScene{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};

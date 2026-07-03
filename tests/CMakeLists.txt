@@ -9,7 +9,6 @@ function(add_noorray_test target source prefix)
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain)
-    target_link_libraries(${target} PRIVATE openpbr)
     catch_discover_tests(${target}
         TEST_PREFIX "${prefix}:"
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"

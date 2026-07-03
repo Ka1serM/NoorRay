@@ -1,7 +1,15 @@
 #include <cuda_fp16.h>
 
 #include "Raytracing/Geometry.h"
-#include "Raytracing/KernelHelpers.h"
+
+NR_GPU inline ushort4 packHalf4(const glm::vec3 value, const float w)
+{
+    return make_ushort4(
+        __half_as_ushort(__float2half(value.x)),
+        __half_as_ushort(__float2half(value.y)),
+        __half_as_ushort(__float2half(value.z)),
+        __half_as_ushort(__float2half(w)));
+}
 
 // Shades the deterministic AOV primary-ray hit and writes ID/normal/position/albedo
 // directly into the output surfaces. Plain RGB, no spectral roundtrip — this is a

@@ -246,7 +246,7 @@ NR_CPU_GPU inline glm::vec3 spectrumToXYZ(
     ) / NrCIE_Y_integral;
 }
 
-// Y (luminance) only — for Russian roulette and adaptive sampling.
+// Y (luminance) only — for Russian roulette.
 // Equivalent to pbrt-v4 SampledSpectrum::y.
 NR_CPU_GPU inline float spectrumY(
     const SampledSpectrum&    L,

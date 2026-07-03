@@ -86,29 +86,6 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetColumnIndex(1);
         changed |= ImGui::Checkbox("##TransparentBg", reinterpret_cast<bool*>(&settings.transparentBackground));
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Adaptive Sampling");
-        ImGui::TableSetColumnIndex(1);
-        changed |= ImGui::Checkbox("##AdaptiveEnable", reinterpret_cast<bool*>(&settings.adaptiveSamplingEnabled));
-
-        if (settings.adaptiveSamplingEnabled)
-        {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("  Min Samples");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            changed |= ImGui::DragInt("##AdaptiveMin", &settings.adaptiveMinSamples, 0.5f, 1, 256, "%d");
-
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("  Target Error");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            changed |= ImGui::DragFloat("##AdaptiveTarget", &settings.adaptiveTargetError, 0.0001f, 0.0f, 1.0f, "%.4f");
-        }
-
         static constexpr const char* kBufferVisNames[] = {
             "Beauty", "Albedo", "Normal", "Cryptomatte", "Position"
         };

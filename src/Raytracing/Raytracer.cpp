@@ -20,7 +20,6 @@
 #include "CUDA/Checks.h"
 #include "CUDA/rstd/Memory.h"
 #include "Log.h"
-#include "Raytracing/Shade.h"
 #include "NoorRayOptixIr.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
@@ -318,9 +317,7 @@ void Raytracer::allocateQueues()
     queues.aovRayQueue = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
     queues.aovHitQueue = nr::rstd::allocate_device<HitWorkItem>(queues.capacity, stream);
     accumulation = nr::rstd::allocate_device<glm::vec4>(static_cast<size_t>(width) * height, stream);
-    adaptiveState = nr::rstd::allocate_device<glm::vec4>(static_cast<size_t>(width) * height, stream);
     NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
-    NR_GPU_CHECK(cudaMemsetAsync(adaptiveState, 0, sizeof(glm::vec4) * width * height, stream));
 }
 
 void Raytracer::freeQueues() noexcept
@@ -334,10 +331,8 @@ void Raytracer::freeQueues() noexcept
     nr::rstd::deallocate_device(queues.aovRayQueue, stream);
     nr::rstd::deallocate_device(queues.aovHitQueue, stream);
     nr::rstd::deallocate_device(accumulation, stream);
-    nr::rstd::deallocate_device(adaptiveState, stream);
     queues = {};
     accumulation = nullptr;
-    adaptiveState = nullptr;
 }
 
 void Raytracer::freeSceneData() noexcept
@@ -570,10 +565,7 @@ void Raytracer::render(const PushData& pushData)
     }
 
     if (pushData.frame == 0)
-    {
         NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
-        NR_GPU_CHECK(cudaMemsetAsync(adaptiveState, 0, sizeof(glm::vec4) * width * height, stream));
-    }
 
     KernelParams params{};
     params.scene = gpuScene;
@@ -592,7 +584,6 @@ void Raytracer::render(const PushData& pushData)
     params.frame.width = width;
     params.frame.height = height;
     params.accumulation = accumulation;
-    params.adaptiveState = adaptiveState;
 
     const RenderSettings& renderSettings = scene.getRenderSettings();
     const uint32_t samplesPerFrame = static_cast<uint32_t>(std::max(1, renderSettings.samples));

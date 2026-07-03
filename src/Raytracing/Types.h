@@ -20,16 +20,19 @@ static constexpr uint32_t InvalidIndex = ~0u;
 
 using TlasHandle = uint64_t;
 
-// PathState now carries wavelengths + spectral throughput/radiance.
-// lambda[]/lambdaPdf[] mirror SampledWavelengths fields and are stored
-// inline to keep the struct self-contained without a separate queue buffer.
-// Layout: 96 bytes (6 × 16-byte aligned lines).
+// Bit offsets of the per-bounce-type counters packed into PathState::packedCounters.
+static constexpr uint32_t CounterDiffuseShift = 0;
+static constexpr uint32_t CounterSpecularShift = 8;
+static constexpr uint32_t CounterTransmissionShift = 16;
+static constexpr uint32_t CounterHitShift = 24;
+
+// PathState carries the sampled wavelengths + spectral throughput/radiance,
+// stored inline to keep the struct self-contained without a separate queue buffer.
 struct alignas(16) PathState
 {
     SampledSpectrum throughput;
     SampledSpectrum radiance;
-    float lambda[NrSpectrumSamples];
-    float lambdaPdf[NrSpectrumSamples];
+    SampledWavelengths wl;
     RandomState rngState;
     uint32_t depth;
     uint32_t flags;

@@ -17,9 +17,6 @@ public:
     int diffuseBounces{64};
     int specularBounces{64};
     int transmissionBounces{64};
-    int adaptiveSamplingEnabled{};
-    int adaptiveMinSamples{4};
-    float adaptiveTargetError{0.001f};
     int russianRouletteStartBounce{3};
     float exposure{};
     int tonemappingEnabled{1};

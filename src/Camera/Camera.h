@@ -35,7 +35,6 @@ public:
     float fieldOfView{90.f};
     float focalLengthMm{2.892f};
     float focusDistance{4.f};
-    bool disableAntiAliasing{false};
 
     NR_CPU_GPU void transformRay(glm::vec3& origin, glm::vec3& direction) const
     {
@@ -47,7 +46,6 @@ public:
     const Sensor& getSensor() const;
     void setFocalLength(float focalLength);
     void setFocusDistance(float v);
-    void setAntiAliasingDisabled(bool disabled);
     bool renderUi();
     float focalLengthForFov(float fovDegrees) const;
     float fovForFocalLength(float focalLength) const;

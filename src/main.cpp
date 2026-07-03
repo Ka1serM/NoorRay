@@ -16,6 +16,6 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    NoorRay app(1280, 720);
+    NoorRay app(1680, 960);
     app.runUi();
 }

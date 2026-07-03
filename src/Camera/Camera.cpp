@@ -41,14 +41,6 @@ void Camera::setFocusDistance(const float v)
         focusDistance = clamped;
 }
 
-void Camera::setAntiAliasingDisabled(const bool disabled)
-{
-    if (ptr())
-        DispatchCPU([disabled](auto* cam) { cam->disableAntiAliasing = disabled; });
-    else
-        disableAntiAliasing = disabled;
-}
-
 Sensor& Camera::getSensor()
 {
     if (ptr())
@@ -73,10 +65,6 @@ bool Camera::renderUi()
     });
     ImGuiManager::dragFloatRow("Focal Length", focalLengthMm, 0.1f, 0.001f, 500.f, [&](float value) {
         setFocalLength(value);
-        changed = true;
-    });
-    ImGuiManager::checkboxRow("Disable Anti-Aliasing", disableAntiAliasing, [&](bool value) {
-        disableAntiAliasing = value;
         changed = true;
     });
     return changed;

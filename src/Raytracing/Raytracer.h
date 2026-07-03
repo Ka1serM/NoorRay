@@ -97,7 +97,6 @@ private:
     Tlas tlas;
     WavefrontQueues queues{};
     glm::vec4* accumulation{};
-    glm::vec4* adaptiveState{};
     float* spectrumTableScaleDevice{};
     float* spectrumTableCoeffsDevice{};
     float* d65Device{};

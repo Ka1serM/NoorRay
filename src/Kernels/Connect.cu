@@ -4,7 +4,6 @@
 
 #include "Raytracing/Geometry.h"
 #include "Raytracing/RayTraversal.h"
-#include "Raytracing/KernelHelpers.h"
 #include "Samplers/RandomSampler.h"
 
 extern "C"

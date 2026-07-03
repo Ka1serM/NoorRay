@@ -64,6 +64,5 @@ struct KernelParams
     OutputSurfaces output;
     GpuFrameSettings frame;
     glm::vec4* accumulation{};
-    glm::vec4* adaptiveState{};
     uint32_t depth{};
 };

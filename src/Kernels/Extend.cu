@@ -3,7 +3,7 @@
 #include <optix_device.h>
 
 #include "Raytracing/RayTraversal.h"
-#include "Raytracing/KernelHelpers.h"
+#include "Raytracing/SceneData.h"
 
 extern "C"
 {

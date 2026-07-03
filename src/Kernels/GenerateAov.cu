@@ -1,6 +1,6 @@
 #include <cuda_fp16.h>
 
-#include "Raytracing/KernelHelpers.h"
+#include "Raytracing/SceneData.h"
 #include "Samplers/RandomSampler.h"
 
 // Deterministic, single-ray-per-pixel primary ray for the AOV pass: pixel-center

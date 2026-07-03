@@ -1,7 +1,7 @@
 #include <cuda_fp16.h>
 
 #include "Raytracing/Geometry.h"
-#include "Raytracing/KernelHelpers.h"
+#include "Raytracing/MisHeuristic.h"
 #include "Raytracing/Queues.h"
 #include "Samplers/RandomSampler.h"
 
@@ -34,14 +34,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         shadow.tMax = 0.0f;
         params.queues.shadowQueue[index] = shadow;
         PathState state = params.queues.pathStates[hit.sampleIndex];
-
-        // Reconstruct sampled wavelengths from PathState.
-        SampledWavelengths wl;
-        for (int i = 0; i < NrSpectrumSamples; ++i)
-        {
-            wl.lambda[i] = state.lambda[i];
-            wl.pdf[i]    = state.lambdaPdf[i];
-        }
+        SampledWavelengths& wl = state.wl;
 
         if (hit.primitiveIndex == InvalidIndex)
         {
@@ -58,12 +51,16 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         + environmentWeight;
                     if (bsdfPdf > 0.0f && environmentWeight > 0.0f && totalWeight > 0.0f) {
                         const float lightPdf = (environmentWeight / totalWeight)
-                            * environmentPdf(*params.scene.environment, hit.rayDirection);
+                            * params.scene.environment->pdf(hit.rayDirection);
                         misWeight = powerHeuristic(bsdfPdf, lightPdf);
                     }
                 }
                 state.radiance += state.throughput *
-                    environmentRadiance(params.scene, hit.rayDirection, cameraRay, wl)
+                    params.scene.environment->radiance(
+                        params.scene.textures, params.scene.textureCount,
+                        hit.rayDirection, cameraRay, wl,
+                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                        params.scene.d65)
                     * misWeight;
             }
             if (cameraRay && backgroundVisible)
@@ -198,16 +195,19 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                                 } else target -= w;
                             }
                             if (selectedWeight == 0.0f && environmentWeight > 0.0f) {
-                                const EnvironmentDirectionSample environmentSample =
-                                    sampleEnvironmentDirection(*params.scene.environment, lightRng);
+                                const EnvironmentSample environmentSample =
+                                    params.scene.environment->sampleDirection(lightRng);
                                 if (environmentSample.pdf > 0.0f) {
                                     selectedWeight = environmentWeight;
                                     environmentSelected = true;
                                     sampledEnvironmentPdf = environmentSample.pdf;
                                     lightSample.direction = environmentSample.direction;
                                     lightSample.distance = 1e16f;
-                                    lightSample.radiance = environmentRadiance(
-                                        params.scene, environmentSample.direction, false, wl);
+                                    lightSample.radiance = params.scene.environment->radiance(
+                                        params.scene.textures, params.scene.textureCount,
+                                        environmentSample.direction, false, wl,
+                                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                                        params.scene.d65);
                                 }
                             }
                             if (selectedWeight > 0.0f) {
@@ -243,11 +243,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                     }
 
                     if (bsdfSample.event == BsdfEvent::Transmission)
-                    {
                         wl.terminateSecondary();
-                        for (int i = 0; i < NrSpectrumSamples; ++i)
-                            state.lambdaPdf[i] = wl.pdf[i];
-                    }
                 }
 
                 state.depth++;

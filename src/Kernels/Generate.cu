@@ -1,7 +1,7 @@
 #include <cuda_fp16.h>
 
-#include "Raytracing/KernelHelpers.h"
 #include "Raytracing/Queues.h"
+#include "Raytracing/SceneData.h"
 #include "Samplers/RandomSampler.h"
 #include "Samplers/R2Sampler.h"
 
@@ -10,7 +10,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     const uint32_t pixel = NR_GPU_LAUNCH_IDX;
     const uint32_t total = params.frame.width * params.frame.height;
     const bool inRange = pixel < total;
-    bool active = inRange && !adaptiveSkip(params, pixel);
+    bool active = inRange;
     const uint64_t sequence = (static_cast<uint64_t>(params.frame.totalAccumulated) << 32u)
         | static_cast<uint64_t>(pixel);
     RandomState rng = seedRandom(sequence);
@@ -52,11 +52,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         if (!active)
         {
             PathState state{};
-            for (int i = 0; i < NrSpectrumSamples; ++i)
-            {
-                state.lambda[i] = wl.lambda[i];
-                state.lambdaPdf[i] = wl.pdf[i];
-            }
+            state.wl = wl;
             if (params.scene.camera->Is<RealisticCamera>())
                 state.packedCounters |= 1u << CounterHitShift;
             state.rngState = rng;
@@ -68,12 +64,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     if (active)
     {
         PathState state{};
-
-        for (int i = 0; i < NrSpectrumSamples; ++i)
-        {
-            state.lambda[i]    = wl.lambda[i];
-            state.lambdaPdf[i] = wl.pdf[i];
-        }
+        state.wl = wl;
 
         state.throughput = SampledSpectrum(cameraWeight);
         state.radiance   = SampledSpectrum(0.f);

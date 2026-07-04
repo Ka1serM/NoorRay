@@ -21,7 +21,9 @@
 #include "glm/gtx/norm.hpp"
 #include "glm/gtx/quaternion.hpp"
 #include "Mesh/MeshAsset.h"
+#include "Mesh/GaussianAsset.h"
 #include "Mesh/Transform.h"
+#include "Scene/GaussianInstance.h"
 #include <functional>
 
 //(x, y, z) -> (x, -y, -z)
@@ -779,4 +781,15 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
             scene.add(std::make_unique<MeshInstance>(scene, name, meshIndex, t));
         }
     }
+}
+
+void SceneImporter::ImportPlyScene(Scene& scene, const std::string& filepath)
+{
+    const std::filesystem::path filePath = resolveAssetPath(filepath);
+    if (!std::filesystem::exists(filePath))
+        throw std::runtime_error("File not found: " + filepath);
+
+    const std::string name = nameFromPath(filePath.filename().string());
+    const uint32_t assetIndex = scene.add(GaussianAsset::CreateFromPly(scene, name, filePath.string()));
+    scene.add(std::make_unique<GaussianInstance>(scene, name, assetIndex, Transform{}));
 }

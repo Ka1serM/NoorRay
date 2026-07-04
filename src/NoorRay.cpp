@@ -17,7 +17,10 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include "backends/imgui_impl_sdl3.h"
+#include "Camera/Camera.h"
 #include "Camera/CameraInstance.h"
+#include "Camera/PerspectiveCamera.h"
+#include "CUDA/rstd/Allocator.h"
 #include "IO/BitmapWriter.h"
 #include "Log.h"
 #include "Mesh/MeshAsset.h"
@@ -59,12 +62,36 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
 
 // ── Headless constructor ──────────────────────────────────────────────────────
 
-NoorRay::NoorRay(int /*argc*/, char* argv[])
+NoorRay::NoorRay(const std::string& scenePath, const int spp,
+                 const std::string& outputPath, const int width, const int height,
+                 const bool statsEnabled)
     : context(1, 1, /*headless=*/true)
     , scene(context)
+    , m_cliSpp(spp)
+    , m_cliOutput(outputPath)
+    , m_cliStats(statsEnabled)
 {
-    SceneImporter::ImportJsonScene(scene, argv[1]);
+    const std::string ext = scenePath.size() >= 4
+        ? scenePath.substr(scenePath.size() - 4) : "";
+    if (ext == ".ply" || ext == ".PLY")
+    {
+        SceneImporter::ImportPlyScene(scene, scenePath);
+        nr::rstd::allocator<PerspectiveCamera> alc;
+        PerspectiveCamera* pc = alc.allocate(1);
+        alc.construct(pc);
+        Camera cam(pc);
+        cam.setFocalLength(50.0f);
+        scene.add(std::make_unique<CameraInstance>(
+            scene, "Camera",
+            Transform{glm::vec3(0.0f, 2.0f, 5.0f)},
+            cam));
+    }
+    else
+        SceneImporter::ImportJsonScene(scene, scenePath);
 
+    const uint32_t gaussianCount = scene.getGaussianCount();
+    LOG_INFO("Scene loaded: " << scenePath << " (" << gaussianCount << " gaussians, "
+             << scene.getMeshAssets().size() << " meshes)");
     raytracer = std::make_unique<Raytracer>(context, scene);
 }
 
@@ -173,22 +200,23 @@ void NoorRay::runUi() {
 
 // ── runCli ────────────────────────────────────────────────────────────────────
 
-void NoorRay::runCli(const int spp, const std::string& outputPath) {
-    if (spp <= 0)
+void NoorRay::runCli() {
+    if (m_cliSpp <= 0)
         throw std::invalid_argument("Samples per pixel must be greater than zero");
 
     LOG_INFO("Rendering " << raytracer->getWidth() << "x" << raytracer->getHeight()
-             << " @ " << spp << " spp");
-    // The CLI only ever saves the final beauty/HDR bitmap below — the AOV pass
-    // (ID/normal/position/albedo) exists purely for interactive viewport features.
+             << " @ " << m_cliSpp << " spp");
     raytracer->setAovEnabled(false);
-    const Bitmap bitmap = raytracer->renderOffline(static_cast<uint32_t>(spp));
+    raytracer->setStatsEnabled(m_cliStats);
+    const Bitmap bitmap = raytracer->renderOffline(static_cast<uint32_t>(m_cliSpp));
 
     std::string writeError;
-    const bool saved = BitmapWriter::write(outputPath, bitmap, {}, &writeError);
+    const bool saved = BitmapWriter::write(m_cliOutput, bitmap, {}, &writeError);
 
     if (!saved)
         throw std::runtime_error("Failed to save bitmap: " + writeError);
 
-    LOG_INFO("Saved: " << outputPath);
+    LOG_INFO("Saved: " << m_cliOutput);
+    if (m_cliStats)
+        raytracer->printKernelStats();
 }

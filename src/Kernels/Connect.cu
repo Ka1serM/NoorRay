@@ -18,7 +18,7 @@ NR_GPU inline bool shadowOccluded(
     while (rayMin < shadow.tMax)
     {
         const RayHit hit = intersectRay(params.scene.tlasHandle, shadow.origin,
-            shadow.direction, rayMin, shadow.tMax);
+            shadow.direction, rayMin, shadow.tMax, 0, false);
         if (!hit.hit)
             return false;
 

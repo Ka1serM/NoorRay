@@ -47,12 +47,20 @@ struct alignas(16) PathRayWorkItem
     glm::vec3 direction;
 };
 
+// HitWorkItem carries per-hit data from Extend to Shade.  Fields are shared
+// between mesh and gaussian hits through a union-like convention:
+//   attribute0 — mesh: baryU, gaussian: world-space hit distance t
+//   attribute1 — mesh: baryV, gaussian: density alpha
+//   instanceIndex — mesh: instance id, gaussian: meshInstanceCount + gaussianId
+//   primitiveIndex — mesh: triangle index, gaussian: unused
+// The gaussian vs mesh discriminator is: instanceIndex >= meshInstanceCount.
 struct alignas(16) HitWorkItem
 {
-    glm::vec3 rayDirection;
+    glm::vec3 rayOrigin;
     uint32_t sampleIndex;
-    float baryU;
-    float baryV;
+    glm::vec3 rayDirection;
+    float attribute0;
+    float attribute1;
     uint32_t instanceIndex;
     uint32_t primitiveIndex;
 };

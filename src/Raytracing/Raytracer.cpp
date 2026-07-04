@@ -98,7 +98,7 @@ Raytracer::Raytracer(
     OptixPipelineCompileOptions pipelineOptions{};
     pipelineOptions.usesMotionBlur = false;
     pipelineOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
-    pipelineOptions.numPayloadValues = 0;
+    pipelineOptions.numPayloadValues = 4;
     pipelineOptions.numAttributeValues = 2;
     pipelineOptions.pipelineLaunchParamsVariableName = "params";
     pipelineOptions.pipelineLaunchParamsSizeInBytes = sizeof(KernelParams);
@@ -116,12 +116,21 @@ Raytracer::Raytracer(
     optixExtendGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__extend");
     optixConnectGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__connect");
 
+    OptixProgramGroupOptions groupOptions{};
+
     OptixProgramGroupDesc triDesc{};
     triDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    OptixProgramGroupOptions groupOptions{};
     logSize = log.size();
     NR_OPTIX_CHECK(optixProgramGroupCreate(
         optixCtx, &triDesc, 1, &groupOptions, log.data(), &logSize, &optixTriangleGroup));
+
+    OptixProgramGroupDesc gaussianDesc{};
+    gaussianDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    gaussianDesc.hitgroup.moduleAH = optixModule;
+    gaussianDesc.hitgroup.entryFunctionNameAH = "__anyhit__gaussian";
+    logSize = log.size();
+    NR_OPTIX_CHECK(optixProgramGroupCreate(
+        optixCtx, &gaussianDesc, 1, &groupOptions, log.data(), &logSize, &optixGaussianHitGroup));
 
     OptixProgramGroupDesc missDesc{};
     missDesc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
@@ -131,7 +140,7 @@ Raytracer::Raytracer(
     NR_OPTIX_CHECK(optixProgramGroupCreate(
         optixCtx, &missDesc, 1, &groupOptions, log.data(), &logSize, &optixMissGroup));
 
-    const std::array groups{optixExtendGroup, optixConnectGroup, optixTriangleGroup, optixMissGroup};
+    const std::array groups{optixExtendGroup, optixConnectGroup, optixTriangleGroup, optixGaussianHitGroup, optixMissGroup};
     OptixPipelineLinkOptions linkOptions{};
     linkOptions.maxTraceDepth = 1;
     logSize = log.size();
@@ -158,7 +167,20 @@ Raytracer::Raytracer(
 
     optixExtendRecord = uploadRecord(optixExtendGroup);
     optixConnectRecord = uploadRecord(optixConnectGroup);
-    optixHitgroupRecord = uploadRecord(optixTriangleGroup);
+
+    // Upload two hitgroup records contiguously: mesh (sbtOffset=0) and Gaussian (sbtOffset=1)
+    {
+        SbtRecord<> meshSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup, &meshSbt));
+        SbtRecord<> gaussianSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixGaussianHitGroup, &gaussianSbt));
+        const std::array records{meshSbt, gaussianSbt};
+        void* deviceRecords = nullptr;
+        NR_GPU_CHECK(cudaMalloc(&deviceRecords, sizeof(records)));
+        NR_GPU_CHECK(cudaMemcpy(deviceRecords, records.data(), sizeof(records), cudaMemcpyHostToDevice));
+        optixHitgroupRecord = reinterpret_cast<CUdeviceptr>(deviceRecords);
+    }
+
     optixMissRecord = uploadRecord(optixMissGroup);
 
     optixExtendSbt.raygenRecord = optixExtendRecord;
@@ -167,7 +189,7 @@ Raytracer::Raytracer(
     optixExtendSbt.missRecordCount = 1;
     optixExtendSbt.hitgroupRecordBase = optixHitgroupRecord;
     optixExtendSbt.hitgroupRecordStrideInBytes = sizeof(SbtRecord<>);
-    optixExtendSbt.hitgroupRecordCount = 1;
+    optixExtendSbt.hitgroupRecordCount = 2;
     optixConnectSbt = optixExtendSbt;
     optixConnectSbt.raygenRecord = optixConnectRecord;
 
@@ -231,6 +253,12 @@ Raytracer::Raytracer(
     // Upload OpenPBR opaque-dielectric energy-compensation LUTs as hardware-filtered textures.
     nr::openpbr::uploadEnergyLuts(openPbrLutStorage, gpuScene.openPbrLuts, stream);
 
+    {
+        void* allocation = nullptr;
+        NR_GPU_CHECK(cudaMalloc(&allocation, sizeof(KernelParams)));
+        optixLaunchParamsDevice = reinterpret_cast<CUdeviceptr>(allocation);
+    }
+
     auto* cam = scene.getActiveCamera();
     auto* c = cam ? cam->getCamera() : nullptr;
     auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
@@ -246,6 +274,11 @@ Raytracer::~Raytracer()
     tlas.destroy(stream);
     freeSceneData();
     freeQueues();
+    if (optixLaunchParamsDevice != 0)
+    {
+        cudaFree(reinterpret_cast<void*>(optixLaunchParamsDevice));
+        optixLaunchParamsDevice = 0;
+    }
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
     cudaEventDestroy(m_startEvent);
@@ -269,6 +302,7 @@ Raytracer::~Raytracer()
     freeRecord(optixMissRecord);
     if (optixPipeline != nullptr) { optixPipelineDestroy(optixPipeline); optixPipeline = nullptr; }
     if (optixMissGroup != nullptr) { optixProgramGroupDestroy(optixMissGroup); optixMissGroup = nullptr; }
+    if (optixGaussianHitGroup != nullptr) { optixProgramGroupDestroy(optixGaussianHitGroup); optixGaussianHitGroup = nullptr; }
     if (optixTriangleGroup != nullptr) { optixProgramGroupDestroy(optixTriangleGroup); optixTriangleGroup = nullptr; }
     if (optixConnectGroup != nullptr) { optixProgramGroupDestroy(optixConnectGroup); optixConnectGroup = nullptr; }
     if (optixExtendGroup != nullptr) { optixProgramGroupDestroy(optixExtendGroup); optixExtendGroup = nullptr; }
@@ -440,6 +474,11 @@ void Raytracer::updateTLAS()
     tlas.build(optixCtx, stream, scene, gpuInstances);
     gpuScene.tlasHandle = tlas.getTraversable();
     gpuScene.instances = gpuInstances.data();
+    gpuScene.meshInstanceCount = static_cast<uint32_t>(gpuInstances.size());
+
+    scene.buildGaussianRenderData();
+    gpuScene.gaussianOpacityColors = scene.getGaussianOpacityColors();
+    gpuScene.gaussianCount = scene.getGaussianCount();
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
@@ -486,24 +525,20 @@ void Raytracer::launchShade(const KernelParams& params, const cudaStream_t strea
 
 void Raytracer::launchExtend(const KernelParams& params, const cudaStream_t stream) const
 {
-    void* deviceParams = nullptr;
-    NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
-    NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
+    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+        &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
-        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
+        optixLaunchParamsDevice, sizeof(KernelParams),
         &optixExtendSbt, params.queues.capacity, 1, 1));
-    NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
 void Raytracer::launchConnect(const KernelParams& params, const cudaStream_t stream) const
 {
-    void* deviceParams = nullptr;
-    NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(params), stream));
-    NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &params, sizeof(params), cudaMemcpyHostToDevice, stream));
+    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+        &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
-        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
+        optixLaunchParamsDevice, sizeof(KernelParams),
         &optixConnectSbt, params.queues.capacity, 1, 1));
-    NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
 void Raytracer::launchGenerateAov(const KernelParams& params, const cudaStream_t stream) const
@@ -527,13 +562,11 @@ void Raytracer::launchExtendAov(const KernelParams& params, const cudaStream_t s
     aovParams.queues.rayQueues[0] = params.queues.aovRayQueue;
     aovParams.queues.hitQueue = params.queues.aovHitQueue;
 
-    void* deviceParams = nullptr;
-    NR_GPU_CHECK(cudaMallocAsync(&deviceParams, sizeof(aovParams), stream));
-    NR_GPU_CHECK(cudaMemcpyAsync(deviceParams, &aovParams, sizeof(aovParams), cudaMemcpyHostToDevice, stream));
+    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+        &aovParams, sizeof(aovParams), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
-        reinterpret_cast<CUdeviceptr>(deviceParams), sizeof(KernelParams),
+        optixLaunchParamsDevice, sizeof(KernelParams),
         &optixExtendSbt, params.queues.capacity, 1, 1));
-    NR_GPU_CHECK(cudaFreeAsync(deviceParams, stream));
 }
 
 void Raytracer::launchShadeAov(const KernelParams& params, const cudaStream_t stream) const
@@ -594,32 +627,41 @@ void Raytracer::render(const PushData& pushData)
 
     NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
 
-    // Deterministic AOV pass: one sharp, unjittered primary ray per pixel, independent
-    // of the noisy accumulation below, so ID/normal/position/albedo never flicker.
-    // Skipped entirely when nothing consumes these buffers (e.g. headless CLI renders).
-    if (aovEnabled)
+    if (pushData.frame == 0)
+        aovStaleBuffers = 2;
+    if (aovEnabled && aovStaleBuffers > 0)
     {
-        launchGenerateAov(params, stream);
-        launchExtendAov(params, stream);
-        launchShadeAov(params, stream);
+        kernelStats.time("GenerateAov", stream, [&] { launchGenerateAov(params, stream); });
+        kernelStats.time("ExtendAov", stream, [&] { launchExtendAov(params, stream); });
+        kernelStats.time("ShadeAov", stream, [&] { launchShadeAov(params, stream); });
+        --aovStaleBuffers;
     }
 
     for (uint32_t s = 0; s < samplesPerFrame; ++s)
     {
         NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0, sizeof(uint32_t) * MaxBounces, stream));
-        NR_GPU_CHECK(cudaMemsetAsync(queues.pathStates, 0, sizeof(PathState) * queues.capacity, stream));
         params.frame.totalAccumulated = static_cast<uint32_t>(pushData.frame) * samplesPerFrame + s;
 
-        launchGenerate(params, stream);
+        kernelStats.time("Generate", stream, [&] { launchGenerate(params, stream); });
         NR_GPU_CHECK(cudaGetLastError());
         for (uint32_t depth = 0; depth < maxShaderBounces; ++depth)
         {
             params.depth = depth;
-            launchExtend(params, stream);
-            launchShade(params, stream);
-            launchConnect(params, stream);
+            kernelStats.time("Extend", stream, [&] { launchExtend(params, stream); });
+            kernelStats.time("Shade", stream, [&] { launchShade(params, stream); });
+            kernelStats.time("Connect", stream, [&] { launchConnect(params, stream); });
+
+            if (depth + 1 < maxShaderBounces)
+            {
+                uint32_t nextActiveCount = 0;
+                NR_GPU_CHECK(cudaMemcpyAsync(&nextActiveCount, queues.rayCounts + depth + 1,
+                    sizeof(uint32_t), cudaMemcpyDeviceToHost, stream));
+                NR_GPU_CHECK(cudaStreamSynchronize(stream));
+                if (nextActiveCount == 0)
+                    break;
+            }
         }
-        launchFinalize(params, stream);
+        kernelStats.time("Finalize", stream, [&] { launchFinalize(params, stream); });
     }
     NR_GPU_CHECK(cudaPeekAtLastError());
 
@@ -654,6 +696,7 @@ Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
     try {
         render(PushData{.frame = 0});
         NR_GPU_CHECK(cudaStreamSynchronize(stream));
+        kernelStats.harvestFrame();
     } catch (...) {
         settings.samples = previousSamplesPerFrame;
         throw;

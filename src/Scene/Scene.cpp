@@ -4,6 +4,7 @@
 #include "CUDA/rstd/Allocator.h"
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
+#include "Scene/GaussianInstance.h"
 #include "Light/PointLight.h"
 #include "Light/RectLight.h"
 #include "Light/SpotLight.h"
@@ -58,6 +59,13 @@ uint32_t Scene::add(MeshAsset meshAsset) {
     meshAsset.setMeshIndex(index);
     meshAssets.push_back(std::move(meshAsset));
     setDirtyFlag(Meshes);
+    return index;
+}
+
+uint32_t Scene::add(GaussianAsset gaussianAsset) {
+    const uint32_t index = static_cast<uint32_t>(gaussianAssets.size());
+    gaussianAssets.push_back(std::move(gaussianAsset));
+    setDirtyFlag(TLAS);
     return index;
 }
 
@@ -300,6 +308,44 @@ std::vector<std::shared_ptr<MeshInstance>> Scene::getMeshInstances() const {
         if (auto mi = std::dynamic_pointer_cast<MeshInstance>(obj))
             result.push_back(mi);
     return result;
+}
+
+std::vector<std::shared_ptr<GaussianInstance>> Scene::getGaussianInstances() const {
+    std::vector<std::shared_ptr<GaussianInstance>> result;
+    for (const auto& obj : sceneObjects)
+        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
+            result.push_back(gi);
+    return result;
+}
+
+uint32_t Scene::getGaussianCount() const {
+    uint32_t total = 0;
+    for (const auto& obj : sceneObjects)
+        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
+            total += gi->getGaussianAsset().getGaussianCount();
+    return total;
+}
+
+void Scene::buildGaussianRenderData()
+{
+    uint32_t total = 0;
+    for (const auto& obj : sceneObjects)
+        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
+            total += gi->getGaussianAsset().getGaussianCount();
+    gaussianOpacityColors.resize(total);
+    uint32_t offset = 0;
+    for (const auto& obj : sceneObjects)
+    {
+        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
+        {
+            const GaussianAsset& asset = gi->getGaussianAsset();
+            for (uint32_t i = 0; i < asset.getGaussianCount(); ++i)
+            {
+                gaussianOpacityColors[offset] = asset.getGaussians()[i].packedOpacityColor;
+                ++offset;
+            }
+        }
+    }
 }
 
 uint32_t Scene::getActiveMeshInstanceIndex() const

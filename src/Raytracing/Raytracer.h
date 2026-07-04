@@ -10,6 +10,7 @@
 #include <optix.h>
 #include <vulkan/vulkan.hpp>
 
+#include "CUDA/KernelStats.h"
 #include "CUDA/Texture.h"
 #include "CUDA/Tlas.h"
 #include "CUDA/SharedImage.h"
@@ -47,11 +48,11 @@ public:
     void render(const PushData& pushData);
     Bitmap renderOffline(uint32_t sampleCount);
 
-    // ID/normal/position/albedo AOVs are only needed for interactive viewport
-    // features (picking, outlines, buffer views) — skip that extra pass entirely
-    // when only the beauty/HDR output is wanted, e.g. headless CLI renders.
     void setAovEnabled(bool enabled) { aovEnabled = enabled; }
     bool getAovEnabled() const { return aovEnabled; }
+    void setStatsEnabled(bool enabled) { kernelStats.setEnabled(enabled); }
+    void harvestKernelStats() { kernelStats.harvestFrame(); }
+    void printKernelStats() const { kernelStats.printReport(); }
     void updateMeshes();
     void updateTextures();
     void updateEnvironmentCdf();
@@ -106,6 +107,7 @@ private:
     GpuSceneData gpuScene{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
+    uint32_t aovStaleBuffers{2};
     uint64_t lastReadyValue{};
     uint64_t submittedFrame{};
     std::array<uint64_t, 2> lastUseValue{};
@@ -113,6 +115,8 @@ private:
     cudaEvent_t m_stopEvent{};
     float m_gpuTimeMs = 0.0f;
     bool m_eventsRecorded = false;
+    KernelStats kernelStats;
+    CUdeviceptr optixLaunchParamsDevice{};
 
     // OptiX state
     OptixDeviceContext optixCtx{};
@@ -120,6 +124,7 @@ private:
     OptixProgramGroup optixExtendGroup{};
     OptixProgramGroup optixConnectGroup{};
     OptixProgramGroup optixTriangleGroup{};
+    OptixProgramGroup optixGaussianHitGroup{};
     OptixProgramGroup optixMissGroup{};
     OptixPipeline optixPipeline{};
     CUdeviceptr optixExtendRecord{};

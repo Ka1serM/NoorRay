@@ -9,6 +9,7 @@
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
 #include "Mesh/MeshAsset.h"
+#include "Mesh/GaussianAsset.h"
 #include "Light/PointLight.h"
 #include "Light/SpotLight.h"
 #include "Light/RectLight.h"
@@ -45,6 +46,7 @@ using glm::transpose;
 
 class SceneObject;
 class MeshInstance;
+class GaussianInstance;
 class CameraInstance;
 class LightInstance;
 class Buffer;
@@ -65,6 +67,7 @@ class Scene {
     std::vector<Texture> textures;
     std::vector<std::string> textureNames;
     nr::rstd::vector<MeshAsset> meshAssets;
+    nr::rstd::vector<GaussianAsset> gaussianAssets;
     Environment* environment{};
     RenderSettings renderSettings{};
 
@@ -74,6 +77,7 @@ class Scene {
     nr::rstd::vector<RectLight> rectLights;
     nr::rstd::vector<DirectionalLight> directionalLights;
     nr::rstd::vector<GpuInstance> gpuInstances;
+    nr::rstd::vector<uint32_t> gaussianOpacityColors;
     nr::rstd::vector<CudaTexture> cudaTextures;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
@@ -101,6 +105,7 @@ public:
     // Object lifetime
     uint64_t add(std::unique_ptr<SceneObject> sceneObject);
     uint32_t add(MeshAsset meshAsset);
+    uint32_t add(GaussianAsset gaussianAsset);
     void add(Texture&& texture);
     bool removeObject(uint64_t objectId);
     bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
@@ -125,6 +130,16 @@ public:
     const MeshAsset& getMeshAsset(uint32_t index) const { return meshAssets[index]; }
     const nr::rstd::vector<MeshAsset>& getMeshAssets() const { return meshAssets; }
     nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets; }
+
+    // Gaussian assets
+    GaussianAsset& getGaussianAsset(uint32_t index) { return gaussianAssets[index]; }
+    const GaussianAsset& getGaussianAsset(uint32_t index) const { return gaussianAssets[index]; }
+    const nr::rstd::vector<GaussianAsset>& getGaussianAssets() const { return gaussianAssets; }
+    nr::rstd::vector<GaussianAsset>& getGaussianAssets() { return gaussianAssets; }
+    std::vector<std::shared_ptr<GaussianInstance>> getGaussianInstances() const;
+    uint32_t getGaussianCount() const;
+    void buildGaussianRenderData();
+    const uint32_t* getGaussianOpacityColors() const { return gaussianOpacityColors.data(); }
     const std::vector<Texture>& getTextures() const { return textures; }
     std::vector<std::string> getTextureNames() const { return textureNames; }
 

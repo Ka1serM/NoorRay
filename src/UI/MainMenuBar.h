@@ -21,7 +21,8 @@ private:
         OBJ,
         GLTF,
         TEXTURE,
-        NRSCENE
+        NRSCENE,
+        PLY
     };
 
     void renderFileMenu();

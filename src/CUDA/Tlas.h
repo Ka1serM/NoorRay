@@ -21,6 +21,8 @@ struct AccelInstanceInput
     uint32_t instanceId{};
 };
 
+class GaussianProxyBlas;
+
 class Tlas
 {
 public:
@@ -50,9 +52,18 @@ private:
         const std::vector<AccelInstanceInput>& instances,
         OptixBuildOperation operation);
 
+    void buildGaussianInstances(
+        OptixDeviceContext context,
+        cudaStream_t stream,
+        const Scene& scene,
+        std::vector<AccelInstanceInput>& inputs);
+
     CUdeviceptr instanceBuffer{};
     CUdeviceptr tlasBuffer{};
     size_t tlasBufferSize{};
     uint32_t instanceCount{};
     OptixTraversableHandle tlasHandle{};
+
+    GaussianProxyBlas* proxyBlas{};
+    uint32_t meshInstanceCount{};
 };

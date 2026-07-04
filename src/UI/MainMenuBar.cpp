@@ -101,6 +101,9 @@ void MainMenuBar::handleFileImport(const std::string& filePath, const FileType t
             case FileType::NRSCENE:
                 SceneImporter::ImportJsonScene(scene, filePath);
                 break;
+            case FileType::PLY:
+                SceneImporter::ImportPlyScene(scene, filePath);
+                break;
             default:
                 break;
         }
@@ -146,6 +149,11 @@ void MainMenuBar::renderFileMenu() {
             if (ImGui::MenuItem("NoorRay Scene (.nrscene)")) {
                 openDialog = std::make_unique<pfd::open_file>("Import Scene", ".", std::vector<std::string>{"NoorRay Scene", "*.nrscene"});
                 pendingFileType = FileType::NRSCENE;
+            }
+
+            if (ImGui::MenuItem("3D Gaussians (.ply)")) {
+                openDialog = std::make_unique<pfd::open_file>("Import 3DGS Point Cloud", ".", std::vector<std::string>{"PLY Files", "*.ply", "All Files", "*"});
+                pendingFileType = FileType::PLY;
             }
 
             ImGui::EndDisabled();

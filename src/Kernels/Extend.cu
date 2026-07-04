@@ -18,18 +18,31 @@ extern "C" __global__ void __raygen__extend()
         return;
 
     const PathRayWorkItem ray = params.queues.rayQueues[params.depth & 1u][index];
-    const RayHit hit = intersectRay(params.scene.tlasHandle, ray.origin, ray.direction, 0.001f, 1000.0f);
+    const RayHit hit = intersectRay(params.scene.tlasHandle, ray.origin, ray.direction, 0.001f, 1000.0f, ray.sampleIndex);
 
     HitWorkItem item{};
-    item.rayDirection = ray.direction;
-    item.sampleIndex = ray.sampleIndex;
-    item.baryU = hit.u;
-    item.baryV = hit.v;
-    item.instanceIndex = hit.instanceIndex;
+    item.rayOrigin     = ray.origin;
+    item.rayDirection  = ray.direction;
+    item.sampleIndex   = ray.sampleIndex;
     item.primitiveIndex = hit.hit ? hit.primitiveIndex : InvalidIndex;
+    if (hit.isGaussianHit)
+    {
+        // Use offset instance index so that Shade can discriminate via
+        // instanceIndex >= meshInstanceCount.
+        item.instanceIndex = params.scene.meshInstanceCount + hit.instanceIndex;
+        item.attribute0    = hit.t;               // world-space hit distance
+        item.attribute1    = hit.gaussianAlpha;   // density alpha
+    }
+    else
+    {
+        item.instanceIndex = hit.instanceIndex;
+        item.attribute0    = hit.u;               // baryU
+        item.attribute1    = hit.v;               // baryV
+    }
     params.queues.hitQueue[index] = item;
 }
 
+#include "Kernels/GaussianHit.cu"
 #include "Kernels/Connect.cu"
 
 #endif

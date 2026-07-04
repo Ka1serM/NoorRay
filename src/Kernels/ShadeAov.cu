@@ -36,7 +36,7 @@ NR_GPU_KERNEL void shadeAovKernel(const KernelParams params)
     }
 
     const SurfaceData surface = loadSurface(
-        params.scene, hit.instanceIndex, hit.primitiveIndex, hit.baryU, hit.baryV);
+        params.scene, hit.instanceIndex, hit.primitiveIndex, hit.attribute0, hit.attribute1);
     if (surface.material == nullptr)
         return;
 

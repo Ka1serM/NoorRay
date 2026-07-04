@@ -63,6 +63,12 @@ target_include_directories(stb INTERFACE
         ${PROJECT_SOURCE_DIR}/external/stb
 )
 
+# tinyply (header-only PLY parser)
+add_library(tinyply INTERFACE)
+target_include_directories(tinyply INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/tinyply/source
+)
+
 # TinyEXR + miniz (32-bit floating-point OpenEXR output)
 add_library(tinyexr STATIC
         external/tinyexr/tinyexr.cc
@@ -263,12 +269,14 @@ add_custom_command(
         DEPENDS
                 src/Kernels/Extend.cu
                 src/Kernels/Connect.cu
+                src/Kernels/GaussianHit.cu
         DEPFILE "${NR_OPTIX_DEPFILE}"
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 
 add_library(NoorRayCuda STATIC
         src/CUDA/Blas.cpp
+        src/CUDA/GaussianProxyBlas.cpp
         src/CUDA/Texture.cpp
         src/CUDA/SharedImage.cpp
         src/CUDA/rstd/Memory.cpp
@@ -354,6 +362,7 @@ target_link_libraries(NoorRay PRIVATE
         GPUOpen::VulkanMemoryAllocator
         glaze
         TBB::tbb
+        tinyply
 )
 
 target_compile_definitions(NoorRay PRIVATE
@@ -368,13 +377,15 @@ if(NR_ENABLE_UNITY_BUILD)
             UNITY_BUILD ON
             UNITY_BUILD_BATCH_SIZE "${NR_UNITY_BUILD_BATCH_SIZE}")
     set_source_files_properties(
-            src/NoorRay.cpp
-            src/Scene/SceneImporter.cpp
-            src/StbImpl.cpp
-            src/UI/ImGuiManager.cpp
-            src/Vulkan/Viewport.cpp
-            src/Vulkan/VmaImpl.cpp
-            PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+        src/NoorRay.cpp
+        src/Scene/SceneImporter.cpp
+        src/StbImpl.cpp
+        src/UI/ImGuiManager.cpp
+        src/Vulkan/Viewport.cpp
+        src/Vulkan/VmaImpl.cpp
+        src/Mesh/GaussianAsset.cpp
+        src/CUDA/GaussianProxyBlas.cpp
+        PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 
 if(NR_ENABLE_PCH)

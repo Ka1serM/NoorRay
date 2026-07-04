@@ -17,11 +17,16 @@ class NoorRay {
     std::unique_ptr<Raytracer> raytracer;
     std::unique_ptr<Viewport> viewport;
 
+    int m_cliSpp = 64;
+    std::string m_cliOutput = "output.exr";
+    bool m_cliStats = false;
+
 public:
     NoorRay(int windowWidth, int windowHeight);
-    NoorRay(int argc, char* argv[]);   // headless: argv[1] = scene.json
+    NoorRay(const std::string& scenePath, int spp,
+            const std::string& outputPath, int width, int height, bool statsEnabled = false);
     ~NoorRay();
 
     void runUi();
-    void runCli(int spp, const std::string& outputPath);
+    void runCli();
 };

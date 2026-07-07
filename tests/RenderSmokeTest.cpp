@@ -8,7 +8,7 @@ class RenderSmokeTest : public RenderTestFixture {};
 
 TEST_CASE_METHOD(RenderSmokeTest, "NoorRay renders a simple sphere to EXR", "[e2e]")
 {
-    const std::string output = render("simple_sphere.json", 4, "simple_sphere.exr");
+    const std::string output = render("simple_sphere.nrscene", 4, "simple_sphere.exr");
     const Bitmap bitmap = BitmapReader::read(output);
     CHECK(bitmap.width() == 64);
     CHECK(bitmap.height() == 64);

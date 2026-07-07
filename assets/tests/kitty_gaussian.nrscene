@@ -1,0 +1,23 @@
+{
+  "camera": {
+    "type": "thinlens",
+    "position": [0.0, 0.0, 2.5],
+    "rotation_euler": [0.0, 0.0, 0.0],
+    "scale": [1.0, 1.0, 1.0],
+    "focal_length": 50.0,
+    "focus_distance": 2.5,
+    "disable_anti_aliasing": false,
+    "aperture_diameter": 0.0,
+    "resolution": [1280, 720]
+  },
+  "objects": [
+    {
+      "type": "ply",
+      "name": "Kitty",
+      "path": "tests/Kitty_AndyOne_CatOnly3SH.ply",
+      "position": [0.0, 0.0, 0.0],
+      "rotation_euler": [90.0, 0.0, 0.0],
+      "scale": [1.0, 1.0, 1.0]
+    }
+  ]
+}

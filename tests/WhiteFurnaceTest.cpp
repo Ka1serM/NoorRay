@@ -56,12 +56,12 @@ void checkEnergyConservation(const Bitmap& bitmap)
 
 TEST_CASE_METHOD(WhiteFurnaceTest, "white furnace conserves energy", "[e2e][furnace]")
 {
-    const std::string output = render("white_furnace.json", 4096, "white_furnace.exr");
+    const std::string output = render("white_furnace.nrscene", 4096, "white_furnace.exr");
     checkEnergyConservation(BitmapReader::read(output));
 }
 
 TEST_CASE_METHOD(WhiteFurnaceTest, "white furnace teapot conserves energy at silhouettes", "[e2e][furnace]")
 {
-    const std::string output = render("white_furnace_teapot.json", 4096, "white_furnace_teapot.exr");
+    const std::string output = render("white_furnace_teapot.nrscene", 4096, "white_furnace_teapot.exr");
     checkEnergyConservation(BitmapReader::read(output));
 }

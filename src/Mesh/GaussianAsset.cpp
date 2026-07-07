@@ -12,6 +12,10 @@
 
 #include <imgui.h>
 #include "UI/ImGuiManager.h"
+#include "Raytracing/RgbToSpectrum.h"
+
+extern const float sRGBToSpectrumTable_Scale[64];
+extern const float sRGBToSpectrumTable_Data[3][64][64][64][3];
 
 static float sigmoid(float x)
 {
@@ -96,7 +100,8 @@ GaussianAsset GaussianAsset::CreateFromPly(Scene& scene, const std::string& name
             glm::vec3(px, py, pz)
         );
 
-        // SH degree-0 → RGB, then clamp and pack
+        // SH degree-0 → RGB, clamped. Only feeds the spectral upsampling
+        // below — the raw color is never stored on the Gaussian.
         float r = SH_C0 * shData[i * 3 + 0] + 0.5f;
         float g_ = SH_C0 * shData[i * 3 + 1] + 0.5f;
         float b = SH_C0 * shData[i * 3 + 2] + 0.5f;
@@ -105,14 +110,13 @@ GaussianAsset GaussianAsset::CreateFromPly(Scene& scene, const std::string& name
         b = std::max(b, 0.0f);
 
         // Opacity: sigmoid of logit
-        const float alpha = sigmoid(opData[i]);
+        g.opacity = sigmoid(opData[i]);
 
-        // Pack RGBA8
-        const uint32_t ri = static_cast<uint32_t>(std::min(r * 255.0f, 255.0f));
-        const uint32_t gi = static_cast<uint32_t>(std::min(g_ * 255.0f, 255.0f));
-        const uint32_t bi = static_cast<uint32_t>(std::min(b * 255.0f, 255.0f));
-        const uint32_t ai = static_cast<uint32_t>(std::min(alpha * 255.0f, 255.0f));
-        g.packedOpacityColor = (ai << 24) | (bi << 16) | (gi << 8) | ri;
+        // Precompute the RGB->spectrum sigmoid-polynomial coefficients once,
+        // here on the CPU, instead of doing this 64^3 table lookup per GPU hit.
+        rgbLookupCoeffs(glm::vec3(r, g_, b), sRGBToSpectrumTable_Scale,
+            reinterpret_cast<const float*>(sRGBToSpectrumTable_Data),
+            g.spectrumCoeffs.x, g.spectrumCoeffs.y, g.spectrumCoeffs.z);
 
         gaussians.push_back(g);
     }

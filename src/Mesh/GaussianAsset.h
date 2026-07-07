@@ -15,7 +15,13 @@ class Scene;
 struct Gaussian
 {
     glm::mat4x3 transform; // 4 columns of vec3: [R*S_col0, R*S_col1, R*S_col2, pos]
-    uint32_t packedOpacityColor; // RGBA8: A = opacity, RGB = colorDc
+    float opacity; // sigmoid of the PLY logit, used by the any-hit's Russian roulette
+    // Jakob-Hanika RGB->spectrum sigmoid-polynomial coefficients (c0,c1,c2) for
+    // colorDc, precomputed once here instead of doing the 64^3 table lookup on
+    // every GPU hit — only the cheap sigmoid itself needs the per-sample
+    // wavelength, so that's all Shade.cu still has to evaluate. Since these
+    // fully replace colorDc for shading purposes, the raw RGB is never stored.
+    glm::vec3 spectrumCoeffs;
 };
 
 class GaussianAsset : public Inspectable

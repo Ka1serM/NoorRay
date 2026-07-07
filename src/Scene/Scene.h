@@ -77,7 +77,8 @@ class Scene {
     nr::rstd::vector<RectLight> rectLights;
     nr::rstd::vector<DirectionalLight> directionalLights;
     nr::rstd::vector<GpuInstance> gpuInstances;
-    nr::rstd::vector<uint32_t> gaussianOpacityColors;
+    nr::rstd::vector<float> gaussianOpacities;
+    nr::rstd::vector<glm::vec3> gaussianSpectrumCoeffs;
     nr::rstd::vector<CudaTexture> cudaTextures;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
@@ -139,7 +140,8 @@ public:
     std::vector<std::shared_ptr<GaussianInstance>> getGaussianInstances() const;
     uint32_t getGaussianCount() const;
     void buildGaussianRenderData();
-    const uint32_t* getGaussianOpacityColors() const { return gaussianOpacityColors.data(); }
+    const float* getGaussianOpacities() const { return gaussianOpacities.data(); }
+    const glm::vec3* getGaussianSpectrumCoeffs() const { return gaussianSpectrumCoeffs.data(); }
     const std::vector<Texture>& getTextures() const { return textures; }
     std::vector<std::string> getTextureNames() const { return textureNames; }
 

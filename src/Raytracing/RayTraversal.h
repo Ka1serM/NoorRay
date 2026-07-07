@@ -62,7 +62,7 @@ NR_GPU inline RayHit intersectRay(
             tMax,
             0.0f,
             0x03,
-            OPTIX_RAY_FLAG_NONE,
+            OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             0,
             1,
             0,
@@ -100,7 +100,8 @@ NR_GPU inline RayHit intersectRay(
             tMax,
             0.0f,
             0x01,
-            OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
+            OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT
+                | OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             0,
             1,
             0);
@@ -134,7 +135,8 @@ NR_GPU inline bool testOcclusion(
         tMax,
         0.0f,
         0x01,
-        OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
+        OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT
+            | OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
         0,
         1,
         0);

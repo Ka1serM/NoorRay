@@ -139,9 +139,9 @@ private:
     void freeSceneData() noexcept;
     void launchGenerate(const KernelParams& params, cudaStream_t stream) const;
     void launchFinalize(const KernelParams& params, cudaStream_t stream) const;
-    void launchShade(const KernelParams& params, cudaStream_t stream) const;
-    void launchExtend(const KernelParams& params, cudaStream_t stream) const;
-    void launchConnect(const KernelParams& params, cudaStream_t stream) const;
+    void launchShade(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
+    void launchExtend(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
+    void launchConnect(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
     void launchGenerateAov(const KernelParams& params, cudaStream_t stream) const;
     void launchExtendAov(const KernelParams& params, cudaStream_t stream) const;
     void launchShadeAov(const KernelParams& params, cudaStream_t stream) const;

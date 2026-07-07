@@ -7,7 +7,11 @@
 #include <cuda_runtime.h>
 #include <optix_stubs.h>
 
+#include <glm/mat3x3.hpp>
+#include <glm/vec3.hpp>
+
 #include "CUDA/Checks.h"
+#include "Mesh/GaussianCutoff.h"
 
 static constexpr float Phi = 1.618033988749895f; // (1 + sqrt(5)) / 2
 
@@ -91,6 +95,22 @@ void GaussianProxyBlas::build(
     if (buffer != 0)
         destroy(stream);
 
+    // Scale the shared unit icosahedron up by GaussianCutoffSigma once, here,
+    // so it tightly bounds a default (unit-sigma) Gaussian's cutoff region.
+    // Each Gaussian's own anisotropic scale is applied on top of this via the
+    // per-instance transform (hardware TRS) — see GaussianAsset.cpp — instead
+    // of correcting for it in the hit shader.
+    const glm::mat3 cutoffScale(GaussianCutoffSigma);
+    std::array<float, 36> scaledVertices{};
+    for (size_t i = 0; i < IcosahedronVertices.size(); i += 3)
+    {
+        const glm::vec3 v = cutoffScale * glm::vec3(
+            IcosahedronVertices[i], IcosahedronVertices[i + 1], IcosahedronVertices[i + 2]);
+        scaledVertices[i] = v.x;
+        scaledVertices[i + 1] = v.y;
+        scaledVertices[i + 2] = v.z;
+    }
+
     // Upload vertex + index data to device.
     constexpr size_t vertexBytes = IcosahedronVertices.size() * sizeof(float);
     constexpr size_t indexBytes  = IcosahedronIndices.size() * sizeof(uint32_t);
@@ -99,7 +119,7 @@ void GaussianProxyBlas::build(
     NR_GPU_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&vertexBuffer), vertexBytes, stream));
     NR_GPU_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&indexBuffer),  indexBytes, stream));
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(vertexBuffer),
-        IcosahedronVertices.data(), vertexBytes, cudaMemcpyHostToDevice, stream));
+        scaledVertices.data(), vertexBytes, cudaMemcpyHostToDevice, stream));
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(indexBuffer),
         IcosahedronIndices.data(), indexBytes, cudaMemcpyHostToDevice, stream));
 

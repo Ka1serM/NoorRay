@@ -58,7 +58,6 @@ GaussianAsset GaussianAsset::CreateFromPly(Scene& scene, const std::string& name
     const float* shData   = reinterpret_cast<const float*>(f_dc->buffer.get());
 
     static constexpr float SH_C0 = 0.28209479177387814f;
-    static constexpr float CutoffFactor = 3.0f;
 
     nr::rstd::vector<Gaussian> gaussians;
     gaussians.reserve(count);
@@ -72,10 +71,13 @@ GaussianAsset GaussianAsset::CreateFromPly(Scene& scene, const std::string& name
         const float py = xyzData[i * 3 + 1];
         const float pz = xyzData[i * 3 + 2];
 
-        // Scale (log-space → linear, then apply cutoff)
-        const float sx = std::exp(scaleData[i * 3 + 0]) * CutoffFactor;
-        const float sy = std::exp(scaleData[i * 3 + 1]) * CutoffFactor;
-        const float sz = std::exp(scaleData[i * 3 + 2]) * CutoffFactor;
+        // Scale (log-space → linear). True per-axis sigma — the cutoff is
+        // baked into the shared proxy geometry instead (GaussianCutoffSigma),
+        // so this transform stays the untruncated R*S and is applied for
+        // free by the hardware instance transform.
+        const float sx = std::exp(scaleData[i * 3 + 0]);
+        const float sy = std::exp(scaleData[i * 3 + 1]);
+        const float sz = std::exp(scaleData[i * 3 + 2]);
 
         // Rotation (wxyz order, normalize)
         glm::quat q;

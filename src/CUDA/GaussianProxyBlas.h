@@ -24,7 +24,7 @@ public:
     GaussianProxyBlas(GaussianProxyBlas&& other) noexcept;
     GaussianProxyBlas& operator=(GaussianProxyBlas&& other) noexcept;
 
-    void build(OptixDeviceContext context, cudaStream_t stream, GaussianProxyType type);
+    void build(OptixDeviceContext context, cudaStream_t stream, GaussianProxyType type, float cutoffSigma);
     void destroy(cudaStream_t stream) noexcept;
 
     OptixTraversableHandle getTraversable() const { return handle; }

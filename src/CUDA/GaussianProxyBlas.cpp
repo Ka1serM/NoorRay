@@ -12,7 +12,6 @@
 #include <glm/vec3.hpp>
 
 #include "CUDA/Checks.h"
-#include "Mesh/GaussianCutoff.h"
 
 // ── Icosahedron ────────────────────────────────────────────────────────────
 static constexpr std::array<float, 36> IcosahedronVertices =
@@ -104,6 +103,16 @@ static constexpr std::array<uint32_t, 12> TetrahedronIndices =
 static constexpr size_t TetrahedronVertCount = 4;
 static constexpr size_t TetrahedronTriCount  = 4;
 
+// Circumradius / inradius ratio for each shape.
+// scale = cutoffSigma * R_over_r so inradius = cutoffSigma for all shapes.
+//   tetrahedron: R/r = 3
+//   octahedron:  R/r = √3
+//   icosahedron: R/r = 3·√(10+2√5) / (√3·(3+√5))
+static constexpr float OctahedronRoverR    = std::sqrt(3.0f);
+static constexpr float TetrahedronRoverR   = 3.0f;
+static constexpr float IcosahedronRoverR   = 3.0f * std::sqrt(10.0f + 2.0f * std::sqrt(5.0f))
+                                           / (std::sqrt(3.0f) * (3.0f + std::sqrt(5.0f)));
+
 // Geometry flags: NO DISABLE_ANYHIT — the any-hit program must run for
 // Gaussian proxy triangles.
 static constexpr unsigned int GaussianGeometryFlags = 0u;
@@ -133,20 +142,21 @@ GaussianProxyBlas& GaussianProxyBlas::operator=(GaussianProxyBlas&& other) noexc
 void GaussianProxyBlas::build(
     const OptixDeviceContext context,
     const cudaStream_t stream,
-    const GaussianProxyType type)
+    const GaussianProxyType type,
+    const float cutoffSigma)
 {
     if (buffer != 0)
         destroy(stream);
 
-    // Select vertex/index data for the chosen proxy type.
-    // All types share the same circumradius = GaussianCutoffSigma, matching
-    // the original icosahedron's vertex extent so the TLAS size stays
-    // comparable.  Inradius (face-plane distance) varies per shape.
+    // Select vertex/index data and compute shape-specific scale so every
+    // proxy has inradius = cutoffSigma — the same face-plane distance for
+    // all shapes guarantees identical visual Gaussian coverage.
     const float* srcVertices = nullptr;
     const uint32_t* srcIndices = nullptr;
     size_t vertexCount = 0;
     size_t indexCount = 0;
     size_t triCount = 0;
+    float scale = 0.0f;
 
     switch (type)
     {
@@ -156,6 +166,7 @@ void GaussianProxyBlas::build(
         vertexCount = IcosahedronVertCount;
         indexCount  = IcosahedronIndices.size();
         triCount    = IcosahedronTriCount;
+        scale = cutoffSigma * IcosahedronRoverR;
         break;
     case GaussianProxyType::Octahedron:
         srcVertices = OctahedronVertices.data();
@@ -163,6 +174,7 @@ void GaussianProxyBlas::build(
         vertexCount = OctahedronVertCount;
         indexCount  = OctahedronIndices.size();
         triCount    = OctahedronTriCount;
+        scale = cutoffSigma * OctahedronRoverR;
         break;
     case GaussianProxyType::Tetrahedron:
         srcVertices = TetrahedronVertices.data();
@@ -170,13 +182,12 @@ void GaussianProxyBlas::build(
         vertexCount = TetrahedronVertCount;
         indexCount  = TetrahedronIndices.size();
         triCount    = TetrahedronTriCount;
+        scale = cutoffSigma * TetrahedronRoverR;
         break;
     }
 
-    // Scale the unit proxy by GaussianCutoffSigma so vertices lie at the
-    // cutoff sphere (distance = sigma).  Each shape's inradius is then:
-    //   icosahedron ≈ 2.38σ, octahedron ≈ 1.73σ, tetrahedron = 1.0σ.
-    const glm::mat3 cutoffScale(GaussianCutoffSigma);
+    // Scale the unit proxy so inradius = cutoffSigma.
+    const glm::mat3 cutoffScale(scale);
     std::vector<float> scaledVertices(vertexCount * 3);
     for (size_t i = 0; i < vertexCount * 3; i += 3)
     {

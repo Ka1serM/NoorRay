@@ -2,7 +2,6 @@
 
 #include <optix_device.h>
 
-#include "Mesh/GaussianCutoff.h"
 #include "Raytracing/SceneData.h"
 
 extern "C"
@@ -43,25 +42,16 @@ extern "C" __global__ void __anyhit__gaussian()
     const float pz = rayOrigin.z + hitT * rayDir.z;
     const float distanceSq = px * px + py * py + pz * pz;
 
-    // The shared proxy geometry bounds exactly the GaussianCutoffSigma²
-    // support region (see GaussianCutoff.h), so this rejects before alpha
-    // even needs evaluating — and guarantees alpha has already decayed to
-    // near-zero by the time the ray reaches the proxy's facets, so the
-    // icosahedron's edges never show up as visible seams.
-    constexpr float cutoffDistanceSq = GaussianCutoffSigma * GaussianCutoffSigma;
-    if (distanceSq >= cutoffDistanceSq)
+    // Precomputed cutoffDistanceSq (host-side, see Raytracer::render).
+    if (distanceSq >= params.frame.cutoffDistanceSq)
     {
         optixIgnoreIntersection();
         return;
     }
 
     // Eq. 2: α_i = opacity * exp(-0.5 * distance²)
+    // opacity > 0 (checked above) and distanceSq < cutoffSq guarantee alpha > 0.
     const float alpha = opacity * __expf(-0.5f * distanceSq);
-    if (alpha <= 0.0f)
-    {
-        optixIgnoreIntersection();
-        return;
-    }
 
     // ── Russian roulette ────────────────────────────────────────────────
     // Accept with probability alpha so that expected value matches 3DGS

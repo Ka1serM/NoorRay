@@ -65,5 +65,6 @@ private:
 
     GaussianProxyBlas* proxyBlas{};
     GaussianProxyType lastProxyType{GaussianProxyType::Tetrahedron};
+    float lastCutoffSigma{3.0f};
     uint32_t meshInstanceCount{};
 };

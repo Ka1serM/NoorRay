@@ -7,6 +7,7 @@
 #include <glm/vec3.hpp>
 
 #include "CUDA/rstd/Vector.h"
+#include "Mesh/GaussianCutoff.h"
 #include "Scene/Inspectable.h"
 
 class Scene;

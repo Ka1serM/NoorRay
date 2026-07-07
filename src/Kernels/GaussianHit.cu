@@ -2,6 +2,7 @@
 
 #include <optix_device.h>
 
+#include "Mesh/GaussianCutoff.h"
 #include "Raytracing/SceneData.h"
 
 extern "C"
@@ -25,9 +26,11 @@ extern "C" __global__ void __anyhit__gaussian()
         return;
     }
 
-    // Mahalanobis distance in object space: the instance transform already
-    // bakes in R*S, so the proxy triangles are in "whitened" unit-sphere
-    // space. Compute closest-point-on-ray-to-origin distance.
+    // Mahalanobis distance in object space: the instance transform carries
+    // each Gaussian's true (untruncated) R*S — see GaussianAsset.cpp — so
+    // object-space coordinates here are already whitened and distanceSq is
+    // directly the squared Mahalanobis distance, with no per-hit correction
+    // factor. Compute closest-point-on-ray-to-origin distance.
     const float3 rayOrigin = optixGetObjectRayOrigin();
     const float3 rayDir    = optixGetObjectRayDirection();
     const float tClosest = -(rayOrigin.x * rayDir.x + rayOrigin.y * rayDir.y + rayOrigin.z * rayDir.z)
@@ -40,6 +43,18 @@ extern "C" __global__ void __anyhit__gaussian()
     const float py = rayOrigin.y + hitT * rayDir.y;
     const float pz = rayOrigin.z + hitT * rayDir.z;
     const float distanceSq = px * px + py * py + pz * pz;
+
+    // The shared proxy geometry bounds exactly the GaussianCutoffSigma²
+    // support region (see GaussianCutoff.h), so this rejects before alpha
+    // even needs evaluating — and guarantees alpha has already decayed to
+    // near-zero by the time the ray reaches the proxy's facets, so the
+    // icosahedron's edges never show up as visible seams.
+    constexpr float cutoffDistanceSq = GaussianCutoffSigma * GaussianCutoffSigma;
+    if (distanceSq >= cutoffDistanceSq)
+    {
+        optixIgnoreIntersection();
+        return;
+    }
 
     // Eq. 2: α_i = opacity * exp(-0.5 * distance²)
     const float alpha = opacity * __expf(-0.5f * distanceSq);

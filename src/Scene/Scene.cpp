@@ -332,7 +332,8 @@ void Scene::buildGaussianRenderData()
     for (const auto& obj : sceneObjects)
         if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
             total += gi->getGaussianAsset().getGaussianCount();
-    gaussianOpacityColors.resize(total);
+    gaussianOpacities.resize(total);
+    gaussianSpectrumCoeffs.resize(total);
     uint32_t offset = 0;
     for (const auto& obj : sceneObjects)
     {
@@ -341,7 +342,8 @@ void Scene::buildGaussianRenderData()
             const GaussianAsset& asset = gi->getGaussianAsset();
             for (uint32_t i = 0; i < asset.getGaussianCount(); ++i)
             {
-                gaussianOpacityColors[offset] = asset.getGaussians()[i].packedOpacityColor;
+                gaussianOpacities[offset] = asset.getGaussians()[i].opacity;
+                gaussianSpectrumCoeffs[offset] = asset.getGaussians()[i].spectrumCoeffs;
                 ++offset;
             }
         }

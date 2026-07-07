@@ -187,7 +187,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         // attribute0 = world-space hit distance t, attribute1 = density alpha.
         // A miss also leaves instanceIndex at InvalidIndex (0xffffffff), which
         // is >= meshInstanceCount too — exclude it explicitly, or every missed
-        // ray reads gaussianOpacityColors[] wildly out of bounds.
+        // ray reads gaussianSpectrumCoeffs[] wildly out of bounds.
         const bool isMiss = hit.instanceIndex == InvalidIndex;
         const bool isGaussianHit = !isMiss && hit.instanceIndex >= params.scene.meshInstanceCount;
 
@@ -202,13 +202,13 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             state.packedCounters += 1u << CounterDiffuseShift;
 
             const uint32_t gaussianId = hit.instanceIndex - params.scene.meshInstanceCount;
-            const uint32_t packed = params.scene.gaussianOpacityColors[gaussianId];
-            const float r = static_cast<float>(packed & 0xffu) / 255.0f;
-            const float g = static_cast<float>((packed >> 8) & 0xffu) / 255.0f;
-            const float b = static_cast<float>((packed >> 16) & 0xffu) / 255.0f;
-            const SampledSpectrum albedo = rgbAlbedoToSpectrum(
-                glm::vec3(r, g, b), wl,
-                params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs);
+            // (c0,c1,c2) precomputed once at load time (GaussianAsset.cpp) —
+            // only the cheap sigmoid itself needs the per-sample wavelength.
+            const glm::vec3 spectrumCoeffs = params.scene.gaussianSpectrumCoeffs[gaussianId];
+            SampledSpectrum albedo;
+            for (int i = 0; i < NrSpectrumSamples; ++i)
+                albedo.values[i] = rgbSigmoidEval(
+                    spectrumCoeffs.x, spectrumCoeffs.y, spectrumCoeffs.z, wl.lambda[i]);
 
             const float inv4Pi = 0.07957747154594767f; // 1/(4*pi)
             const glm::vec3 gaussianPos = hit.rayOrigin + hit.attribute0 * hit.rayDirection;

@@ -477,7 +477,8 @@ void Raytracer::updateTLAS()
     gpuScene.meshInstanceCount = static_cast<uint32_t>(gpuInstances.size());
 
     scene.buildGaussianRenderData();
-    gpuScene.gaussianOpacityColors = scene.getGaussianOpacityColors();
+    gpuScene.gaussianOpacities = scene.getGaussianOpacities();
+    gpuScene.gaussianSpectrumCoeffs = scene.getGaussianSpectrumCoeffs();
     gpuScene.gaussianCount = scene.getGaussianCount();
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
@@ -515,30 +516,33 @@ void Raytracer::launchFinalize(const KernelParams& params, const cudaStream_t st
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&finalizeKernel), grid, blockSize, args, 0, stream));
 }
 
-void Raytracer::launchShade(const KernelParams& params, const cudaStream_t stream) const
+void Raytracer::launchShade(
+    const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
 {
     constexpr uint32_t blockSize = 256;
-    const dim3 grid((params.queues.capacity + blockSize - 1) / blockSize, 1, 1);
+    const dim3 grid((launchCount + blockSize - 1) / blockSize, 1, 1);
     void* args[] = { const_cast<KernelParams*>(&params) };
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&shadeKernel), grid, blockSize, args, 0, stream));
 }
 
-void Raytracer::launchExtend(const KernelParams& params, const cudaStream_t stream) const
+void Raytracer::launchExtend(
+    const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
 {
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
         optixLaunchParamsDevice, sizeof(KernelParams),
-        &optixExtendSbt, params.queues.capacity, 1, 1));
+        &optixExtendSbt, launchCount, 1, 1));
 }
 
-void Raytracer::launchConnect(const KernelParams& params, const cudaStream_t stream) const
+void Raytracer::launchConnect(
+    const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
 {
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
         optixLaunchParamsDevice, sizeof(KernelParams),
-        &optixConnectSbt, params.queues.capacity, 1, 1));
+        &optixConnectSbt, launchCount, 1, 1));
 }
 
 void Raytracer::launchGenerateAov(const KernelParams& params, const cudaStream_t stream) const
@@ -625,6 +629,16 @@ void Raytracer::render(const PushData& pushData)
                                         renderSettings.specularBounces,
                                         renderSettings.transmissionBounces, 1}) + 1));
 
+    // Shade only ever populates the shadow queue from analytic lights (both
+    // mesh and Gaussian NEE) or environment importance sampling on a mesh
+    // hit — never for Gaussians, which sample the environment through the
+    // scattered ray instead. With no analytic lights and no meshes, Connect
+    // would launch a full-width raygen every bounce just to find an empty
+    // queue, so skip it entirely in that case.
+    const bool mayGenerateShadowRays = gpuScene.meshInstanceCount > 0 ||
+        gpuScene.pointLightCount > 0 || gpuScene.spotLightCount > 0 ||
+        gpuScene.rectLightCount > 0 || gpuScene.directionalLightCount > 0;
+
     NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
 
     if (pushData.frame == 0)
@@ -644,12 +658,19 @@ void Raytracer::render(const PushData& pushData)
 
         kernelStats.time("Generate", stream, [&] { launchGenerate(params, stream); });
         NR_GPU_CHECK(cudaGetLastError());
+        // Depth 0 may hold up to a full frame of rays (exact count isn't
+        // known without an extra sync after Generate); later depths launch
+        // only as many threads as the previous bounce's queue actually holds,
+        // shrinking with Russian roulette / bounce-limit termination instead
+        // of relaunching a full-resolution grid every bounce.
+        uint32_t activeCount = params.queues.capacity;
         for (uint32_t depth = 0; depth < maxShaderBounces; ++depth)
         {
             params.depth = depth;
-            kernelStats.time("Extend", stream, [&] { launchExtend(params, stream); });
-            kernelStats.time("Shade", stream, [&] { launchShade(params, stream); });
-            kernelStats.time("Connect", stream, [&] { launchConnect(params, stream); });
+            kernelStats.time("Extend", stream, [&] { launchExtend(params, activeCount, stream); });
+            kernelStats.time("Shade", stream, [&] { launchShade(params, activeCount, stream); });
+            if (mayGenerateShadowRays)
+                kernelStats.time("Connect", stream, [&] { launchConnect(params, activeCount, stream); });
 
             if (depth + 1 < maxShaderBounces)
             {
@@ -659,6 +680,7 @@ void Raytracer::render(const PushData& pushData)
                 NR_GPU_CHECK(cudaStreamSynchronize(stream));
                 if (nextActiveCount == 0)
                     break;
+                activeCount = nextActiveCount;
             }
         }
         kernelStats.time("Finalize", stream, [&] { launchFinalize(params, stream); });

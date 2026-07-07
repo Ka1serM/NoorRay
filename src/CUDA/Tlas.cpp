@@ -136,7 +136,9 @@ void Tlas::buildInternal(
         destination.instanceId = source.instanceId;
         destination.sbtOffset = index < meshInstanceCount ? 0 : 1;
         destination.visibilityMask = index < meshInstanceCount ? 0x01 : 0x02;
-        destination.flags = OPTIX_INSTANCE_FLAG_DISABLE_TRIANGLE_FACE_CULLING;
+        // Backface culling forced on for every instance (mesh and Gaussian
+        // proxy alike) via the ray-flag-driven culling in RayTraversal.h.
+        destination.flags = OPTIX_INSTANCE_FLAG_NONE;
         destination.traversableHandle = source.blasHandle;
     }
 

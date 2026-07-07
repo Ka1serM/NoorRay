@@ -18,8 +18,7 @@ extern "C" __global__ void __anyhit__gaussian()
     if (globalGaussianId >= params.scene.gaussianCount)
         return;
 
-    const uint32_t packed = params.scene.gaussianOpacityColors[globalGaussianId];
-    const float opacity = static_cast<float>((packed >> 24) & 0xffu) / 255.0f;
+    const float opacity = params.scene.gaussianOpacities[globalGaussianId];
     if (opacity <= 0.0f)
     {
         optixIgnoreIntersection();

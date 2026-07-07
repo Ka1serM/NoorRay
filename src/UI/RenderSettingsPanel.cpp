@@ -83,6 +83,17 @@ void RenderSettingsPanel::renderUi()
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Cutoff Sigma");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::SliderFloat("##CutoffSigma", &settings.gaussianCutoffSigma, 1.0f, 6.0f, "%.1f"))
+        {
+            changed = true;
+            scene.setDirtyFlag(TLAS);
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Transparent Background");
         ImGui::TableSetColumnIndex(1);
         changed |= ImGui::Checkbox("##TransparentBg", reinterpret_cast<bool*>(&settings.transparentBackground));

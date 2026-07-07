@@ -71,15 +71,18 @@ void Tlas::buildGaussianInstances(
     if (gaussianCount == 0)
         return;
 
+    const RenderSettings& rs = scene.getRenderSettings();
     const GaussianProxyType proxyType =
-        static_cast<GaussianProxyType>(scene.getRenderSettings().gaussianProxyType);
+        static_cast<GaussianProxyType>(rs.gaussianProxyType);
+    const float cutoffSigma = rs.gaussianCutoffSigma;
 
-    if (proxyBlas == nullptr || lastProxyType != proxyType)
+    if (proxyBlas == nullptr || lastProxyType != proxyType || lastCutoffSigma != cutoffSigma)
     {
         if (proxyBlas == nullptr)
             proxyBlas = new GaussianProxyBlas();
-        proxyBlas->build(context, stream, proxyType);
+        proxyBlas->build(context, stream, proxyType, cutoffSigma);
         lastProxyType = proxyType;
+        lastCutoffSigma = cutoffSigma;
     }
 
     const uint32_t instanceStart = static_cast<uint32_t>(inputs.size());

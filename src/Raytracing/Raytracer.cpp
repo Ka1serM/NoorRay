@@ -624,6 +624,8 @@ void Raytracer::render(const PushData& pushData)
     params.accumulation = accumulation;
 
     const RenderSettings& renderSettings = scene.getRenderSettings();
+    params.frame.cutoffDistanceSq = renderSettings.gaussianCutoffSigma
+                                 * renderSettings.gaussianCutoffSigma;
     const uint32_t samplesPerFrame = static_cast<uint32_t>(std::max(1, renderSettings.samples));
     const uint32_t maxShaderBounces = std::min(MaxBounces - 1,
         static_cast<uint32_t>(std::max(renderSettings.maxBounces, 1)));

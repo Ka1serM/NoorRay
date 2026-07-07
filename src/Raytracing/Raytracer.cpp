@@ -598,7 +598,7 @@ void Raytracer::render(const PushData& pushData)
         NR_GPU_CHECK(cudaWaitExternalSemaphoresAsync(&cudaBufferReleased, &waitParams, 1, stream));
     }
 
-    if (m_eventsRecorded) {
+    if (m_timingEnabled && m_eventsRecorded) {
         NR_GPU_CHECK(cudaEventSynchronize(m_stopEvent));
         NR_GPU_CHECK(cudaEventElapsedTime(&m_gpuTimeMs, m_startEvent, m_stopEvent));
     }
@@ -625,9 +625,7 @@ void Raytracer::render(const PushData& pushData)
     const RenderSettings& renderSettings = scene.getRenderSettings();
     const uint32_t samplesPerFrame = static_cast<uint32_t>(std::max(1, renderSettings.samples));
     const uint32_t maxShaderBounces = std::min(MaxBounces - 1,
-        static_cast<uint32_t>(std::max({renderSettings.diffuseBounces,
-                                        renderSettings.specularBounces,
-                                        renderSettings.transmissionBounces, 1}) + 1));
+        static_cast<uint32_t>(std::max(renderSettings.maxBounces, 1)));
 
     // Shade only ever populates the shadow queue from analytic lights (both
     // mesh and Gaussian NEE) or environment importance sampling on a mesh
@@ -639,7 +637,8 @@ void Raytracer::render(const PushData& pushData)
         gpuScene.pointLightCount > 0 || gpuScene.spotLightCount > 0 ||
         gpuScene.rectLightCount > 0 || gpuScene.directionalLightCount > 0;
 
-    NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
+    if (m_timingEnabled)
+        NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
 
     if (pushData.frame == 0)
         aovStaleBuffers = 2;
@@ -658,37 +657,26 @@ void Raytracer::render(const PushData& pushData)
 
         kernelStats.time("Generate", stream, [&] { launchGenerate(params, stream); });
         NR_GPU_CHECK(cudaGetLastError());
-        // Depth 0 may hold up to a full frame of rays (exact count isn't
-        // known without an extra sync after Generate); later depths launch
-        // only as many threads as the previous bounce's queue actually holds,
-        // shrinking with Russian roulette / bounce-limit termination instead
-        // of relaunching a full-resolution grid every bounce.
-        uint32_t activeCount = params.queues.capacity;
+        // pbrt-style wavefront: always launch over full capacity; each kernel
+        // reads its device-side queue count and early-exits when
+        // index >= count.  No CPU-GPU synchronization in the hot loop.
         for (uint32_t depth = 0; depth < maxShaderBounces; ++depth)
         {
             params.depth = depth;
-            kernelStats.time("Extend", stream, [&] { launchExtend(params, activeCount, stream); });
-            kernelStats.time("Shade", stream, [&] { launchShade(params, activeCount, stream); });
+            kernelStats.time("Extend", stream, [&] { launchExtend(params, queues.capacity, stream); });
+            kernelStats.time("Shade", stream, [&] { launchShade(params, queues.capacity, stream); });
             if (mayGenerateShadowRays)
-                kernelStats.time("Connect", stream, [&] { launchConnect(params, activeCount, stream); });
-
-            if (depth + 1 < maxShaderBounces)
-            {
-                uint32_t nextActiveCount = 0;
-                NR_GPU_CHECK(cudaMemcpyAsync(&nextActiveCount, queues.rayCounts + depth + 1,
-                    sizeof(uint32_t), cudaMemcpyDeviceToHost, stream));
-                NR_GPU_CHECK(cudaStreamSynchronize(stream));
-                if (nextActiveCount == 0)
-                    break;
-                activeCount = nextActiveCount;
-            }
+                kernelStats.time("Connect", stream, [&] { launchConnect(params, queues.capacity, stream); });
         }
         kernelStats.time("Finalize", stream, [&] { launchFinalize(params, stream); });
     }
     NR_GPU_CHECK(cudaPeekAtLastError());
 
-    NR_GPU_CHECK(cudaEventRecord(m_stopEvent, stream));
-    m_eventsRecorded = true;
+    if (m_timingEnabled)
+    {
+        NR_GPU_CHECK(cudaEventRecord(m_stopEvent, stream));
+        m_eventsRecorded = true;
+    }
 
     {
         cudaExternalSemaphoreSignalParams signalParams{};

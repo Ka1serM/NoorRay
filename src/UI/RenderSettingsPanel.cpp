@@ -5,6 +5,7 @@
 
 #include <imgui.h>
 
+#include "CUDA/GaussianProxyBlas.h"
 #include "Scene/RenderSettings.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
@@ -65,6 +66,20 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
         changed |= ImGui::DragInt("##RRBounce", &settings.russianRouletteStartBounce, 0.1f, 0, 16, "%d");
+
+        static constexpr const char* kProxyNames[] = { "Icosahedron", "Octahedron", "Tetrahedron" };
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Gaussian Proxy");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        int proxyType = settings.gaussianProxyType;
+        if (ImGui::Combo("##GaussianProxy", &proxyType, kProxyNames, IM_ARRAYSIZE(kProxyNames)))
+        {
+            settings.gaussianProxyType = proxyType;
+            changed = true;
+            scene.setDirtyFlag(TLAS);
+        }
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);

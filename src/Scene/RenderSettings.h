@@ -9,6 +9,8 @@ enum class BufferVisualization : int
     Position,
 };
 
+enum class GaussianProxyType : int;
+
 class RenderSettings
 {
 public:
@@ -19,5 +21,6 @@ public:
     float exposure{};
     int tonemappingEnabled{1};
     int transparentBackground{};
+    int gaussianProxyType{};
     BufferVisualization bufferVisualization{BufferVisualization::Beauty};
 };

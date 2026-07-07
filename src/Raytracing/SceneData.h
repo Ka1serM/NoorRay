@@ -58,6 +58,7 @@ struct GpuFrameSettings
     uint32_t width{};
     uint32_t height{};
     uint32_t totalAccumulated{};  // total samples accumulated so far (blend weight)
+    uint32_t visibilityMask{0x03}; // 0x01 = mesh, 0x02 = gaussian, 0x03 = both
 };
 
 struct KernelParams

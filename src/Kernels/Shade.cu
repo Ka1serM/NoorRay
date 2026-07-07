@@ -298,14 +298,11 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             state.lastBsdfPdfBits = __float_as_uint(scatterPdf);
 
             state.depth++;
-            const RenderSettings render = params.scene.renderSettings;
-            const uint32_t diffuse = (state.packedCounters >> CounterDiffuseShift) & 0xffu;
-            continuePath = diffuse <= static_cast<uint32_t>(render.diffuseBounces) &&
-                           params.depth + 1 < 256;
-            if (continuePath)
+            continuePath = true;
+            if (static_cast<int>(state.depth) >= params.scene.renderSettings.russianRouletteStartBounce)
             {
                 const float survival = fminf(fmaxf(
-                    state.throughput.maxComponent(), 0.05f), 0.9f);
+                    state.throughput.maxComponent(), 0.05f), 0.95f);
                 continuePath = randomFloat(rouletteRng) <= survival;
                 if (continuePath)
                     state.throughput *= (1.0f / survival);
@@ -405,15 +402,8 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 }
 
                 state.depth++;
-                const RenderSettings render = params.scene.renderSettings;
-                const uint32_t diffuse    = (state.packedCounters >> CounterDiffuseShift)     & 0xffu;
-                const uint32_t specular   = (state.packedCounters >> CounterSpecularShift)    & 0xffu;
-                const uint32_t transmitted = (state.packedCounters >> CounterTransmissionShift) & 0xffu;
-                continuePath = diffuse   <= static_cast<uint32_t>(render.diffuseBounces)    &&
-                               specular  <= static_cast<uint32_t>(render.specularBounces)   &&
-                               transmitted <= static_cast<uint32_t>(render.transmissionBounces) &&
-                               params.depth + 1 < 256;
-                if (continuePath && static_cast<int>(state.depth) >= render.russianRouletteStartBounce)
+                continuePath = true;
+                if (static_cast<int>(state.depth) >= params.scene.renderSettings.russianRouletteStartBounce)
                 {
                     const float survival = fminf(fmaxf(
                         state.throughput.maxComponent() * state.etaScale, 0.05f), 0.95f);

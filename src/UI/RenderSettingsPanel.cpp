@@ -54,24 +54,10 @@ void RenderSettingsPanel::renderUi()
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Diffuse Bounces");
+        ImGui::TextUnformatted("Max Bounces");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= ImGui::DragInt("##DiffuseBounces", &settings.diffuseBounces, 0.1f, 1, 64, "%d");
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Specular Bounces");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= ImGui::DragInt("##SpecularBounces", &settings.specularBounces, 0.1f, 1, 64, "%d");
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Transmission Bounces");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= ImGui::DragInt("##TransmissionBounces", &settings.transmissionBounces, 0.1f, 1, 64, "%d");
+        changed |= ImGui::DragInt("##MaxBounces", &settings.maxBounces, 0.1f, 1, 64, "%d");
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);

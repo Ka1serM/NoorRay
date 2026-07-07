@@ -51,6 +51,7 @@ public:
     void setAovEnabled(bool enabled) { aovEnabled = enabled; }
     bool getAovEnabled() const { return aovEnabled; }
     void setStatsEnabled(bool enabled) { kernelStats.setEnabled(enabled); }
+    void setTimingEnabled(bool enabled) { m_timingEnabled = enabled; }
     void harvestKernelStats() { kernelStats.harvestFrame(); }
     void printKernelStats() const { kernelStats.printReport(); }
     void updateMeshes();
@@ -114,6 +115,7 @@ private:
     cudaEvent_t m_startEvent{};
     cudaEvent_t m_stopEvent{};
     float m_gpuTimeMs = 0.0f;
+    bool m_timingEnabled = false;
     bool m_eventsRecorded = false;
     KernelStats kernelStats;
     CUdeviceptr optixLaunchParamsDevice{};

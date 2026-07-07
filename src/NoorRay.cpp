@@ -208,6 +208,7 @@ void NoorRay::runCli() {
              << " @ " << m_cliSpp << " spp");
     raytracer->setAovEnabled(false);
     raytracer->setStatsEnabled(m_cliStats);
+    raytracer->setTimingEnabled(m_cliStats);
     const Bitmap bitmap = raytracer->renderOffline(static_cast<uint32_t>(m_cliSpp));
 
     std::string writeError;

@@ -26,16 +26,16 @@ bool Sensor::renderUi()
         int h = static_cast<int>(resolutionHeight);
         ImGui::PushItemWidth((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("x").x
                               - ImGui::GetStyle().ItemSpacing.x * 2.f) * 0.5f);
-        if (ImGui::DragInt("##ResW", &w, 1.f, 1, 16384))
+        if (ImGui::InputInt("##ResW", &w, 0, 0, ImGuiInputTextFlags_CharsDecimal))
             changed = true;
         ImGui::SameLine();
         ImGui::TextUnformatted("x");
         ImGui::SameLine();
-        if (ImGui::DragInt("##ResH", &h, 1.f, 1, 16384))
+        if (ImGui::InputInt("##ResH", &h, 0, 0, ImGuiInputTextFlags_CharsDecimal))
             changed = true;
         ImGui::PopItemWidth();
-        resolutionWidth  = static_cast<uint32_t>(std::max(w, 1));
-        resolutionHeight = static_cast<uint32_t>(std::max(h, 1));
+        resolutionWidth  = static_cast<uint32_t>(std::clamp(w, 1, 16384));
+        resolutionHeight = static_cast<uint32_t>(std::clamp(h, 1, 16384));
         ImGui::EndTable();
     }
     ImGui::TreePop();

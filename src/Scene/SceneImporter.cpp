@@ -732,6 +732,10 @@ void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
             ImportGltfScene(scene, jstr(at(obj, "path")));
             if (SceneObject* root = scene.getActiveObject())
                 root->setLocalTransform(t);
+        } else if (type == "ply") {
+            ImportPlyScene(scene, jstr(at(obj, "path")));
+            if (SceneObject* root = scene.getActiveObject())
+                root->setLocalTransform(t);
         } else if (type == "obj") {
             Material matOverride{};
             const bool hasMaterial = obj.contains("material");

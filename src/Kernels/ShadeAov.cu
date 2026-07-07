@@ -26,7 +26,8 @@ NR_GPU_KERNEL void shadeAovKernel(const KernelParams params)
     const uint32_t y = pixel / params.frame.width;
     const HitWorkItem hit = params.queues.aovHitQueue[pixel];
 
-    if (hit.primitiveIndex == InvalidIndex)
+    if (hit.primitiveIndex == InvalidIndex ||
+        hit.instanceIndex >= params.scene.meshInstanceCount)
     {
         surf2Dwrite(make_uchar4(0, 0, 0, 255), params.output.albedo, x * sizeof(uchar4), y);
         surf2Dwrite(packHalf4(glm::vec3(0.0f), 0.0f), params.output.normal, x * sizeof(ushort4), y);

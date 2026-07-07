@@ -8,6 +8,7 @@
 #include <cuda_runtime_api.h>
 #include <optix.h>
 
+#include "CUDA/GaussianProxyBlas.h"
 #include "CUDA/rstd/Vector.h"
 
 #include "Scene/GpuInstance.h"
@@ -20,8 +21,6 @@ struct AccelInstanceInput
     OptixTraversableHandle blasHandle{};
     uint32_t instanceId{};
 };
-
-class GaussianProxyBlas;
 
 class Tlas
 {
@@ -65,5 +64,6 @@ private:
     OptixTraversableHandle tlasHandle{};
 
     GaussianProxyBlas* proxyBlas{};
+    GaussianProxyType lastProxyType{GaussianProxyType::Tetrahedron};
     uint32_t meshInstanceCount{};
 };

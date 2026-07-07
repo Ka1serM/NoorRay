@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <utility>
+#include <vector>
 
 #include <cuda_runtime.h>
 #include <optix_stubs.h>
@@ -13,30 +14,23 @@
 #include "CUDA/Checks.h"
 #include "Mesh/GaussianCutoff.h"
 
-static constexpr float Phi = 1.618033988749895f; // (1 + sqrt(5)) / 2
-
-// Unit icosahedron — 12 vertices.
+// ── Icosahedron ────────────────────────────────────────────────────────────
 static constexpr std::array<float, 36> IcosahedronVertices =
 {{
-    // Ring at y = -1
-    -1.0f,  Phi,  0.0f,
-     1.0f,  Phi,  0.0f,
-    -1.0f, -Phi,  0.0f,
-     1.0f, -Phi,  0.0f,
-    // Ring at y = 0
-     0.0f, -1.0f,  Phi,
-     0.0f,  1.0f,  Phi,
-     0.0f, -1.0f, -Phi,
-     0.0f,  1.0f, -Phi,
-    // Ring at z = 0
-     Phi,  0.0f, -1.0f,
-     Phi,  0.0f,  1.0f,
-    -Phi,  0.0f, -1.0f,
-    -Phi,  0.0f,  1.0f,
+    -1.0f,  1.618033988749895f,  0.0f,
+     1.0f,  1.618033988749895f,  0.0f,
+    -1.0f, -1.618033988749895f,  0.0f,
+     1.0f, -1.618033988749895f,  0.0f,
+     0.0f, -1.0f,  1.618033988749895f,
+     0.0f,  1.0f,  1.618033988749895f,
+     0.0f, -1.0f, -1.618033988749895f,
+     0.0f,  1.0f, -1.618033988749895f,
+     1.618033988749895f,  0.0f, -1.0f,
+     1.618033988749895f,  0.0f,  1.0f,
+    -1.618033988749895f,  0.0f, -1.0f,
+    -1.618033988749895f,  0.0f,  1.0f,
 }};
 
-// 20 triangular faces (each entry is vertex index * 3).
-// Wound so that outward-facing normals are correct for a unit icosahedron.
 static constexpr std::array<uint32_t, 60> IcosahedronIndices =
 {{
      0,  1,  4,
@@ -61,9 +55,57 @@ static constexpr std::array<uint32_t, 60> IcosahedronIndices =
      6,  3,  7,
 }};
 
+static constexpr size_t IcosahedronVertCount  = 12;
+static constexpr size_t IcosahedronTriCount   = 20;
+
+// ── Octahedron ─────────────────────────────────────────────────────────────
+static constexpr std::array<float, 18> OctahedronVertices =
+{{
+     0.0f,  1.0f,  0.0f,
+     0.0f, -1.0f,  0.0f,
+     1.0f,  0.0f,  0.0f,
+     0.0f,  0.0f,  1.0f,
+    -1.0f,  0.0f,  0.0f,
+     0.0f,  0.0f, -1.0f,
+}};
+
+static constexpr std::array<uint32_t, 24> OctahedronIndices =
+{{
+     0,  3,  2,
+     0,  4,  3,
+     0,  5,  4,
+     0,  2,  5,
+     1,  2,  3,
+     1,  3,  4,
+     1,  4,  5,
+     1,  5,  2,
+}};
+
+static constexpr size_t OctahedronVertCount = 6;
+static constexpr size_t OctahedronTriCount  = 8;
+
+// ── Tetrahedron ────────────────────────────────────────────────────────────
+static constexpr std::array<float, 12> TetrahedronVertices =
+{{
+     0.0f,                       0.0f,                       1.0f,
+     0.9428090415820634f,        0.0f,                      -0.3333333333333333f,
+    -0.4714045207910317f,        0.8164965809277260f,       -0.3333333333333333f,
+    -0.4714045207910317f,       -0.8164965809277260f,       -0.3333333333333333f,
+}};
+
+static constexpr std::array<uint32_t, 12> TetrahedronIndices =
+{{
+     1,  2,  3,
+     0,  3,  2,
+     0,  1,  3,
+     0,  2,  1,
+}};
+
+static constexpr size_t TetrahedronVertCount = 4;
+static constexpr size_t TetrahedronTriCount  = 4;
+
 // Geometry flags: NO DISABLE_ANYHIT — the any-hit program must run for
-// Gaussian proxy triangles. This is the one geometry-level difference from
-// mesh BLASes.
+// Gaussian proxy triangles.
 static constexpr unsigned int GaussianGeometryFlags = 0u;
 
 GaussianProxyBlas::~GaussianProxyBlas() noexcept
@@ -90,30 +132,64 @@ GaussianProxyBlas& GaussianProxyBlas::operator=(GaussianProxyBlas&& other) noexc
 
 void GaussianProxyBlas::build(
     const OptixDeviceContext context,
-    const cudaStream_t stream)
+    const cudaStream_t stream,
+    const GaussianProxyType type)
 {
     if (buffer != 0)
         destroy(stream);
 
-    // Scale the shared unit icosahedron up by GaussianCutoffSigma once, here,
-    // so it tightly bounds a default (unit-sigma) Gaussian's cutoff region.
-    // Each Gaussian's own anisotropic scale is applied on top of this via the
-    // per-instance transform (hardware TRS) — see GaussianAsset.cpp — instead
-    // of correcting for it in the hit shader.
+    // Select vertex/index data for the chosen proxy type.
+    // All types share the same circumradius = GaussianCutoffSigma, matching
+    // the original icosahedron's vertex extent so the TLAS size stays
+    // comparable.  Inradius (face-plane distance) varies per shape.
+    const float* srcVertices = nullptr;
+    const uint32_t* srcIndices = nullptr;
+    size_t vertexCount = 0;
+    size_t indexCount = 0;
+    size_t triCount = 0;
+
+    switch (type)
+    {
+    case GaussianProxyType::Icosahedron:
+        srcVertices = IcosahedronVertices.data();
+        srcIndices  = IcosahedronIndices.data();
+        vertexCount = IcosahedronVertCount;
+        indexCount  = IcosahedronIndices.size();
+        triCount    = IcosahedronTriCount;
+        break;
+    case GaussianProxyType::Octahedron:
+        srcVertices = OctahedronVertices.data();
+        srcIndices  = OctahedronIndices.data();
+        vertexCount = OctahedronVertCount;
+        indexCount  = OctahedronIndices.size();
+        triCount    = OctahedronTriCount;
+        break;
+    case GaussianProxyType::Tetrahedron:
+        srcVertices = TetrahedronVertices.data();
+        srcIndices  = TetrahedronIndices.data();
+        vertexCount = TetrahedronVertCount;
+        indexCount  = TetrahedronIndices.size();
+        triCount    = TetrahedronTriCount;
+        break;
+    }
+
+    // Scale the unit proxy by GaussianCutoffSigma so vertices lie at the
+    // cutoff sphere (distance = sigma).  Each shape's inradius is then:
+    //   icosahedron ≈ 2.38σ, octahedron ≈ 1.73σ, tetrahedron = 1.0σ.
     const glm::mat3 cutoffScale(GaussianCutoffSigma);
-    std::array<float, 36> scaledVertices{};
-    for (size_t i = 0; i < IcosahedronVertices.size(); i += 3)
+    std::vector<float> scaledVertices(vertexCount * 3);
+    for (size_t i = 0; i < vertexCount * 3; i += 3)
     {
         const glm::vec3 v = cutoffScale * glm::vec3(
-            IcosahedronVertices[i], IcosahedronVertices[i + 1], IcosahedronVertices[i + 2]);
-        scaledVertices[i] = v.x;
+            srcVertices[i], srcVertices[i + 1], srcVertices[i + 2]);
+        scaledVertices[i]     = v.x;
         scaledVertices[i + 1] = v.y;
         scaledVertices[i + 2] = v.z;
     }
 
     // Upload vertex + index data to device.
-    constexpr size_t vertexBytes = IcosahedronVertices.size() * sizeof(float);
-    constexpr size_t indexBytes  = IcosahedronIndices.size() * sizeof(uint32_t);
+    const size_t vertexBytes = vertexCount * 3 * sizeof(float);
+    const size_t indexBytes  = indexCount * sizeof(uint32_t);
     CUdeviceptr vertexBuffer = 0;
     CUdeviceptr indexBuffer  = 0;
     NR_GPU_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&vertexBuffer), vertexBytes, stream));
@@ -121,17 +197,17 @@ void GaussianProxyBlas::build(
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(vertexBuffer),
         scaledVertices.data(), vertexBytes, cudaMemcpyHostToDevice, stream));
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(indexBuffer),
-        IcosahedronIndices.data(), indexBytes, cudaMemcpyHostToDevice, stream));
+        srcIndices, indexBytes, cudaMemcpyHostToDevice, stream));
 
     OptixBuildInput buildInput{};
     buildInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
     buildInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
     buildInput.triangleArray.vertexStrideInBytes = 3 * sizeof(float);
-    buildInput.triangleArray.numVertices = 12;
+    buildInput.triangleArray.numVertices = static_cast<uint32_t>(vertexCount);
     buildInput.triangleArray.vertexBuffers = &vertexBuffer;
     buildInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
     buildInput.triangleArray.indexStrideInBytes = 3 * sizeof(uint32_t);
-    buildInput.triangleArray.numIndexTriplets = 20;
+    buildInput.triangleArray.numIndexTriplets = static_cast<uint32_t>(triCount);
     buildInput.triangleArray.indexBuffer = indexBuffer;
     buildInput.triangleArray.flags = &GaussianGeometryFlags;
     buildInput.triangleArray.numSbtRecords = 1;
@@ -154,7 +230,6 @@ void GaussianProxyBlas::build(
     NR_GPU_CHECK(cudaFreeAsync(scratch, stream));
     buffer = reinterpret_cast<CUdeviceptr>(output);
 
-    // Free the temporary vertex/index buffers after the BLAS is built.
     NR_GPU_CHECK(cudaFreeAsync(reinterpret_cast<void*>(vertexBuffer), stream));
     NR_GPU_CHECK(cudaFreeAsync(reinterpret_cast<void*>(indexBuffer), stream));
 }

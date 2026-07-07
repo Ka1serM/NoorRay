@@ -18,7 +18,8 @@ extern "C" __global__ void __raygen__extend()
         return;
 
     const PathRayWorkItem ray = params.queues.rayQueues[params.depth & 1u][index];
-    const RayHit hit = intersectRay(params.scene.tlasHandle, ray.origin, ray.direction, 0.001f, 1000.0f, ray.sampleIndex);
+    const bool gaussianEnabled = (params.frame.visibilityMask & 0x02) != 0;
+    const RayHit hit = intersectRay(params.scene.tlasHandle, ray.origin, ray.direction, 0.001f, 1000.0f, ray.sampleIndex, gaussianEnabled);
 
     HitWorkItem item{};
     item.rayOrigin     = ray.origin;

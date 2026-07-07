@@ -563,6 +563,7 @@ void Raytracer::launchExtendAov(const KernelParams& params, const cudaStream_t s
 
     KernelParams aovParams = params;
     aovParams.depth = 0;
+    aovParams.frame.visibilityMask = 0x01; // mesh only, no gaussians
     aovParams.queues.rayQueues[0] = params.queues.aovRayQueue;
     aovParams.queues.hitQueue = params.queues.aovHitQueue;
 

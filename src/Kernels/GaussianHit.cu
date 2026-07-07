@@ -88,12 +88,9 @@ extern "C" __global__ void __anyhit__gaussian()
     // frames (sub-samples), and gaussians along the same ray.
     uint32_t key = sampleIndex
         ^ (params.frame.totalAccumulated << 8)
-        ^ (globalGaussianId << 16)
-        ^ 0xdeadbeefu;
+        ^ (globalGaussianId << 16);
     key ^= key >> 16;
     key *= 0x85ebca6bu;
-    key ^= key >> 13;
-    key *= 0xc2b2ae35u;
     key ^= key >> 16;
     const float xi = (static_cast<float>(key & 0x00ffffffu) + 0.5f) / 16777216.0f;
 

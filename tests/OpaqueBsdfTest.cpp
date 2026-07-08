@@ -28,6 +28,28 @@ TEST_CASE_METHOD(OpaqueBsdfTest,
     CHECK(reflectance <= 0.81f);
 }
 
+TEST_CASE_METHOD(OpaqueBsdfTest,
+    "perfectly smooth metal samples only delta reflection", "[bsdf][metal][delta]")
+{
+    constexpr float reflectance = 0.8f;
+    const Bsdf bsdf(
+        normal, normal, view, SampledSpectrum(reflectance),
+        1.0f, 0.5f, 0.0f, 0.0f, SampledSpectrum(1.0f),
+        SellmeierCoefficients{}, SampledWavelengths::sampleUniform(0.5f), {});
+
+    RandomState rng = seedRandom(0x51ee7u);
+    for (int i = 0; i < 128; ++i) {
+        const BsdfSample sample = bsdf.sample(rng);
+        CHECK(sample.event == BsdfEvent::Specular);
+        CHECK(sample.direction.x == Catch::Approx(0.0f).margin(1e-6f));
+        CHECK(sample.direction.y == Catch::Approx(0.0f).margin(1e-6f));
+        CHECK(sample.direction.z == Catch::Approx(1.0f).margin(1e-6f));
+        CHECK(sample.weight[0] == Catch::Approx(reflectance).margin(1e-5f));
+        CHECK(sample.pdf == 0.0f);
+    }
+    CHECK(bsdf.pdf(glm::vec3(0.0f, 0.0f, 1.0f)) == 0.0f);
+}
+
 TEST_CASE_METHOD(OpaqueBsdfTest, "white furnace remains energy conserving at grazing angles", "[bsdf][furnace]")
 {
     for (const float cosine : {0.5f, 0.173648f, 0.087156f}) {

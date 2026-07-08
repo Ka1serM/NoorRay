@@ -104,7 +104,10 @@ void NoorRay::runUi() {
     auto* viewportPanel    = dynamic_cast<ViewportPanel*>(imGuiManager->getComponent("Viewport"));
     auto* renderPanel      = dynamic_cast<RenderPanel*>(imGuiManager->getComponent("Render"));
 
+    raytracer->setTimingEnabled(true);
+
     int frame = 0;
+    uint64_t displayedRenderValue = 0;
     bool isRunning = true, isFullscreen = false, firstFrame = true;
 
     while (isRunning) {
@@ -150,44 +153,52 @@ void NoorRay::runUi() {
                 } else if (renderPanel->isSaveRequested()) {
                     renderPanel->executeSave();
                 } else {
-                    debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
-                    if (scene.isDirty(Meshes))   raytracer->updateMeshes();
-                    if (scene.isDirty(Textures)) raytracer->updateTextures();
-                    else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
-                    if (scene.isDirty(Lights))   raytracer->updateLights();
-                    if (scene.isDirty(TLAS))     raytracer->updateTLAS();
-
-                    PushData push{};
-                    push.frame            = frame;
-                    if (firstFrame || scene.isDirty(Accumulation))
-                        frame = 0;
-                    else
-                        ++frame;
-
-                    push.frame = frame;
-                    scene.clearDirtyFlags();
-                    firstFrame = false;
-
-                    raytracer->render(push);
+                    const FrameInfo completedFrame = raytracer->getFrameInfo();
+                    if (raytracer->isFrameReady()
+                        && completedFrame.readyValue > displayedRenderValue)
                     {
-                        const int spp = std::max(1, scene.getRenderSettings().samples);
-                        const int cur = (push.frame + 1) * spp;
-                        debugPanel->setSampleInfo(cur, scene.getRenderSettings().maxSamples);
+                        displayedRenderValue = completedFrame.readyValue;
+                        viewport->dispatch(
+                            cmd, completedFrame.bufferIndex, scene.getActiveMeshInstanceIndex(),
+                            scene.getRenderSettings().exposure,
+                            static_cast<int>(scene.getRenderSettings().bufferVisualization),
+                            scene.getRenderSettings().tonemappingEnabled);
+                        viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
+                        viewportPanel->setAovImages(
+                            raytracer->getOutputCrypto(completedFrame.bufferIndex),
+                            raytracer->getOutputPosition(completedFrame.bufferIndex));
+                        renderer->setExternalFrameSync(
+                            completedFrame.renderReadySemaphore,
+                            completedFrame.bufferReleasedSemaphore,
+                            completedFrame.readyValue);
                     }
-                    const FrameInfo frameInfo = raytracer->getFrameInfo();
-                    viewport->dispatch(
-                        cmd, frameInfo.bufferIndex, scene.getActiveMeshInstanceIndex(),
-                        scene.getRenderSettings().exposure,
-                        static_cast<int>(scene.getRenderSettings().bufferVisualization),
-                        scene.getRenderSettings().tonemappingEnabled);
-                    viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
-                    viewportPanel->setAovImages(
-                        raytracer->getOutputCrypto(frameInfo.bufferIndex),
-                        raytracer->getOutputPosition(frameInfo.bufferIndex));
-                    renderer->setExternalFrameSync(
-                        frameInfo.renderReadySemaphore,
-                        frameInfo.bufferReleasedSemaphore,
-                        frameInfo.readyValue);
+
+                    // Keep at most one CUDA render in flight. ImGui continues to
+                    // present the last completed viewport image while it runs.
+                    if (!raytracer->isRenderInFlight())
+                    {
+                        if (scene.isDirty(Meshes))   raytracer->updateMeshes();
+                        if (scene.isDirty(Textures)) raytracer->updateTextures();
+                        else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
+                        if (scene.isDirty(Lights))   raytracer->updateLights();
+                        if (scene.isDirty(TLAS))     raytracer->updateTLAS();
+
+                        if (firstFrame || scene.isDirty(Accumulation))
+                            frame = 0;
+                        else
+                            ++frame;
+
+                        scene.clearDirtyFlags();
+                        firstFrame = false;
+                        raytracer->render(PushData{.frame = frame});
+                        // render() harvests the completed frame's CUDA events
+                        // before asynchronously submitting the next frame.
+                        debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
+
+                        const int spp = std::max(1, scene.getRenderSettings().samples);
+                        debugPanel->setSampleInfo(
+                            (frame + 1) * spp, scene.getRenderSettings().maxSamples);
+                    }
                 }
             }
 

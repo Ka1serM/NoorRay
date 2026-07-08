@@ -61,6 +61,8 @@ public:
     void updateTLAS();
 
     FrameInfo getFrameInfo() const;
+    bool isRenderInFlight() const;
+    bool isFrameReady() const;
     float getGpuTimeMs() const { return m_gpuTimeMs; }
     uint32_t getWidth() const { return width; }
     uint32_t getHeight() const { return height; }

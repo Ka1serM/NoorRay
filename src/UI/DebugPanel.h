@@ -1,6 +1,5 @@
 ﻿#pragma once
 #include "ImGuiComponent.h"
-#include <chrono>
 #include <string>
 
 class DebugPanel : public ImGuiComponent {
@@ -14,10 +13,7 @@ public:
     int getBvhMode() const { return visualizeBVH; }
 
 private:
-    std::chrono::high_resolution_clock::time_point lastTime;
     float fps = 0.0f;
-    float timeAccumulator = 0.0f;
-    int frameCounter = 0;
     float m_raytraceMs = 0.0f;
     int m_currentSample = 0;
     int m_maxSamples = 0;

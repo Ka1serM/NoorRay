@@ -3,7 +3,7 @@
 #include "ImGuiManager.h"
 
 DebugPanel::DebugPanel(std::string name) 
-    : ImGuiComponent(std::move(name)), lastTime(std::chrono::high_resolution_clock::now()) {}
+    : ImGuiComponent(std::move(name)) {}
 
 void DebugPanel::setSampleInfo(const int current, const int max) {
     m_currentSample = current;
@@ -11,20 +11,8 @@ void DebugPanel::setSampleInfo(const int current, const int max) {
 }
 
 void DebugPanel::onComputeFinished(const float raytraceMs) {
-    const auto now = std::chrono::high_resolution_clock::now();
-    const float deltaTime = std::chrono::duration<float>(now - lastTime).count();
-    lastTime = now;
-
     m_raytraceMs = raytraceMs;
-
-    timeAccumulator += deltaTime;
-    frameCounter++;
-
-    if (timeAccumulator >= 1.0f) {
-        fps = static_cast<float>(frameCounter) / timeAccumulator;
-        timeAccumulator = 0.0f;
-        frameCounter = 0;
-    }
+    fps = raytraceMs > 0.0f ? 1000.0f / raytraceMs : 0.0f;
 }
 
 void DebugPanel::renderUi() {

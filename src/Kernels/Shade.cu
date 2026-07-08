@@ -225,7 +225,6 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             const float z = 2.0f * randomFloat(bsdfRng) - 1.0f;
             const float radius = sqrtf(fmaxf(1.0f - z * z, 0.0f));
             const glm::vec3 nextDirection(radius * cosf(theta), z, radius * sinf(theta));
-            const float scatterPdf = inv4Pi;
 
             // ── NEE: sample analytic lights ────────────────────────
             {
@@ -276,17 +275,17 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                     if (selectedWeight > 0.0f && lightSample.radiance.maxComponent() > 0.0f)
                     {
                         const float selectionPdf = selectedWeight / totalWeight;
-                        // lightSample.radiance already includes 1/selectionPdf
-                        // (baked in by the existing shadeBsdfLobe pattern).
                         const SampledSpectrum brdf = albedo * inv4Pi;
-                        const float lightPdf = selectionPdf;
-                        const float misWeight = powerHeuristic(lightPdf, scatterPdf);
                         shadow.origin    = gaussianPos + lightSample.direction * 0.001f;
                         shadow.direction = lightSample.direction;
                         shadow.tMin      = 0.001f;
                         shadow.tMax      = lightSample.distance - 0.002f;
+                        // Analytic lights are only reachable through NEE: they are
+                        // not emissive geometry that the scattered ray can hit.
+                        // Therefore there is no competing sampling technique and
+                        // no MIS term. Compensate only for selecting one light.
                         shadow.contribution = state.throughput * brdf * lightSample.radiance
-                            * misWeight;
+                            / fmaxf(selectionPdf, 1e-20f);
                         shadow.rngState     = shadowRng;
                         shadow.sampleIndex  = hit.sampleIndex;
                         params.queues.shadowQueue[index] = shadow;
@@ -295,7 +294,9 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             }
 
             state.throughput *= albedo;
-            state.lastBsdfPdfBits = __float_as_uint(scatterPdf);
+            // Gaussian scattering does not perform environment NEE. A zero PDF
+            // tells the miss path not to MIS-downweight its environment sample.
+            state.lastBsdfPdfBits = __float_as_uint(0.0f);
 
             state.depth++;
             continuePath = true;

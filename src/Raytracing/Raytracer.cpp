@@ -338,7 +338,6 @@ void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
     nextBuffer = 0;
     lastLaunched = 0;
     lastReadyValue = 0;
-    submittedFrame = 0;
     lastUseValue = {};
 }
 
@@ -782,4 +781,16 @@ void Raytracer::debugSave(const std::string& path) const
 FrameInfo Raytracer::getFrameInfo() const
 {
     return {lastLaunched, lastReadyValue, renderReady.get(), bufferReleased.get()};
+}
+
+bool Raytracer::isRenderInFlight() const
+{
+    return lastReadyValue != 0
+        && context.getDevice().getSemaphoreCounterValue(renderReady.get()) < lastReadyValue;
+}
+
+bool Raytracer::isFrameReady() const
+{
+    return lastReadyValue != 0
+        && context.getDevice().getSemaphoreCounterValue(renderReady.get()) >= lastReadyValue;
 }

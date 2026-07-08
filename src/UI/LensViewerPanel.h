@@ -29,7 +29,6 @@ private:
 
     Scene& scene;
     std::vector<TracedRay> rays;
-    uint32_t cachedLensVersion = ~0u;
     bool settingsDirty = true;
     bool fitPending = true;
     int pixelStride = 100; // trace a ray fan for every Nth sensor row (physical pixel grid)

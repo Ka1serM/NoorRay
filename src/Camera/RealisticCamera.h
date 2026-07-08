@@ -28,9 +28,6 @@ public:
     float sensorWidthCm{};
     float sensorHeightCm{};
     float filmDiagonalCm{};
-    // Bumped every time the lens/sensor is (re)loaded, so external UI (LensViewerPanel) can
-    // cheaply tell when its cached traced rays are stale without comparing lens contents.
-    uint32_t lensVersion{};
 
 #if !defined(NR_OPTIX_PTX_BUILD)
     // Construct the libross film ray used by generateRay. Keeping this public lets diagnostic
@@ -89,6 +86,12 @@ public:
     float derivedFocalLengthMm() const { return effectiveFocalLengthM * 1000.0f; }
     float apertureDiameterMm{0.f};
     void loadLensAndSensor();
+    bool consumeOpticsDirty()
+    {
+        const bool wasDirty = opticsDirty;
+        opticsDirty = false;
+        return wasDirty;
+    }
 
 private:
     std::string lensPath;
@@ -96,6 +99,7 @@ private:
     std::string glassCatalogPaths;
     float effectiveFocalLengthM = 0.045f;
     std::string loadStatus;
+    bool opticsDirty = true;
 
     std::unique_ptr<pfd::open_file> lensDialog;
     std::unique_ptr<pfd::open_file> sensorDialog;

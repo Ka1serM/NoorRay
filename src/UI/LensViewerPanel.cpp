@@ -74,7 +74,7 @@ void LensViewerPanel::retraceRays(const RealisticCamera& camera)
 {
     rays.clear();
     settingsDirty = false;
-    cachedLensVersion = camera.lensVersion;
+    fitPending = true;
     if (camera.rossLens == nullptr || camera.rossLens->surfaces.empty())
         return;
 
@@ -259,7 +259,14 @@ void LensViewerPanel::drawCanvas(const RealisticCamera* camera)
 
 void LensViewerPanel::renderUi()
 {
-    ImGui::Begin(name.c_str(), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    const bool visible = ImGui::Begin(
+        name.c_str(), nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if (!visible) {
+        ImGui::End();
+        return;
+    }
+    if (ImGui::IsWindowAppearing())
+        fitPending = true;
 
     RealisticCamera* camera = findActiveRealisticCamera(scene);
     if (camera == nullptr) {
@@ -275,7 +282,8 @@ void LensViewerPanel::renderUi()
     if (ImGui::Button("Fit View"))
         fitPending = true;
 
-    if (settingsDirty || camera->lensVersion != cachedLensVersion)
+    const bool opticsDirty = camera->consumeOpticsDirty();
+    if (settingsDirty || opticsDirty)
         retraceRays(*camera);
 
     drawCanvas(camera);

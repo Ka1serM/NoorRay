@@ -74,7 +74,7 @@ void RealisticCamera::freeRossLens()
 void RealisticCamera::loadLensAndSensor()
 {
     freeRossLens();
-    ++lensVersion;
+    opticsDirty = true;
 
     if (lensPath.empty() || sensorPath.empty()) {
         sensorWidthCm = 0.0f;

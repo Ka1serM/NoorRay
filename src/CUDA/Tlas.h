@@ -64,7 +64,7 @@ private:
     OptixTraversableHandle tlasHandle{};
 
     GaussianProxyBlas* proxyBlas{};
-    GaussianProxyType lastProxyType{GaussianProxyType::Tetrahedron};
+    GaussianProxyType lastProxyType{GaussianProxyType::TriangularBipyramid};
     float lastCutoffSigma{3.0f};
     uint32_t meshInstanceCount{};
 };

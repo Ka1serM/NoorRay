@@ -270,6 +270,7 @@ add_custom_command(
                 src/Kernels/Extend.cu
                 src/Kernels/Connect.cu
                 src/Kernels/GaussianHit.cu
+                src/Kernels/GaussianProxyOverdraw.cu
         DEPFILE "${NR_OPTIX_DEPFILE}"
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")

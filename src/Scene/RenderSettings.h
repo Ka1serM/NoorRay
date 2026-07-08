@@ -22,6 +22,8 @@ public:
     int tonemappingEnabled{1};
     int transparentBackground{};
     float gaussianCutoffSigma{3.0f};
-    int gaussianProxyType{1}; // GaussianProxyType::Octahedron
+    int gaussianProxyType{0}; // GaussianProxyType::Icosahedron
+    int gaussianProxyOverdrawVisualization{};
+    int gaussianProxyOverdrawMax{1024};
     BufferVisualization bufferVisualization{BufferVisualization::Beauty};
 };

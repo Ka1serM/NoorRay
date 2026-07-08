@@ -127,16 +127,22 @@ private:
     OptixModule optixModule{};
     OptixProgramGroup optixExtendGroup{};
     OptixProgramGroup optixConnectGroup{};
+    OptixProgramGroup optixProxyOverdrawGroup{};
     OptixProgramGroup optixTriangleGroup{};
     OptixProgramGroup optixGaussianHitGroup{};
+    OptixProgramGroup optixProxyOverdrawHitGroup{};
     OptixProgramGroup optixMissGroup{};
     OptixPipeline optixPipeline{};
+    OptixPipeline optixProxyOverdrawPipeline{};
     CUdeviceptr optixExtendRecord{};
     CUdeviceptr optixConnectRecord{};
+    CUdeviceptr optixProxyOverdrawRecord{};
     CUdeviceptr optixHitgroupRecord{};
+    CUdeviceptr optixProxyOverdrawHitgroupRecord{};
     CUdeviceptr optixMissRecord{};
     OptixShaderBindingTable optixExtendSbt{};
     OptixShaderBindingTable optixConnectSbt{};
+    OptixShaderBindingTable optixProxyOverdrawSbt{};
 
     void allocateQueues();
     void freeQueues() noexcept;
@@ -146,6 +152,7 @@ private:
     void launchShade(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
     void launchExtend(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
     void launchConnect(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
+    void launchProxyOverdraw(const KernelParams& params, cudaStream_t stream) const;
     void launchGenerateAov(const KernelParams& params, cudaStream_t stream) const;
     void launchExtendAov(const KernelParams& params, cudaStream_t stream) const;
     void launchShadeAov(const KernelParams& params, cudaStream_t stream) const;

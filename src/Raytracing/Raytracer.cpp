@@ -115,6 +115,8 @@ Raytracer::Raytracer(
 
     optixExtendGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__extend");
     optixConnectGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__connect");
+    optixProxyOverdrawGroup = makeRaygenGroup(
+        optixCtx, optixModule, "__raygen__gaussianProxyOverdraw");
 
     OptixProgramGroupOptions groupOptions{};
 
@@ -132,6 +134,15 @@ Raytracer::Raytracer(
     NR_OPTIX_CHECK(optixProgramGroupCreate(
         optixCtx, &gaussianDesc, 1, &groupOptions, log.data(), &logSize, &optixGaussianHitGroup));
 
+    OptixProgramGroupDesc proxyOverdrawDesc{};
+    proxyOverdrawDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    proxyOverdrawDesc.hitgroup.moduleAH = optixModule;
+    proxyOverdrawDesc.hitgroup.entryFunctionNameAH = "__anyhit__gaussianProxyOverdraw";
+    logSize = log.size();
+    NR_OPTIX_CHECK(optixProgramGroupCreate(
+        optixCtx, &proxyOverdrawDesc, 1, &groupOptions, log.data(), &logSize,
+        &optixProxyOverdrawHitGroup));
+
     OptixProgramGroupDesc missDesc{};
     missDesc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
     missDesc.miss.module = nullptr;
@@ -140,7 +151,9 @@ Raytracer::Raytracer(
     NR_OPTIX_CHECK(optixProgramGroupCreate(
         optixCtx, &missDesc, 1, &groupOptions, log.data(), &logSize, &optixMissGroup));
 
-    const std::array groups{optixExtendGroup, optixConnectGroup, optixTriangleGroup, optixGaussianHitGroup, optixMissGroup};
+    const std::array groups{
+        optixExtendGroup, optixConnectGroup, optixTriangleGroup,
+        optixGaussianHitGroup, optixMissGroup};
     OptixPipelineLinkOptions linkOptions{};
     linkOptions.maxTraceDepth = 1;
     logSize = log.size();
@@ -165,8 +178,35 @@ Raytracer::Raytracer(
         directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
         continuationStackSize, 2));
 
+    // Keep diagnostics in a separate pipeline. Its larger raygen program and
+    // stack requirements therefore cannot change normal-render occupancy.
+    const std::array proxyOverdrawGroups{
+        optixProxyOverdrawGroup, optixTriangleGroup,
+        optixProxyOverdrawHitGroup, optixMissGroup};
+    logSize = log.size();
+    result = optixPipelineCreate(
+        optixCtx, &pipelineOptions, &linkOptions,
+        proxyOverdrawGroups.data(), static_cast<unsigned int>(proxyOverdrawGroups.size()),
+        log.data(), &logSize, &optixProxyOverdrawPipeline);
+    if (result != OPTIX_SUCCESS)
+        throw std::runtime_error(
+            std::string("OptiX proxy-overdraw pipeline creation failed: ") + log.data());
+
+    OptixStackSizes proxyOverdrawStackSizes{};
+    for (const OptixProgramGroup group : proxyOverdrawGroups)
+        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(
+            group, &proxyOverdrawStackSizes, optixProxyOverdrawPipeline));
+    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
+        &proxyOverdrawStackSizes, linkOptions.maxTraceDepth, 0, 0,
+        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
+        &continuationStackSize));
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixProxyOverdrawPipeline,
+        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
+        continuationStackSize, 2));
+
     optixExtendRecord = uploadRecord(optixExtendGroup);
     optixConnectRecord = uploadRecord(optixConnectGroup);
+    optixProxyOverdrawRecord = uploadRecord(optixProxyOverdrawGroup);
 
     // Upload two hitgroup records contiguously: mesh (sbtOffset=0) and Gaussian (sbtOffset=1)
     {
@@ -181,6 +221,20 @@ Raytracer::Raytracer(
         optixHitgroupRecord = reinterpret_cast<CUdeviceptr>(deviceRecords);
     }
 
+    // Diagnostic SBT: mesh instances retain an empty hit group while Gaussian
+    // instances use the counting any-hit program at their existing sbtOffset 1.
+    {
+        SbtRecord<> meshSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup, &meshSbt));
+        SbtRecord<> gaussianSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixProxyOverdrawHitGroup, &gaussianSbt));
+        const std::array records{meshSbt, gaussianSbt};
+        void* deviceRecords = nullptr;
+        NR_GPU_CHECK(cudaMalloc(&deviceRecords, sizeof(records)));
+        NR_GPU_CHECK(cudaMemcpy(deviceRecords, records.data(), sizeof(records), cudaMemcpyHostToDevice));
+        optixProxyOverdrawHitgroupRecord = reinterpret_cast<CUdeviceptr>(deviceRecords);
+    }
+
     optixMissRecord = uploadRecord(optixMissGroup);
 
     optixExtendSbt.raygenRecord = optixExtendRecord;
@@ -192,6 +246,9 @@ Raytracer::Raytracer(
     optixExtendSbt.hitgroupRecordCount = 2;
     optixConnectSbt = optixExtendSbt;
     optixConnectSbt.raygenRecord = optixConnectRecord;
+    optixProxyOverdrawSbt = optixExtendSbt;
+    optixProxyOverdrawSbt.raygenRecord = optixProxyOverdrawRecord;
+    optixProxyOverdrawSbt.hitgroupRecordBase = optixProxyOverdrawHitgroupRecord;
 
     NR_GPU_CHECK(cudaEventCreate(&m_startEvent));
     NR_GPU_CHECK(cudaEventCreate(&m_stopEvent));
@@ -298,17 +355,23 @@ Raytracer::~Raytracer()
     };
     freeRecord(optixExtendRecord);
     freeRecord(optixConnectRecord);
+    freeRecord(optixProxyOverdrawRecord);
     freeRecord(optixHitgroupRecord);
+    freeRecord(optixProxyOverdrawHitgroupRecord);
     freeRecord(optixMissRecord);
     if (optixPipeline != nullptr) { optixPipelineDestroy(optixPipeline); optixPipeline = nullptr; }
+    if (optixProxyOverdrawPipeline != nullptr) { optixPipelineDestroy(optixProxyOverdrawPipeline); optixProxyOverdrawPipeline = nullptr; }
     if (optixMissGroup != nullptr) { optixProgramGroupDestroy(optixMissGroup); optixMissGroup = nullptr; }
     if (optixGaussianHitGroup != nullptr) { optixProgramGroupDestroy(optixGaussianHitGroup); optixGaussianHitGroup = nullptr; }
+    if (optixProxyOverdrawHitGroup != nullptr) { optixProgramGroupDestroy(optixProxyOverdrawHitGroup); optixProxyOverdrawHitGroup = nullptr; }
     if (optixTriangleGroup != nullptr) { optixProgramGroupDestroy(optixTriangleGroup); optixTriangleGroup = nullptr; }
     if (optixConnectGroup != nullptr) { optixProgramGroupDestroy(optixConnectGroup); optixConnectGroup = nullptr; }
+    if (optixProxyOverdrawGroup != nullptr) { optixProgramGroupDestroy(optixProxyOverdrawGroup); optixProxyOverdrawGroup = nullptr; }
     if (optixExtendGroup != nullptr) { optixProgramGroupDestroy(optixExtendGroup); optixExtendGroup = nullptr; }
     if (optixModule != nullptr) { optixModuleDestroy(optixModule); optixModule = nullptr; }
     optixExtendSbt = {};
     optixConnectSbt = {};
+    optixProxyOverdrawSbt = {};
 }
 
 void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
@@ -544,6 +607,16 @@ void Raytracer::launchConnect(
         &optixConnectSbt, launchCount, 1, 1));
 }
 
+void Raytracer::launchProxyOverdraw(
+    const KernelParams& params, const cudaStream_t stream) const
+{
+    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+        &params, sizeof(params), cudaMemcpyHostToDevice, stream));
+    NR_OPTIX_CHECK(optixLaunch(optixProxyOverdrawPipeline, stream,
+        optixLaunchParamsDevice, sizeof(KernelParams),
+        &optixProxyOverdrawSbt, params.frame.width * params.frame.height, 1, 1));
+}
+
 void Raytracer::launchGenerateAov(const KernelParams& params, const cudaStream_t stream) const
 {
     constexpr uint32_t blockSize = 256;
@@ -652,25 +725,33 @@ void Raytracer::render(const PushData& pushData)
         --aovStaleBuffers;
     }
 
-    for (uint32_t s = 0; s < samplesPerFrame; ++s)
+    if (renderSettings.gaussianProxyOverdrawVisualization != 0)
     {
-        NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0, sizeof(uint32_t) * MaxBounces, stream));
-        params.frame.totalAccumulated = static_cast<uint32_t>(pushData.frame) * samplesPerFrame + s;
-
-        kernelStats.time("Generate", stream, [&] { launchGenerate(params, stream); });
-        NR_GPU_CHECK(cudaGetLastError());
-        // pbrt-style wavefront: always launch over full capacity; each kernel
-        // reads its device-side queue count and early-exits when
-        // index >= count.  No CPU-GPU synchronization in the hot loop.
-        for (uint32_t depth = 0; depth < maxShaderBounces; ++depth)
+        kernelStats.time("ProxyOverdraw", stream,
+            [&] { launchProxyOverdraw(params, stream); });
+    }
+    else
+    {
+        for (uint32_t s = 0; s < samplesPerFrame; ++s)
         {
-            params.depth = depth;
-            kernelStats.time("Extend", stream, [&] { launchExtend(params, queues.capacity, stream); });
-            kernelStats.time("Shade", stream, [&] { launchShade(params, queues.capacity, stream); });
-            if (mayGenerateShadowRays)
-                kernelStats.time("Connect", stream, [&] { launchConnect(params, queues.capacity, stream); });
+            NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0, sizeof(uint32_t) * MaxBounces, stream));
+            params.frame.totalAccumulated = static_cast<uint32_t>(pushData.frame) * samplesPerFrame + s;
+
+            kernelStats.time("Generate", stream, [&] { launchGenerate(params, stream); });
+            NR_GPU_CHECK(cudaGetLastError());
+            // pbrt-style wavefront: always launch over full capacity; each kernel
+            // reads its device-side queue count and early-exits when
+            // index >= count.  No CPU-GPU synchronization in the hot loop.
+            for (uint32_t depth = 0; depth < maxShaderBounces; ++depth)
+            {
+                params.depth = depth;
+                kernelStats.time("Extend", stream, [&] { launchExtend(params, queues.capacity, stream); });
+                kernelStats.time("Shade", stream, [&] { launchShade(params, queues.capacity, stream); });
+                if (mayGenerateShadowRays)
+                    kernelStats.time("Connect", stream, [&] { launchConnect(params, queues.capacity, stream); });
+            }
+            kernelStats.time("Finalize", stream, [&] { launchFinalize(params, stream); });
         }
-        kernelStats.time("Finalize", stream, [&] { launchFinalize(params, stream); });
     }
     NR_GPU_CHECK(cudaPeekAtLastError());
 

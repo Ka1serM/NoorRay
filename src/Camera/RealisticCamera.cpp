@@ -1,6 +1,8 @@
 #include "RealisticCamera.h"
 
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <imgui.h>
 #include <string>
 #include "Raytracing/Sellmeier.h"
@@ -11,6 +13,33 @@
 #include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupilCalculator.h"
 #include "libross/imaging/imagesensor/ImageSensorReader.h"
 #include "openlensfileio/glasscatalogs/glasscatalog/GlassCatalogLibrary.h"
+
+namespace {
+std::string joinWithSemicolons(const std::vector<std::string>& paths)
+{
+    std::string result;
+    for (const std::string& path : paths) {
+        if (!result.empty())
+            result += ';';
+        result += path;
+    }
+    return result;
+}
+
+const char* surfaceGeometryLabel(const ross::LensSurface& surf)
+{
+    if (surf.isAperture())
+        return "Aperture";
+    switch (surf.geometry) {
+        case ross::LensGeometry::SPHERICAL:   return "Spheric";
+        case ross::LensGeometry::ASPHERICAL:  return "Aspheric";
+        case ross::LensGeometry::CYLINDER_X:  return "Cylinder X";
+        case ross::LensGeometry::CYLINDER_Y:  return "Cylinder Y";
+        case ross::LensGeometry::PLANAR:      return "Planar";
+    }
+    return "Surface";
+}
+}
 
 void RealisticCamera::load(std::string lensPath_, std::string sensorPath_,
                            std::string glassCatalogPaths_)
@@ -45,6 +74,7 @@ void RealisticCamera::freeRossLens()
 void RealisticCamera::loadLensAndSensor()
 {
     freeRossLens();
+    ++lensVersion;
 
     if (lensPath.empty() || sensorPath.empty()) {
         sensorWidthCm = 0.0f;
@@ -113,6 +143,83 @@ void RealisticCamera::loadLensAndSensor()
 
 bool RealisticCamera::renderUi()
 {
+    if (lensDialog && lensDialog->ready(0)) {
+        const auto selection = lensDialog->result();
+        if (!selection.empty()) {
+            lensPath = selection.front();
+            loadLensAndSensor();
+        }
+        lensDialog.reset();
+    }
+    if (sensorDialog && sensorDialog->ready(0)) {
+        const auto selection = sensorDialog->result();
+        if (!selection.empty()) {
+            sensorPath = selection.front();
+            loadLensAndSensor();
+        }
+        sensorDialog.reset();
+    }
+    if (glassCatalogDialog && glassCatalogDialog->ready(0)) {
+        const auto selection = glassCatalogDialog->result();
+        if (!selection.empty()) {
+            glassCatalogPaths = joinWithSemicolons(selection);
+            loadLensAndSensor();
+        }
+        glassCatalogDialog.reset();
+    }
+
+    std::array<char, 512> lensBuffer{};
+    std::array<char, 512> sensorBuffer{};
+    std::array<char, 1024> glassCatalogBuffer{};
+    std::snprintf(lensBuffer.data(), lensBuffer.size(), "%s", lensPath.c_str());
+    std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensorPath.c_str());
+    std::snprintf(glassCatalogBuffer.data(), glassCatalogBuffer.size(), "%s", glassCatalogPaths.c_str());
+
+    const float selectButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+
+    ImGuiManager::tableRowLabel("Lens File");
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::InputText("##RealisticLensPath", lensBuffer.data(), lensBuffer.size()))
+        lensPath = lensBuffer.data();
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(lensDialog != nullptr);
+    if (ImGui::Button("Select##RealisticLens", ImVec2(selectButtonWidth, 0))) {
+        lensDialog = std::make_unique<pfd::open_file>(
+            "Select Lens File", ".",
+            std::vector<std::string>{"Lens Files", "*.olio *.zmx *.dat", "All Files", "*"});
+    }
+    ImGui::EndDisabled();
+
+    ImGuiManager::tableRowLabel("Glass Catalogs");
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::InputText("##RealisticGlassCatalogPaths", glassCatalogBuffer.data(), glassCatalogBuffer.size()))
+        glassCatalogPaths = glassCatalogBuffer.data();
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(glassCatalogDialog != nullptr);
+    if (ImGui::Button("Select##RealisticGlassCatalogs", ImVec2(selectButtonWidth, 0))) {
+        glassCatalogDialog = std::make_unique<pfd::open_file>(
+            "Select Glass Catalogs", ".",
+            std::vector<std::string>{"Glass Catalogs", "*.agf *.AGF", "All Files", "*"},
+            pfd::opt::multiselect);
+    }
+    ImGui::EndDisabled();
+
+    ImGuiManager::tableRowLabel("Sensor File");
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::InputText("##RealisticSensorPath", sensorBuffer.data(), sensorBuffer.size()))
+        sensorPath = sensorBuffer.data();
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(sensorDialog != nullptr);
+    if (ImGui::Button("Select##RealisticSensor", ImVec2(selectButtonWidth, 0))) {
+        sensorDialog = std::make_unique<pfd::open_file>(
+            "Select Sensor File", ".",
+            std::vector<std::string>{"Sensor Files", "*.json", "All Files", "*"});
+    }
+    ImGui::EndDisabled();
+
     if (ImGui::Button("Reload##RealisticCamera")) {
         loadLensAndSensor();
     }
@@ -155,7 +262,7 @@ bool RealisticCamera::renderUi()
             if (ImGui::BeginTable("##LensTable", 7, tableFlags)) {
                 ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 32.0f);
-                ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 84.0f);
                 ImGui::TableSetupColumn("Radius mm");
                 ImGui::TableSetupColumn("Thickness mm");
                 ImGui::TableSetupColumn("Aperture mm");
@@ -169,7 +276,7 @@ bool RealisticCamera::renderUi()
                     ImGui::TableSetColumnIndex(0);
                     ImGui::Text("%zu", i);
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(surf.isAperture() ? "Aperture" : "Surface");
+                    ImGui::TextUnformatted(surfaceGeometryLabel(surf));
                     ImGui::TableSetColumnIndex(2);
                     ImGui::Text("%.4g", surf.curvatureRadius);
                     ImGui::TableSetColumnIndex(3);

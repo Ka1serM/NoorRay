@@ -13,6 +13,7 @@
 #include "UI/EnvironmentPanel.h"
 #include "UI/RenderPanel.h"
 #include "UI/RenderSettingsPanel.h"
+#include "UI/LensViewerPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "stb_image_write.h"
@@ -20,6 +21,7 @@
 #include "Camera/Camera.h"
 #include "Camera/CameraInstance.h"
 #include "Camera/PerspectiveCamera.h"
+#include "Camera/RealisticCamera.h"
 #include "Camera/ThinLensCamera.h"
 #include "CUDA/rstd/Allocator.h"
 #include "IO/BitmapWriter.h"
@@ -37,11 +39,19 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     , renderer(std::make_unique<Renderer>(context, windowWidth, windowHeight))
     , imGuiManager(std::make_unique<ImGuiManager>(context, renderer->getNumSwapchainImages(), renderer->getColorImageFormat()))
 {
-    nr::rstd::allocator<ThinLensCamera> cameraAllocator;
-    ThinLensCamera* thinLens = cameraAllocator.allocate(1);
-    cameraAllocator.construct(thinLens);
+    // Defaults to a realistic camera with an aspheric lens so lens-file/tracing issues around
+    // aspheres are visible in the Lens Viewer panel right away.
+    nr::rstd::allocator<RealisticCamera> cameraAllocator;
+    RealisticCamera* realisticCamera = cameraAllocator.allocate(1);
+    cameraAllocator.construct(realisticCamera);
+    realisticCamera->load(
+        "/home/marcel/GitRepositories/ROSS/resources/lenses/canon_automotive_fisheye/canon_automotive_fisheye.zmx",
+        "/home/marcel/GitRepositories/ROSS/resources/sensors/onsemi_AR0237.json",
+        "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/schott.AGF;"
+        "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/ohara.AGF;"
+        "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/misc.agf");
     scene.add(std::make_unique<CameraInstance>(
-        scene, "Camera", Transform{glm::vec3(0.0f, 0.0f, 5.0f)}, Camera(thinLens)));
+        scene, "Camera", Transform{glm::vec3(0.0f, 0.0f, 5.0f)}, Camera(realisticCamera)));
 
     raytracer = std::make_unique<Raytracer>(context, scene);
 
@@ -61,6 +71,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     imGuiManager->addComponent<DetailsPanel>("Details", scene);
     imGuiManager->addComponent<RenderSettingsPanel>("Render Settings", scene);
     imGuiManager->addComponent<RenderPanel>("Render", context, *raytracer, *renderer, *viewport);
+    imGuiManager->addComponent<LensViewerPanel>("Lens Viewer", scene);
     imGuiManager->addComponent<ViewportPanel>("Viewport", context, scene,
         viewport->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(),
         raytracer->getWidth(), raytracer->getHeight());

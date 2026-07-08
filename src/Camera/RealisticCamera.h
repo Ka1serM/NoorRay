@@ -15,6 +15,10 @@ struct ExitPupil;
 }
 #endif
 #include <glm/vec2.hpp>
+#ifndef NR_GPU_CODE
+#include <memory>
+#include "portable-file-dialogs.h"
+#endif
 using glm::vec2;
 
 class RealisticCamera : public Camera {
@@ -24,6 +28,28 @@ public:
     float sensorWidthCm{};
     float sensorHeightCm{};
     float filmDiagonalCm{};
+    // Bumped every time the lens/sensor is (re)loaded, so external UI (LensViewerPanel) can
+    // cheaply tell when its cached traced rays are stale without comparing lens contents.
+    uint32_t lensVersion{};
+
+#if !defined(NR_OPTIX_PTX_BUILD)
+    // Construct the libross film ray used by generateRay. Keeping this public lets diagnostic
+    // views exercise exactly the same film mapping and exit-pupil sampling as rendered rays.
+    NR_CPU_GPU bool makeFilmRay(ross::Ray& filmRay, float nx, float ny,
+        const ross::Vector2f& pupilSample) const
+    {
+        if (rossLens == nullptr || exitPupil == nullptr || exitPupil->pupilBounds.empty())
+            return false;
+
+        const ross::Vector2f filmPos(-nx * sensorWidthCm * 0.5f, -ny * sensorHeightCm * 0.5f);
+        const auto pupil = exitPupil->samplePupil(filmPos, filmDiagonalCm, pupilSample);
+        filmRay = ross::Ray::betweenPoints(
+            ross::Vector3f(filmPos.x, filmPos.y, 0.0f),
+            ross::Vector3f(pupil.point.x, pupil.point.y,
+                rossLens->getSurfaceCenter(rossLens->getLastSurface())));
+        return true;
+    }
+#endif
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, RandomState& rng, uint32_t, const float wavelengthNm,
@@ -33,21 +59,12 @@ public:
         return false;
 #else
         weight = 0.0f;
-        if (rossLens == nullptr || exitPupil == nullptr || exitPupil->pupilBounds.empty())
-            return false;
-
-        const ross::Vector2f filmPos(-nx * sensorWidthCm * 0.5f, -ny * sensorHeightCm * 0.5f);
-
         const ross::Vector2f sample(
             centered ? 0.5f : randomFloat(rng),
             centered ? 0.5f : randomFloat(rng));
-        const auto pupilSample = exitPupil->samplePupil(filmPos, filmDiagonalCm, sample);
-
-        const ross::Vector3f filmPoint(filmPos.x, filmPos.y, 0.0f);
-        const ross::Vector3f pupilPoint(
-            pupilSample.point.x, pupilSample.point.y,
-            rossLens->getLastSurface().center);
-        const ross::Ray filmRay = ross::Ray::betweenPoints(filmPoint, pupilPoint);
+        ross::Ray filmRay;
+        if (!makeFilmRay(filmRay, nx, ny, sample))
+            return false;
 
         ross::FromFilmToWorldRaytracer raytracer(*rossLens);
         const auto traced = raytracer.trace(filmRay, wavelengthNm);
@@ -79,6 +96,10 @@ private:
     std::string glassCatalogPaths;
     float effectiveFocalLengthM = 0.045f;
     std::string loadStatus;
+
+    std::unique_ptr<pfd::open_file> lensDialog;
+    std::unique_ptr<pfd::open_file> sensorDialog;
+    std::unique_ptr<pfd::open_file> glassCatalogDialog;
 
     void freeRossLens();
 #endif

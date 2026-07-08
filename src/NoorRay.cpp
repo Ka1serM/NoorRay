@@ -20,6 +20,7 @@
 #include "Camera/Camera.h"
 #include "Camera/CameraInstance.h"
 #include "Camera/PerspectiveCamera.h"
+#include "Camera/ThinLensCamera.h"
 #include "CUDA/rstd/Allocator.h"
 #include "IO/BitmapWriter.h"
 #include "Log.h"
@@ -36,7 +37,12 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     , renderer(std::make_unique<Renderer>(context, windowWidth, windowHeight))
     , imGuiManager(std::make_unique<ImGuiManager>(context, renderer->getNumSwapchainImages(), renderer->getColorImageFormat()))
 {
-    SceneImporter::ImportJsonScene(scene, NOORRAY_ASSET_DIR "/slanted_edge_target.nrscene");
+    nr::rstd::allocator<ThinLensCamera> cameraAllocator;
+    ThinLensCamera* thinLens = cameraAllocator.allocate(1);
+    cameraAllocator.construct(thinLens);
+    scene.add(std::make_unique<CameraInstance>(
+        scene, "Camera", Transform{glm::vec3(0.0f, 0.0f, 5.0f)}, Camera(thinLens)));
+
     raytracer = std::make_unique<Raytracer>(context, scene);
 
     viewport = std::make_unique<Viewport>(

@@ -175,11 +175,14 @@ void NoorRay::runUi() {
                         && completedFrame.readyValue > displayedRenderValue)
                     {
                         displayedRenderValue = completedFrame.readyValue;
+                        const RenderSettings& renderSettings = scene.getRenderSettings();
+                        const bool proxyOverdraw =
+                            renderSettings.gaussianProxyOverdrawVisualization != 0;
                         viewport->dispatch(
                             cmd, completedFrame.bufferIndex, scene.getActiveMeshInstanceIndex(),
-                            scene.getRenderSettings().exposure,
-                            static_cast<int>(scene.getRenderSettings().bufferVisualization),
-                            scene.getRenderSettings().tonemappingEnabled);
+                            proxyOverdraw ? 0.0f : renderSettings.exposure,
+                            proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
+                            proxyOverdraw ? 0 : renderSettings.tonemappingEnabled);
                         viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
                         viewportPanel->setAovImages(
                             raytracer->getOutputCrypto(completedFrame.bufferIndex),

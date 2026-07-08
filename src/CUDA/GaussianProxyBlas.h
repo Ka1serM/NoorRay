@@ -10,7 +10,7 @@ enum class GaussianProxyType : int
 {
     Icosahedron,
     Octahedron,
-    Tetrahedron,
+    TriangularBipyramid,
 };
 
 class GaussianProxyBlas

@@ -67,7 +67,8 @@ void RenderSettingsPanel::renderUi()
         ImGui::SetNextItemWidth(-FLT_MIN);
         changed |= ImGui::DragInt("##RRBounce", &settings.russianRouletteStartBounce, 0.1f, 0, 16, "%d");
 
-        static constexpr const char* kProxyNames[] = { "Icosahedron", "Octahedron", "Tetrahedron" };
+        static constexpr const char* kProxyNames[] =
+            { "Icosahedron", "Octahedron", "Triangular Bipyramid" };
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Gaussian Proxy");
@@ -90,6 +91,24 @@ void RenderSettingsPanel::renderUi()
         {
             changed = true;
             scene.setDirtyFlag(TLAS);
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Proxy Overdraw");
+        ImGui::TableSetColumnIndex(1);
+        changed |= ImGui::Checkbox("##ProxyOverdraw",
+            reinterpret_cast<bool*>(&settings.gaussianProxyOverdrawVisualization));
+
+        if (settings.gaussianProxyOverdrawVisualization)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Overdraw Range");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            changed |= ImGui::SliderInt(
+                "##ProxyOverdrawMax", &settings.gaussianProxyOverdrawMax, 1, 1024);
         }
 
         ImGui::TableNextRow();

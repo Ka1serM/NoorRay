@@ -97,6 +97,10 @@ void Tlas::buildGaussianInstances(
         const auto& gaussians = asset.getGaussians();
         for (uint32_t i = 0; i < asset.getGaussianCount(); ++i)
         {
+            // Bake the complete scene-instance TRS and the Gaussian asset's
+            // translation/rotation/sigma scale into one OptiX instance matrix
+            // on the CPU. The shared proxy BLAS carries cutoff scaling so the
+            // resulting OptiX object space remains Mahalanobis space.
             const mat4 gaussToInstance = toMat4(gaussians[i].transform);
             const mat4 worldTransform = instanceToWorld * gaussToInstance;
             inputs.push_back({toOptixTransform(worldTransform), proxyBlas->getTraversable(), gaussianGlobalId});

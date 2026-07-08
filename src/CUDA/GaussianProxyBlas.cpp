@@ -1,117 +1,205 @@
 #include "CUDA/GaussianProxyBlas.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <map>
+#include <numbers>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
 #include <cuda_runtime.h>
 #include <optix_stubs.h>
 
-#include <glm/mat3x3.hpp>
+#include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
 #include "CUDA/Checks.h"
 
-// ── Icosahedron ────────────────────────────────────────────────────────────
-static constexpr std::array<float, 36> IcosahedronVertices =
-{{
-    -1.0f,  1.618033988749895f,  0.0f,
-     1.0f,  1.618033988749895f,  0.0f,
-    -1.0f, -1.618033988749895f,  0.0f,
-     1.0f, -1.618033988749895f,  0.0f,
-     0.0f, -1.0f,  1.618033988749895f,
-     0.0f,  1.0f,  1.618033988749895f,
-     0.0f, -1.0f, -1.618033988749895f,
-     0.0f,  1.0f, -1.618033988749895f,
-     1.618033988749895f,  0.0f, -1.0f,
-     1.618033988749895f,  0.0f,  1.0f,
-    -1.618033988749895f,  0.0f, -1.0f,
-    -1.618033988749895f,  0.0f,  1.0f,
-}};
+namespace
+{
+struct ProxyMesh
+{
+    std::vector<glm::vec3> vertices;
+    std::vector<uint32_t> indices;
+    float inradius{};
+};
 
-static constexpr std::array<uint32_t, 60> IcosahedronIndices =
-{{
-     0,  1,  4,
-     0,  4, 11,
-     0, 11,  5,
-     0,  5,  1,
-     1,  5,  9,
-     1,  9,  8,
-     1,  8,  4,
-     4,  8,  2,
-     4,  2, 11,
-    11,  2, 10,
-    11, 10,  5,
-     5, 10,  6,
-     5,  6,  9,
-     9,  6,  7,
-     9,  7,  8,
-     8,  7,  3,
-     8,  3,  2,
-     2,  3, 10,
-    10,  3,  6,
-     6,  3,  7,
-}};
+void normalizeVertices(ProxyMesh& mesh)
+{
+    glm::vec3 center(0.0f);
+    for (const glm::vec3 vertex : mesh.vertices)
+        center += vertex;
+    center /= static_cast<float>(mesh.vertices.size());
 
-static constexpr size_t IcosahedronVertCount  = 12;
-static constexpr size_t IcosahedronTriCount   = 20;
+    float radius = 0.0f;
+    for (glm::vec3& vertex : mesh.vertices)
+    {
+        vertex -= center;
+        radius = std::max(radius, glm::length(vertex));
+    }
+    if (!(radius > 0.0f))
+        throw std::runtime_error("Gaussian proxy has zero radius");
+    for (glm::vec3& vertex : mesh.vertices)
+        vertex /= radius;
+}
 
-// ── Octahedron ─────────────────────────────────────────────────────────────
-static constexpr std::array<float, 18> OctahedronVertices =
-{{
-     0.0f,  1.0f,  0.0f,
-     0.0f, -1.0f,  0.0f,
-     1.0f,  0.0f,  0.0f,
-     0.0f,  0.0f,  1.0f,
-    -1.0f,  0.0f,  0.0f,
-     0.0f,  0.0f, -1.0f,
-}};
+void generateConvexHullFaces(ProxyMesh& mesh)
+{
+    constexpr float epsilon = 1e-5f;
+    const uint32_t count = static_cast<uint32_t>(mesh.vertices.size());
+    for (uint32_t i = 0; i < count; ++i)
+    for (uint32_t j = i + 1; j < count; ++j)
+    for (uint32_t k = j + 1; k < count; ++k)
+    {
+        const glm::vec3 a = mesh.vertices[i];
+        const glm::vec3 normal = glm::cross(
+            mesh.vertices[j] - a, mesh.vertices[k] - a);
+        if (glm::dot(normal, normal) <= epsilon * epsilon)
+            continue;
 
-static constexpr std::array<uint32_t, 24> OctahedronIndices =
-{{
-     0,  3,  2,
-     0,  4,  3,
-     0,  5,  4,
-     0,  2,  5,
-     1,  2,  3,
-     1,  3,  4,
-     1,  4,  5,
-     1,  5,  2,
-}};
+        bool positive = false;
+        bool negative = false;
+        for (uint32_t vertex = 0; vertex < count; ++vertex)
+        {
+            if (vertex == i || vertex == j || vertex == k)
+                continue;
+            const float side = glm::dot(normal, mesh.vertices[vertex] - a);
+            positive |= side > epsilon;
+            negative |= side < -epsilon;
+        }
+        if ((positive && negative) || (!positive && !negative))
+            continue;
 
-static constexpr size_t OctahedronVertCount = 6;
-static constexpr size_t OctahedronTriCount  = 8;
+        uint32_t b = j;
+        uint32_t c = k;
+        if (glm::dot(normal, a) < 0.0f)
+            std::swap(b, c);
+        mesh.indices.insert(mesh.indices.end(), {i, b, c});
+    }
+}
 
-// ── Tetrahedron ────────────────────────────────────────────────────────────
-static constexpr std::array<float, 12> TetrahedronVertices =
-{{
-     0.0f,                       0.0f,                       1.0f,
-     0.9428090415820634f,        0.0f,                      -0.3333333333333333f,
-    -0.4714045207910317f,        0.8164965809277260f,       -0.3333333333333333f,
-    -0.4714045207910317f,       -0.8164965809277260f,       -0.3333333333333333f,
-}};
+void validateMesh(ProxyMesh& mesh, const size_t expectedVertices, const size_t expectedFaces)
+{
+    constexpr float epsilon = 1e-4f;
+    if (mesh.vertices.size() != expectedVertices || mesh.indices.size() != expectedFaces * 3)
+        throw std::runtime_error("Generated Gaussian proxy has an unexpected topology");
 
-static constexpr std::array<uint32_t, 12> TetrahedronIndices =
-{{
-     1,  2,  3,
-     0,  3,  2,
-     0,  1,  3,
-     0,  2,  1,
-}};
+    float radius = 0.0f;
+    float minInradius = std::numeric_limits<float>::max();
+    float maxInradius = 0.0f;
+    float minEdgeLength = std::numeric_limits<float>::max();
+    float maxEdgeLength = 0.0f;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> edgeUse;
+    for (const glm::vec3 vertex : mesh.vertices)
+        radius = std::max(radius, glm::length(vertex));
 
-static constexpr size_t TetrahedronVertCount = 4;
-static constexpr size_t TetrahedronTriCount  = 4;
+    for (size_t i = 0; i < mesh.indices.size(); i += 3)
+    {
+        const uint32_t ia = mesh.indices[i];
+        const uint32_t ib = mesh.indices[i + 1];
+        const uint32_t ic = mesh.indices[i + 2];
+        const glm::vec3 a = mesh.vertices[ia];
+        const glm::vec3 normal = glm::cross(
+            mesh.vertices[ib] - a, mesh.vertices[ic] - a);
+        const float normalLength = glm::length(normal);
+        const float distance = normalLength > 0.0f
+            ? glm::dot(normal, a) / normalLength : 0.0f;
+        if (!(distance > 0.0f))
+            throw std::runtime_error("Generated Gaussian proxy has an invalid face");
+        minInradius = std::min(minInradius, distance);
+        maxInradius = std::max(maxInradius, distance);
+        for (const auto edge : {std::pair{ia, ib}, std::pair{ib, ic}, std::pair{ic, ia}})
+            ++edgeUse[std::minmax(edge.first, edge.second)];
+    }
 
-// Circumradius / inradius ratio for each shape.
-// scale = cutoffSigma * R_over_r so inradius = cutoffSigma for all shapes.
-//   tetrahedron: R/r = 3
-//   octahedron:  R/r = √3
-//   icosahedron: R/r = 3·√(10+2√5) / (√3·(3+√5))
-static constexpr float OctahedronRoverR    = std::sqrt(3.0f);
-static constexpr float TetrahedronRoverR   = 3.0f;
-static constexpr float IcosahedronRoverR   = 3.0f * std::sqrt(10.0f + 2.0f * std::sqrt(5.0f))
-                                           / (std::sqrt(3.0f) * (3.0f + std::sqrt(5.0f)));
+    if (std::abs(radius - 1.0f) > epsilon)
+        throw std::runtime_error("Generated Gaussian proxy is not unit normalized");
+    if (maxInradius - minInradius > epsilon)
+        throw std::runtime_error("Generated Gaussian proxy faces are not uniformly tangent");
+    for (const auto& [edge, uses] : edgeUse)
+    {
+        if (uses != 2)
+            throw std::runtime_error("Generated Gaussian proxy is not a closed manifold");
+        const float edgeLength = glm::length(
+            mesh.vertices[edge.first] - mesh.vertices[edge.second]);
+        minEdgeLength = std::min(minEdgeLength, edgeLength);
+        maxEdgeLength = std::max(maxEdgeLength, edgeLength);
+    }
+    if (maxEdgeLength - minEdgeLength > epsilon)
+        throw std::runtime_error("Generated Gaussian proxy does not have regular edges");
+    mesh.inradius = minInradius;
+}
+
+ProxyMesh generateProxy(const GaussianProxyType type)
+{
+    ProxyMesh mesh;
+    size_t expectedVertices = 0;
+    size_t expectedFaces = 0;
+    switch (type)
+    {
+    case GaussianProxyType::Icosahedron:
+    {
+        constexpr float phi = std::numbers::phi_v<float>;
+        for (const float a : {-1.0f, 1.0f})
+        for (const float b : {-phi, phi})
+        {
+            mesh.vertices.emplace_back(0.0f, a, b);
+            mesh.vertices.emplace_back(a, b, 0.0f);
+            mesh.vertices.emplace_back(b, 0.0f, a);
+        }
+        expectedVertices = 12;
+        expectedFaces = 20;
+        break;
+    }
+    case GaussianProxyType::Octahedron:
+        for (uint32_t axis = 0; axis < 3; ++axis)
+        for (const float sign : {-1.0f, 1.0f})
+        {
+            glm::vec3 vertex(0.0f);
+            vertex[axis] = sign;
+            mesh.vertices.push_back(vertex);
+        }
+        expectedVertices = 6;
+        expectedFaces = 8;
+        break;
+    case GaussianProxyType::TriangularBipyramid:
+    {
+        const float baseRadius = 1.0f / std::sqrt(2.0f);
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            const float angle = 2.0f * std::numbers::pi_v<float>
+                              * static_cast<float>(i) / 3.0f;
+            mesh.vertices.emplace_back(
+                baseRadius * std::cos(angle), baseRadius * std::sin(angle), 0.0f);
+        }
+        mesh.vertices.emplace_back(0.0f, 0.0f, 1.0f);
+        mesh.vertices.emplace_back(0.0f, 0.0f, -1.0f);
+        expectedVertices = 5;
+        expectedFaces = 6;
+        break;
+    }
+    }
+    normalizeVertices(mesh);
+    generateConvexHullFaces(mesh);
+    validateMesh(mesh, expectedVertices, expectedFaces);
+    return mesh;
+}
+
+const std::array<ProxyMesh, 3>& generatedProxies()
+{
+    // Constructing the table validates every supported shape, not only the
+    // currently selected one. Any bad topology fails before OptiX sees it.
+    static const std::array<ProxyMesh, 3> meshes = {
+        generateProxy(GaussianProxyType::Icosahedron),
+        generateProxy(GaussianProxyType::Octahedron),
+        generateProxy(GaussianProxyType::TriangularBipyramid),
+    };
+    return meshes;
+}
+}
 
 // Geometry flags: NO DISABLE_ANYHIT — the any-hit program must run for
 // Gaussian proxy triangles.
@@ -148,54 +236,18 @@ void GaussianProxyBlas::build(
     if (buffer != 0)
         destroy(stream);
 
-    // Select vertex/index data and compute shape-specific scale so every
-    // proxy has inradius = cutoffSigma — the same face-plane distance for
-    // all shapes guarantees identical visual Gaussian coverage.
-    const float* srcVertices = nullptr;
-    const uint32_t* srcIndices = nullptr;
-    size_t vertexCount = 0;
-    size_t indexCount = 0;
-    size_t triCount = 0;
-    float scale = 0.0f;
-
-    switch (type)
-    {
-    case GaussianProxyType::Icosahedron:
-        srcVertices = IcosahedronVertices.data();
-        srcIndices  = IcosahedronIndices.data();
-        vertexCount = IcosahedronVertCount;
-        indexCount  = IcosahedronIndices.size();
-        triCount    = IcosahedronTriCount;
-        scale = cutoffSigma * IcosahedronRoverR;
-        break;
-    case GaussianProxyType::Octahedron:
-        srcVertices = OctahedronVertices.data();
-        srcIndices  = OctahedronIndices.data();
-        vertexCount = OctahedronVertCount;
-        indexCount  = OctahedronIndices.size();
-        triCount    = OctahedronTriCount;
-        scale = cutoffSigma * OctahedronRoverR;
-        break;
-    case GaussianProxyType::Tetrahedron:
-        srcVertices = TetrahedronVertices.data();
-        srcIndices  = TetrahedronIndices.data();
-        vertexCount = TetrahedronVertCount;
-        indexCount  = TetrahedronIndices.size();
-        triCount    = TetrahedronTriCount;
-        scale = cutoffSigma * TetrahedronRoverR;
-        break;
-    }
-
-    // Scale the unit proxy so inradius = cutoffSigma.
-    const glm::mat3 cutoffScale(scale);
+    const ProxyMesh& proxy = generatedProxies().at(static_cast<size_t>(type));
+    const size_t vertexCount = proxy.vertices.size();
+    const size_t indexCount = proxy.indices.size();
+    const size_t triCount = indexCount / 3;
+    const float cutoffScale = cutoffSigma / proxy.inradius;
     std::vector<float> scaledVertices(vertexCount * 3);
-    for (size_t i = 0; i < vertexCount * 3; i += 3)
+    for (size_t i = 0; i < vertexCount; ++i)
     {
-        const glm::vec3 v = cutoffScale * glm::vec3(
-            srcVertices[i], srcVertices[i + 1], srcVertices[i + 2]);
-        scaledVertices[i]     = v.x;
-        scaledVertices[i + 1] = v.y;
-        scaledVertices[i + 2] = v.z;
+        const glm::vec3 vertex = proxy.vertices[i] * cutoffScale;
+        scaledVertices[i * 3] = vertex.x;
+        scaledVertices[i * 3 + 1] = vertex.y;
+        scaledVertices[i * 3 + 2] = vertex.z;
     }
 
     // Upload vertex + index data to device.
@@ -208,7 +260,7 @@ void GaussianProxyBlas::build(
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(vertexBuffer),
         scaledVertices.data(), vertexBytes, cudaMemcpyHostToDevice, stream));
     NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(indexBuffer),
-        srcIndices, indexBytes, cudaMemcpyHostToDevice, stream));
+        proxy.indices.data(), indexBytes, cudaMemcpyHostToDevice, stream));
 
     OptixBuildInput buildInput{};
     buildInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;

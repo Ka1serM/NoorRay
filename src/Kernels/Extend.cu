@@ -44,6 +44,7 @@ extern "C" __global__ void __raygen__extend()
 }
 
 #include "Kernels/GaussianHit.cu"
+#include "Kernels/GaussianProxyOverdraw.cu"
 #include "Kernels/Connect.cu"
 
 #endif

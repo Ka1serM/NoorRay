@@ -65,7 +65,7 @@ public:
         float rough = roughness;
         if (roughnessIndex >= 0)
             rough *= textures[roughnessIndex].sample(uv).y;
-        rough = fminf(fmaxf(rough, 0.045f), 1.0f);
+        rough = fminf(fmaxf(rough, 0.0f), 1.0f);
 
         float trans = transmission;
         if (transmissionIndex >= 0)

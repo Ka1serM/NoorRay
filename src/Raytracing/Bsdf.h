@@ -62,7 +62,9 @@ public:
           albedo(albedo),
           metallic(metallic),
           specular(specular),
-          roughness(roughness),
+          // Material resolution handles the physical [0,1] range. The BSDF owns only its
+          // numerical GGX floor while preserving exact zero for delta reflection.
+          roughness(roughness == 0.0f ? 0.0f : fmaxf(roughness, 0.045f)),
           transmission(transmission),
           transmissionColor(transmissionColor),
           sellmeier(sellmeier),
@@ -153,6 +155,25 @@ public:
         }
         else
         {
+            // A perfectly smooth, fully metallic surface is a single delta lobe. Do not run it
+            // through the diffuse/specular mixture or the GGX PDF: the continuous GGX density is
+            // undefined in this limit, and selecting the (zero-energy) diffuse lobe produces dark
+            // highlight samples. Its throughput is simply conductor Fresnel.
+            if (metallic >= 1.0f - BsdfEpsilon && isSmoothAlpha(roughness))
+            {
+                const float ndv = fmaxf(glm::dot(sampleNormal, view), 0.0f);
+                if (ndv <= 0.0f)
+                    return result;
+                result.event = BsdfEvent::Specular;
+                result.direction = glm::reflect(-view, sampleNormal);
+                result.pdf = 0.0f; // delta distribution: no finite solid-angle PDF
+                for (int i = 0; i < NrSpectrumSamples; ++i)
+                    result.weight[i] = fresnelConductor(ndv, albedo[i]);
+                result.weight *= shadingNormalCorrection(
+                    geometricNormal, sampleNormal, view, result.direction);
+                return result;
+            }
+
             const float specProb = specularSamplingProbability();
 
             glm::vec3 halfVector{};
@@ -215,6 +236,8 @@ public:
     NR_CPU_GPU float pdf(const glm::vec3& light) const
     {
         if (transmission > 0.0f)
+            return 0.0f;
+        if (metallic >= 1.0f - BsdfEpsilon && isSmoothAlpha(roughness))
             return 0.0f;
         const float ndl = fmaxf(glm::dot(shadingNormal, light), 0.0f);
         if (ndl <= 0.0f)

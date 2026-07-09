@@ -8,8 +8,7 @@ static void printUsage()
 {
     std::cerr << "Usage:\n"
         << "  NoorRay                                                     # GUI mode\n"
-        << "  NoorRay --scene <scene.json> --spp <N> [options]            # Render scene\n"
-        << "  NoorRay --ply   <pointcloud.ply> --spp <N> [options]        # Render gaussian splat\n"
+        << "  NoorRay --scene <file> --spp <N> [options]                  # Render scene, mesh, or Gaussian splat\n"
         << "\nOptions:\n"
         << "  --output <path>      Output image path (default: output.exr)\n"
         << "  --width  <int>       Output width (default: from camera sensor or 1280)\n"
@@ -40,7 +39,7 @@ int main(int argc, char* argv[])
             printUsage();
             return 0;
         }
-        else if (arg == "--scene" || arg == "--ply")
+        else if (arg == "--scene" || arg == "--import" || arg == "--ply")
         {
             if (i + 1 >= argc)
             {
@@ -105,7 +104,7 @@ int main(int argc, char* argv[])
 
     if (scenePath.empty())
     {
-        LOG_ERROR("No scene file specified. Use --scene or --ply.");
+        LOG_ERROR("No scene file specified. Use --scene.");
         printUsage();
         return 1;
     }

@@ -63,12 +63,6 @@ target_include_directories(stb INTERFACE
         ${PROJECT_SOURCE_DIR}/external/stb
 )
 
-# tinyply (header-only PLY parser)
-add_library(tinyply INTERFACE)
-target_include_directories(tinyply INTERFACE
-        ${PROJECT_SOURCE_DIR}/external/tinyply/source
-)
-
 # TinyEXR + miniz (32-bit floating-point OpenEXR output)
 add_library(tinyexr STATIC
         external/tinyexr/tinyexr.cc
@@ -98,6 +92,46 @@ add_subdirectory(external/tbb)
 
 # ROSS camera-lens ray tracing (kept as an unmodified submodule).
 include(cmake/ROSS.cmake)
+
+# GaussForge Gaussian readers. Use only the import sources NoorRay needs so the
+# upstream CLI and benchmark targets do not become part of the main build.
+include(FetchContent)
+include(external/GaussForge/cmakes/zlib.cmake)
+
+FetchContent_Declare(
+        libwebp
+        GIT_REPOSITORY https://github.com/webmproject/libwebp.git
+        GIT_TAG v1.4.0
+        GIT_SHALLOW TRUE
+)
+set(WEBP_BUILD_ANIM_UTILS OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_CWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_DWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_GIF2WEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_IMG2WEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_VWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_WEBPINFO OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_LIBWEBPMUX OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_WEBPMUX OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(libwebp)
+
+include(external/GaussForge/cmakes/spz.cmake)
+
+add_library(gauss_forge_readers STATIC
+        external/GaussForge/src/core/validate.cpp
+        external/GaussForge/src/io/ply_auto.cpp
+        external/GaussForge/src/io/ply_reader.cpp
+        external/GaussForge/src/io/ply_compressed_reader.cpp
+        external/GaussForge/src/io/splat_reader.cpp
+        external/GaussForge/src/io/ksplat_reader.cpp
+        external/GaussForge/src/io/spz_reader.cpp
+        external/GaussForge/src/io/sog_reader.cpp
+)
+target_include_directories(gauss_forge_readers PUBLIC
+        ${PROJECT_SOURCE_DIR}/external/GaussForge/include
+)
+target_link_libraries(gauss_forge_readers PUBLIC spz::spz webp nlohmann_json::nlohmann_json ZLIB::ZLIB)
 
 # Restore normal log level for project-own messages
 set(CMAKE_MESSAGE_LOG_LEVEL STATUS)
@@ -359,11 +393,11 @@ target_link_libraries(NoorRay PRIVATE
         tinyobjloader
         tinyexr
         stb
+        gauss_forge_readers
         ImViewGuizmo
         GPUOpen::VulkanMemoryAllocator
         glaze
         TBB::tbb
-        tinyply
 )
 
 target_compile_definitions(NoorRay PRIVATE

@@ -15,25 +15,19 @@ public:
     void renderUi() override;
 
 private:
-    // Enum to keep track of the file type for the pending import.
-    enum class FileType {
-        NONE,
-        OBJ,
-        GLTF,
-        TEXTURE,
-        NRSCENE,
-        PLY
-    };
-
     void renderFileMenu();
     void renderViewMenu() const;
     void renderAddMenu() const;
-    void handleFileImport(const std::string& filePath, FileType type) const;
+    void handleFileImport(const std::string& filePath) const;
+    void openScene(const std::string& filePath);
+    void saveScene(const std::string& filePath);
 
     Scene& scene;
     Context& context;
     ImGuiManager& imGuiManager;
 
     std::unique_ptr<pfd::open_file> openDialog;
-    FileType pendingFileType = FileType::NONE;
+    std::unique_ptr<pfd::open_file> sceneOpenDialog;
+    std::unique_ptr<pfd::save_file> sceneSaveDialog;
+    std::string currentScenePath;
 };

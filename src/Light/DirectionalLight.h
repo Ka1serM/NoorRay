@@ -6,7 +6,7 @@
 
 class DirectionalLight {
 public:
-    glm::vec3 direction{0.f, 0.f, 1.f};
+    glm::vec3 direction{0.f, -1.f, 0.f};
     glm::vec3 color{1.f};
     float intensity{1.f};
     float softAngle{0.53f};

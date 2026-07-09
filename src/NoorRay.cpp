@@ -28,6 +28,7 @@
 #include "Log.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/SceneImporter.h"
+#include "Scene/SceneReader.h"
 #include "Raytracing/Raytracer.h"
 #include "Vulkan/Viewport.h"
 
@@ -88,11 +89,13 @@ NoorRay::NoorRay(const std::string& scenePath, const int spp,
     , m_cliOutput(outputPath)
     , m_cliStats(statsEnabled)
 {
-    const std::string ext = scenePath.size() >= 4
-        ? scenePath.substr(scenePath.size() - 4) : "";
-    if (ext == ".ply" || ext == ".PLY")
+    if (SceneImporter::IsSceneFile(scenePath))
     {
-        SceneImporter::ImportPlyScene(scene, scenePath);
+        SceneReader::Read(scene, scenePath);
+    }
+    else
+    {
+        SceneImporter::ImportFile(scene, scenePath);
         nr::rstd::allocator<PerspectiveCamera> alc;
         PerspectiveCamera* pc = alc.allocate(1);
         alc.construct(pc);
@@ -103,8 +106,6 @@ NoorRay::NoorRay(const std::string& scenePath, const int spp,
             Transform{glm::vec3(0.0f, 2.0f, 5.0f)},
             cam));
     }
-    else
-        SceneImporter::ImportJsonScene(scene, scenePath);
 
     const uint32_t gaussianCount = scene.getGaussianCount();
     LOG_INFO("Scene loaded: " << scenePath << " (" << gaussianCount << " gaussians, "

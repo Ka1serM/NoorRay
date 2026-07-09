@@ -558,6 +558,17 @@ void Raytracer::updateLights()
     gpuScene.spotLightCount = scene.getSpotLightCount();
     gpuScene.rectLightCount = scene.getRectLightCount();
     gpuScene.directionalLightCount = scene.getDirectionalLightCount();
+
+    float analyticWeight = 0.0f;
+    for (uint32_t i = 0; i < gpuScene.pointLightCount; ++i)
+        analyticWeight += gpuScene.pointLights[i].selectionWeight();
+    for (uint32_t i = 0; i < gpuScene.spotLightCount; ++i)
+        analyticWeight += gpuScene.spotLights[i].selectionWeight();
+    for (uint32_t i = 0; i < gpuScene.rectLightCount; ++i)
+        analyticWeight += gpuScene.rectLights[i].selectionWeight();
+    for (uint32_t i = 0; i < gpuScene.directionalLightCount; ++i)
+        analyticWeight += gpuScene.directionalLights[i].selectionWeight();
+    gpuScene.analyticLightSelectionWeight = analyticWeight;
 }
 
 void Raytracer::launchGenerate(const KernelParams& params, const cudaStream_t stream) const

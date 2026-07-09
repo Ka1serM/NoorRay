@@ -8,16 +8,7 @@
 
 NR_GPU inline float analyticLightSelectionWeight(const GpuSceneData& scene)
 {
-    float weight = 0.0f;
-    for (uint32_t i = 0; i < scene.pointLightCount; ++i)
-        weight += scene.pointLights[i].selectionWeight();
-    for (uint32_t i = 0; i < scene.spotLightCount; ++i)
-        weight += scene.spotLights[i].selectionWeight();
-    for (uint32_t i = 0; i < scene.rectLightCount; ++i)
-        weight += scene.rectLights[i].selectionWeight();
-    for (uint32_t i = 0; i < scene.directionalLightCount; ++i)
-        weight += scene.directionalLights[i].selectionWeight();
-    return weight;
+    return scene.analyticLightSelectionWeight;
 }
 
 // Samples the BSDF lobe, adds emission, and performs next-event estimation
@@ -211,7 +202,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                     spectrumCoeffs.x, spectrumCoeffs.y, spectrumCoeffs.z, wl.lambda[i]);
 
             const float inv4Pi = 0.07957747154594767f; // 1/(4*pi)
-            const glm::vec3 gaussianPos = hit.rayOrigin + hit.attribute0 * hit.rayDirection;
+            const glm::vec3 gaussianPos = hit.positionOrDirection;
 
             const RandomState bounceKey = state.rngState;
             state.rngState = splitMix64(bounceKey);
@@ -224,7 +215,10 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             const float theta = 2.0f * EnvironmentPi * randomFloat(bsdfRng);
             const float z = 2.0f * randomFloat(bsdfRng) - 1.0f;
             const float radius = sqrtf(fmaxf(1.0f - z * z, 0.0f));
-            const glm::vec3 nextDirection(radius * cosf(theta), z, radius * sinf(theta));
+            float sinTheta = 0.0f;
+            float cosTheta = 1.0f;
+            sincosf(theta, &sinTheta, &cosTheta);
+            const glm::vec3 nextDirection(radius * cosTheta, z, radius * sinTheta);
 
             // ── NEE: sample analytic lights ────────────────────────
             {
@@ -331,14 +325,14 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                         + environmentWeight;
                     if (bsdfPdf > 0.0f && environmentWeight > 0.0f && totalWeight > 0.0f) {
                         const float lightPdf = (environmentWeight / totalWeight)
-                            * params.scene.environment->pdf(hit.rayDirection);
+                            * params.scene.environment->pdf(hit.positionOrDirection);
                         misWeight = powerHeuristic(bsdfPdf, lightPdf);
                     }
                 }
                 state.radiance += state.throughput *
                     params.scene.environment->radiance(
                         params.scene.textures, params.scene.textureCount,
-                        hit.rayDirection, cameraRay, wl,
+                        hit.positionOrDirection, cameraRay, wl,
                         params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
                         params.scene.d65)
                     * misWeight;
@@ -350,75 +344,70 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         else
         {
             SurfaceData surface = loadSurface(params.scene, hit.instanceIndex, hit.primitiveIndex, hit.attribute0, hit.attribute1);
-            if (surface.material != nullptr)
+            const Material& material = *surface.material;
+            const glm::vec3 originalGeometricNormal = surface.geometricNormal;
+            glm::vec3 shadingNormal = applyNormalMap(
+                material, params.scene.textures, surface.uv, surface.tangent, surface.normal);
+            const RandomState bounceKey = state.rngState;
+            state.rngState = splitMix64(bounceKey);
+            RandomState opacityRng = seedRandom(bounceKey ^ 0x243f6a8885a308d3ull);
+            RandomState bsdfRng = seedRandom(bounceKey ^ 0x13198a2e03707344ull);
+            RandomState lightRng = seedRandom(bounceKey ^ 0xa4093822299f31d0ull);
+            RandomState shadowRng = seedRandom(bounceKey ^ 0x082efa98ec4e6c89ull);
+            RandomState rouletteRng = seedRandom(bounceKey ^ 0x452821e638d01377ull);
+            glm::vec3 nextDirection{};
+            float opacity = material.opacity;
+            if (material.opacityIndex >= 0)
+                opacity *= params.scene.textures[material.opacityIndex].sample(surface.uv).w;
+            opacity = fminf(fmaxf(opacity, 0.0f), 1.0f);
+            const bool transparentSurface = randomFloat(opacityRng) > opacity;
+            if (transparentSurface)
             {
-                const Material material = *surface.material;
-                const glm::vec3 originalGeometricNormal = surface.geometricNormal;
-                glm::vec3 shadingNormal = applyNormalMap(
-                    material, params.scene.textures, surface.uv, surface.tangent, surface.normal);
-                // Independent per-bounce streams keep conditional BSDF/light
-                // branches from shifting opacity, lighting, or RR dimensions.
-                const RandomState bounceKey = state.rngState;
-                state.rngState = splitMix64(bounceKey);
-                RandomState opacityRng = seedRandom(bounceKey ^ 0x243f6a8885a308d3ull);
-                RandomState bsdfRng = seedRandom(bounceKey ^ 0x13198a2e03707344ull);
-                RandomState lightRng = seedRandom(bounceKey ^ 0xa4093822299f31d0ull);
-                RandomState shadowRng = seedRandom(bounceKey ^ 0x082efa98ec4e6c89ull);
-                RandomState rouletteRng = seedRandom(bounceKey ^ 0x452821e638d01377ull);
-                glm::vec3 nextDirection{};
-                float opacity = material.opacity;
-                if (material.opacityIndex >= 0)
-                    opacity *= params.scene.textures[material.opacityIndex].sample(surface.uv).w;
-                opacity = fminf(fmaxf(opacity, 0.0f), 1.0f);
-                const bool transparentSurface = randomFloat(opacityRng) > opacity;
-                if (transparentSurface)
-                {
-                    nextDirection = hit.rayDirection;
-                }
-                else
-                {
-                    state.packedCounters |= 1u << CounterHitShift;
-                    if (glm::dot(shadingNormal, hit.rayDirection) > 0.0f)
-                        shadingNormal = -shadingNormal;
-                    if (glm::dot(surface.geometricNormal, hit.rayDirection) > 0.0f)
-                        surface.geometricNormal = -surface.geometricNormal;
-                    const glm::vec3 viewDirection = -hit.rayDirection;
+                nextDirection = hit.positionOrDirection;
+            }
+            else
+            {
+                state.packedCounters |= 1u << CounterHitShift;
+                if (glm::dot(shadingNormal, hit.positionOrDirection) > 0.0f)
+                    shadingNormal = -shadingNormal;
+                if (glm::dot(surface.geometricNormal, hit.positionOrDirection) > 0.0f)
+                    surface.geometricNormal = -surface.geometricNormal;
+                const glm::vec3 viewDirection = -hit.positionOrDirection;
 
-                    shadingNormal = Bsdf::clampShadingNormal(
-                        surface.geometricNormal, shadingNormal, viewDirection);
+                shadingNormal = Bsdf::clampShadingNormal(
+                    surface.geometricNormal, shadingNormal, viewDirection);
 
-                    const Bsdf bsdf = material.makeBsdf(
-                        params.scene.textures, surface.uv,
-                        viewDirection, originalGeometricNormal, shadingNormal, wl,
-                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.openPbrLuts);
-                    const SampledSpectrum emission = material.emissionSpectral(
-                        params.scene.textures, surface.uv, wl,
-                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65);
-                    nextDirection = shadeBsdfLobe(
-                        params, surface.position, bsdf, emission, state, shadow,
-                        hit.sampleIndex, bsdfRng, lightRng, shadowRng);
-                    params.queues.shadowQueue[index] = shadow;
-                }
+                const Bsdf bsdf = material.makeBsdf(
+                    params.scene.textures, surface.uv,
+                    viewDirection, originalGeometricNormal, shadingNormal, wl,
+                    params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                    params.scene.openPbrLuts);
+                const SampledSpectrum emission = material.emissionSpectral(
+                    params.scene.textures, surface.uv, wl,
+                    params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+                    params.scene.d65);
+                nextDirection = shadeBsdfLobe(
+                    params, surface.position, bsdf, emission, state, shadow,
+                    hit.sampleIndex, bsdfRng, lightRng, shadowRng);
+                params.queues.shadowQueue[index] = shadow;
+            }
 
-                state.depth++;
-                continuePath = true;
-                if (static_cast<int>(state.depth) >= params.scene.renderSettings.russianRouletteStartBounce)
-                {
-                    const float survival = fminf(fmaxf(
-                        state.throughput.maxComponent() * state.etaScale, 0.05f), 0.95f);
-                    continuePath = randomFloat(rouletteRng) <= survival;
-                    if (continuePath)
-                        state.throughput *= (1.0f / survival);
-                }
+            state.depth++;
+            continuePath = true;
+            if (static_cast<int>(state.depth) >= params.scene.renderSettings.russianRouletteStartBounce)
+            {
+                const float survival = fminf(fmaxf(
+                    state.throughput.maxComponent() * state.etaScale, 0.05f), 0.95f);
+                continuePath = randomFloat(rouletteRng) <= survival;
                 if (continuePath)
-                {
-                    continuation.origin = surface.position + surface.geometricNormal *
-                        (glm::dot(nextDirection, surface.geometricNormal) >= 0.0f ? 0.001f : -0.001f);
-                    continuation.direction  = nextDirection;
-                    continuation.sampleIndex = hit.sampleIndex;
-                }
+                    state.throughput *= (1.0f / survival);
+            }
+            if (continuePath)
+            {
+                continuation.origin = surface.position + surface.geometricNormal *
+                    (glm::dot(nextDirection, surface.geometricNormal) >= 0.0f ? 0.001f : -0.001f);
+                continuation.direction  = nextDirection;
+                continuation.sampleIndex = hit.sampleIndex;
             }
             params.queues.pathStates[hit.sampleIndex] = state;
         }

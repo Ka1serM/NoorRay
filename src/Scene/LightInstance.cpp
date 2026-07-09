@@ -23,7 +23,7 @@ void LightInstance::onTransformUpdated()
     const Transform world = getWorldTransform();
     const vec3 pos = world.getPosition();
     const quat rotation = world.getRotation();
-    const vec3 dir = glm::normalize(rotation * vec3(0.f, 0.f, -1.f));
+    const vec3 dir = glm::normalize(rotation * vec3(0.f, -1.f, 0.f));
     const vec3 tangent = glm::normalize(rotation * vec3(1.f, 0.f, 0.f));
 
     switch (lightType) {
@@ -77,12 +77,26 @@ bool LightInstance::renderUi()
 {
     bool changed = SceneObject::renderUi();
     switch (lightType) {
-    case TypePoint: changed |= scene.pointLights[lightIndex].renderUi(); break;
-    case TypeSpot:  changed |= scene.spotLights[lightIndex].renderUi(); break;
-    case TypeRect:  changed |= scene.rectLights[lightIndex].renderUi(); break;
-    case TypeDirectional: changed |= scene.directionalLights[lightIndex].renderUi(); break;
+    case TypePoint:
+        changed |= scene.pointLights[lightIndex].renderUi();
+        light = scene.pointLights[lightIndex];
+        break;
+    case TypeSpot:
+        changed |= scene.spotLights[lightIndex].renderUi();
+        light = scene.spotLights[lightIndex];
+        break;
+    case TypeRect:
+        changed |= scene.rectLights[lightIndex].renderUi();
+        light = scene.rectLights[lightIndex];
+        break;
+    case TypeDirectional:
+        changed |= scene.directionalLights[lightIndex].renderUi();
+        light = scene.directionalLights[lightIndex];
+        break;
     }
-    if (changed)
+    if (changed) {
+        scene.setDirtyFlag(Lights);
         scene.setDirtyFlag(Accumulation);
+    }
     return changed;
 }

@@ -104,6 +104,7 @@ public:
     ~Scene();
 
     // Object lifetime
+    void clear();
     uint64_t add(std::unique_ptr<SceneObject> sceneObject);
     uint32_t add(MeshAsset meshAsset);
     uint32_t add(GaussianAsset gaussianAsset);

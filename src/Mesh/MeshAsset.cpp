@@ -142,7 +142,7 @@ MeshAsset MeshAsset::CreateSphere(Scene& scene, const std::string& name, const M
             vec3 normal = {cosPhi * sinTheta, cosTheta, sinPhi * sinTheta};
             vec3 pos = normal * radius;
             vec2 uv = {static_cast<float>(lon) / lonSeg, static_cast<float>(lat) / latSeg};
-            
+
             vec3 tangent;
             // At the poles, the derivative of position with respect to the azimuthal angle 'phi'
             // is zero, making the tangent undefined. All vertices on the top/bottom rows share
@@ -277,11 +277,11 @@ bool MeshAsset::renderUi() {
 
     if (materials.empty())
         return false;
-    
+
     ImGuiManager::tableRowLabel("Materials");
 
     bool anyMaterialChanged = false;
-    
+
     const auto textureNames = scene.getTextureNames();
 
     // Helper lambda for drawing texture selection combos.
@@ -296,7 +296,7 @@ bool MeshAsset::renderUi() {
         ImGui::TableNextColumn();
         // Use a unique ID for each combo box.
         const std::string comboId = "##" + std::string(label) + std::to_string(materialIndex);
-        
+
         const char* previewValue = (currentComboIndex == 0) ? "No Texture" : textureNames[currentComboIndex - 1].c_str();
         if (ImGui::BeginCombo(comboId.c_str(), previewValue))
         {
@@ -341,10 +341,10 @@ bool MeshAsset::renderUi() {
                 drawTextureCombo("Roughness Texture", mat.roughnessIndex, i);
                 ImGuiManager::dragFloatRow("Roughness", mat.roughness, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.roughness = v; anyMaterialChanged = true; });
 
-                
+
                 drawTextureCombo("Normal Texture", mat.normalIndex, i);
 
-                
+
                 glm::vec3 fraunhoferIors = sellmeierFraunhoferIors(mat.sellmeier);
                 auto updateIor = [&](const int channel, const float value) {
                     fraunhoferIors[channel] = value;
@@ -361,7 +361,7 @@ bool MeshAsset::renderUi() {
                 drawTextureCombo("Transmission Texture", mat.transmissionIndex, i);
                 ImGuiManager::colorEdit3Row("Transmission Color", mat.transmissionColor, [&](const vec3 v) { mat.transmissionColor = v; anyMaterialChanged = true; });
 
-                
+
                 ImGuiManager::dragFloatRow("Emission Strength", mat.emissionStrength, 0.1f, 0.0f, 100000.0f, [&](const float v) { mat.emissionStrength = v; anyMaterialChanged = true; });
                 drawTextureCombo("Emission Texture", mat.emissionIndex, i);
                 ImGuiManager::colorEdit3Row("Emission Color", mat.emission, [&](const vec3 v) { mat.emission = v; anyMaterialChanged = true; });
@@ -369,7 +369,7 @@ bool MeshAsset::renderUi() {
 
                 ImGuiManager::dragFloatRow("Opacity", mat.opacity, 0.01f, 0.0f, 1.0f, [&](const float v) { mat.opacity = v; anyMaterialChanged = true; });
                 drawTextureCombo("Opacity Texture", mat.opacityIndex, i);
-                
+
                 ImGui::EndTable();
             }
             ImGui::TreePop();

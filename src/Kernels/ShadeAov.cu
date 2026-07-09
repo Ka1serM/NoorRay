@@ -26,8 +26,7 @@ NR_GPU_KERNEL void shadeAovKernel(const KernelParams params)
     const uint32_t y = pixel / params.frame.width;
     const HitWorkItem hit = params.queues.aovHitQueue[pixel];
 
-    if (hit.primitiveIndex == InvalidIndex ||
-        hit.instanceIndex >= params.scene.meshInstanceCount)
+    if (hit.instanceIndex == InvalidIndex || hit.instanceIndex >= params.scene.meshInstanceCount)
     {
         surf2Dwrite(make_uchar4(0, 0, 0, 255), params.output.albedo, x * sizeof(uchar4), y);
         surf2Dwrite(packHalf4(glm::vec3(0.0f), 0.0f), params.output.normal, x * sizeof(ushort4), y);
@@ -38,9 +37,6 @@ NR_GPU_KERNEL void shadeAovKernel(const KernelParams params)
 
     const SurfaceData surface = loadSurface(
         params.scene, hit.instanceIndex, hit.primitiveIndex, hit.attribute0, hit.attribute1);
-    if (surface.material == nullptr)
-        return;
-
     const Material& material = *surface.material;
     const glm::vec3 shadingNormal = applyNormalMap(
         material, params.scene.textures, surface.uv, surface.tangent, surface.normal);
@@ -56,5 +52,5 @@ NR_GPU_KERNEL void shadeAovKernel(const KernelParams params)
                 params.output.albedo, x * sizeof(uchar4), y);
     surf2Dwrite(packHalf4(shadingNormal, 0.0f), params.output.normal, x * sizeof(ushort4), y);
     surf2Dwrite(packHalf4(surface.position, 1.0f), params.output.position, x * sizeof(ushort4), y);
-    surf2Dwrite(surface.objectIndex, params.output.cryptomatte, x * sizeof(uint32_t), y);
+    surf2Dwrite(hit.instanceIndex, params.output.cryptomatte, x * sizeof(uint32_t), y);
 }

@@ -10,6 +10,7 @@ class Transform {
 
     glm::vec3 position{};
     glm::quat rotation{};
+    glm::vec3 rotationEulerDegrees{};
     glm::vec3 scale{};
 
 public:

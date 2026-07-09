@@ -10,9 +10,11 @@ Transform::Transform(const glm::mat4& matrix)
     setFromMatrix(matrix);
 }
 
-Transform::Transform(const glm::vec3 position, const glm::quat rotation, const glm::vec3 scale) : position(position), rotation(rotation), scale(scale) {}
+Transform::Transform(const glm::vec3 position, const glm::quat rotation, const glm::vec3 scale)
+    : position(position), rotation(rotation), rotationEulerDegrees(degrees(eulerAngles(rotation))), scale(scale) {}
 
-Transform::Transform(const glm::vec3 position, const glm::vec3 rotationDegrees, const glm::vec3 scale) : position(position), rotation(glm::quat(radians(rotationDegrees))), scale(scale) {}
+Transform::Transform(const glm::vec3 position, const glm::vec3 rotationDegrees, const glm::vec3 scale)
+    : position(position), rotation(glm::quat(radians(rotationDegrees))), rotationEulerDegrees(rotationDegrees), scale(scale) {}
 
 glm::mat4 Transform::getMatrix() const {
     glm::mat4 mat = translate(glm::mat4(1.0f), position);
@@ -43,6 +45,7 @@ void Transform::setFromMatrix(const glm::mat4& mat) {
 
     // Convert rotation matrix to quaternion
     rotation = glm::quat_cast(rotationMat);
+    rotationEulerDegrees = degrees(eulerAngles(rotation));
 }
 
 vk::TransformMatrixKHR Transform::getVkTransformMatrix() const {
@@ -55,17 +58,19 @@ vk::TransformMatrixKHR Transform::getVkTransformMatrix() const {
 }
 
 void Transform::setRotationEuler(const glm::vec3& eulerDegrees) {
+    rotationEulerDegrees = eulerDegrees;
     rotation = glm::quat(glm::radians(eulerDegrees));
 }
 
 
 glm::vec3 Transform::getRotationEuler() const {
-    return degrees(eulerAngles(rotation));
+    return rotationEulerDegrees;
 }
 
 
 void Transform::setRotation(const glm::quat& rot) {
     rotation = rot;
+    rotationEulerDegrees = degrees(eulerAngles(rotation));
 }
 
 void Transform::setPosition(const glm::vec3& pos) {
@@ -87,4 +92,3 @@ glm::quat Transform::getRotation() const {
 glm::vec3 Transform::getScale() const {
     return scale;
 }
-

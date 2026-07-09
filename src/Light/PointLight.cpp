@@ -8,5 +8,7 @@ bool PointLight::renderUi()
         [&](glm::vec3 v) { color = v; changed = true; });
     ImGuiManager::dragFloatRow("Intensity", intensity, 0.1f, 0.f, 1e6f,
         [&](float v) { intensity = v; changed = true; });
+    ImGuiManager::dragFloatRow("Soft Radius", softRadius, 0.01f, 0.f, 1e6f,
+        [&](float v) { softRadius = v; changed = true; });
     return changed;
 }

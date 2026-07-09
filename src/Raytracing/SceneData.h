@@ -45,6 +45,7 @@ struct GpuSceneData
     uint32_t spotLightCount{};
     uint32_t rectLightCount{};
     uint32_t directionalLightCount{};
+    float analyticLightSelectionWeight{};
     uint32_t textureCount{};
     // Gaussian splat data — flat GPU arrays.
     const float* gaussianOpacities{}; // sigmoid opacity, indexed by global id

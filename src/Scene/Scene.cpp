@@ -49,6 +49,36 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
 
 // ── Public lifetime API ───────────────────────────────────────────────────────
 
+void Scene::clear() {
+    sceneObjects.clear();
+    meshAssets.clear();
+    gaussianAssets.clear();
+    textures.clear();
+    textureNames.clear();
+    pointLights.clear();
+    spotLights.clear();
+    rectLights.clear();
+    directionalLights.clear();
+    gpuInstances.clear();
+    gaussianOpacities.clear();
+    gaussianSpectrumCoeffs.clear();
+    cudaTextures.clear();
+    activeCamera.reset();
+    copiedObject.reset();
+    activeObjectId = 0;
+    nextObjectId = 1;
+    renderSettings = {};
+    environment->destroyCdf();
+    environment->textureIndex = -1;
+    environment->color = vec3(1.0f);
+    environment->rotation = 0.0f;
+    environment->visible = 1;
+    environment->visibleExposure = 0.0f;
+    environment->lightingExposure = 1.0f;
+    environment->updateDerivedSettings();
+    dirtyFlags = TLAS | Meshes | Textures | EnvironmentCdf | Lights | Accumulation;
+}
+
 uint64_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     const uint32_t index = registerObject(std::move(sceneObject));
     return sceneObjects[index]->getId();

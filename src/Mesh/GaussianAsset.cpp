@@ -1,10 +1,22 @@
-#define TINYPLY_IMPLEMENTATION
-#include "tinyply.h"
-
 #include "Mesh/GaussianAsset.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cctype>
+#include <filesystem>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
+#include <vector>
+
+#include <gf/core/gauss_ir.h>
+#include <gf/io/ksplat.h>
+#include <gf/io/ply_auto.h>
+#include <gf/io/reader.h>
+#include <gf/io/sog.h>
+#include <gf/io/splat.h>
+#include <gf/io/spz.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -13,6 +25,7 @@
 #include <imgui.h>
 #include "UI/ImGuiManager.h"
 #include "Raytracing/RgbToSpectrum.h"
+#include "Scene/CoordinateSystem.h"
 
 extern const float sRGBToSpectrumTable_Scale[64];
 extern const float sRGBToSpectrumTable_Data[3][64][64][64][3];
@@ -22,44 +35,76 @@ static float sigmoid(float x)
     return 1.0f / (1.0f + std::exp(-x));
 }
 
-GaussianAsset GaussianAsset::CreateFromPly(Scene& scene, const std::string& name, const std::string& path)
+namespace {
+std::string lowercase(std::string value)
+{
+    std::ranges::transform(value, value.begin(), [](const unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+std::unique_ptr<gf::IGaussReader> makeGaussianReaderForPath(const std::string& path)
+{
+    const std::filesystem::path filePath(path);
+    const std::string filename = lowercase(filePath.filename().string());
+    const std::string extension = lowercase(filePath.extension().string());
+
+    if (extension == ".ply" || filename.ends_with(".compressed.ply"))
+        return gf::MakePlyAutoReader();
+    if (extension == ".splat")
+        return gf::MakeSplatReader();
+    if (extension == ".ksplat")
+        return gf::MakeKsplatReader();
+    if (extension == ".spz")
+        return gf::MakeSpzReader();
+    if (extension == ".sog")
+        return gf::MakeSogReader();
+
+    throw std::runtime_error("Unsupported Gaussian file format: " + path);
+}
+
+nr::coords::CoordinateSpace gaussianSourceSpace(const gf::GaussianCloudIR& ir)
+{
+    if (ir.meta.sourceFormat == "sog")
+        return nr::coords::YDownZForwardSpace;
+    if (ir.meta.handedness == gf::Handedness::kRight && ir.meta.up == gf::UpAxis::kY)
+        return nr::coords::OpenGlSpace;
+    if (ir.meta.handedness == gf::Handedness::kRight && ir.meta.up == gf::UpAxis::kZ)
+        return nr::coords::ZUpYForwardSpace;
+
+    // Raw 3DGS Gaussian files commonly come from COLMAP/OpenCV-style data:
+    // x right, y down, z forward. Those files usually do not carry explicit
+    // coordinate metadata, so convert that convention into NoorRay/OpenGL
+    // space at asset import time instead of storing a corrective scene rotation.
+    return nr::coords::YDownZForwardSpace;
+}
+}
+
+GaussianAsset GaussianAsset::CreateFromFile(Scene& scene, const std::string& name, const std::string& path)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file)
-        throw std::runtime_error("Failed to open PLY file: " + path);
+        throw std::runtime_error("Failed to open Gaussian file: " + path);
 
-    tinyply::PlyFile ply;
-    ply.parse_header(file);
+    file.seekg(0, std::ios::end);
+    const std::streamoff fileSize = file.tellg();
+    if (fileSize <= 0)
+        throw std::runtime_error("Gaussian file is empty: " + path);
+    file.seekg(0, std::ios::beg);
 
-    std::shared_ptr<tinyply::PlyData> xyz, opacity, scales, quat_rot, f_dc;
+    std::vector<uint8_t> data(static_cast<size_t>(fileSize));
+    if (!file.read(reinterpret_cast<char*>(data.data()), fileSize))
+        throw std::runtime_error("Failed to read Gaussian file: " + path);
 
-    try { xyz = ply.request_properties_from_element("vertex", { "x", "y", "z" }); }
-    catch (const std::exception&) { throw std::runtime_error("PLY missing vertex x/y/z"); }
+    auto reader = makeGaussianReaderForPath(path);
+    auto result = reader->Read(data.data(), data.size(), gf::ReadOptions{ .strict = true });
+    if (!result)
+        throw std::runtime_error("Failed to import Gaussian file: " + result.error().message);
 
-    try { opacity = ply.request_properties_from_element("vertex", { "opacity" }); }
-    catch (const std::exception&) { throw std::runtime_error("PLY missing vertex opacity"); }
-
-    try { scales = ply.request_properties_from_element("vertex", { "scale_0", "scale_1", "scale_2" }); }
-    catch (const std::exception&) { throw std::runtime_error("PLY missing vertex scale_0/1/2"); }
-
-    try { quat_rot = ply.request_properties_from_element("vertex", { "rot_0", "rot_1", "rot_2", "rot_3" }); }
-    catch (const std::exception&) { throw std::runtime_error("PLY missing vertex rot_0/1/2/3"); }
-
-    // SH DC coefficients (degree 0)
-    try { f_dc = ply.request_properties_from_element("vertex", { "f_dc_0", "f_dc_1", "f_dc_2" }); }
-    catch (const std::exception&) { throw std::runtime_error("PLY missing vertex f_dc_0/1/2"); }
-
-    // f_rest_* (higher SH bands) are ignored in v1 — parse header but don't request data
-    // so tinyply skips them during the read pass.
-
-    ply.read(file);
-
-    const size_t count = xyz->count;
-    const float* xyzData  = reinterpret_cast<const float*>(xyz->buffer.get());
-    const float* opData   = reinterpret_cast<const float*>(opacity->buffer.get());
-    const float* scaleData = reinterpret_cast<const float*>(scales->buffer.get());
-    const float* rotData  = reinterpret_cast<const float*>(quat_rot->buffer.get());
-    const float* shData   = reinterpret_cast<const float*>(f_dc->buffer.get());
+    const gf::GaussianCloudIR& ir = result.value();
+    const size_t count = static_cast<size_t>(ir.numPoints);
+    const nr::coords::CoordinateSpace sourceSpace = gaussianSourceSpace(ir);
 
     static constexpr float SH_C0 = 0.28209479177387814f;
 
@@ -71,46 +116,48 @@ GaussianAsset GaussianAsset::CreateFromPly(Scene& scene, const std::string& name
         Gaussian g;
 
         // Position
-        const float px = xyzData[i * 3 + 0];
-        const float py = xyzData[i * 3 + 1];
-        const float pz = xyzData[i * 3 + 2];
+        const glm::vec3 position = nr::coords::toOpenGlVector({
+            ir.positions[i * 3 + 0],
+            ir.positions[i * 3 + 1],
+            ir.positions[i * 3 + 2],
+        }, sourceSpace);
 
         // Scale (log-space → linear). True per-axis sigma — the cutoff is
         // baked into the shared proxy geometry instead (GaussianCutoffSigma),
         // so this transform stays the untruncated R*S and is applied for
         // free by the hardware instance transform.
-        const float sx = std::exp(scaleData[i * 3 + 0]);
-        const float sy = std::exp(scaleData[i * 3 + 1]);
-        const float sz = std::exp(scaleData[i * 3 + 2]);
+        const float sx = std::exp(ir.scales[i * 3 + 0]);
+        const float sy = std::exp(ir.scales[i * 3 + 1]);
+        const float sz = std::exp(ir.scales[i * 3 + 2]);
 
         // Rotation (wxyz order, normalize)
         glm::quat q;
-        q.w = rotData[i * 4 + 0];
-        q.x = rotData[i * 4 + 1];
-        q.y = rotData[i * 4 + 2];
-        q.z = rotData[i * 4 + 3];
+        q.w = ir.rotations[i * 4 + 0];
+        q.x = ir.rotations[i * 4 + 1];
+        q.y = ir.rotations[i * 4 + 2];
+        q.z = ir.rotations[i * 4 + 3];
         q = glm::normalize(q);
 
         // R*S: rotation from quat → mat3, then scale each column
         const glm::mat3 R = glm::mat3_cast(q);
         g.transform = glm::mat4x3(
-            R[0] * sx,
-            R[1] * sy,
-            R[2] * sz,
-            glm::vec3(px, py, pz)
+            nr::coords::toOpenGlVector(R[0] * sx, sourceSpace),
+            nr::coords::toOpenGlVector(R[1] * sy, sourceSpace),
+            nr::coords::toOpenGlVector(R[2] * sz, sourceSpace),
+            position
         );
 
         // SH degree-0 → RGB, clamped. Only feeds the spectral upsampling
         // below — the raw color is never stored on the Gaussian.
-        float r = SH_C0 * shData[i * 3 + 0] + 0.5f;
-        float g_ = SH_C0 * shData[i * 3 + 1] + 0.5f;
-        float b = SH_C0 * shData[i * 3 + 2] + 0.5f;
+        float r = SH_C0 * ir.colors[i * 3 + 0] + 0.5f;
+        float g_ = SH_C0 * ir.colors[i * 3 + 1] + 0.5f;
+        float b = SH_C0 * ir.colors[i * 3 + 2] + 0.5f;
         r = std::max(r, 0.0f);
         g_ = std::max(g_, 0.0f);
         b = std::max(b, 0.0f);
 
         // Opacity: sigmoid of logit
-        g.opacity = sigmoid(opData[i]);
+        g.opacity = sigmoid(ir.alphas[i]);
 
         // Precompute the RGB->spectrum sigmoid-polynomial coefficients once,
         // here on the CPU, instead of doing this 64^3 table lookup per GPU hit.

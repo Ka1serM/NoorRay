@@ -23,6 +23,8 @@ protected:
     std::vector<std::weak_ptr<SceneObject>> children;
 
     bool visible;
+    std::string sourceType;
+    std::string sourcePath;
 
 public:
     SceneObject(Scene& scene, const std::string& name, const Transform& transform);
@@ -36,6 +38,9 @@ public:
 
     bool isVisible() const { return visible; }
     void setVisible(const bool v) { visible = v; }
+    void setSource(const std::string& type, const std::string& path) { sourceType = type; sourcePath = path; }
+    const std::string& getSourceType() const { return sourceType; }
+    const std::string& getSourcePath() const { return sourcePath; }
 
     SceneObject* getParent() const { return parent.lock().get(); }
     std::shared_ptr<SceneObject> getParentPtr() const { return parent.lock(); }

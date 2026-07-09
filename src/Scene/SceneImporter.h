@@ -12,7 +12,10 @@ public:
     static void ImportGltfScene(Scene& scene, const std::string& filepath);
     static void ImportObjScene(Scene& scene, const std::string& filepath, const Material* materialOverride = nullptr);
     static void ImportJsonScene(Scene& scene, const std::string& filepath);
-    static void ImportPlyScene(Scene& scene, const std::string& filepath);
+    static void ImportFile(Scene& scene, const std::string& filepath);
+    static void ImportGaussianScene(Scene& scene, const std::string& filepath);
+    static bool IsGaussianFile(const std::string& filepath);
+    static bool IsSceneFile(const std::string& filepath);
 
     static std::string nameFromPath(const std::string& path);
     static std::vector<char> readFile(const std::string& filename);

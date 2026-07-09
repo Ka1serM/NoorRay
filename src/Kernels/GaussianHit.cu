@@ -14,9 +14,6 @@ extern "C" __global__ void __anyhit__gaussian()
     const uint32_t instanceId = optixGetInstanceId();
     const uint32_t globalGaussianId = instanceId;
 
-    if (globalGaussianId >= params.scene.gaussianCount)
-        return;
-
     const float opacity = params.scene.gaussianOpacities[globalGaussianId];
     if (opacity <= 0.0f)
     {
@@ -37,6 +34,13 @@ extern "C" __global__ void __anyhit__gaussian()
     // numerically identical to the world-space ray parameter — usable as the
     // shading hit distance without any extra transform.
     const float hitT = fmaxf(tClosest, 0.0f);
+    const float maxHitT = __uint_as_float(optixGetPayload_1());
+    if (hitT >= maxHitT)
+    {
+        optixIgnoreIntersection();
+        return;
+    }
+
     const float px = rayOrigin.x + hitT * rayDir.x;
     const float py = rayOrigin.y + hitT * rayDir.y;
     const float pz = rayOrigin.z + hitT * rayDir.z;

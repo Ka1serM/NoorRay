@@ -435,10 +435,16 @@ public:
             sample.direction = glm::reflect(-view, halfVector);
             const float ndl = fabsf(glm::dot(orientedShadingNormal, sample.direction));
             sample.pdf = wmPdf * fresnel / fmaxf(4.0f * vdh, BsdfEpsilon);
-            const float f = distribution
-                * geometrySmith(orientedShadingNormal, view, sample.direction, roughness)
-                * fresnel / fmaxf(4.0f * ndv * ndl, BsdfEpsilon);
-            sample.weight = SampledSpectrum(f * ndl / fmaxf(sample.pdf, BsdfEpsilon));
+            // weight = f*ndl/pdf. f and pdf both carry a 1/(4*vdh*ndv-ish) VNDF
+            // Jacobian and the branch-selection `fresnel` factor; algebraically
+            // those cancel completely (this is Heitz's VNDF-sampling identity,
+            // weight = G1(wi) for reflection). Computing the ratio directly —
+            // instead of separately clamping f's and pdf's denominators with
+            // BsdfEpsilon on *different* expressions (4*ndv*ndl vs 4*vdh) — is
+            // what makes that cancellation exact instead of breaking down (and
+            // crushing the weight toward zero) at grazing angles, where either
+            // clamp can dominate independently.
+            sample.weight = SampledSpectrum(smithG1Ggx(ndl, roughness));
         }
         else
         {
@@ -453,16 +459,15 @@ public:
             const float denominator2 = denominator * denominator;
             const float dWmDWi = fabsf(wiDotM) / fmaxf(denominator2, BsdfEpsilon);
             sample.pdf = wmPdf * dWmDWi * (1.0f - fresnel);
-            const float transmissionGeometry = smithG1Ggx(
-                fabsf(glm::dot(orientedShadingNormal, view)), roughness)
-                * smithG1Ggx(fabsf(glm::dot(
-                    orientedShadingNormal, sample.direction)), roughness);
-            float f = (1.0f - fresnel) * distribution
-                * transmissionGeometry
-                * fabsf(wiDotM * woDotM
-                    / fmaxf(cosI * ndv * denominator2, BsdfEpsilon));
-            f /= etaPath * etaPath;
-            sample.weight = SampledSpectrum(f * cosI / fmaxf(sample.pdf, BsdfEpsilon));
+            // Same cancellation as the reflection branch above (weight =
+            // G1(wi)/etaPath^2 here), computed directly rather than via f/pdf
+            // with mismatched epsilon clamps on the shared `denominator2` term
+            // (BsdfEpsilon alone vs. cosI*ndv*BsdfEpsilon). At IOR ~ 1,
+            // `denominator` is ~0 for every sample regardless of angle, so the
+            // old clamp mismatch wasn't a rare edge case — it fired on every
+            // transmissive sample and crushed brightness accordingly.
+            sample.weight = SampledSpectrum(
+                smithG1Ggx(cosI, roughness) / (etaPath * etaPath));
         }
         return sample;
     }

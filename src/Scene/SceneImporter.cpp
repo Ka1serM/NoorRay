@@ -1,8 +1,9 @@
 ﻿#include "SceneImporter.h"
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
-#include <glaze/glaze.hpp>
 #include "Camera/CameraInstance.h"
 #include "CUDA/rstd/Allocator.h"
 #include "Vulkan/Texture.h"
@@ -23,12 +24,20 @@
 #include "Mesh/MeshAsset.h"
 #include "Mesh/GaussianAsset.h"
 #include "Mesh/Transform.h"
+#include "Scene/CoordinateSystem.h"
 #include "Scene/GaussianInstance.h"
+#include "Scene/SceneReader.h"
 #include <functional>
 
-//(x, y, z) -> (x, -y, -z)
-
 namespace {
+std::string lowerPath(std::string value)
+{
+    std::ranges::transform(value, value.begin(), [](const unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
 // Resolves an asset path referenced from a scene JSON. If the path does not
 // exist as given (e.g. relative to whatever the process cwd happens to be),
 // fall back to resolving it relative to the compiled-in asset directory, so
@@ -180,10 +189,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
             vertices.resize(vertexCount);
             for (size_t v = 0; v < vertexCount; ++v) {
-                vertices[v].position    = glm::make_vec3(&positions[v * 3]);
-                vertices[v].normal      = normals ? normalize(glm::make_vec3(&normals[v * 3])) : vec3(0, 1, 0);
+                vertices[v].position    = nr::coords::toOpenGlVector(glm::make_vec3(&positions[v * 3]), nr::coords::OpenGlSpace);
+                vertices[v].normal      = normals ? normalize(nr::coords::toOpenGlVector(glm::make_vec3(&normals[v * 3]), nr::coords::OpenGlSpace)) : vec3(0, 1, 0);
                 vertices[v].uv          = texcoords ? vec2(texcoords[v * 2], 1.0f - texcoords[v * 2 + 1]) : vec2(0);
-                vertices[v].tangent     = tangents ? normalize(vec3(glm::make_vec3(&tangents[v * 4]))) : vec3(1, 0, 0);
+                vertices[v].tangent     = tangents ? normalize(nr::coords::toOpenGlVector(vec3(glm::make_vec3(&tangents[v * 4])), nr::coords::OpenGlSpace)) : vec3(1, 0, 0);
                 vertices[v].tangentSign = tangents ? tangents[v * 4 + 3] : 1.0f;
             }
 
@@ -232,6 +241,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             vec3 S = node.scale.size() == 3 ? vec3(glm::make_vec3(node.scale.data())) : vec3(1.0f);
             localTransform = translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S);
         }
+        localTransform = nr::coords::toOpenGlTransform(localTransform, nr::coords::OpenGlSpace);
 
         worldTransforms[nodeIndex] = parentWorld * localTransform;
 
@@ -289,7 +299,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                     if (matrixAcc >= 0) {
                         const float* matrices = readAccData(matrixAcc);
                         for (size_t inst = 0; inst < instanceCount; ++inst)
-                            perInstanceTransforms.push_back(glm::make_mat4(&matrices[inst * 16]));
+                            perInstanceTransforms.push_back(nr::coords::toOpenGlTransform(glm::make_mat4(&matrices[inst * 16]), nr::coords::OpenGlSpace));
                     } else {
                         const float* translations = readAccData(transAcc);
                         const float* rotations    = readAccData(rotAcc);
@@ -300,7 +310,8 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                                 ? quat(rotations[inst * 4 + 3], rotations[inst * 4], rotations[inst * 4 + 1], rotations[inst * 4 + 2])
                                 : quat(1.0f, 0.0f, 0.0f, 0.0f);
                             vec3 S = scales ? glm::make_vec3(&scales[inst * 3]) : vec3(1.0f);
-                            perInstanceTransforms.push_back(translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S));
+                            perInstanceTransforms.push_back(nr::coords::toOpenGlTransform(
+                                translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S), nr::coords::OpenGlSpace));
                         }
                     }
                 }
@@ -336,6 +347,8 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     // new local transform relative to its parent.
 
     auto importRoot = std::make_unique<SceneObject>(scene, nameFromPath(filepath), Transform{});
+    const std::string gltfType = lowerPath(filePath.extension().string()) == ".glb" ? "glb" : "gltf";
+    importRoot->setSource(gltfType, filePath.string());
     SceneObject* importRootPtr = importRoot.get();
     const uint64_t rootId = scene.add(std::move(importRoot));
 
@@ -439,6 +452,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     // Create a parent object for this entire OBJ file to keep the scene organized
     std::string parentName = nameFromPath(filepath);
     auto parentObject = std::make_unique<SceneObject>(scene, parentName, Transform{});
+    parentObject->setSource("obj", filePath.string());
     const uint64_t parentId = scene.add(std::move(parentObject));
 
     for (const auto& shape : shapes) {
@@ -482,20 +496,19 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                 const auto& idx = shape.mesh.indices[indexOffset + v];
                 Vertex vertex{};
 
-                // Position with Y/Z inversion (coordinate system conversion)
-                vertex.position = vec3(
+                vertex.position = nr::coords::toOpenGlVector({
                     attrib.vertices[3 * idx.vertex_index + 0],
-                    -attrib.vertices[3 * idx.vertex_index + 1],
-                    -attrib.vertices[3 * idx.vertex_index + 2]
-                );
+                    attrib.vertices[3 * idx.vertex_index + 1],
+                    attrib.vertices[3 * idx.vertex_index + 2],
+                }, nr::coords::OpenGlSpace);
 
                 // Normal, checking for existence
                 if (idx.normal_index >= 0) {
-                    vertex.normal = vec3(
+                    vertex.normal = nr::coords::toOpenGlVector({
                         attrib.normals[3 * idx.normal_index + 0],
-                        -attrib.normals[3 * idx.normal_index + 1],
-                        -attrib.normals[3 * idx.normal_index + 2]
-                    );
+                        attrib.normals[3 * idx.normal_index + 1],
+                        attrib.normals[3 * idx.normal_index + 2],
+                    }, nr::coords::OpenGlSpace);
                 } else
                     vertex.normal = vec3(0.0f, 1.0f, 0.0f); // Default normal
 
@@ -602,198 +615,53 @@ std::vector<char> SceneImporter::readFile(const std::string& filename) {
 
 void SceneImporter::ImportJsonScene(Scene& scene, const std::string& filepath)
 {
-    glz::generic j{};
-    std::string buf;
-    if (const auto err = glz::read_file_json(j, filepath, buf))
-        throw std::runtime_error("Failed to parse scene JSON: " + glz::format_error(err, buf));
+    SceneReader::Read(scene, filepath);
+}
 
-    // Safe accessors
-    static const glz::generic kNull{};
-    auto at = [&](const glz::generic& obj, std::string_view key) -> const glz::generic& {
-        return obj.contains(key) ? obj[key] : kNull;
-    };
-    auto jfloat = [](const glz::generic& v, float def = 0.f) {
-        return v.is_number() ? v.as<float>() : def;
-    };
-    auto jint = [](const glz::generic& v, int def = 0) {
-        return v.is_number() ? v.as<int>() : def;
-    };
-    auto jbool = [](const glz::generic& v, bool def = false) {
-        return v.is_boolean() ? v.get<bool>() : def;
-    };
-    auto jstr = [](const glz::generic& v, std::string_view def = "") -> std::string {
-        return v.is_string() ? v.get<std::string>() : std::string(def);
-    };
-    auto jvec3 = [&](const glz::generic& v, vec3 def = {}) -> vec3 {
-        if (!v.is_array()) return def;
-        const auto& a = v.get_array();
-        return { a.size() > 0 ? jfloat(a[0], def.x) : def.x,
-                 a.size() > 1 ? jfloat(a[1], def.y) : def.y,
-                 a.size() > 2 ? jfloat(a[2], def.z) : def.z };
-    };
+bool SceneImporter::IsGaussianFile(const std::string& filepath)
+{
+    const std::string path = lowerPath(filepath);
+    return path.ends_with(".ply")
+        || path.ends_with(".compressed.ply")
+        || path.ends_with(".splat")
+        || path.ends_with(".ksplat")
+        || path.ends_with(".spz")
+        || path.ends_with(".sog");
+}
 
-    if (j.contains("environment")) {
-        const auto& jenv = j["environment"];
-        Environment& environment = scene.getEnvironment();
-        environment.color = jvec3(at(jenv, "color"), {1.0f, 1.0f, 1.0f});
-        environment.lightingExposure = jfloat(at(jenv, "lighting_exposure"), 1.0f);
-        environment.visibleExposure = jfloat(at(jenv, "visible_exposure"), 0.0f);
-        environment.visible = jbool(at(jenv, "visible"), true) ? 1 : 0;
-        environment.updateDerivedSettings();
-    }
+bool SceneImporter::IsSceneFile(const std::string& filepath)
+{
+    return lowerPath(filepath).ends_with(".nrscene");
+}
 
-    // Render settings
-    if (j.contains("render_settings")) {
-        const auto& jrs = j["render_settings"];
-        RenderSettings& rs = scene.getRenderSettings();
-        rs.maxSamples = jint(at(jrs, "max_samples"), rs.maxSamples);
-    }
+void SceneImporter::ImportFile(Scene& scene, const std::string& filepath)
+{
+    const std::string path = lowerPath(filepath);
 
-    // Camera
-    if (j.contains("camera")) {
-        const auto& jcam = j["camera"];
-        const std::string camType = jstr(at(jcam, "type"), "perspective");
-        const Transform camTransform{
-            jvec3(at(jcam, "position")),
-            jvec3(at(jcam, "rotation_euler")),
-            jvec3(at(jcam, "scale"), {1, 1, 1})
-        };
-        const float focalLength = jfloat(at(jcam, "focal_length"), 50.f);
-        const float focusDist   = jfloat(at(jcam, "focus_distance"), 2.f);
-        const float bokehBias   = jfloat(at(jcam, "bokeh_bias"), 1.f);
-        const float aperture    = jfloat(at(jcam, "aperture_diameter"), 0.f);
-
-        Camera cam;
-        if (camType == "realistic") {
-            nr::rstd::allocator<RealisticCamera> alc;
-            RealisticCamera* rc = alc.allocate(1);
-            alc.construct(rc);
-            rc->apertureDiameterMm = aperture;
-            cam = Camera(rc);
-        } else if (camType == "thinlens") {
-            nr::rstd::allocator<ThinLensCamera> alc;
-            ThinLensCamera* tc = alc.allocate(1);
-            alc.construct(tc);
-            tc->fStop = aperture;
-            cam = Camera(tc);
-        } else if (camType == "fisheye") {
-            nr::rstd::allocator<FisheyeCamera> alc;
-            FisheyeCamera* fc = alc.allocate(1);
-            alc.construct(fc);
-            fc->fStop = aperture;
-            cam = Camera(fc);
-        } else if (camType == "orthographic") {
-            nr::rstd::allocator<OrthographicCamera> alc;
-            OrthographicCamera* oc = alc.allocate(1);
-            alc.construct(oc);
-            cam = Camera(oc);
-        } else {
-            nr::rstd::allocator<PerspectiveCamera> alc;
-            PerspectiveCamera* pc = alc.allocate(1);
-            alc.construct(pc);
-            cam = Camera(pc);
-        }
-
-        cam.setFocalLength(focalLength);
-        cam.setFocusDistance(focusDist);
-        if (at(jcam, "resolution").is_array()) {
-            const auto& resolution = at(jcam, "resolution").get_array();
-            if (resolution.size() >= 2)
-                cam.getSensor().setResolution(
-                    static_cast<uint32_t>(std::max(jint(resolution[0]), 1)),
-                    static_cast<uint32_t>(std::max(jint(resolution[1]), 1)));
-        }
-        if (auto* thinLens = cam.CastOrNullptr<ThinLensCamera>())
-            thinLens->bokehBias = std::max(0.001f, bokehBias);
-        else if (auto* fisheye = cam.CastOrNullptr<FisheyeCamera>())
-            fisheye->bokehBias = std::max(0.001f, bokehBias);
-
-        auto camInst = std::make_unique<CameraInstance>(scene, "Camera", camTransform, cam);
-        if (camType == "realistic") {
-            const std::string lens   = jstr(at(jcam, "lens"));
-            const std::string sensor = jstr(at(jcam, "sensor"));
-            const std::string glass  = jstr(at(jcam, "glass_catalogs"));
-            if (!lens.empty() && !sensor.empty())
-                camInst->loadRealisticLens(lens, sensor, glass);
-        }
-        scene.add(std::move(camInst));
-    }
-
-    // Objects
-    if (!j.contains("objects") || !j["objects"].is_array()) return;
-    for (const auto& obj : j["objects"].get_array()) {
-        const std::string type = jstr(at(obj, "type"), "sphere");
-        const std::string name = jstr(at(obj, "name"), "Object");
-        Transform t{ jvec3(at(obj, "position")),
-                     jvec3(at(obj, "rotation_euler")),
-                     jvec3(at(obj, "scale"), {1, 1, 1}) };
-
-        if (type == "gltf" || type == "glb") {
-            ImportGltfScene(scene, jstr(at(obj, "path")));
-            if (SceneObject* root = scene.getActiveObject())
-                root->setLocalTransform(t);
-        } else if (type == "ply") {
-            ImportPlyScene(scene, jstr(at(obj, "path")));
-            if (SceneObject* root = scene.getActiveObject())
-                root->setLocalTransform(t);
-        } else if (type == "obj") {
-            Material matOverride{};
-            const bool hasMaterial = obj.contains("material");
-            if (hasMaterial) {
-                const auto& md = at(obj, "material");
-                matOverride.albedo           = jvec3(at(md, "albedo"),          {0.8f, 0.8f, 0.8f});
-                matOverride.roughness        = jfloat(at(md, "roughness"),       0.5f);
-                matOverride.metallic         = jfloat(at(md, "metallic"));
-                matOverride.specular         = jfloat(at(md, "specular"),        0.5f);
-                const float ior = jfloat(at(md, "ior"), 1.5f);
-                const glm::vec3 iorRgb(
-                    jfloat(at(md, "ior_r"), ior),
-                    jfloat(at(md, "ior_g"), ior),
-                    jfloat(at(md, "ior_b"), ior));
-                matOverride.sellmeier        = fitSellmeierFromFraunhofer(iorRgb);
-                matOverride.transmission     = jfloat(at(md, "transmission"));
-                matOverride.opacity          = jfloat(at(md, "opacity"),         1.f);
-                matOverride.emission         = jvec3(at(md, "emission"));
-                matOverride.emissionStrength = jfloat(at(md, "emission_strength"));
-            }
-            ImportObjScene(scene, jstr(at(obj, "path")), hasMaterial ? &matOverride : nullptr);
-            if (SceneObject* root = scene.getActiveObject())
-                root->setLocalTransform(t);
-        } else {
-            const auto& md = at(obj, "material");
-            Material mat{};
-            mat.albedo           = jvec3(at(md, "albedo"),          {0.8f, 0.8f, 0.8f});
-            mat.roughness        = jfloat(at(md, "roughness"),       0.5f);
-            mat.metallic         = jfloat(at(md, "metallic"));
-            mat.specular         = jfloat(at(md, "specular"),        0.5f);
-            const float ior = jfloat(at(md, "ior"), 1.5f);
-            const glm::vec3 iorRgb(
-                jfloat(at(md, "ior_r"), ior),
-                jfloat(at(md, "ior_g"), ior),
-                jfloat(at(md, "ior_b"), ior));
-            mat.sellmeier        = fitSellmeierFromFraunhofer(iorRgb);
-            mat.transmission     = jfloat(at(md, "transmission"));
-            mat.opacity          = jfloat(at(md, "opacity"),         1.f);
-            mat.emission         = jvec3(at(md, "emission"));
-            mat.emissionStrength = jfloat(at(md, "emission_strength"));
-
-            uint32_t meshIndex;
-            if      (type == "cube")  meshIndex = scene.add(MeshAsset::CreateCube(scene, name, mat));
-            else if (type == "plane") meshIndex = scene.add(MeshAsset::CreatePlane(scene, name, mat));
-            else if (type == "disk")  meshIndex = scene.add(MeshAsset::CreateDisk(scene, name, mat));
-            else                      meshIndex = scene.add(MeshAsset::CreateSphere(scene, name, mat));
-            scene.add(std::make_unique<MeshInstance>(scene, name, meshIndex, t));
-        }
+    if (path.ends_with(".gltf") || path.ends_with(".glb")) {
+        ImportGltfScene(scene, filepath);
+    } else if (path.ends_with(".obj")) {
+        ImportObjScene(scene, filepath);
+    } else if (IsGaussianFile(filepath)) {
+        ImportGaussianScene(scene, filepath);
+    } else if (path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".jpeg") ||
+               path.ends_with(".bmp") || path.ends_with(".tga") || path.ends_with(".psd") ||
+               path.ends_with(".gif") || path.ends_with(".hdr") || path.ends_with(".pic")) {
+        scene.add(Texture(scene.getContext(), filepath));
+    } else {
+        throw std::runtime_error("Unsupported import file type: " + filepath);
     }
 }
 
-void SceneImporter::ImportPlyScene(Scene& scene, const std::string& filepath)
+void SceneImporter::ImportGaussianScene(Scene& scene, const std::string& filepath)
 {
     const std::filesystem::path filePath = resolveAssetPath(filepath);
     if (!std::filesystem::exists(filePath))
         throw std::runtime_error("File not found: " + filepath);
 
     const std::string name = nameFromPath(filePath.filename().string());
-    const uint32_t assetIndex = scene.add(GaussianAsset::CreateFromPly(scene, name, filePath.string()));
-    scene.add(std::make_unique<GaussianInstance>(scene, name, assetIndex, Transform{}));
+    const uint32_t assetIndex = scene.add(GaussianAsset::CreateFromFile(scene, name, filePath.string()));
+    auto instance = std::make_unique<GaussianInstance>(scene, name, assetIndex, Transform{});
+    instance->setSource("gaussian", filePath.string());
+    scene.add(std::move(instance));
 }

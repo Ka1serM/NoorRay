@@ -9,7 +9,10 @@
 #include <iostream>
 #include "Log.h"
 #include "Scene/SceneImporter.h"
+#include "Scene/SceneReader.h"
+#include "Scene/SceneWriter.h"
 #include <memory>
+#include <filesystem>
 
 #include "ImGuiManager.h"
 
@@ -82,33 +85,45 @@ void MainMenuBar::renderAddMenu() const {
     }
 }
 
-void MainMenuBar::handleFileImport(const std::string& filePath, const FileType type) const
+void MainMenuBar::handleFileImport(const std::string& filePath) const
 {
     if (filePath.empty())
         return;
 
     try {
-        switch (type) {
-            case FileType::OBJ:
-                SceneImporter::ImportObjScene(scene, filePath);
-                break;
-            case FileType::GLTF:
-                SceneImporter::ImportGltfScene(scene, filePath);
-                break;
-            case FileType::TEXTURE:
-                scene.add(Texture(context, filePath));
-                break;
-            case FileType::NRSCENE:
-                SceneImporter::ImportJsonScene(scene, filePath);
-                break;
-            case FileType::PLY:
-                SceneImporter::ImportPlyScene(scene, filePath);
-                break;
-            default:
-                break;
-        }
+        SceneImporter::ImportFile(scene, filePath);
     } catch (const std::exception& e) {
        LOG_ERROR("Import failed: " << e.what());
+    }
+}
+
+void MainMenuBar::openScene(const std::string& filePath)
+{
+    if (filePath.empty())
+        return;
+
+    try {
+        SceneReader::Read(scene, filePath);
+        currentScenePath = filePath;
+    } catch (const std::exception& e) {
+        LOG_ERROR("Open scene failed: " << e.what());
+    }
+}
+
+void MainMenuBar::saveScene(const std::string& filePath)
+{
+    if (filePath.empty())
+        return;
+
+    std::filesystem::path path(filePath);
+    if (path.extension().empty())
+        path.replace_extension(".nrscene");
+
+    try {
+        SceneWriter::Write(scene, path.string());
+        currentScenePath = path.string();
+    } catch (const std::exception& e) {
+        LOG_ERROR("Save scene failed: " << e.what());
     }
 }
 
@@ -118,47 +133,69 @@ void MainMenuBar::renderFileMenu() {
 
         const auto& selection = openDialog->result();
         if (!selection.empty())
-            handleFileImport(selection[0], pendingFileType);
+            handleFileImport(selection[0]);
 
         // Reset the unique_ptr to close the dialog and reset the state.
         openDialog.reset();
-        pendingFileType = FileType::NONE;
+    }
+
+    if (sceneOpenDialog && sceneOpenDialog->ready(0)) {
+        const auto& selection = sceneOpenDialog->result();
+        if (!selection.empty())
+            openScene(selection[0]);
+        sceneOpenDialog.reset();
+    }
+
+    if (sceneSaveDialog && sceneSaveDialog->ready(0)) {
+        saveScene(sceneSaveDialog->result());
+        sceneSaveDialog.reset();
     }
 
     if (ImGui::BeginMenu("File"))
     {
-        if (ImGui::BeginMenu("Import")) {
-            // Disable menu items if a dialog is currently running.
-            ImGui::BeginDisabled(static_cast<bool>(openDialog));
+        const bool dialogOpen = static_cast<bool>(openDialog)
+            || static_cast<bool>(sceneOpenDialog)
+            || static_cast<bool>(sceneSaveDialog);
 
-            if (ImGui::MenuItem("Bitmap Texture")) {
-                openDialog = std::make_unique<pfd::open_file>("Import Texture", ".", std::vector<std::string>{"Image Files", "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic", "All Files", "*"});
-                pendingFileType = FileType::TEXTURE;
-            }
-
-            if (ImGui::MenuItem("Wavefront .obj")) {
-                openDialog = std::make_unique<pfd::open_file>("Import OBJ Model", ".", std::vector<std::string>{"OBJ Files", "*.obj", "All Files", "*"});
-                pendingFileType = FileType::OBJ;
-            }
-
-            if (ImGui::MenuItem("Khronos .gltf")) {
-                openDialog = std::make_unique<pfd::open_file>("Import GLTF", ".", std::vector<std::string>{"GLTF Files", "*.gltf *.glb", "All Files", "*"});
-                pendingFileType = FileType::GLTF;
-            }
-
-            if (ImGui::MenuItem("NoorRay Scene (.nrscene)")) {
-                openDialog = std::make_unique<pfd::open_file>("Import Scene", ".", std::vector<std::string>{"NoorRay Scene", "*.nrscene"});
-                pendingFileType = FileType::NRSCENE;
-            }
-
-            if (ImGui::MenuItem("3D Gaussians (.ply)")) {
-                openDialog = std::make_unique<pfd::open_file>("Import 3DGS Point Cloud", ".", std::vector<std::string>{"PLY Files", "*.ply", "All Files", "*"});
-                pendingFileType = FileType::PLY;
-            }
-
-            ImGui::EndDisabled();
-            ImGui::EndMenu(); // Correctly ends the "Import" menu
+        ImGui::BeginDisabled(dialogOpen);
+        if (ImGui::MenuItem("Open...")) {
+            sceneOpenDialog = std::make_unique<pfd::open_file>(
+                "Open Scene",
+                ".",
+                std::vector<std::string>{"NoorRay Scene", "*.nrscene", "All Files", "*"});
         }
+
+        if (ImGui::MenuItem("Save", nullptr, false, !currentScenePath.empty()))
+            saveScene(currentScenePath);
+
+        if (ImGui::MenuItem("Save As...")) {
+            const std::string defaultPath = currentScenePath.empty() ? "scene.nrscene" : currentScenePath;
+            sceneSaveDialog = std::make_unique<pfd::save_file>(
+                "Save Scene As",
+                defaultPath,
+                std::vector<std::string>{"NoorRay Scene", "*.nrscene", "All Files", "*"},
+                pfd::opt::force_overwrite);
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::MenuItem("Import...")) {
+            openDialog = std::make_unique<pfd::open_file>(
+                "Import Asset",
+                ".",
+                std::vector<std::string>{
+                    "Supported Assets",
+                    "*.obj *.gltf *.glb *.ply *.compressed.ply *.splat *.ksplat *.spz *.sog *.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
+                    "Gaussian Splats",
+                    "*.ply *.compressed.ply *.splat *.ksplat *.spz *.sog",
+                    "Meshes",
+                    "*.obj *.gltf *.glb",
+                    "Images",
+                    "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
+                    "All Files",
+                    "*"});
+        }
+        ImGui::EndDisabled();
 
         ImGui::Separator();
 

@@ -17,22 +17,32 @@ struct RayHit
     float v = 0.0f;
     uint32_t instanceIndex = InvalidIndex;
     uint32_t primitiveIndex = InvalidIndex;
-    bool hit = false;
-    bool isGaussianHit = false;
     float gaussianAlpha = 0.0f;
 };
 
 // Payload layout for optixTraverse (gaussian-enabled path):
 //   0: sampleIndex (uint32, preserved through traversal)
-//   1: world-space hit distance (float as uint) of the accepted gaussian's
-//      closest-approach point; init to tMax, set by any-hit on accept
+//   1: before acceptance, maximum allowed world-space Gaussian hit distance
+//      (normally the nearest mesh hit); after acceptance, accepted Gaussian t
 //   2: accepted gaussianId (uint32, init to InvalidIndex, set by any-hit on accept)
 //   3: accepted gaussianAlpha (float as uint, init to 0)
 //
-// The any-hit program uses Russian roulette: accept with prob = density alpha.
-// On acceptance, payload[2,3] are set and the traversal terminates at the
-// gaussian proxy triangle (no optixIgnoreIntersection).  On rejection the
-// traversal continues to the next gaussian or mesh.
+// We trace meshes first and use that t as a hard visibility bound for Gaussian
+// sampling. This prevents a stochastic Gaussian hit behind an opaque mesh from
+// replacing the mesh hit and making solid objects randomly disappear.
+//
+// This can't be collapsed into one optixTraverse call: Gaussians are instanced
+// as a shared triangulated proxy shape (for fast RT), and the any-hit samples
+// opacity at the analytic closest-approach point, not at wherever the ray
+// happens to cross that proxy's triangles. OptiX's own hit-narrowing tracks
+// the proxy-crossing distance, so in a merged trace, accepting a Gaussian
+// narrows the search using a distance nearer than its true (farther) shading
+// point — silently culling any mesh triangle that lies in between, even
+// though that mesh is unambiguously the closer, opaque surface. That's biased
+// (it recurs at a fixed, non-vanishing rate — roughly the Gaussian's alpha —
+// so it does not average out with more samples), not just noise: it was
+// confirmed by deliberately reproducing it. The mesh bound has to come from
+// an authoritative closest-hit query first.
 
 static constexpr uint32_t GaussianPayloadCount = 4;
 static constexpr uint32_t GaussianSbtIndex     = 1; // sbtOffset for Gaussian hitgroup
@@ -44,14 +54,44 @@ NR_GPU inline RayHit intersectRay(
     const float tMin,
     const float tMax,
     const uint32_t sampleIndex = 0,
-    const bool gaussianEnabled = true)
+    const bool gaussianEnabled = true,
+    const bool meshVisibilityBoundEnabled = true)
 {
     RayHit hit{};
 #if defined(NR_GPU_DEVICE_COMPILE)
     if (gaussianEnabled)
     {
+        RayHit meshHit{};
+        if (meshVisibilityBoundEnabled)
+        {
+            // No TERMINATE_ON_FIRST_HIT: this must be the true closest mesh
+            // hit, since it's also used directly as the final surface hit
+            // when no Gaussian wins below (see comment above).
+            optixTraverse(
+                accel,
+                make_float3(origin.x, origin.y, origin.z),
+                make_float3(direction.x, direction.y, direction.z),
+                tMin,
+                tMax,
+                0.0f,
+                0x01,
+                OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+                0,
+                1,
+                0);
+            if (optixHitObjectIsHit())
+            {
+                meshHit.t = optixHitObjectGetRayTmax();
+                meshHit.u = __uint_as_float(optixHitObjectGetAttribute_0());
+                meshHit.v = __uint_as_float(optixHitObjectGetAttribute_1());
+                meshHit.instanceIndex = optixHitObjectGetInstanceIndex();
+                meshHit.primitiveIndex = optixHitObjectGetPrimitiveIndex();
+            }
+        }
+
+        const float gaussianTMax = meshHit.instanceIndex != InvalidIndex ? meshHit.t : tMax;
         uint32_t payload0 = sampleIndex;
-        uint32_t payload1 = __float_as_uint(tMax); // unused
+        uint32_t payload1 = __float_as_uint(gaussianTMax);
         uint32_t payload2 = InvalidIndex;
         uint32_t payload3 = 0;
         optixTraverse(
@@ -59,9 +99,9 @@ NR_GPU inline RayHit intersectRay(
             make_float3(origin.x, origin.y, origin.z),
             make_float3(direction.x, direction.y, direction.z),
             tMin,
-            tMax,
+            gaussianTMax,
             0.0f,
-            0x03,
+            0x02,
             OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             0,
             1,
@@ -72,26 +112,20 @@ NR_GPU inline RayHit intersectRay(
         if (gaussianId != InvalidIndex)
         {
             // Gaussian accepted via Russian roulette.
-            hit.hit = true;
-            hit.isGaussianHit = true;
             hit.instanceIndex = gaussianId;
             hit.gaussianAlpha = __uint_as_float(payload3);
             hit.t = __uint_as_float(payload1);
         }
-        else if (optixHitObjectIsHit())
+        else if (meshHit.instanceIndex != InvalidIndex)
         {
-            // Mesh hit (no gaussian accepted along this ray).
-            hit.hit = true;
-            hit.t = optixHitObjectGetRayTmax();
-            hit.u = __uint_as_float(optixHitObjectGetAttribute_0());
-            hit.v = __uint_as_float(optixHitObjectGetAttribute_1());
-            hit.instanceIndex = optixHitObjectGetInstanceIndex();
-            hit.primitiveIndex = optixHitObjectGetPrimitiveIndex();
+            hit = meshHit;
         }
     }
     else
     {
         // Simple mesh-only traversal — no Gaussian payload, no any-hit.
+        // No TERMINATE_ON_FIRST_HIT: needs the true closest hit, not an
+        // arbitrary BVH-order intersection.
         optixTraverse(
             accel,
             make_float3(origin.x, origin.y, origin.z),
@@ -100,14 +134,12 @@ NR_GPU inline RayHit intersectRay(
             tMax,
             0.0f,
             0x01,
-            OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT
-                | OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+            OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             0,
             1,
             0);
         if (optixHitObjectIsHit())
         {
-            hit.hit = true;
             hit.t = optixHitObjectGetRayTmax();
             hit.u = __uint_as_float(optixHitObjectGetAttribute_0());
             hit.v = __uint_as_float(optixHitObjectGetAttribute_1());

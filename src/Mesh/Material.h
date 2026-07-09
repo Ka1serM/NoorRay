@@ -18,7 +18,7 @@ struct Material
 public:
     glm::vec3 albedo{1.0f};
     int albedoIndex{-1};
-    float specular{0.5f};
+    float specular{1.0f};
     float metallic{};
     float roughness{};
     SellmeierCoefficients sellmeier{};

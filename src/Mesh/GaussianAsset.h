@@ -27,7 +27,7 @@ struct Gaussian
 class GaussianAsset : public Inspectable
 {
 public:
-    static GaussianAsset CreateFromPly(Scene& scene, const std::string& name, const std::string& path);
+    static GaussianAsset CreateFromFile(Scene& scene, const std::string& name, const std::string& path);
 
     GaussianAsset(Scene& scene, std::string name, nr::rstd::vector<Gaussian> gaussians);
     GaussianAsset(GaussianAsset&& other) noexcept = default;

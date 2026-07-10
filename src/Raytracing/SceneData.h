@@ -70,5 +70,7 @@ struct KernelParams
     OutputSurfaces output;
     GpuFrameSettings frame;
     glm::vec4* accumulation{};
+    PsfGatherBucketSample* psfGatherBuckets{};
+    uint32_t psfBinCount{};
     uint32_t depth{};
 };

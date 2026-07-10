@@ -73,6 +73,8 @@ CUdeviceptr uploadRecord(const OptixProgramGroup group)
 
 extern NR_GPU_KERNEL void generateKernel(KernelParams);
 extern NR_GPU_KERNEL void finalizeKernel(KernelParams);
+extern NR_GPU_KERNEL void resolveScatterPsfKernel(KernelParams);
+extern NR_GPU_KERNEL void applyGatherPsfKernel(KernelParams);
 extern NR_GPU_KERNEL void shadeKernel(KernelParams);
 extern NR_GPU_KERNEL void generateAovKernel(KernelParams);
 extern NR_GPU_KERNEL void shadeAovKernel(KernelParams);
@@ -589,6 +591,78 @@ void Raytracer::launchFinalize(const KernelParams& params, const cudaStream_t st
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&finalizeKernel), grid, blockSize, args, 0, stream));
 }
 
+void Raytracer::launchResolveScatterPsf(const KernelParams& params, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const uint32_t count = params.frame.width * params.frame.height;
+    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = { const_cast<KernelParams*>(&params) };
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&resolveScatterPsfKernel), grid, blockSize, args, 0, stream));
+}
+
+void Raytracer::launchApplyGatherPsf(const KernelParams& params, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const uint32_t count = params.frame.width * params.frame.height;
+    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = { const_cast<KernelParams*>(&params) };
+    NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&applyGatherPsfKernel), grid, blockSize, args, 0, stream));
+}
+
+void Raytracer::prepareSensorFrame(Sensor& sensor, KernelParams& params, const bool resetAccumulation)
+{
+    params.psfGatherBuckets = nullptr;
+    params.psfBinCount = 0;
+
+    if (resetAccumulation)
+        NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
+
+    if (sensor.Is<ScatterPsfSensor>()) {
+        return;
+    }
+
+    if (auto* gather = sensor.CastOrNullptr<GatherPsfSensor>())
+        gather->prepareFrame(width, height, resetAccumulation, stream,
+            params.psfGatherBuckets, params.psfBinCount);
+}
+
+void Raytracer::launchSensorAddSample(
+    const Sensor& sensor, const KernelParams& params, const cudaStream_t stream)
+{
+    if (sensor.Is<ScatterPsfSensor>())
+        kernelStats.time("FinalizePsfScatter", stream, [&] { launchFinalize(params, stream); });
+    else if (sensor.Is<GatherPsfSensor>())
+        kernelStats.time("FinalizePsfGatherBuckets", stream, [&] { launchFinalize(params, stream); });
+    else
+        kernelStats.time("FinalizeDirect", stream, [&] { launchFinalize(params, stream); });
+}
+
+void Raytracer::applySensorAfterFrame(
+    const Sensor& sensor, const KernelParams& params, const cudaStream_t stream, const bool finalSample)
+{
+    if (sensor.Is<ScatterPsfSensor>()) {
+        kernelStats.time("ResolvePsfScatter", stream, [&] { launchResolveScatterPsf(params, stream); });
+        return;
+    }
+
+    if (!sensor.Is<GatherPsfSensor>())
+        return;
+
+    if (!finalSample)
+        return;
+
+    if (params.psfGatherBuckets == nullptr || params.psfBinCount == 0) {
+        std::cerr << "[PSF] Gather final resolve skipped: buckets="
+                  << static_cast<const void*>(params.psfGatherBuckets)
+                  << " bins=" << params.psfBinCount << std::endl;
+        return;
+    }
+
+    std::cerr << "[PSF] Gather final resolve applying " << params.psfBinCount
+              << " PSF bins" << std::endl;
+    kernelStats.time("ApplyPsfGather", stream, [&] { launchApplyGatherPsf(params, stream); });
+}
+
 void Raytracer::launchShade(
     const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
 {
@@ -687,9 +761,6 @@ void Raytracer::render(const PushData& pushData)
         NR_GPU_CHECK(cudaEventElapsedTime(&m_gpuTimeMs, m_startEvent, m_stopEvent));
     }
 
-    if (pushData.frame == 0)
-        NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
-
     KernelParams params{};
     params.scene = gpuScene;
     params.scene.renderSettings = scene.getRenderSettings();
@@ -712,6 +783,9 @@ void Raytracer::render(const PushData& pushData)
     const uint32_t samplesPerFrame = static_cast<uint32_t>(std::max(1, renderSettings.samples));
     const uint32_t maxShaderBounces = std::min(MaxBounces - 1,
         static_cast<uint32_t>(std::max(renderSettings.maxBounces, 1)));
+
+    Sensor& activeSensor = activeCamera->getCamera()->getSensor();
+    prepareSensorFrame(activeSensor, params, pushData.frame == 0);
 
     // Shade only ever populates the shadow queue from analytic lights (both
     // mesh and Gaussian NEE) or environment importance sampling on a mesh
@@ -761,8 +835,15 @@ void Raytracer::render(const PushData& pushData)
                 if (mayGenerateShadowRays)
                     kernelStats.time("Connect", stream, [&] { launchConnect(params, queues.capacity, stream); });
             }
-            kernelStats.time("Finalize", stream, [&] { launchFinalize(params, stream); });
+            launchSensorAddSample(activeSensor, params, stream);
         }
+        const uint32_t accumulatedBeforeFrame =
+            static_cast<uint32_t>(pushData.frame) * samplesPerFrame;
+        const uint32_t accumulatedAfterFrame =
+            static_cast<uint32_t>(pushData.frame + 1) * samplesPerFrame;
+        const uint32_t maxSamples = static_cast<uint32_t>(std::max(1, renderSettings.maxSamples));
+        const bool finalSample = accumulatedBeforeFrame < maxSamples && accumulatedAfterFrame >= maxSamples;
+        applySensorAfterFrame(activeSensor, params, stream, finalSample);
     }
     NR_GPU_CHECK(cudaPeekAtLastError());
 
@@ -796,16 +877,20 @@ Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
 
     RenderSettings& settings = scene.getRenderSettings();
     const int previousSamplesPerFrame = settings.samples;
+    const int previousMaxSamples = settings.maxSamples;
     settings.samples = static_cast<int>(sampleCount);
+    settings.maxSamples = static_cast<int>(sampleCount);
     try {
         render(PushData{.frame = 0});
         NR_GPU_CHECK(cudaStreamSynchronize(stream));
         kernelStats.harvestFrame();
     } catch (...) {
         settings.samples = previousSamplesPerFrame;
+        settings.maxSamples = previousMaxSamples;
         throw;
     }
     settings.samples = previousSamplesPerFrame;
+    settings.maxSamples = previousMaxSamples;
 
     std::vector<glm::vec4> pixels(static_cast<size_t>(width) * height);
     NR_GPU_CHECK(cudaMemcpy(

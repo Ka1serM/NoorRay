@@ -9,12 +9,12 @@
 float Camera::focalLengthForFov(const float fovDegrees) const
 {
     const float halfAngle = glm::radians(std::clamp(fovDegrees, 1.f, 179.f)) * 0.5f;
-    return sensor.widthMm / (2.f * std::tan(halfAngle));
+    return sensor.width() / (2.f * std::tan(halfAngle));
 }
 
 float Camera::fovForFocalLength(const float focalLength) const
 {
-    const float fov = 2.f * std::atan(sensor.widthMm / (2.f * std::max(0.001f, focalLength)))
+    const float fov = 2.f * std::atan(sensor.width() / (2.f * std::max(0.001f, focalLength)))
         * (180.f / std::numbers::pi_v<float>);
     return std::clamp(fov, 1.f, 179.f);
 }

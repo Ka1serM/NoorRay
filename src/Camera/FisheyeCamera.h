@@ -10,10 +10,10 @@ public:
     float bokehBias{1.f};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState& rng, uint32_t, float, bool centered = false) const
+        float nx, float ny, RandomState& rng, uint32_t, SampledWavelengths&, bool centered = false) const
     {
         weight = 1.0f;
-        const float aspect = sensor.widthMm / sensor.heightMm;
+        const float aspect = sensor.width() / sensor.height();
         const float sx = nx * aspect;
         const float sy = ny;
         const float r = sqrtf(sx * sx + sy * sy);

@@ -10,12 +10,12 @@ public:
     float bokehBias{1.f};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState& rng, uint32_t, float, bool centered = false) const
+        float nx, float ny, RandomState& rng, uint32_t, SampledWavelengths&, bool centered = false) const
     {
         weight = 1.0f;
         const glm::vec2 scale{
-            sensor.widthMm / (2.f * focalLengthMm),
-            sensor.heightMm / (2.f * focalLengthMm)};
+            sensor.width() / (2.f * focalLengthMm),
+            sensor.height() / (2.f * focalLengthMm)};
         direction = glm::normalize(glm::vec3(nx * scale.x, ny * scale.y, -1.f));
         const float aperture = !centered && fStop > 0.f ? (focalLengthMm / fStop) * 0.5f * 0.001f : 0.f;
         if (aperture > 0.f) {

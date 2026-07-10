@@ -1,4 +1,5 @@
 #include "NoorRay.h"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -45,9 +46,10 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     nr::rstd::allocator<RealisticCamera> cameraAllocator;
     RealisticCamera* realisticCamera = cameraAllocator.allocate(1);
     cameraAllocator.construct(realisticCamera);
+    realisticCamera->sensor.setImageSensorPath(
+        "/home/marcel/GitRepositories/ROSS/resources/sensors/onsemi_AR0237.json");
     realisticCamera->load(
         "/home/marcel/GitRepositories/ROSS/resources/lenses/canon_automotive_fisheye/canon_automotive_fisheye.zmx",
-        "/home/marcel/GitRepositories/ROSS/resources/sensors/onsemi_AR0237.json",
         "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/schott.AGF;"
         "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/ohara.AGF;"
         "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/misc.agf");
@@ -125,6 +127,8 @@ void NoorRay::runUi() {
     raytracer->setTimingEnabled(true);
 
     int frame = 0;
+    int submittedSamples = 0;
+    bool renderComplete = false;
     uint64_t displayedRenderValue = 0;
     bool isRunning = true, isFullscreen = false, firstFrame = true;
 
@@ -204,21 +208,34 @@ void NoorRay::runUi() {
                         if (scene.isDirty(Lights))   raytracer->updateLights();
                         if (scene.isDirty(TLAS))     raytracer->updateTLAS();
 
-                        if (firstFrame || scene.isDirty(Accumulation))
-                            frame = 0;
-                        else
-                            ++frame;
-
-                        scene.clearDirtyFlags();
-                        firstFrame = false;
-                        raytracer->render(PushData{.frame = frame});
-                        // render() harvests the completed frame's CUDA events
-                        // before asynchronously submitting the next frame.
-                        debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
-
+                        const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
                         const int spp = std::max(1, scene.getRenderSettings().samples);
-                        debugPanel->setSampleInfo(
-                            (frame + 1) * spp, scene.getRenderSettings().maxSamples);
+                        const int maxSamples = std::max(1, scene.getRenderSettings().maxSamples);
+
+                        if (resetAccumulation) {
+                            frame = 0;
+                            submittedSamples = 0;
+                            renderComplete = false;
+                        }
+
+                        if (renderComplete) {
+                            debugPanel->setSampleInfo(submittedSamples, maxSamples);
+                        } else {
+                            if (!resetAccumulation)
+                                ++frame;
+
+                            scene.clearDirtyFlags();
+                            firstFrame = false;
+                            raytracer->render(PushData{.frame = frame});
+                            // render() harvests the completed frame's CUDA events
+                            // before asynchronously submitting the next frame.
+                            debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
+
+                            submittedSamples = std::min((frame + 1) * spp, maxSamples);
+                            renderComplete = submittedSamples >= maxSamples;
+                            debugPanel->setSampleInfo(
+                                submittedSamples, maxSamples);
+                        }
                     }
                 }
             }

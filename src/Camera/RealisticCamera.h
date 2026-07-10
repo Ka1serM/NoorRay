@@ -49,12 +49,13 @@ public:
 #endif
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState& rng, uint32_t, const float wavelengthNm,
+        float nx, float ny, RandomState& rng, uint32_t, SampledWavelengths& wavelengths,
         bool centered = false) const
     {
 #if defined(NR_OPTIX_PTX_BUILD)
         return false;
 #else
+        wavelengths.terminateSecondary();
         weight = 0.0f;
         const ross::Vector2f sample(
             centered ? 0.5f : randomFloat(rng),
@@ -64,7 +65,7 @@ public:
             return false;
 
         ross::FromFilmToWorldRaytracer raytracer(*rossLens);
-        const auto traced = raytracer.trace(filmRay, wavelengthNm);
+        const auto traced = raytracer.trace(filmRay, wavelengths[0]);
         if (!traced)
             return false;
 
@@ -82,7 +83,10 @@ public:
 #ifndef NR_GPU_CODE
     ~RealisticCamera();
     bool renderUi();
-    void load(std::string lensPath, std::string sensorPath, std::string glassCatalogPaths);
+    void load(std::string lensPath, std::string glassCatalogPaths);
+    void setOpticsPaths(std::string lensPath, std::string glassCatalogPaths);
+    const std::string& getLensPath() const { return lensPath; }
+    const std::string& getGlassCatalogPaths() const { return glassCatalogPaths; }
     float derivedFocalLengthMm() const { return effectiveFocalLengthM * 1000.0f; }
     float apertureDiameterMm{0.f};
     void loadLensAndSensor();
@@ -95,14 +99,12 @@ public:
 
 private:
     std::string lensPath;
-    std::string sensorPath;
     std::string glassCatalogPaths;
     float effectiveFocalLengthM = 0.045f;
     std::string loadStatus;
     bool opticsDirty = true;
 
     std::unique_ptr<pfd::open_file> lensDialog;
-    std::unique_ptr<pfd::open_file> sensorDialog;
     std::unique_ptr<pfd::open_file> glassCatalogDialog;
 
     void freeRossLens();

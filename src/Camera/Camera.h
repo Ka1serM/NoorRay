@@ -17,18 +17,20 @@ class ThinLensCamera;
 class OrthographicCamera;
 class FisheyeCamera;
 class RealisticCamera;
+class RossPsfCamera;
 
 class Camera : public nr::TaggedPointer<
     PerspectiveCamera,
     ThinLensCamera,
     OrthographicCamera,
     FisheyeCamera,
-    RealisticCamera>
+    RealisticCamera,
+    RossPsfCamera>
 {
 public:
     using nr::TaggedPointer<
         PerspectiveCamera, ThinLensCamera, OrthographicCamera,
-        FisheyeCamera, RealisticCamera>::TaggedPointer;
+        FisheyeCamera, RealisticCamera, RossPsfCamera>::TaggedPointer;
 
     Sensor sensor;
     glm::mat4 cameraToWorld{1.f};
@@ -56,3 +58,4 @@ public:
 #include "Camera/OrthographicCamera.h"
 #include "Camera/FisheyeCamera.h"
 #include "Camera/RealisticCamera.h"
+#include "Camera/RossPsfCamera.h"

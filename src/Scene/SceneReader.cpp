@@ -12,6 +12,7 @@
 #include "Camera/OrthographicCamera.h"
 #include "Camera/PerspectiveCamera.h"
 #include "Camera/RealisticCamera.h"
+#include "Camera/RossPsfCamera.h"
 #include "Camera/ThinLensCamera.h"
 #include "CUDA/rstd/Allocator.h"
 #include "Mesh/MeshAsset.h"
@@ -59,6 +60,12 @@ Camera makeCamera(const nr::sceneio::CameraFile& file)
         allocator.construct(realistic);
         realistic->apertureDiameterMm = file.aperture_diameter;
         camera = Camera(realistic);
+    } else if (file.type == "rosspsf") {
+        nr::rstd::allocator<RossPsfCamera> allocator;
+        RossPsfCamera* rossPsf = allocator.allocate(1);
+        allocator.construct(rossPsf);
+        rossPsf->apertureDiameterMm = file.aperture_diameter;
+        camera = Camera(rossPsf);
     } else if (file.type == "thinlens") {
         nr::rstd::allocator<ThinLensCamera> allocator;
         ThinLensCamera* thinLens = allocator.allocate(1);
@@ -87,6 +94,7 @@ Camera makeCamera(const nr::sceneio::CameraFile& file)
 
     camera.setFocalLength(file.focal_length);
     camera.setFocusDistance(file.focus_distance);
+    camera.getSensor().setImageSensorPath(file.sensor);
     camera.getSensor().setResolution(
         std::max(file.resolution[0], 1u),
         std::max(file.resolution[1], 1u));
@@ -99,7 +107,9 @@ void addCamera(Scene& scene, const nr::sceneio::CameraFile& file)
     Transform transform{toVec3(file.position), toVec3(file.rotation_euler), toVec3(file.scale)};
     auto cameraInstance = std::make_unique<CameraInstance>(scene, "Camera", transform, camera);
     if (file.type == "realistic" && !file.lens.empty() && !file.sensor.empty())
-        cameraInstance->loadRealisticLens(file.lens, file.sensor, file.glass_catalogs);
+        cameraInstance->loadRealisticLens(file.lens, file.glass_catalogs);
+    else if (file.type == "rosspsf" && !file.lens.empty() && !file.sensor.empty())
+        cameraInstance->loadRossPsfCamera(file.lens, file.glass_catalogs, {});
     scene.add(std::move(cameraInstance));
 }
 

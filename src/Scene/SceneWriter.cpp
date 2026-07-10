@@ -73,6 +73,7 @@ nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
     case CameraProjectionType::Fisheye: file.type = "fisheye"; break;
     case CameraProjectionType::ThinLens: file.type = "thinlens"; break;
     case CameraProjectionType::Realistic: file.type = "realistic"; break;
+    case CameraProjectionType::RossPsf: file.type = "rosspsf"; break;
     case CameraProjectionType::Perspective: file.type = "perspective"; break;
     }
 
@@ -89,6 +90,14 @@ nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
     }
     const glm::uvec2 resolution = camera->getSensor().resolution();
     file.resolution = {resolution.x, resolution.y};
+    file.sensor = std::string(camera->getSensor().getImageSensorPath());
+    if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
+        file.lens = realistic->getLensPath();
+        file.glass_catalogs = realistic->getGlassCatalogPaths();
+    } else if (const auto* rossPsf = camera->CastOrNullptr<RossPsfCamera>()) {
+        file.lens = rossPsf->getLensPath();
+        file.glass_catalogs = rossPsf->getGlassCatalogPaths();
+    }
     return file;
 }
 

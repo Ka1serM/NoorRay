@@ -12,19 +12,82 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
     const PathState state = params.queues.pathStates[pixel];
     const float alpha = static_cast<float>((state.packedCounters >> CounterHitShift) & 1u);
 
-    // Spectral radiance → linear sRGB via CIE XYZ.
-    const glm::vec3 xyz = spectrumToXYZ(
-        state.radiance, state.wl, params.scene.cieX, params.scene.cieY, params.scene.cieZ);
-    glm::vec3 radiance = xyzToLinearSRGB(xyz);
-
     const uint32_t x = pixel % params.frame.width;
     const uint32_t y = pixel / params.frame.width;
-    const float weight = params.frame.totalAccumulated == 0
-        ? 1.0f : 1.0f / static_cast<float>(params.frame.totalAccumulated + 1);
-    const glm::vec4 previous = params.accumulation[pixel];
-    radiance = glm::mix(glm::vec3(previous.x, previous.y, previous.z), radiance, weight);
-    const float accAlpha = previous.w * (1.0f - weight) + alpha * weight;
-    params.accumulation[pixel] = glm::vec4(radiance, accAlpha);
-    surf2Dwrite(make_float4(radiance.x, radiance.y, radiance.z, accAlpha),
+    SensorSampleContext ctx{};
+    ctx.accumulation = params.accumulation;
+    ctx.psfBuckets = params.psfGatherBuckets;
+    ctx.width = params.frame.width;
+    ctx.height = params.frame.height;
+    ctx.totalAccumulated = params.frame.totalAccumulated;
+    ctx.alpha = alpha;
+    ctx.cieX = params.scene.cieX;
+    ctx.cieY = params.scene.cieY;
+    ctx.cieZ = params.scene.cieZ;
+
+    const Sensor& sensor = params.scene.camera->Dispatch([](const auto* camera) -> const Sensor& {
+        return camera->sensor;
+    });
+    if (sensor) {
+        sensor.Dispatch([&](const auto* concreteSensor) {
+            concreteSensor->addSample(pixel, state.radiance, state.wl, 1.0f, ctx);
+        });
+        if (sensor.Is<RectangularSensor>() || sensor.Is<GatherPsfSensor>()) {
+            const glm::vec4 out = params.accumulation[pixel];
+            surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
+                params.output.color, x * sizeof(float4), y);
+        }
+    } else {
+        RectangularSensor direct;
+        direct.copyPhysicalFrom(sensor);
+        direct.addSample(pixel, state.radiance, state.wl, 1.0f, ctx);
+        const glm::vec4 out = params.accumulation[pixel];
+        surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
+            params.output.color, x * sizeof(float4), y);
+    }
+}
+
+NR_GPU_KERNEL void resolveScatterPsfKernel(const KernelParams params)
+{
+    const uint32_t pixel = NR_GPU_LAUNCH_IDX;
+    const uint32_t pixelCount = params.frame.width * params.frame.height;
+    if (pixel >= pixelCount || params.accumulation == nullptr)
+        return;
+
+    const Sensor& sensor = params.scene.camera->Dispatch([](const auto* camera) -> const Sensor& {
+        return camera->sensor;
+    });
+    const ScatterPsfSensor* scatterSensor = sensor.CastOrNullptr<ScatterPsfSensor>();
+    if (scatterSensor == nullptr)
+        return;
+
+    const glm::vec4 out = scatterSensor->resolvePixel(pixel, params.frame.width, params.accumulation);
+    const uint32_t x = pixel % params.frame.width;
+    const uint32_t y = pixel / params.frame.width;
+    surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
         params.output.color, x * sizeof(float4), y);
+}
+
+NR_GPU_KERNEL void applyGatherPsfKernel(const KernelParams params)
+{
+    const uint32_t pixel = NR_GPU_LAUNCH_IDX;
+    const uint32_t pixelCount = params.frame.width * params.frame.height;
+    if (pixel >= pixelCount || params.psfGatherBuckets == nullptr || params.psfBinCount == 0)
+        return;
+
+    const Sensor& sensor = params.scene.camera->Dispatch([](const auto* camera) -> const Sensor& {
+        return camera->sensor;
+    });
+    const GatherPsfSensor* gatherSensor = sensor.CastOrNullptr<GatherPsfSensor>();
+    if (gatherSensor == nullptr)
+        return;
+
+    const int destX = static_cast<int>(pixel % params.frame.width);
+    const int destY = static_cast<int>(pixel / params.frame.width);
+    const glm::vec4 out = gatherSensor->resolvePixel(
+        pixel, params.frame.width, params.frame.height,
+        params.psfBinCount, params.psfGatherBuckets);
+    params.accumulation[pixel] = out;
+    surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
+        params.output.color, destX * sizeof(float4), destY);
 }

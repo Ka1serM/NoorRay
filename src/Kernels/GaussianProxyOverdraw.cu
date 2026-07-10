@@ -57,9 +57,10 @@ extern "C" __global__ void __raygen__gaussianProxyOverdraw()
     glm::vec3 direction{};
     float cameraWeight = 1.0f;
     RandomState rng = seedRandom(static_cast<uint64_t>(pixel));
+    SampledWavelengths wl = SampledWavelengths::sampleVisible(0.5f);
     const bool active = params.scene.camera->Dispatch([&](const auto* camera) {
         return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
-            pixel, 550.0f, true);
+            pixel, wl, true);
     });
 
     uint32_t count = 0;

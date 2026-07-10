@@ -38,10 +38,8 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y) / static_cast<float>(params.frame.height) * 2.0f;
         active = params.scene.camera->Dispatch([&](const auto* camera) {
             return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
-                pixel, wl[0]);
+                pixel, wl);
         });
-        if (active && params.scene.camera->Is<RealisticCamera>())
-            wl.terminateSecondary();
 
         // Camera samples rejected by the lens still represent a black sample.
         // Initialize their state so finalization does not reuse the previous path.
@@ -49,7 +47,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         {
             PathState state{};
             state.wl = wl;
-            if (params.scene.camera->Is<RealisticCamera>())
+            if (params.scene.camera->Is<RealisticCamera>() || params.scene.camera->Is<RossPsfCamera>())
                 state.packedCounters |= 1u << CounterHitShift;
             state.rngState = rng;
             params.queues.pathStates[pixel] = state;

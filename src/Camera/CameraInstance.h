@@ -15,6 +15,7 @@ enum class CameraProjectionType : int {
     Fisheye,
     ThinLens,
     Realistic,
+    RossPsf,
 };
 
 class CameraInstance : public SceneObject {
@@ -49,8 +50,9 @@ public:
     bool getArcballActive() const { return arcballMode; }
 
     void switchTo(CameraProjectionType type);
-    void loadRealisticLens(const std::string& lensPath, const std::string& sensorPath,
-                           const std::string& glassCatalogPaths);
+    void loadRealisticLens(const std::string& lensPath, const std::string& glassCatalogPaths);
+    void loadRossPsfCamera(const std::string& lensPath, const std::string& glassCatalogPaths,
+                           const std::string& rayLutPath);
     void setApertureDiameter(float mm);
     std::unique_ptr<SceneObject> clone() const override;
 

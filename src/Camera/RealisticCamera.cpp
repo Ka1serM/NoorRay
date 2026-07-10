@@ -5,13 +5,13 @@
 #include <cstdio>
 #include <imgui.h>
 #include <string>
+#include <stdexcept>
 #include "Raytracing/Sellmeier.h"
 #include "Log.h"
 #include "UI/ImGuiManager.h"
 #include "libross/foundation/gpu/types/Allocator.h"
 #include "libross/imaging/cameralens/lenssystemio/CameraLensSystemReader.h"
 #include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupilCalculator.h"
-#include "libross/imaging/imagesensor/ImageSensorReader.h"
 #include "openlensfileio/glasscatalogs/glasscatalog/GlassCatalogLibrary.h"
 
 namespace {
@@ -41,13 +41,17 @@ const char* surfaceGeometryLabel(const ross::LensSurface& surf)
 }
 }
 
-void RealisticCamera::load(std::string lensPath_, std::string sensorPath_,
-                           std::string glassCatalogPaths_)
+void RealisticCamera::load(std::string lensPath_, std::string glassCatalogPaths_)
 {
     lensPath           = std::move(lensPath_);
-    sensorPath         = std::move(sensorPath_);
     glassCatalogPaths  = std::move(glassCatalogPaths_);
     loadLensAndSensor();
+}
+
+void RealisticCamera::setOpticsPaths(std::string lensPath_, std::string glassCatalogPaths_)
+{
+    lensPath = std::move(lensPath_);
+    glassCatalogPaths = std::move(glassCatalogPaths_);
 }
 
 RealisticCamera::~RealisticCamera()
@@ -76,7 +80,7 @@ void RealisticCamera::loadLensAndSensor()
     freeRossLens();
     opticsDirty = true;
 
-    if (lensPath.empty() || sensorPath.empty()) {
+    if (lensPath.empty() || sensor.getImageSensorPath().empty()) {
         sensorWidthCm = 0.0f;
         sensorHeightCm = 0.0f;
         filmDiagonalCm = 0.0f;
@@ -105,14 +109,11 @@ void RealisticCamera::loadLensAndSensor()
         rossLens = lensAlloc.allocate(1);
         lensAlloc.construct(rossLens, loaded);
 
-        ross::ImageSensor rossSensor = ross::ImageSensorReader::readFile(sensorPath);
+        if (!sensor.loadImageSensorDimensions())
+            throw std::runtime_error("Failed to load image sensor");
 
-        sensor.widthMm = rossSensor.dimensions.width.millimeter();
-        sensor.heightMm = rossSensor.dimensions.height.millimeter();
-        sensor.resolutionWidth = rossSensor.resolution.width;
-        sensor.resolutionHeight = rossSensor.resolution.height;
-        sensorWidthCm = rossSensor.dimensions.width.centimeter();
-        sensorHeightCm = rossSensor.dimensions.height.centimeter();
+        sensorWidthCm = sensor.width() * 0.1f;
+        sensorHeightCm = sensor.height() * 0.1f;
         filmDiagonalCm = std::sqrt(
             sensorWidthCm * sensorWidthCm + sensorHeightCm * sensorHeightCm);
 
@@ -154,14 +155,6 @@ bool RealisticCamera::renderUi()
         }
         lensDialog.reset();
     }
-    if (sensorDialog && sensorDialog->ready(0)) {
-        const auto selection = sensorDialog->result();
-        if (!selection.empty()) {
-            sensorPath = selection.front();
-            loadLensAndSensor();
-        }
-        sensorDialog.reset();
-    }
     if (glassCatalogDialog && glassCatalogDialog->ready(0)) {
         const auto selection = glassCatalogDialog->result();
         if (!selection.empty()) {
@@ -172,10 +165,8 @@ bool RealisticCamera::renderUi()
     }
 
     std::array<char, 512> lensBuffer{};
-    std::array<char, 512> sensorBuffer{};
     std::array<char, 1024> glassCatalogBuffer{};
     std::snprintf(lensBuffer.data(), lensBuffer.size(), "%s", lensPath.c_str());
-    std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensorPath.c_str());
     std::snprintf(glassCatalogBuffer.data(), glassCatalogBuffer.size(), "%s", glassCatalogPaths.c_str());
 
     const float selectButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -206,20 +197,6 @@ bool RealisticCamera::renderUi()
             "Select Glass Catalogs", ".",
             std::vector<std::string>{"Glass Catalogs", "*.agf *.AGF", "All Files", "*"},
             pfd::opt::multiselect);
-    }
-    ImGui::EndDisabled();
-
-    ImGuiManager::tableRowLabel("Sensor File");
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - ImGui::GetStyle().ItemSpacing.x);
-    if (ImGui::InputText("##RealisticSensorPath", sensorBuffer.data(), sensorBuffer.size()))
-        sensorPath = sensorBuffer.data();
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(sensorDialog != nullptr);
-    if (ImGui::Button("Select##RealisticSensor", ImVec2(selectButtonWidth, 0))) {
-        sensorDialog = std::make_unique<pfd::open_file>(
-            "Select Sensor File", ".",
-            std::vector<std::string>{"Sensor Files", "*.json", "All Files", "*"});
     }
     ImGui::EndDisabled();
 

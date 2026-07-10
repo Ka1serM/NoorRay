@@ -6,6 +6,7 @@
 #include <utility>
 #include <imgui.h>
 #include "Camera/RealisticCamera.h"
+#include "Camera/RossPsfCamera.h"
 #include "CUDA/rstd/Allocator.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/quaternion.hpp"
@@ -18,16 +19,45 @@
 void CameraInstance::allocateCamera(CameraProjectionType type)
 {
     Camera state{};
-    if (gpuCamera != nullptr && *gpuCamera)
+    Sensor transferredSensor(nullptr);
+    std::string sharedLensPath;
+    std::string sharedGlassCatalogPaths;
+    if (gpuCamera != nullptr && *gpuCamera) {
         state = gpuCamera->DispatchCPU([](const auto* camera) {
             return static_cast<const Camera&>(*camera);
         });
+        gpuCamera->DispatchCPU([&](const auto* camera) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(*camera)>, RealisticCamera>) {
+                sharedLensPath = camera->getLensPath();
+                sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
+            } else if constexpr (std::is_same_v<std::remove_cvref_t<decltype(*camera)>, RossPsfCamera>) {
+                sharedLensPath = camera->getLensPath();
+                sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
+            }
+        });
+        gpuCamera->DispatchCPU([&](auto* camera) {
+            transferredSensor.moveConcreteFrom(camera->sensor);
+        });
+        state.sensor = Sensor(nullptr);
+    }
     freeCamera();
     auto allocate = [&]<typename T>() {
         nr::rstd::allocator<T> allocator;
         T* camera = allocator.allocate(1);
         allocator.construct(camera);
         static_cast<Camera&>(*camera) = state;
+        camera->sensor.moveConcreteFrom(transferredSensor);
+        if (!camera->sensor)
+            camera->sensor.allocateRectangular();
+        if constexpr (std::is_same_v<T, RealisticCamera> || std::is_same_v<T, RossPsfCamera>)
+            camera->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
+        if constexpr (std::is_same_v<T, RossPsfCamera>) {
+            if (!sharedLensPath.empty() && !camera->sensor.getImageSensorPath().empty())
+                camera->loadLensSensorAndPsf();
+        } else if constexpr (std::is_same_v<T, RealisticCamera>) {
+            if (!sharedLensPath.empty() && !camera->sensor.getImageSensorPath().empty())
+                camera->loadLensAndSensor();
+        }
         *gpuCamera = Camera(camera);
     };
     switch (type) {
@@ -35,6 +65,7 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
     case CameraProjectionType::Orthographic: allocate.template operator()<OrthographicCamera>(); break;
     case CameraProjectionType::Fisheye: allocate.template operator()<FisheyeCamera>(); break;
     case CameraProjectionType::Realistic: allocate.template operator()<RealisticCamera>(); break;
+    case CameraProjectionType::RossPsf: allocate.template operator()<RossPsfCamera>(); break;
     case CameraProjectionType::Perspective:
     default: allocate.template operator()<PerspectiveCamera>(); break;
     }
@@ -46,6 +77,7 @@ void CameraInstance::freeCamera()
         return;
     gpuCamera->DispatchCPU([](auto* cam) {
         using CameraType = std::remove_reference_t<decltype(*cam)>;
+        cam->sensor.freeConcrete();
         nr::rstd::allocator<CameraType> allocator;
         allocator.destroy(cam);
         allocator.deallocate(cam, 1);
@@ -63,6 +95,17 @@ CameraInstance::CameraInstance(Scene& scene, const std::string& name, Transform 
     gpuCamera = allocator.allocate(1);
     allocator.construct(gpuCamera);
     *gpuCamera = camera;
+    if (*gpuCamera) {
+        gpuCamera->DispatchCPU([](auto* cam) {
+            if (!cam->sensor) {
+                using CameraType = std::remove_cvref_t<decltype(*cam)>;
+                if constexpr (std::is_same_v<CameraType, RossPsfCamera>)
+                    cam->sensor.allocateGatherPsf();
+                else
+                    cam->sensor.allocateRectangular();
+            }
+        });
+    }
     rebuildCamera();
 }
 
@@ -78,7 +121,14 @@ CameraInstance::CameraInstance(const CameraInstance& other)
     const Camera state = other.gpuCamera->DispatchCPU([](const auto* camera) {
         return static_cast<const Camera&>(*camera);
     });
-    gpuCamera->DispatchCPU([&](auto* camera) { static_cast<Camera&>(*camera) = state; });
+    const Sensor& otherSensor = other.gpuCamera->DispatchCPU([](const auto* camera) -> const Sensor& {
+        return camera->sensor;
+    });
+    gpuCamera->DispatchCPU([&](auto* camera) {
+        static_cast<Camera&>(*camera) = state;
+        camera->sensor = Sensor(nullptr);
+        camera->sensor.cloneConcreteFrom(otherSensor);
+    });
     rebuildCamera();
 }
 
@@ -98,11 +148,18 @@ void CameraInstance::markDirty()
     scene.setDirtyFlag(Accumulation);
 }
 
-void CameraInstance::loadRealisticLens(const std::string& lensPath, const std::string& sensorPath,
-                                        const std::string& glassCatalogPaths)
+void CameraInstance::loadRealisticLens(const std::string& lensPath, const std::string& glassCatalogPaths)
 {
     if (auto* rc = gpuCamera->CastOrNullptr<RealisticCamera>())
-        rc->load(lensPath, sensorPath, glassCatalogPaths);
+        rc->load(lensPath, glassCatalogPaths);
+    scene.setDirtyFlag(Accumulation);
+}
+
+void CameraInstance::loadRossPsfCamera(const std::string& lensPath, const std::string& glassCatalogPaths,
+    const std::string& rayLutPath)
+{
+    if (auto* rc = gpuCamera->CastOrNullptr<RossPsfCamera>())
+        rc->load(lensPath, glassCatalogPaths, rayLutPath);
     scene.setDirtyFlag(Accumulation);
 }
 
@@ -160,6 +217,7 @@ CameraProjectionType CameraInstance::getProjectionType() const
     if (gpuCamera->Is<OrthographicCamera>()) return CameraProjectionType::Orthographic;
     if (gpuCamera->Is<FisheyeCamera>())     return CameraProjectionType::Fisheye;
     if (gpuCamera->Is<RealisticCamera>())   return CameraProjectionType::Realistic;
+    if (gpuCamera->Is<RossPsfCamera>())     return CameraProjectionType::RossPsf;
     return CameraProjectionType::Perspective;
 }
 
@@ -169,6 +227,7 @@ const char* CameraInstance::getProjectionName() const
     if (gpuCamera->Is<OrthographicCamera>()) return "Orthographic";
     if (gpuCamera->Is<FisheyeCamera>())     return "Fisheye";
     if (gpuCamera->Is<RealisticCamera>())   return "Realistic";
+    if (gpuCamera->Is<RossPsfCamera>())     return "Hybrid PSF";
     return "Perspective";
 }
 
@@ -181,10 +240,10 @@ mat4 CameraInstance::getViewMatrix() const
 
 mat4 CameraInstance::getProjectionMatrix() const
 {
-    const Sensor sensor = gpuCamera->DispatchCPU([](const auto* camera) { return camera->sensor; });
+    const Sensor& sensor = gpuCamera->DispatchCPU([](const auto* camera) -> const Sensor& { return camera->sensor; });
     const float aspect = sensor.aspectRatio();
     const float focalLength = gpuCamera->DispatchCPU([](const auto* camera) { return camera->focalLengthMm; });
-    const float fovY = 2.f * std::atan(sensor.heightMm / (2.f * focalLength));
+    const float fovY = 2.f * std::atan(sensor.height() / (2.f * focalLength));
     return perspective(fovY, aspect, 0.01f, 10000.f);
 }
 
@@ -274,11 +333,12 @@ bool CameraInstance::renderUi()
         ImGuiManager::tableRowLabel("Projection");
         static const CameraProjectionType projectionTypes[] = {
             CameraProjectionType::Perspective, CameraProjectionType::ThinLens,
-            CameraProjectionType::Realistic,   CameraProjectionType::Orthographic,
-            CameraProjectionType::Fisheye,
+            CameraProjectionType::Realistic,   CameraProjectionType::RossPsf,
+            CameraProjectionType::Orthographic, CameraProjectionType::Fisheye,
         };
-        static const char* projectionNames[] = {"Perspective", "Thin Lens", "Realistic", "Orthographic", "Fisheye"};
-        constexpr int projectionCount = 5;
+        static const char* projectionNames[] = {
+            "Perspective", "Thin Lens", "Realistic", "Hybrid PSF", "Orthographic", "Fisheye"};
+        constexpr int projectionCount = 6;
         int projectionIndex = 0;
         for (int i = 0; i < projectionCount; ++i)
             if (projectionTypes[i] == getProjectionType()) { projectionIndex = i; break; }

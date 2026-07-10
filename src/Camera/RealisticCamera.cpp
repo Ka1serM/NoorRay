@@ -94,8 +94,11 @@ void RealisticCamera::loadLensAndSensor()
 
         ross::CameraLens loaded =
             ross::CameraLensSystemReader::readCameraLens(lensPath, catalogs);
-        if (apertureDiameterMm > 0.0f)
+        if (apertureDiameterMm > 0.0f) {
             loaded.changeAperture_mm(apertureDiameterMm);
+        } else {
+            apertureDiameterMm = std::max(0.0f, loaded.getApertureRadius() * 20.0f);
+        }
         loaded.focusLens(focusDistance * 100.0f);
 
         ross::rstd::allocator<ross::CameraLens> lensAlloc;
@@ -220,19 +223,21 @@ bool RealisticCamera::renderUi()
     }
     ImGui::EndDisabled();
 
+    bool changed = false;
+
     if (ImGui::Button("Reload##RealisticCamera")) {
         loadLensAndSensor();
+        changed = true;
     }
     ImGui::SameLine();
     ImGui::TextUnformatted(loadStatus.c_str());
-
-    bool changed = false;
 
     ImGuiManager::dragFloatRow("Aperture Diameter (mm)", apertureDiameterMm, 0.1f, 0.f, 64.f, [&](float value) {
         apertureDiameterMm = std::max(0.f, value);
         if (rossLens != nullptr && apertureDiameterMm > 0.0f)
             rossLens->changeAperture_mm(apertureDiameterMm);
         loadLensAndSensor();
+        changed = true;
     });
 
     ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
@@ -240,6 +245,7 @@ bool RealisticCamera::renderUi()
         if (rossLens != nullptr)
             rossLens->focusLens(focusDistance * 100.0f);
         loadLensAndSensor();
+        changed = true;
     });
 
     const bool sensorChanged = sensor.renderUi();

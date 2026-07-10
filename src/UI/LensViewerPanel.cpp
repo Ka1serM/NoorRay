@@ -74,7 +74,6 @@ void LensViewerPanel::retraceRays(const RealisticCamera& camera)
 {
     rays.clear();
     settingsDirty = false;
-    fitPending = true;
     if (camera.rossLens == nullptr || camera.rossLens->surfaces.empty())
         return;
 

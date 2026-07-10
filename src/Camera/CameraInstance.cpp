@@ -109,7 +109,7 @@ void CameraInstance::loadRealisticLens(const std::string& lensPath, const std::s
 void CameraInstance::setApertureDiameter(float mm)
 {
     if (auto* rc = gpuCamera->CastOrNullptr<RealisticCamera>()) {
-        rc->apertureDiameterMm = mm;
+        rc->apertureDiameterMm = std::max(0.0f, mm);
         rc->loadLensAndSensor();
     }
     scene.setDirtyFlag(Accumulation);

@@ -43,7 +43,7 @@ public:
         filmRay = ross::Ray::betweenPoints(
             ross::Vector3f(filmPos.x, filmPos.y, 0.0f),
             ross::Vector3f(pupil.point.x, pupil.point.y,
-                rossLens->getSurfaceCenter(rossLens->getLastSurface())));
+                rossLens->getLastSurface().center));
         return true;
     }
 #endif

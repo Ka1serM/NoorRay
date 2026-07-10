@@ -116,7 +116,7 @@ void LensViewerPanel::drawCanvas(const RealisticCamera* camera)
     float zMin = 0.0f, zMax = 0.0f, heightMax = 0.0f;
     if (camera != nullptr && camera->rossLens != nullptr) {
         for (const auto& surf : camera->rossLens->surfaces) {
-            const float z = camera->rossLens->getSurfaceCenter(surf);
+            const float z = surf.center;
             zMin = std::min(zMin, z);
             zMax = std::max(zMax, z);
             heightMax = std::max(heightMax, surf.apertureRadius);
@@ -175,7 +175,7 @@ void LensViewerPanel::drawCanvas(const RealisticCamera* camera)
 
     if (camera != nullptr && camera->rossLens != nullptr) {
         for (const auto& surf : camera->rossLens->surfaces) {
-            const float z = camera->rossLens->getSurfaceCenter(surf);
+            const float z = surf.center;
             if (surf.isAperture()) {
                 // Draw iris blades: two short bars radiating outward from the stop radius.
                 const float r0 = surf.apertureRadius;

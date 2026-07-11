@@ -36,8 +36,7 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Tonemapping");
         ImGui::TableSetColumnIndex(1);
-        changed |= ImGui::Checkbox(
-            "##Tonemapping", reinterpret_cast<bool*>(&settings.tonemappingEnabled));
+        changed |= ImGui::Checkbox("##Tonemapping", &settings.tonemappingEnabled);
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -74,10 +73,10 @@ void RenderSettingsPanel::renderUi()
         ImGui::TextUnformatted("Gaussian Proxy");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        int proxyType = settings.gaussianProxyType;
+        int proxyType = static_cast<int>(settings.gaussianProxyType);
         if (ImGui::Combo("##GaussianProxy", &proxyType, kProxyNames, IM_ARRAYSIZE(kProxyNames)))
         {
-            settings.gaussianProxyType = proxyType;
+            settings.gaussianProxyType = static_cast<GaussianProxyType>(proxyType);
             changed = true;
             scene.setDirtyFlag(TLAS);
         }
@@ -114,8 +113,7 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Proxy Overdraw");
         ImGui::TableSetColumnIndex(1);
-        changed |= ImGui::Checkbox("##ProxyOverdraw",
-            reinterpret_cast<bool*>(&settings.gaussianProxyOverdrawVisualization));
+        changed |= ImGui::Checkbox("##ProxyOverdraw", &settings.gaussianProxyOverdrawVisualization);
 
         if (settings.gaussianProxyOverdrawVisualization)
         {
@@ -132,7 +130,7 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Transparent Background");
         ImGui::TableSetColumnIndex(1);
-        changed |= ImGui::Checkbox("##TransparentBg", reinterpret_cast<bool*>(&settings.transparentBackground));
+        changed |= ImGui::Checkbox("##TransparentBg", &settings.transparentBackground);
 
         static constexpr const char* kBufferVisNames[] = {
             "Beauty", "Albedo", "Normal", "Cryptomatte", "Position"

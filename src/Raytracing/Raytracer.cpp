@@ -802,7 +802,7 @@ void Raytracer::render(const PushData& pushData)
         --aovStaleBuffers;
     }
 
-    if (renderSettings.gaussianProxyOverdrawVisualization != 0)
+    if (renderSettings.gaussianProxyOverdrawVisualization)
     {
         kernelStats.time("GenerateProxyOverdrawRays", stream,
             [&] { launchGenerateAov(params, stream); });

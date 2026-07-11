@@ -60,7 +60,7 @@ VertexOutput vertMain(uint vertexId : SV_VertexID, uint instanceId : SV_Instance
     // Screen-space pixel offset converted back to a clip-space delta (NDC y grows
     // upward while pixel y grows downward, hence the sign flip), then scaled by
     // clip.w so it survives the hardware's perspective divide unchanged.
-    const float2 ndcOffset = corner * pushConstants.radius * 2.0 * float2(2.0, -2.0) / pushConstants.screenSize;
+    const float2 ndcOffset = corner * pushConstants.radius * float2(2.0, -2.0) / pushConstants.screenSize;
 
     output.clipPosition = float4((ndc + ndcOffset) * clip.w, clip.z, clip.w);
     output.local = corner;

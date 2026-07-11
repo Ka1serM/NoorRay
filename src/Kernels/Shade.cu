@@ -323,7 +323,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         {
             const bool cameraRay       = state.depth == 0;
             const bool backgroundVisible = params.scene.environment->visible != 0 &&
-                params.scene.renderSettings.transparentBackground == 0;
+                !params.scene.renderSettings.transparentBackground;
             if (!cameraRay || backgroundVisible) {
                 float misWeight = 1.0f;
                 if (!cameraRay) {

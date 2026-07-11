@@ -189,7 +189,7 @@ void NoorRay::runUi() {
                     {
                         const RenderSettings& renderSettings = scene.getRenderSettings();
                         const bool proxyOverdraw =
-                            renderSettings.gaussianProxyOverdrawVisualization != 0;
+                            renderSettings.gaussianProxyOverdrawVisualization;
                         const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
                         const glm::mat4 viewProjection = scene.getActiveCamera()
                             ? scene.getActiveCamera()->getProjectionMatrix() * scene.getActiveCamera()->getViewMatrix()
@@ -243,7 +243,7 @@ void NoorRay::runUi() {
                         const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
                         const RenderSettings& renderSettings = scene.getRenderSettings();
                         const bool proxyOverdraw =
-                            renderSettings.gaussianProxyOverdrawVisualization != 0;
+                            renderSettings.gaussianProxyOverdrawVisualization;
                         const int spp = std::max(1, renderSettings.samples);
                         const int maxSamples = std::max(1, renderSettings.maxSamples);
 

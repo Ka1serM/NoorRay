@@ -27,6 +27,7 @@ public:
     std::string getType() const override;
     bool renderUi() override;
     void onTransformUpdated() override;
+    glm::vec3 getColor() const;
 
 private:
     friend class Scene;

@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include "CUDA/Unique/Texture.h"
+#include "CUDA/Unique/SharedVector.h"
 #include "CUDA/rstd/Vector.h"
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
@@ -72,11 +73,15 @@ class Scene {
     Environment* environment{};
     RenderSettings renderSettings{};
 
+    // Light arrays — Vulkan-allocated, imported into CUDA/OptiX via an external memory
+    // handle, so the same storage is directly usable from CPU, CUDA, and Vulkan
+    // (e.g. the viewport overlay) without a per-frame copy.
+    nr::cuda::SharedVector<PointLight> pointLights;
+    nr::cuda::SharedVector<SpotLight> spotLights;
+    nr::cuda::SharedVector<RectLight> rectLights;
+    nr::cuda::SharedVector<DirectionalLight> directionalLights;
+
     // GPU data — unified memory arrays
-    nr::rstd::vector<PointLight> pointLights;
-    nr::rstd::vector<SpotLight> spotLights;
-    nr::rstd::vector<RectLight> rectLights;
-    nr::rstd::vector<DirectionalLight> directionalLights;
     nr::rstd::vector<GpuInstance> gpuInstances;
     nr::rstd::vector<float> gaussianOpacities;
     nr::rstd::vector<glm::vec3> gaussianSpectrumCoeffs;
@@ -158,11 +163,17 @@ public:
     // Camera
     CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }
 
-    // Light GPU data (unified memory, one array per type)
+    // Light GPU data, Vulkan/CUDA-shared. Host pointers (below) are for CPU-side use
+    // (UI, transform updates, host-side selection-weight sums); the *Device variants
+    // are the CUDA-mapped view and are the only ones safe to dereference in kernels.
     const PointLight* getPointLights() const { return pointLights.data(); }
     const SpotLight* getSpotLights() const { return spotLights.data(); }
     const RectLight* getRectLights() const { return rectLights.data(); }
     const DirectionalLight* getDirectionalLights() const { return directionalLights.data(); }
+    const PointLight* getPointLightsDevice() const { return pointLights.devicePointer(); }
+    const SpotLight* getSpotLightsDevice() const { return spotLights.devicePointer(); }
+    const RectLight* getRectLightsDevice() const { return rectLights.devicePointer(); }
+    const DirectionalLight* getDirectionalLightsDevice() const { return directionalLights.devicePointer(); }
     uint32_t getPointLightCount() const { return static_cast<uint32_t>(pointLights.size()); }
     uint32_t getSpotLightCount() const { return static_cast<uint32_t>(spotLights.size()); }
     uint32_t getRectLightCount() const { return static_cast<uint32_t>(rectLights.size()); }

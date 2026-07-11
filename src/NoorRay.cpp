@@ -32,6 +32,7 @@
 #include "Scene/SceneReader.h"
 #include "Raytracing/Raytracer.h"
 #include "Vulkan/Viewport.h"
+#include "Scene/LightInstance.h"
 
 // ── GUI constructor ───────────────────────────────────────────────────────────
 
@@ -55,6 +56,13 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
         "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/misc.agf");
     scene.add(std::make_unique<CameraInstance>(
         scene, "Camera", Transform{glm::vec3(0.0f, 0.0f, 5.0f)}, Camera(realisticCamera)));
+
+    // TEMP-BILLBOARD-RASTER-TEST
+    scene.add(std::make_unique<LightInstance>(scene, "TestPoint", Transform(glm::vec3(0.f, 0.f, 0.f)), LightInstance::TypePoint));
+    scene.add(std::make_unique<LightInstance>(scene, "TestSpot", Transform(glm::vec3(-1.f, 0.5f, 0.f)), LightInstance::TypeSpot));
+    scene.add(std::make_unique<LightInstance>(scene, "TestRect", Transform(glm::vec3(1.f, 0.5f, 0.f)), LightInstance::TypeRect));
+    scene.add(std::make_unique<LightInstance>(scene, "TestDir", Transform(glm::vec3(0.f, -0.8f, 0.f)), LightInstance::TypeDirectional));
+    // END TEMP-BILLBOARD-RASTER-TEST
 
     raytracer = std::make_unique<Raytracer>(context, scene);
 
@@ -188,8 +196,12 @@ void NoorRay::runUi() {
                         const bool proxyOverdraw =
                             renderSettings.gaussianProxyOverdrawVisualization != 0;
                         const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
+                        const glm::mat4 viewProjection = scene.getActiveCamera()
+                            ? scene.getActiveCamera()->getProjectionMatrix() * scene.getActiveCamera()->getViewMatrix()
+                            : glm::mat4(1.0f);
+                        viewport->updateBillboards(scene);
                         viewport->dispatch(
-                            cmd, bufferIndex, selectedIndex,
+                            cmd, bufferIndex, selectedIndex, viewProjection,
                             proxyOverdraw ? 0.0f : renderSettings.exposure,
                             proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
                             proxyOverdraw ? 0 : renderSettings.tonemappingEnabled);

@@ -178,14 +178,17 @@ set(SLANGC_BASE
 
 set(SHADER_OUTPUTS
         "${SHADER_DIR}/Viewport/Viewport.spv"
+        "${SHADER_DIR}/Viewport/ViewportBillboards.spv"
 )
 
 add_custom_command(
         OUTPUT ${SHADER_OUTPUTS}
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${SHADER_DIR}/Viewport/Viewport.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Viewport/Viewport.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${SHADER_DIR}/Viewport/ViewportBillboards.slang" -entry vertMain -stage vertex -entry fragMain -stage fragment ${SLANGC_BASE} -o "${SHADER_DIR}/Viewport/ViewportBillboards.spv"
         DEPENDS
         "${SHADER_DIR}/Viewport/Viewport.slang"
-        COMMENT "Compiling the Vulkan viewport shader"
+        "${SHADER_DIR}/Viewport/ViewportBillboards.slang"
+        COMMENT "Compiling the Vulkan viewport shaders"
         VERBATIM
 )
 
@@ -202,6 +205,13 @@ static constexpr unsigned char noorRayViewportSpv[] = {
     #embed \"${SHADER_DIR}/Viewport/Viewport.spv\"
 };
 static constexpr size_t noorRayViewportSpvLength = sizeof(noorRayViewportSpv);\n" @ONLY)
+
+file(CONFIGURE OUTPUT "${NR_GEN}/ViewportBillboardsSpv.h" CONTENT
+"#pragma once
+static constexpr unsigned char noorRayViewportBillboardsSpv[] = {
+    #embed \"${SHADER_DIR}/Viewport/ViewportBillboards.spv\"
+};
+static constexpr size_t noorRayViewportBillboardsSpvLength = sizeof(noorRayViewportBillboardsSpv);\n" @ONLY)
 
 file(CONFIGURE OUTPUT "${NR_GEN}/ImGuiFont.h" CONTENT
 "#pragma once
@@ -314,6 +324,7 @@ add_library(NoorRayCuda STATIC
         src/Raytracing/GaussianProxyBlas.cpp
         src/CUDA/Unique/Texture.cpp
         src/CUDA/Unique/SharedImage.cpp
+        src/CUDA/Unique/SharedBuffer.cpp
         src/CUDA/rstd/Memory.cpp
         src/Mesh/OpenPbrEnergy.cpp
         src/Kernels/Generate.cu

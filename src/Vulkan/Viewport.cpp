@@ -281,7 +281,8 @@ void Viewport::dispatch(
     const glm::mat4& viewProjection,
     const float exposure,
     const int bufferVisualization,
-    const int tonemappingEnabled)
+    const int tonemappingEnabled,
+    const bool showBillboards)
 {
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
@@ -296,7 +297,7 @@ void Viewport::dispatch(
     const uint32_t groupCountY = (outputImage.getHeight() + ViewportGroupSize - 1) / ViewportGroupSize;
     commandBuffer.dispatch(groupCountX, groupCountY, 1);
 
-    if (billboardCount > 0)
+    if (showBillboards && billboardCount > 0)
     {
         outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal);
         drawBillboards(commandBuffer, viewProjection);

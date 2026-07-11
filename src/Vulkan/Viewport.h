@@ -44,7 +44,8 @@ public:
         const glm::mat4& viewProjection,
         float exposure,
         int bufferVisualization,
-        int tonemappingEnabled);
+        int tonemappingEnabled,
+        bool showBillboards = true);
     // Rebuilds the billboard list from the scene's current objects (cheap: a
     // handful of structs memcpy'd into a host-visible buffer). Call once per
     // dispatched frame before dispatch().

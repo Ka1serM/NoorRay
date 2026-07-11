@@ -6,6 +6,9 @@
 #include <cuda_runtime_api.h>
 
 #include "CUDA/Annotations.h"
+#ifndef NR_GPU_CODE
+#include "CUDA/Unique/Texture.h"
+#endif
 
 // Native NoorRay access to Adobe OpenPBR 1.1's opaque-dielectric energy
 // compensation data. The source tables are vendored unchanged under
@@ -61,23 +64,26 @@ struct EnergyLutTextures
     cudaTextureObject_t idealReflectionRatio{};
 };
 
-// Host-owned backing arrays for EnergyLutTextures; only the Raytracer needs
-// this, to free the arrays on teardown.
+#ifndef NR_GPU_CODE
+// Host-owned backing arrays and texture objects. The raw texture handles are
+// copied into EnergyLutTextures for device code.
 struct EnergyLutStorage
 {
-    cudaArray_t opaqueEnergyArray{};
-    cudaArray_t opaqueAverageEnergyArray{};
-    cudaArray_t idealEnergyArray{};
-    cudaArray_t idealAverageEnergyArray{};
-    cudaArray_t idealReflectionRatioArray{};
+    nr::cuda::UniqueTexture opaqueEnergy;
+    nr::cuda::UniqueTexture opaqueAverageEnergy;
+    nr::cuda::UniqueTexture idealEnergy;
+    nr::cuda::UniqueTexture idealAverageEnergy;
+    nr::cuda::UniqueTexture idealReflectionRatio;
+
+    void reset() noexcept { *this = {}; }
 };
 
 // Uploads the tables above into 3D/2D CUDA arrays and creates linear-filtered
 // texture objects over them. Call once at startup.
 void uploadEnergyLuts(EnergyLutStorage& storage, EnergyLutTextures& textures, cudaStream_t stream);
+EnergyLutTextures getEnergyLutTextures(const EnergyLutStorage& storage) noexcept;
 
-// Destroys the texture objects and frees the backing arrays. Call once at shutdown.
-void destroyEnergyLuts(EnergyLutStorage& storage, EnergyLutTextures& textures) noexcept;
+#endif
 
 NR_CPU_GPU inline float decode(const uint16_t value)
 {

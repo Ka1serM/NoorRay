@@ -59,14 +59,13 @@ OptixProgramGroup makeRaygenGroup(
     return group;
 }
 
-CUdeviceptr uploadRecord(const OptixProgramGroup group)
+nr::cuda::UniqueDeviceBuffer uploadRecord(const OptixProgramGroup group)
 {
     SbtRecord<> record{};
     NR_OPTIX_CHECK(optixSbtRecordPackHeader(group, &record));
-    void* deviceRecord = nullptr;
-    NR_GPU_CHECK(cudaMalloc(&deviceRecord, sizeof(record)));
-    NR_GPU_CHECK(cudaMemcpy(deviceRecord, &record, sizeof(record), cudaMemcpyHostToDevice));
-    return reinterpret_cast<CUdeviceptr>(deviceRecord);
+    nr::cuda::UniqueDeviceBuffer deviceRecord(sizeof(record));
+    NR_GPU_CHECK(cudaMemcpy(deviceRecord.get(), &record, sizeof(record), cudaMemcpyHostToDevice));
+    return deviceRecord;
 }
 
 }
@@ -111,14 +110,14 @@ Raytracer::Raytracer(
     OptixResult result = optixModuleCreate(
         optixCtx, &moduleOptions, &pipelineOptions,
         reinterpret_cast<const char*>(noorRayOptixIr), noorRayOptixIrLength,
-        log.data(), &logSize, &optixModule);
+        log.data(), &logSize, optixModule.put());
     if (result != OPTIX_SUCCESS)
         throw std::runtime_error(std::string("OptiX module creation failed: ") + log.data());
 
-    optixExtendGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__extend");
-    optixConnectGroup = makeRaygenGroup(optixCtx, optixModule, "__raygen__connect");
-    optixProxyOverdrawGroup = makeRaygenGroup(
-        optixCtx, optixModule, "__raygen__gaussianProxyOverdraw");
+    optixExtendGroup.reset(makeRaygenGroup(optixCtx, optixModule.get(), "__raygen__extend"));
+    optixConnectGroup.reset(makeRaygenGroup(optixCtx, optixModule.get(), "__raygen__connect"));
+    optixProxyOverdrawGroup.reset(makeRaygenGroup(
+        optixCtx, optixModule.get(), "__raygen__gaussianProxyOverdraw"));
 
     OptixProgramGroupOptions groupOptions{};
 
@@ -126,24 +125,24 @@ Raytracer::Raytracer(
     triDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     logSize = log.size();
     NR_OPTIX_CHECK(optixProgramGroupCreate(
-        optixCtx, &triDesc, 1, &groupOptions, log.data(), &logSize, &optixTriangleGroup));
+        optixCtx, &triDesc, 1, &groupOptions, log.data(), &logSize, optixTriangleGroup.put()));
 
     OptixProgramGroupDesc gaussianDesc{};
     gaussianDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    gaussianDesc.hitgroup.moduleAH = optixModule;
+    gaussianDesc.hitgroup.moduleAH = optixModule.get();
     gaussianDesc.hitgroup.entryFunctionNameAH = "__anyhit__gaussian";
     logSize = log.size();
     NR_OPTIX_CHECK(optixProgramGroupCreate(
-        optixCtx, &gaussianDesc, 1, &groupOptions, log.data(), &logSize, &optixGaussianHitGroup));
+        optixCtx, &gaussianDesc, 1, &groupOptions, log.data(), &logSize, optixGaussianHitGroup.put()));
 
     OptixProgramGroupDesc proxyOverdrawDesc{};
     proxyOverdrawDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    proxyOverdrawDesc.hitgroup.moduleAH = optixModule;
+    proxyOverdrawDesc.hitgroup.moduleAH = optixModule.get();
     proxyOverdrawDesc.hitgroup.entryFunctionNameAH = "__anyhit__gaussianProxyOverdraw";
     logSize = log.size();
     NR_OPTIX_CHECK(optixProgramGroupCreate(
         optixCtx, &proxyOverdrawDesc, 1, &groupOptions, log.data(), &logSize,
-        &optixProxyOverdrawHitGroup));
+        optixProxyOverdrawHitGroup.put()));
 
     OptixProgramGroupDesc missDesc{};
     missDesc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
@@ -151,24 +150,24 @@ Raytracer::Raytracer(
     missDesc.miss.entryFunctionName = nullptr;
     logSize = log.size();
     NR_OPTIX_CHECK(optixProgramGroupCreate(
-        optixCtx, &missDesc, 1, &groupOptions, log.data(), &logSize, &optixMissGroup));
+        optixCtx, &missDesc, 1, &groupOptions, log.data(), &logSize, optixMissGroup.put()));
 
     const std::array groups{
-        optixExtendGroup, optixConnectGroup, optixTriangleGroup,
-        optixGaussianHitGroup, optixMissGroup};
+        optixExtendGroup.get(), optixConnectGroup.get(), optixTriangleGroup.get(),
+        optixGaussianHitGroup.get(), optixMissGroup.get()};
     OptixPipelineLinkOptions linkOptions{};
     linkOptions.maxTraceDepth = 1;
     logSize = log.size();
     result = optixPipelineCreate(
         optixCtx, &pipelineOptions, &linkOptions,
         groups.data(), static_cast<unsigned int>(groups.size()),
-        log.data(), &logSize, &optixPipeline);
+        log.data(), &logSize, optixPipeline.put());
     if (result != OPTIX_SUCCESS)
         throw std::runtime_error(std::string("OptiX pipeline creation failed: ") + log.data());
 
     OptixStackSizes stackSizes{};
     for (const OptixProgramGroup group : groups)
-        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(group, &stackSizes, optixPipeline));
+        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(group, &stackSizes, optixPipeline.get()));
     unsigned int directCallableStackSizeFromTraversal = 0;
     unsigned int directCallableStackSizeFromState = 0;
     unsigned int continuationStackSize = 0;
@@ -176,20 +175,20 @@ Raytracer::Raytracer(
         &stackSizes, linkOptions.maxTraceDepth, 0, 0,
         &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
         &continuationStackSize));
-    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixPipeline,
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixPipeline.get(),
         directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
         continuationStackSize, 2));
 
     // Keep diagnostics in a separate pipeline. Its larger raygen program and
     // stack requirements therefore cannot change normal-render occupancy.
     const std::array proxyOverdrawGroups{
-        optixProxyOverdrawGroup, optixTriangleGroup,
-        optixProxyOverdrawHitGroup, optixMissGroup};
+        optixProxyOverdrawGroup.get(), optixTriangleGroup.get(),
+        optixProxyOverdrawHitGroup.get(), optixMissGroup.get()};
     logSize = log.size();
     result = optixPipelineCreate(
         optixCtx, &pipelineOptions, &linkOptions,
         proxyOverdrawGroups.data(), static_cast<unsigned int>(proxyOverdrawGroups.size()),
-        log.data(), &logSize, &optixProxyOverdrawPipeline);
+        log.data(), &logSize, optixProxyOverdrawPipeline.put());
     if (result != OPTIX_SUCCESS)
         throw std::runtime_error(
             std::string("OptiX proxy-overdraw pipeline creation failed: ") + log.data());
@@ -197,63 +196,59 @@ Raytracer::Raytracer(
     OptixStackSizes proxyOverdrawStackSizes{};
     for (const OptixProgramGroup group : proxyOverdrawGroups)
         NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(
-            group, &proxyOverdrawStackSizes, optixProxyOverdrawPipeline));
+            group, &proxyOverdrawStackSizes, optixProxyOverdrawPipeline.get()));
     NR_OPTIX_CHECK(optixUtilComputeStackSizes(
         &proxyOverdrawStackSizes, linkOptions.maxTraceDepth, 0, 0,
         &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
         &continuationStackSize));
-    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixProxyOverdrawPipeline,
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixProxyOverdrawPipeline.get(),
         directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
         continuationStackSize, 2));
 
-    optixExtendRecord = uploadRecord(optixExtendGroup);
-    optixConnectRecord = uploadRecord(optixConnectGroup);
-    optixProxyOverdrawRecord = uploadRecord(optixProxyOverdrawGroup);
+    optixExtendRecord = uploadRecord(optixExtendGroup.get());
+    optixConnectRecord = uploadRecord(optixConnectGroup.get());
+    optixProxyOverdrawRecord = uploadRecord(optixProxyOverdrawGroup.get());
 
     // Upload two hitgroup records contiguously: mesh (sbtOffset=0) and Gaussian (sbtOffset=1)
     {
         SbtRecord<> meshSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup, &meshSbt));
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
         SbtRecord<> gaussianSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixGaussianHitGroup, &gaussianSbt));
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixGaussianHitGroup.get(), &gaussianSbt));
         const std::array records{meshSbt, gaussianSbt};
-        void* deviceRecords = nullptr;
-        NR_GPU_CHECK(cudaMalloc(&deviceRecords, sizeof(records)));
-        NR_GPU_CHECK(cudaMemcpy(deviceRecords, records.data(), sizeof(records), cudaMemcpyHostToDevice));
-        optixHitgroupRecord = reinterpret_cast<CUdeviceptr>(deviceRecords);
+        optixHitgroupRecord.allocate(sizeof(records));
+        NR_GPU_CHECK(cudaMemcpy(optixHitgroupRecord.get(), records.data(), sizeof(records), cudaMemcpyHostToDevice));
     }
 
     // Diagnostic SBT: mesh instances retain an empty hit group while Gaussian
     // instances use the counting any-hit program at their existing sbtOffset 1.
     {
         SbtRecord<> meshSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup, &meshSbt));
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
         SbtRecord<> gaussianSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixProxyOverdrawHitGroup, &gaussianSbt));
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixProxyOverdrawHitGroup.get(), &gaussianSbt));
         const std::array records{meshSbt, gaussianSbt};
-        void* deviceRecords = nullptr;
-        NR_GPU_CHECK(cudaMalloc(&deviceRecords, sizeof(records)));
-        NR_GPU_CHECK(cudaMemcpy(deviceRecords, records.data(), sizeof(records), cudaMemcpyHostToDevice));
-        optixProxyOverdrawHitgroupRecord = reinterpret_cast<CUdeviceptr>(deviceRecords);
+        optixProxyOverdrawHitgroupRecord.allocate(sizeof(records));
+        NR_GPU_CHECK(cudaMemcpy(optixProxyOverdrawHitgroupRecord.get(), records.data(), sizeof(records), cudaMemcpyHostToDevice));
     }
 
-    optixMissRecord = uploadRecord(optixMissGroup);
+    optixMissRecord = uploadRecord(optixMissGroup.get());
 
-    optixExtendSbt.raygenRecord = optixExtendRecord;
-    optixExtendSbt.missRecordBase = optixMissRecord;
+    optixExtendSbt.raygenRecord = optixExtendRecord.devicePtr();
+    optixExtendSbt.missRecordBase = optixMissRecord.devicePtr();
     optixExtendSbt.missRecordStrideInBytes = sizeof(SbtRecord<>);
     optixExtendSbt.missRecordCount = 1;
-    optixExtendSbt.hitgroupRecordBase = optixHitgroupRecord;
+    optixExtendSbt.hitgroupRecordBase = optixHitgroupRecord.devicePtr();
     optixExtendSbt.hitgroupRecordStrideInBytes = sizeof(SbtRecord<>);
     optixExtendSbt.hitgroupRecordCount = 2;
     optixConnectSbt = optixExtendSbt;
-    optixConnectSbt.raygenRecord = optixConnectRecord;
+    optixConnectSbt.raygenRecord = optixConnectRecord.devicePtr();
     optixProxyOverdrawSbt = optixExtendSbt;
-    optixProxyOverdrawSbt.raygenRecord = optixProxyOverdrawRecord;
-    optixProxyOverdrawSbt.hitgroupRecordBase = optixProxyOverdrawHitgroupRecord;
+    optixProxyOverdrawSbt.raygenRecord = optixProxyOverdrawRecord.devicePtr();
+    optixProxyOverdrawSbt.hitgroupRecordBase = optixProxyOverdrawHitgroupRecord.devicePtr();
 
-    NR_GPU_CHECK(cudaEventCreate(&m_startEvent));
-    NR_GPU_CHECK(cudaEventCreate(&m_stopEvent));
+    m_startEvent.create();
+    m_stopEvent.create();
 
     auto createSemaphore = [&]() -> vk::UniqueSemaphore {
         vk::ExportSemaphoreCreateInfo exportInfo{};
@@ -279,43 +274,41 @@ Raytracer::Raytracer(
         NR_GPU_CHECK(cudaImportExternalSemaphore(&result, &desc));
         return result;
     };
-    cudaRenderReady = importSemaphore(renderReady.get());
-    cudaBufferReleased = importSemaphore(bufferReleased.get());
+    cudaRenderReady.reset(importSemaphore(renderReady.get()));
+    cudaBufferReleased.reset(importSemaphore(bufferReleased.get()));
 
     // Upload Jakob & Hanika sRGB-to-spectrum table once (9 MB coefficients + 64-element scale).
     constexpr size_t kScaleBytes = 64 * sizeof(float);
     constexpr size_t kCoeffBytes = sizeof(sRGBToSpectrumTable_Data);
-    NR_GPU_CHECK(cudaMalloc(&spectrumTableScaleDevice, kScaleBytes));
-    NR_GPU_CHECK(cudaMalloc(&spectrumTableCoeffsDevice, kCoeffBytes));
-    NR_GPU_CHECK(cudaMemcpy(spectrumTableScaleDevice, sRGBToSpectrumTable_Scale, kScaleBytes, cudaMemcpyHostToDevice));
-    NR_GPU_CHECK(cudaMemcpy(spectrumTableCoeffsDevice, sRGBToSpectrumTable_Data, kCoeffBytes, cudaMemcpyHostToDevice));
-    gpuScene.spectrumTableScale  = spectrumTableScaleDevice;
-    gpuScene.spectrumTableCoeffs = spectrumTableCoeffsDevice;
+    spectrumTableScaleDevice.allocate(kScaleBytes);
+    spectrumTableCoeffsDevice.allocate(kCoeffBytes);
+    NR_GPU_CHECK(cudaMemcpy(spectrumTableScaleDevice.get(), sRGBToSpectrumTable_Scale, kScaleBytes, cudaMemcpyHostToDevice));
+    NR_GPU_CHECK(cudaMemcpy(spectrumTableCoeffsDevice.get(), sRGBToSpectrumTable_Data, kCoeffBytes, cudaMemcpyHostToDevice));
+    gpuScene.spectrumTableScale  = static_cast<float*>(spectrumTableScaleDevice.get());
+    gpuScene.spectrumTableCoeffs = static_cast<float*>(spectrumTableCoeffsDevice.get());
 
     constexpr size_t kD65Bytes = NrD65Samples * sizeof(float);
-    NR_GPU_CHECK(cudaMalloc(&d65Device, kD65Bytes));
-    NR_GPU_CHECK(cudaMemcpy(d65Device, NrD65, kD65Bytes, cudaMemcpyHostToDevice));
-    gpuScene.d65 = d65Device;
+    d65Device.allocate(kD65Bytes);
+    NR_GPU_CHECK(cudaMemcpy(d65Device.get(), NrD65, kD65Bytes, cudaMemcpyHostToDevice));
+    gpuScene.d65 = static_cast<float*>(d65Device.get());
 
     // Upload CIE 1931 2-degree CMF tables (471 floats × 3, ~5.5 KB).
     constexpr size_t kCieBytes = NrCIESamples * sizeof(float);
-    NR_GPU_CHECK(cudaMalloc(&cieXDevice, kCieBytes));
-    NR_GPU_CHECK(cudaMalloc(&cieYDevice, kCieBytes));
-    NR_GPU_CHECK(cudaMalloc(&cieZDevice, kCieBytes));
-    NR_GPU_CHECK(cudaMemcpy(cieXDevice, NrCIE_X, kCieBytes, cudaMemcpyHostToDevice));
-    NR_GPU_CHECK(cudaMemcpy(cieYDevice, NrCIE_Y, kCieBytes, cudaMemcpyHostToDevice));
-    NR_GPU_CHECK(cudaMemcpy(cieZDevice, NrCIE_Z, kCieBytes, cudaMemcpyHostToDevice));
-    gpuScene.cieX = cieXDevice;
-    gpuScene.cieY = cieYDevice;
-    gpuScene.cieZ = cieZDevice;
+    cieXDevice.allocate(kCieBytes);
+    cieYDevice.allocate(kCieBytes);
+    cieZDevice.allocate(kCieBytes);
+    NR_GPU_CHECK(cudaMemcpy(cieXDevice.get(), NrCIE_X, kCieBytes, cudaMemcpyHostToDevice));
+    NR_GPU_CHECK(cudaMemcpy(cieYDevice.get(), NrCIE_Y, kCieBytes, cudaMemcpyHostToDevice));
+    NR_GPU_CHECK(cudaMemcpy(cieZDevice.get(), NrCIE_Z, kCieBytes, cudaMemcpyHostToDevice));
+    gpuScene.cieX = static_cast<float*>(cieXDevice.get());
+    gpuScene.cieY = static_cast<float*>(cieYDevice.get());
+    gpuScene.cieZ = static_cast<float*>(cieZDevice.get());
 
     // Upload OpenPBR opaque-dielectric energy-compensation LUTs as hardware-filtered textures.
     nr::openpbr::uploadEnergyLuts(openPbrLutStorage, gpuScene.openPbrLuts, stream);
 
     {
-        void* allocation = nullptr;
-        NR_GPU_CHECK(cudaMalloc(&allocation, sizeof(KernelParams)));
-        optixLaunchParamsDevice = reinterpret_cast<CUdeviceptr>(allocation);
+        optixLaunchParamsDevice.allocate(sizeof(KernelParams));
     }
 
     auto* cam = scene.getActiveCamera();
@@ -330,47 +323,32 @@ Raytracer::~Raytracer()
 {
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
-    tlas.destroy(stream);
+    tlas.reset();
     freeSceneData();
     freeQueues();
-    if (optixLaunchParamsDevice != 0)
-    {
-        cudaFree(reinterpret_cast<void*>(optixLaunchParamsDevice));
-        optixLaunchParamsDevice = 0;
-    }
+    optixLaunchParamsDevice.reset();
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
-    cudaEventDestroy(m_startEvent);
-    cudaEventDestroy(m_stopEvent);
-    for (auto& img : color) img.destroy();
-    for (auto& img : albedo) img.destroy();
-    for (auto& img : normal) img.destroy();
-    for (auto& img : cryptomatte) img.destroy();
-    for (auto& img : position) img.destroy();
-    if (cudaRenderReady != nullptr)
-        cudaDestroyExternalSemaphore(cudaRenderReady);
-    if (cudaBufferReleased != nullptr)
-        cudaDestroyExternalSemaphore(cudaBufferReleased);
-
-    auto freeRecord = [](CUdeviceptr& ptr) {
-        if (ptr != 0) { cudaFree(reinterpret_cast<void*>(ptr)); ptr = 0; }
-    };
-    freeRecord(optixExtendRecord);
-    freeRecord(optixConnectRecord);
-    freeRecord(optixProxyOverdrawRecord);
-    freeRecord(optixHitgroupRecord);
-    freeRecord(optixProxyOverdrawHitgroupRecord);
-    freeRecord(optixMissRecord);
-    if (optixPipeline != nullptr) { optixPipelineDestroy(optixPipeline); optixPipeline = nullptr; }
-    if (optixProxyOverdrawPipeline != nullptr) { optixPipelineDestroy(optixProxyOverdrawPipeline); optixProxyOverdrawPipeline = nullptr; }
-    if (optixMissGroup != nullptr) { optixProgramGroupDestroy(optixMissGroup); optixMissGroup = nullptr; }
-    if (optixGaussianHitGroup != nullptr) { optixProgramGroupDestroy(optixGaussianHitGroup); optixGaussianHitGroup = nullptr; }
-    if (optixProxyOverdrawHitGroup != nullptr) { optixProgramGroupDestroy(optixProxyOverdrawHitGroup); optixProxyOverdrawHitGroup = nullptr; }
-    if (optixTriangleGroup != nullptr) { optixProgramGroupDestroy(optixTriangleGroup); optixTriangleGroup = nullptr; }
-    if (optixConnectGroup != nullptr) { optixProgramGroupDestroy(optixConnectGroup); optixConnectGroup = nullptr; }
-    if (optixProxyOverdrawGroup != nullptr) { optixProgramGroupDestroy(optixProxyOverdrawGroup); optixProxyOverdrawGroup = nullptr; }
-    if (optixExtendGroup != nullptr) { optixProgramGroupDestroy(optixExtendGroup); optixExtendGroup = nullptr; }
-    if (optixModule != nullptr) { optixModuleDestroy(optixModule); optixModule = nullptr; }
+    m_startEvent.reset();
+    m_stopEvent.reset();
+    cudaRenderReady.reset();
+    cudaBufferReleased.reset();
+    optixExtendRecord.reset();
+    optixConnectRecord.reset();
+    optixProxyOverdrawRecord.reset();
+    optixHitgroupRecord.reset();
+    optixProxyOverdrawHitgroupRecord.reset();
+    optixMissRecord.reset();
+    optixPipeline.reset();
+    optixProxyOverdrawPipeline.reset();
+    optixMissGroup.reset();
+    optixGaussianHitGroup.reset();
+    optixProxyOverdrawHitGroup.reset();
+    optixTriangleGroup.reset();
+    optixConnectGroup.reset();
+    optixProxyOverdrawGroup.reset();
+    optixExtendGroup.reset();
+    optixModule.reset();
     optixExtendSbt = {};
     optixConnectSbt = {};
     optixProxyOverdrawSbt = {};
@@ -385,7 +363,7 @@ void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
     height = newHeight;
     freeQueues();
 
-    auto createImages = [&](SharedImage (&arr)[2], const vk::Format format)
+    auto createImages = [&](nr::cuda::UniqueSharedImage (&arr)[2], const vk::Format format)
     {
         for (auto& img : arr)
             img.create(context, width, height, format);
@@ -409,31 +387,40 @@ void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
 void Raytracer::allocateQueues()
 {
     queues.capacity = width * height;
-    queues.rayCounts = nr::rstd::allocate_device<uint32_t>(MaxBounces, stream);
-    queues.pathStates = nr::rstd::allocate_device<PathState>(queues.capacity, stream);
-    queues.rayQueues[0] = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
-    queues.rayQueues[1] = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
-    queues.hitQueue = nr::rstd::allocate_device<HitWorkItem>(queues.capacity, stream);
-    queues.shadowQueue = nr::rstd::allocate_device<ShadowWorkItem>(queues.capacity, stream);
-    queues.aovRayQueue = nr::rstd::allocate_device<PathRayWorkItem>(queues.capacity, stream);
-    queues.aovHitQueue = nr::rstd::allocate_device<HitWorkItem>(queues.capacity, stream);
-    accumulation = nr::rstd::allocate_device<glm::vec4>(static_cast<size_t>(width) * height, stream);
-    NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
+    rayCountBuffer.allocate(sizeof(uint32_t) * MaxBounces, stream);
+    pathStateBuffer.allocate(sizeof(PathState) * queues.capacity, stream);
+    rayQueueBuffers[0].allocate(sizeof(PathRayWorkItem) * queues.capacity, stream);
+    rayQueueBuffers[1].allocate(sizeof(PathRayWorkItem) * queues.capacity, stream);
+    hitQueueBuffer.allocate(sizeof(HitWorkItem) * queues.capacity, stream);
+    shadowQueueBuffer.allocate(sizeof(ShadowWorkItem) * queues.capacity, stream);
+    aovRayQueueBuffer.allocate(sizeof(PathRayWorkItem) * queues.capacity, stream);
+    aovHitQueueBuffer.allocate(sizeof(HitWorkItem) * queues.capacity, stream);
+    accumulationBuffer.allocate(sizeof(glm::vec4) * static_cast<size_t>(width) * height, stream);
+
+    queues.rayCounts = rayCountBuffer.as<uint32_t>();
+    queues.pathStates = pathStateBuffer.as<PathState>();
+    queues.rayQueues[0] = rayQueueBuffers[0].as<PathRayWorkItem>();
+    queues.rayQueues[1] = rayQueueBuffers[1].as<PathRayWorkItem>();
+    queues.hitQueue = hitQueueBuffer.as<HitWorkItem>();
+    queues.shadowQueue = shadowQueueBuffer.as<ShadowWorkItem>();
+    queues.aovRayQueue = aovRayQueueBuffer.as<PathRayWorkItem>();
+    queues.aovHitQueue = aovHitQueueBuffer.as<HitWorkItem>();
+    NR_GPU_CHECK(cudaMemsetAsync(
+        accumulationBuffer.get(), 0, sizeof(glm::vec4) * width * height, stream));
 }
 
 void Raytracer::freeQueues() noexcept
 {
-    nr::rstd::deallocate_device(queues.rayCounts, stream);
-    nr::rstd::deallocate_device(queues.pathStates, stream);
-    nr::rstd::deallocate_device(queues.rayQueues[0], stream);
-    nr::rstd::deallocate_device(queues.rayQueues[1], stream);
-    nr::rstd::deallocate_device(queues.hitQueue, stream);
-    nr::rstd::deallocate_device(queues.shadowQueue, stream);
-    nr::rstd::deallocate_device(queues.aovRayQueue, stream);
-    nr::rstd::deallocate_device(queues.aovHitQueue, stream);
-    nr::rstd::deallocate_device(accumulation, stream);
+    rayCountBuffer.reset();
+    pathStateBuffer.reset();
+    rayQueueBuffers[0].reset();
+    rayQueueBuffers[1].reset();
+    hitQueueBuffer.reset();
+    shadowQueueBuffer.reset();
+    aovRayQueueBuffer.reset();
+    aovHitQueueBuffer.reset();
+    accumulationBuffer.reset();
     queues = {};
-    accumulation = nullptr;
 }
 
 void Raytracer::freeSceneData() noexcept
@@ -441,13 +428,13 @@ void Raytracer::freeSceneData() noexcept
     scene.getCudaTexturesRef().clear();
     scene.getEnvironment().destroyCdf();
     scene.getGpuInstancesRef().clear();
-    if (spectrumTableScaleDevice)  { cudaFree(spectrumTableScaleDevice);  spectrumTableScaleDevice  = nullptr; }
-    if (spectrumTableCoeffsDevice) { cudaFree(spectrumTableCoeffsDevice); spectrumTableCoeffsDevice = nullptr; }
-    if (d65Device) { cudaFree(d65Device); d65Device = nullptr; }
-    if (cieXDevice) { cudaFree(cieXDevice); cieXDevice = nullptr; }
-    if (cieYDevice) { cudaFree(cieYDevice); cieYDevice = nullptr; }
-    if (cieZDevice) { cudaFree(cieZDevice); cieZDevice = nullptr; }
-    nr::openpbr::destroyEnergyLuts(openPbrLutStorage, gpuScene.openPbrLuts);
+    spectrumTableScaleDevice.reset();
+    spectrumTableCoeffsDevice.reset();
+    d65Device.reset();
+    cieXDevice.reset();
+    cieYDevice.reset();
+    cieZDevice.reset();
+    openPbrLutStorage.reset();
     gpuScene = {};
 }
 
@@ -505,25 +492,13 @@ void Raytracer::updateEnvironmentCdf()
         * std::max(env.lightingExposureScale, 0.0f);
     const std::vector<float> cdf = Environment::computeCdf(
         texture.getPixels().data(), texture.getWidth(), texture.getHeight());
-    const cudaChannelFormatDesc format = cudaCreateChannelDesc<float4>();
-    NR_GPU_CHECK(cudaMallocArray(
-        &env.cdfArray, &format, texture.getWidth(), texture.getHeight()));
-    NR_GPU_CHECK(cudaMemcpy2DToArrayAsync(
-        env.cdfArray, 0, 0, cdf.data(), texture.getWidth() * sizeof(float4),
-        texture.getWidth() * sizeof(float4), texture.getHeight(),
-        cudaMemcpyHostToDevice, stream));
-
-    cudaResourceDesc resource{};
-    resource.resType = cudaResourceTypeArray;
-    resource.res.array.array = env.cdfArray;
-    cudaTextureDesc description{};
-    description.addressMode[0] = cudaAddressModeClamp;
-    description.addressMode[1] = cudaAddressModeClamp;
-    description.filterMode = cudaFilterModePoint;
-    description.readMode = cudaReadModeElementType;
-    description.normalizedCoords = 1;
-    NR_GPU_CHECK(cudaCreateTextureObject(
-        &env.cdfTexture, &resource, &description, nullptr));
+    env.cdfTexture = nr::cuda::UniqueTexture::uploadFloat4(
+        cdf.data(),
+        texture.getWidth(),
+        texture.getHeight(),
+        stream,
+        cudaAddressModeClamp,
+        cudaFilterModePoint);
 }
 
 void Raytracer::updateMeshes()
@@ -616,7 +591,8 @@ void Raytracer::prepareSensorFrame(Sensor& sensor, KernelParams& params, const b
     params.psfBinCount = 0;
 
     if (resetAccumulation)
-        NR_GPU_CHECK(cudaMemsetAsync(accumulation, 0, sizeof(glm::vec4) * width * height, stream));
+        NR_GPU_CHECK(cudaMemsetAsync(
+            accumulationBuffer.get(), 0, sizeof(glm::vec4) * width * height, stream));
 
     if (sensor.Is<ScatterPsfSensor>()) {
         return;
@@ -676,30 +652,30 @@ void Raytracer::launchShade(
 void Raytracer::launchExtend(
     const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
 {
-    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+    NR_GPU_CHECK(cudaMemcpyAsync(optixLaunchParamsDevice.get(),
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
-    NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
-        optixLaunchParamsDevice, sizeof(KernelParams),
+    NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
+        optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
         &optixExtendSbt, launchCount, 1, 1));
 }
 
 void Raytracer::launchConnect(
     const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
 {
-    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+    NR_GPU_CHECK(cudaMemcpyAsync(optixLaunchParamsDevice.get(),
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
-    NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
-        optixLaunchParamsDevice, sizeof(KernelParams),
+    NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
+        optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
         &optixConnectSbt, launchCount, 1, 1));
 }
 
 void Raytracer::launchProxyOverdraw(
     const KernelParams& params, const cudaStream_t stream) const
 {
-    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+    NR_GPU_CHECK(cudaMemcpyAsync(optixLaunchParamsDevice.get(),
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
-    NR_OPTIX_CHECK(optixLaunch(optixProxyOverdrawPipeline, stream,
-        optixLaunchParamsDevice, sizeof(KernelParams),
+    NR_OPTIX_CHECK(optixLaunch(optixProxyOverdrawPipeline.get(), stream,
+        optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
         &optixProxyOverdrawSbt, params.frame.width * params.frame.height, 1, 1));
 }
 
@@ -725,10 +701,10 @@ void Raytracer::launchExtendAov(const KernelParams& params, const cudaStream_t s
     aovParams.queues.rayQueues[0] = params.queues.aovRayQueue;
     aovParams.queues.hitQueue = params.queues.aovHitQueue;
 
-    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(optixLaunchParamsDevice),
+    NR_GPU_CHECK(cudaMemcpyAsync(optixLaunchParamsDevice.get(),
         &aovParams, sizeof(aovParams), cudaMemcpyHostToDevice, stream));
-    NR_OPTIX_CHECK(optixLaunch(optixPipeline, stream,
-        optixLaunchParamsDevice, sizeof(KernelParams),
+    NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
+        optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
         &optixExtendSbt, params.queues.capacity, 1, 1));
 }
 
@@ -754,12 +730,13 @@ void Raytracer::render(const PushData& pushData)
     {
         cudaExternalSemaphoreWaitParams waitParams{};
         waitParams.params.fence.value = lastUseValue[buffer];
-        NR_GPU_CHECK(cudaWaitExternalSemaphoresAsync(&cudaBufferReleased, &waitParams, 1, stream));
+        cudaExternalSemaphore_t semaphore = cudaBufferReleased.get();
+        NR_GPU_CHECK(cudaWaitExternalSemaphoresAsync(&semaphore, &waitParams, 1, stream));
     }
 
     if (m_timingEnabled && m_eventsRecorded) {
-        NR_GPU_CHECK(cudaEventSynchronize(m_stopEvent));
-        NR_GPU_CHECK(cudaEventElapsedTime(&m_gpuTimeMs, m_startEvent, m_stopEvent));
+        NR_GPU_CHECK(cudaEventSynchronize(m_stopEvent.get()));
+        NR_GPU_CHECK(cudaEventElapsedTime(&m_gpuTimeMs, m_startEvent.get(), m_stopEvent.get()));
     }
 
     KernelParams params{};
@@ -777,7 +754,7 @@ void Raytracer::render(const PushData& pushData)
     params.frame.width = width;
     params.frame.height = height;
     params.frame.frameIndex = pushData.frame;
-    params.accumulation = accumulation;
+    params.accumulation = accumulationBuffer.as<glm::vec4>();
 
     const RenderSettings& renderSettings = scene.getRenderSettings();
     params.frame.cutoffDistanceSq = renderSettings.gaussianCutoffSigma
@@ -806,7 +783,7 @@ void Raytracer::render(const PushData& pushData)
              gpuScene.rectLightCount > 0 || gpuScene.directionalLightCount > 0));
 
     if (m_timingEnabled)
-        NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
+        NR_GPU_CHECK(cudaEventRecord(m_startEvent.get(), stream));
 
     if (pushData.frame == 0)
         aovStaleBuffers = 2;
@@ -830,7 +807,7 @@ void Raytracer::render(const PushData& pushData)
         for (uint32_t s = 0; s < samplesPerFrame; ++s)
         {
             NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0, sizeof(uint32_t) * MaxBounces, stream));
-            params.frame.totalAccumulated = static_cast<uint32_t>(pushData.frame) * samplesPerFrame + s;
+            params.frame.totalAccumulated = pushData.accumulatedSampleOffset + s;
 
             kernelStats.time("Generate", stream, [&] { launchGenerate(params, stream); });
             NR_GPU_CHECK(cudaGetLastError());
@@ -847,10 +824,8 @@ void Raytracer::render(const PushData& pushData)
             }
             launchSensorAddSample(activeSensor, params, stream);
         }
-        const uint32_t accumulatedBeforeFrame =
-            static_cast<uint32_t>(pushData.frame) * samplesPerFrame;
-        const uint32_t accumulatedAfterFrame =
-            static_cast<uint32_t>(pushData.frame + 1) * samplesPerFrame;
+        const uint32_t accumulatedBeforeFrame = pushData.accumulatedSampleOffset;
+        const uint32_t accumulatedAfterFrame = pushData.accumulatedSampleOffset + samplesPerFrame;
         const uint32_t maxSamples = static_cast<uint32_t>(std::max(1, renderSettings.maxSamples));
         const bool finalSample = accumulatedBeforeFrame < maxSamples && accumulatedAfterFrame >= maxSamples;
         applySensorAfterFrame(activeSensor, params, stream, finalSample);
@@ -859,14 +834,15 @@ void Raytracer::render(const PushData& pushData)
 
     if (m_timingEnabled)
     {
-        NR_GPU_CHECK(cudaEventRecord(m_stopEvent, stream));
+        NR_GPU_CHECK(cudaEventRecord(m_stopEvent.get(), stream));
         m_eventsRecorded = true;
     }
 
     {
         cudaExternalSemaphoreSignalParams signalParams{};
         signalParams.params.fence.value = frameValue;
-        NR_GPU_CHECK(cudaSignalExternalSemaphoresAsync(&cudaRenderReady, &signalParams, 1, stream));
+        cudaExternalSemaphore_t semaphore = cudaRenderReady.get();
+        NR_GPU_CHECK(cudaSignalExternalSemaphoresAsync(&semaphore, &signalParams, 1, stream));
     }
     lastLaunched = buffer;
     lastReadyValue = frameValue;
@@ -904,7 +880,7 @@ Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
 
     std::vector<glm::vec4> pixels(static_cast<size_t>(width) * height);
     NR_GPU_CHECK(cudaMemcpy(
-        pixels.data(), accumulation, pixels.size() * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
+        pixels.data(), accumulationBuffer.get(), pixels.size() * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
     return Bitmap(width, height, std::move(pixels));
 }
 
@@ -923,7 +899,8 @@ void Raytracer::debugSave(const std::string& path) const
 
     const size_t pixelCount = static_cast<size_t>(width) * height;
     std::vector<glm::vec4> host(pixelCount);
-    NR_GPU_CHECK(cudaMemcpy(host.data(), accumulation, pixelCount * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
+    NR_GPU_CHECK(cudaMemcpy(
+        host.data(), accumulationBuffer.get(), pixelCount * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
 
     // Per-channel stats
     float maxR = 0, maxG = 0, maxB = 0, maxA = 0, minA = 1.0f;

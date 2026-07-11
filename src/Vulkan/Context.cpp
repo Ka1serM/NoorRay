@@ -167,7 +167,7 @@ Context::Context(const int width, const int height, const bool isHeadless)
         selectCudaDeviceForVulkan(physicalDevice);
         int leastPriority = 0, greatestPriority = 0;
         NR_GPU_CHECK(cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority));
-        NR_GPU_CHECK(cudaStreamCreateWithPriority(&cudaStream, cudaStreamNonBlocking, greatestPriority));
+        cudaStream.createWithPriority(cudaStreamNonBlocking, greatestPriority);
 
         CUcontext currentCtx{};
         if (cuCtxGetCurrent(&currentCtx) != CUDA_SUCCESS || currentCtx == nullptr)
@@ -178,7 +178,7 @@ Context::Context(const int width, const int height, const bool isHeadless)
         OptixDeviceContextOptions ctxOpts{};
         ctxOpts.logCallbackFunction = optixLogCallback;
         ctxOpts.logCallbackLevel = 3;
-        NR_OPTIX_CHECK(optixDeviceContextCreate(currentCtx, &ctxOpts, &optixCtx));
+        NR_OPTIX_CHECK(optixDeviceContextCreate(currentCtx, &ctxOpts, optixCtx.put()));
 
     } catch (const vk::Error& e) {
         LOG_FATAL("Vulkan Error in Context constructor: " << e.what());
@@ -508,17 +508,28 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL Context::debugUtilsMessengerCallback(
 
 Context::~Context() {
     LOG_INFO("Destroying Context...");
-    if (optixCtx != nullptr) { optixDeviceContextDestroy(optixCtx); optixCtx = nullptr; }
-    if (cudaStream != nullptr) { cudaStreamDestroy(cudaStream); cudaStream = nullptr; }
+    if (cudaStream)
+        cudaStreamSynchronize(cudaStream.get());
     try {
         if (device)
             device->waitIdle();
     } catch (const vk::Error& e) {
         LOG_ERROR("Vulkan error during device->waitIdle(): " << e.what());
     }
+    optixCtx.reset();
+    cudaStream.reset();
+    if (allocator != VK_NULL_HANDLE)
+    {
+        vmaDestroyAllocator(allocator);
+        allocator = VK_NULL_HANDLE;
+    }
 
     if (!headless) {
-        SDL_DestroyWindow(window);
+        if (window != nullptr)
+        {
+            SDL_DestroyWindow(window);
+            window = nullptr;
+        }
         SDL_Vulkan_UnloadLibrary();
         SDL_Quit();
     }

@@ -56,7 +56,7 @@ NR_GPU inline SurfaceData loadSurface(
 // Perturbs a shading normal using the material's tangent-space normal map, if any.
 NR_GPU inline glm::vec3 applyNormalMap(
     const Material& material,
-    const CudaTexture* textures,
+    const nr::cuda::UniqueTexture* textures,
     const glm::vec2 uv,
     const glm::vec3 tangent,
     const glm::vec3 shadingNormal)

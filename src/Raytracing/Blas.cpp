@@ -1,4 +1,4 @@
-#include "CUDA/Blas.h"
+#include "Raytracing/Blas.h"
 
 #include <utility>
 
@@ -7,14 +7,9 @@
 
 #include "CUDA/Checks.h"
 
-Blas::~Blas() noexcept
-{
-    destroy();
-}
-
 Blas::Blas(Blas&& other) noexcept
     : handle(std::exchange(other.handle, {})),
-      buffer(std::exchange(other.buffer, {}))
+      buffer(std::move(other.buffer))
 {
 }
 
@@ -22,9 +17,9 @@ Blas& Blas::operator=(Blas&& other) noexcept
 {
     if (this != &other)
     {
-        destroy();
+        reset();
         handle = std::exchange(other.handle, {});
-        buffer = std::exchange(other.buffer, {});
+        buffer = std::move(other.buffer);
     }
     return *this;
 }
@@ -38,8 +33,7 @@ void Blas::build(
     const uint32_t* indices,
     const uint32_t triangleCount)
 {
-    if (buffer != 0)
-        destroy(stream);
+    reset();
 
     const CUdeviceptr vertexBuffer = reinterpret_cast<CUdeviceptr>(vertices);
     OptixBuildInput buildInput{};
@@ -62,31 +56,17 @@ void Blas::build(
     OptixAccelBufferSizes sizes{};
     NR_OPTIX_CHECK(optixAccelComputeMemoryUsage(context, &options, &buildInput, 1, &sizes));
 
-    void* scratch = nullptr;
-    void* output = nullptr;
-    NR_GPU_CHECK(cudaMallocAsync(&scratch, sizes.tempSizeInBytes, stream));
-    NR_GPU_CHECK(cudaMallocAsync(&output, sizes.outputSizeInBytes, stream));
+    nr::cuda::UniqueAsyncDeviceBuffer scratch(sizes.tempSizeInBytes, stream);
+    buffer.allocate(sizes.outputSizeInBytes, stream);
     NR_OPTIX_CHECK(optixAccelBuild(
         context, stream, &options, &buildInput, 1,
-        reinterpret_cast<CUdeviceptr>(scratch), sizes.tempSizeInBytes,
-        reinterpret_cast<CUdeviceptr>(output), sizes.outputSizeInBytes,
+        scratch.devicePtr(), sizes.tempSizeInBytes,
+        buffer.devicePtr(), sizes.outputSizeInBytes,
         &handle, nullptr, 0));
-    NR_GPU_CHECK(cudaFreeAsync(scratch, stream));
-    buffer = reinterpret_cast<CUdeviceptr>(output);
 }
 
-void Blas::destroy(const cudaStream_t stream) noexcept
+void Blas::reset() noexcept
 {
-    if (buffer != 0)
-        cudaFreeAsync(reinterpret_cast<void*>(buffer), stream);
-    buffer = 0;
-    handle = {};
-}
-
-void Blas::destroy() noexcept
-{
-    if (buffer != 0)
-        cudaFree(reinterpret_cast<void*>(buffer));
-    buffer = 0;
+    buffer.reset();
     handle = {};
 }

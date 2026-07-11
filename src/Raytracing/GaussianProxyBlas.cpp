@@ -1,4 +1,4 @@
-#include "CUDA/GaussianProxyBlas.h"
+#include "Raytracing/GaussianProxyBlas.h"
 
 #include <algorithm>
 #include <array>
@@ -207,12 +207,12 @@ static constexpr unsigned int GaussianGeometryFlags = 0u;
 
 GaussianProxyBlas::~GaussianProxyBlas() noexcept
 {
-    destroy();
+    reset();
 }
 
 GaussianProxyBlas::GaussianProxyBlas(GaussianProxyBlas&& other) noexcept
     : handle(std::exchange(other.handle, {})),
-      buffer(std::exchange(other.buffer, {}))
+      buffer(std::move(other.buffer))
 {
 }
 
@@ -220,9 +220,9 @@ GaussianProxyBlas& GaussianProxyBlas::operator=(GaussianProxyBlas&& other) noexc
 {
     if (this != &other)
     {
-        destroy();
+        reset();
         handle = std::exchange(other.handle, {});
-        buffer = std::exchange(other.buffer, {});
+        buffer = std::move(other.buffer);
     }
     return *this;
 }
@@ -233,8 +233,7 @@ void GaussianProxyBlas::build(
     const GaussianProxyType type,
     const float cutoffSigma)
 {
-    if (buffer != 0)
-        destroy(stream);
+    reset();
 
     const ProxyMesh& proxy = generatedProxies().at(static_cast<size_t>(type));
     const size_t vertexCount = proxy.vertices.size();
@@ -253,13 +252,11 @@ void GaussianProxyBlas::build(
     // Upload vertex + index data to device.
     const size_t vertexBytes = vertexCount * 3 * sizeof(float);
     const size_t indexBytes  = indexCount * sizeof(uint32_t);
-    CUdeviceptr vertexBuffer = 0;
-    CUdeviceptr indexBuffer  = 0;
-    NR_GPU_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&vertexBuffer), vertexBytes, stream));
-    NR_GPU_CHECK(cudaMallocAsync(reinterpret_cast<void**>(&indexBuffer),  indexBytes, stream));
-    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(vertexBuffer),
+    nr::cuda::UniqueAsyncDeviceBuffer vertexBuffer(vertexBytes, stream);
+    nr::cuda::UniqueAsyncDeviceBuffer indexBuffer(indexBytes, stream);
+    NR_GPU_CHECK(cudaMemcpyAsync(vertexBuffer.get(),
         scaledVertices.data(), vertexBytes, cudaMemcpyHostToDevice, stream));
-    NR_GPU_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(indexBuffer),
+    NR_GPU_CHECK(cudaMemcpyAsync(indexBuffer.get(),
         proxy.indices.data(), indexBytes, cudaMemcpyHostToDevice, stream));
 
     OptixBuildInput buildInput{};
@@ -267,11 +264,12 @@ void GaussianProxyBlas::build(
     buildInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
     buildInput.triangleArray.vertexStrideInBytes = 3 * sizeof(float);
     buildInput.triangleArray.numVertices = static_cast<uint32_t>(vertexCount);
-    buildInput.triangleArray.vertexBuffers = &vertexBuffer;
+    CUdeviceptr vertexBufferPtr = vertexBuffer.devicePtr();
+    buildInput.triangleArray.vertexBuffers = &vertexBufferPtr;
     buildInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
     buildInput.triangleArray.indexStrideInBytes = 3 * sizeof(uint32_t);
     buildInput.triangleArray.numIndexTriplets = static_cast<uint32_t>(triCount);
-    buildInput.triangleArray.indexBuffer = indexBuffer;
+    buildInput.triangleArray.indexBuffer = indexBuffer.devicePtr();
     buildInput.triangleArray.flags = &GaussianGeometryFlags;
     buildInput.triangleArray.numSbtRecords = 1;
 
@@ -281,34 +279,17 @@ void GaussianProxyBlas::build(
     OptixAccelBufferSizes sizes{};
     NR_OPTIX_CHECK(optixAccelComputeMemoryUsage(context, &options, &buildInput, 1, &sizes));
 
-    void* scratch = nullptr;
-    void* output = nullptr;
-    NR_GPU_CHECK(cudaMallocAsync(&scratch, sizes.tempSizeInBytes, stream));
-    NR_GPU_CHECK(cudaMallocAsync(&output, sizes.outputSizeInBytes, stream));
+    nr::cuda::UniqueAsyncDeviceBuffer scratch(sizes.tempSizeInBytes, stream);
+    buffer.allocate(sizes.outputSizeInBytes, stream);
     NR_OPTIX_CHECK(optixAccelBuild(
         context, stream, &options, &buildInput, 1,
-        reinterpret_cast<CUdeviceptr>(scratch), sizes.tempSizeInBytes,
-        reinterpret_cast<CUdeviceptr>(output), sizes.outputSizeInBytes,
+        scratch.devicePtr(), sizes.tempSizeInBytes,
+        buffer.devicePtr(), sizes.outputSizeInBytes,
         &handle, nullptr, 0));
-    NR_GPU_CHECK(cudaFreeAsync(scratch, stream));
-    buffer = reinterpret_cast<CUdeviceptr>(output);
-
-    NR_GPU_CHECK(cudaFreeAsync(reinterpret_cast<void*>(vertexBuffer), stream));
-    NR_GPU_CHECK(cudaFreeAsync(reinterpret_cast<void*>(indexBuffer), stream));
 }
 
-void GaussianProxyBlas::destroy(const cudaStream_t stream) noexcept
+void GaussianProxyBlas::reset() noexcept
 {
-    if (buffer != 0)
-        cudaFreeAsync(reinterpret_cast<void*>(buffer), stream);
-    buffer = 0;
-    handle = {};
-}
-
-void GaussianProxyBlas::destroy() noexcept
-{
-    if (buffer != 0)
-        cudaFree(reinterpret_cast<void*>(buffer));
-    buffer = 0;
+    buffer.reset();
     handle = {};
 }

@@ -139,7 +139,7 @@ CameraInstance::~CameraInstance()
 
 void CameraInstance::markDirty()
 {
-    rebuildCamera();
+    scene.setDirtyFlag(CameraState);
     scene.setDirtyFlag(Accumulation);
 }
 
@@ -186,7 +186,7 @@ void CameraInstance::rebuildCamera()
 void CameraInstance::onTransformUpdated()
 {
     SceneObject::onTransformUpdated();
-    rebuildCamera();
+    scene.setDirtyFlag(CameraState);
 }
 
 void CameraInstance::switchTo(CameraProjectionType type)
@@ -304,9 +304,8 @@ void CameraInstance::update()
         setPosition(position);
     }
 
-    rebuildCamera();
     if (oldPosition != getPosition() || oldRotation != getRotation())
-        scene.setDirtyFlag(Accumulation);
+        markDirty();
 }
 
 // ── UI ────────────────────────────────────────────────────────────────────────

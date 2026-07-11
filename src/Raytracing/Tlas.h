@@ -2,14 +2,17 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 #include <optix.h>
 
-#include "CUDA/GaussianProxyBlas.h"
+#include "CUDA/Unique/AsyncDeviceBuffer.h"
+#include "CUDA/Unique/ManagedBuffer.h"
 #include "CUDA/rstd/Vector.h"
+#include "Raytracing/GaussianProxyBlas.h"
 
 #include "Scene/GpuInstance.h"
 
@@ -26,7 +29,7 @@ class Tlas
 {
 public:
     Tlas() = default;
-    ~Tlas() = default;
+    ~Tlas() noexcept = default;
 
     Tlas(const Tlas&) = delete;
     Tlas& operator=(const Tlas&) = delete;
@@ -36,7 +39,7 @@ public:
         cudaStream_t stream,
         const Scene& scene,
         nr::rstd::vector<GpuInstance>& instancesOut);
-    void destroy(cudaStream_t stream) noexcept;
+    void reset() noexcept;
 
     OptixTraversableHandle getTraversable() const { return tlasHandle; }
 
@@ -55,7 +58,7 @@ private:
         nr::rstd::vector<GpuInstance>& instancesOut,
         uint32_t index);
 
-    OptixInstance* instancePtr() const { return reinterpret_cast<OptixInstance*>(instanceBuffer); }
+    OptixInstance* instancePtr() const { return reinterpret_cast<OptixInstance*>(instanceBuffer.devicePtr()); }
 
     std::vector<AccelInstanceInput> buildInstanceInputs(
         const Scene& scene,
@@ -73,13 +76,13 @@ private:
         const Scene& scene,
         std::vector<AccelInstanceInput>& inputs);
 
-    CUdeviceptr instanceBuffer{};
-    CUdeviceptr tlasBuffer{};
+    nr::cuda::UniqueManagedBuffer instanceBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer tlasBuffer;
     size_t tlasBufferSize{};
     uint32_t instanceCount{};
     OptixTraversableHandle tlasHandle{};
 
-    GaussianProxyBlas* proxyBlas{};
+    std::unique_ptr<GaussianProxyBlas> proxyBlas;
     GaussianProxyType lastProxyType{GaussianProxyType::TriangularBipyramid};
     float lastCutoffSigma{3.0f};
     uint32_t meshInstanceCount{};

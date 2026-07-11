@@ -1,21 +1,26 @@
 #pragma once
 
+#include <utility>
+
 #include <cuda_runtime_api.h>
 
 #include "Vulkan/Image.h"
 
 class Context;
 
-class SharedImage
+namespace nr::cuda
+{
+
+class UniqueSharedImage
 {
 public:
-    SharedImage() = default;
-    ~SharedImage() noexcept { destroy(); }
+    UniqueSharedImage() = default;
+    ~UniqueSharedImage() noexcept { reset(); }
 
-    SharedImage(const SharedImage&) = delete;
-    SharedImage& operator=(const SharedImage&) = delete;
+    UniqueSharedImage(const UniqueSharedImage&) = delete;
+    UniqueSharedImage& operator=(const UniqueSharedImage&) = delete;
 
-    SharedImage(SharedImage&& other) noexcept
+    UniqueSharedImage(UniqueSharedImage&& other) noexcept
         : image(std::move(other.image)),
           cudaMemory(other.cudaMemory),
           cudaMipmappedArray(other.cudaMipmappedArray),
@@ -28,11 +33,11 @@ public:
         other.surface = 0;
     }
 
-    SharedImage& operator=(SharedImage&& other) noexcept
+    UniqueSharedImage& operator=(UniqueSharedImage&& other) noexcept
     {
         if (this != &other)
         {
-            destroy();
+            reset();
             image = std::move(other.image);
             cudaMemory = other.cudaMemory;
             cudaMipmappedArray = other.cudaMipmappedArray;
@@ -47,7 +52,7 @@ public:
     }
 
     void create(Context& context, uint32_t width, uint32_t height, vk::Format format);
-    void destroy() noexcept;
+    void reset() noexcept;
 
     Image& getImage() { return image; }
     const Image& getImage() const { return image; }
@@ -60,3 +65,5 @@ private:
     cudaArray_t cudaArray{};
     cudaSurfaceObject_t surface{};
 };
+
+}

@@ -75,12 +75,12 @@ ImGuiManager::~ImGuiManager() {
     LOG_INFO( "Destroyed ImGuiManager");
 }
 
-void ImGuiManager::render(vk::CommandBuffer commandBuffer, const vk::ImageView targetView, const vk::Extent2D targetExtent) {
-    
+void ImGuiManager::updateUi() {
+
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
-    
+
     const auto* mainViewport = ImGui::GetMainViewport();
     const float menuBarSize = ImGui::GetFrameHeight();
 
@@ -104,8 +104,11 @@ void ImGuiManager::render(vk::CommandBuffer commandBuffer, const vk::ImageView t
         component->renderUi();
 
     ImGui::End();
-    
+
     ImGui::Render();
+}
+
+void ImGuiManager::renderDrawData(vk::CommandBuffer commandBuffer, const vk::ImageView targetView, const vk::Extent2D targetExtent) {
 
     // Vulkan dynamic rendering
     vk::RenderingAttachmentInfo colorAttachment{};

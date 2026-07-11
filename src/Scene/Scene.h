@@ -87,6 +87,7 @@ class Scene {
     uint64_t activeObjectId = 0;
     uint64_t nextObjectId = 1;
     uint8_t dirtyFlags = 0;
+    std::vector<uint32_t> dirtyMeshInstanceIndices;
 
     std::weak_ptr<SceneObject> copiedObject;
 
@@ -194,4 +195,14 @@ public:
     bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf | Lights); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
+
+    // Per-mesh-instance transform dirty tracking, so a single object move can
+    // be applied to the TLAS without re-baking every instance in the scene.
+    // Only set for pure transform edits (see MeshInstance::onTransformUpdated);
+    // structural changes (add/remove) go through the TLAS dirty flag alone and
+    // fall back to a full rebuild.
+    void markMeshInstanceTransformDirty(uint32_t instanceIndex);
+    const std::vector<uint32_t>& getDirtyMeshInstanceIndices() const { return dirtyMeshInstanceIndices; }
+    void clearDirtyMeshInstanceIndices() { dirtyMeshInstanceIndices.clear(); }
+    uint32_t getMeshInstanceIndex(const SceneObject* object) const;
 };

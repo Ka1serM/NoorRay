@@ -61,6 +61,7 @@ private:
     void updateDisplayDescriptor();
 
     void handleInput();
+    void handleScrollZoom();
     void handleTransformGizmo();
     void handleViewGizmo() const;
     void renderToolbar();

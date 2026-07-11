@@ -12,6 +12,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "CUDA/ManagedMemory.h"
 #include "CUDA/rstd/Allocator.h"
 #include "Log.h"
 #include "UI/ImGuiManager.h"
@@ -69,6 +70,11 @@ RossPsfCamera::~RossPsfCamera()
 
 void RossPsfCamera::freeRossObjects()
 {
+    if (rayLut == nullptr && rossSensor == nullptr && rossLens == nullptr)
+        return;
+
+    nr::synchronizeBeforeManagedMutation("RossPsfCamera optics free");
+
     if (rayLut != nullptr) {
         ross::rstd::allocator<ross::RayLUT> allocator;
         allocator.destroy(rayLut);
@@ -139,15 +145,7 @@ void RossPsfCamera::loadLensSensorAndPsf(const bool buildRayLut)
             loadedSensor.dimensions.height.millimeter());
         sensor.setResolution(loadedSensor.resolution.width, loadedSensor.resolution.height);
         sensor.loadImageSensorDimensions();
-        uint32_t psfBinCount = 0;
-        sensor.DispatchCPU([&](auto* concreteSensor) {
-            using SensorType = std::remove_cvref_t<decltype(*concreteSensor)>;
-            if constexpr (std::is_same_v<SensorType, ScatterPsfSensor>
-                          || std::is_same_v<SensorType, GatherPsfSensor>) {
-                concreteSensor->loadPsfGrid();
-                psfBinCount = concreteSensor->psfBinCount();
-            }
-        });
+        const uint32_t psfBinCount = sensor.reloadPsfGrid();
 
         ross::rstd::allocator<ross::ImageSensor> sensorAllocator;
         rossSensor = sensorAllocator.allocate(1);

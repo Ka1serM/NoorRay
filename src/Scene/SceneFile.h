@@ -20,6 +20,7 @@ struct EnvironmentFile {
 
 struct RenderSettingsFile {
     int max_samples{3000};
+    int gaussian_shading_mode{};
 };
 
 struct CameraFile {

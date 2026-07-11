@@ -19,7 +19,13 @@ public:
     
     ImGuiManager(Context& context, uint32_t numImages, vk::SurfaceFormatKHR renderTargetFormat);
     ~ImGuiManager();
-    void render(vk::CommandBuffer commandBuffer, vk::ImageView targetView, vk::Extent2D targetExtent);
+    // Runs widget logic for all components (including any resulting scene
+    // mutations) and finalizes ImGui's draw data. Must be called before any
+    // GPU work that reads scene data is dispatched for the frame, so UI-driven
+    // edits never race an in-flight kernel.
+    void updateUi();
+    // Records the draw data already finalized by updateUi() into commandBuffer.
+    void renderDrawData(vk::CommandBuffer commandBuffer, vk::ImageView targetView, vk::Extent2D targetExtent);
     void processEvent(const SDL_Event& event);
 
     template<typename T, typename... Args>

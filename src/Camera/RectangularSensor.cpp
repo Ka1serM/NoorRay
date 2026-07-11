@@ -12,15 +12,12 @@
 #include "CUDA/rstd/Allocator.h"
 #include "CUDA/rstd/Memory.h"
 #include "CUDA/Checks.h"
+#include "CUDA/ManagedMemory.h"
 #include "Log.h"
 #include "UI/ImGuiManager.h"
 #include "libross/foundation/gpu/types/Allocator.h"
 #include "libross/imaging/imagesensor/ImageSensorReader.h"
 #include "portable-file-dialogs.h"
-
-#if defined(NR_CUDA_ACTIVE)
-#include <cuda_runtime.h>
-#endif
 
 namespace {
 constexpr int RectangularSensorTypeIndex = 0;
@@ -30,36 +27,11 @@ constexpr int GatherPsfSensorTypeIndex = 2;
 constexpr std::array<const char*, 3> SensorTypeNames{
     "Rectangular", "Scatter PSF", "Gather PSF"};
 
-void synchronizeBeforeManagedSensorMutation(const char* reason)
-{
-#if defined(NR_CUDA_ACTIVE)
-    const cudaError_t result = cudaDeviceSynchronize();
-    if (result != cudaSuccess)
-        LOG_ERROR(reason << ": CUDA synchronize failed before managed sensor mutation: "
-                         << cudaGetErrorString(result));
-#else
-    (void)reason;
-#endif
-}
-
 template <typename SensorType>
 void allocateSensor(Sensor& sensor)
 {
-    synchronizeBeforeManagedSensorMutation("Sensor allocation");
+    nr::synchronizeBeforeManagedMutation("Sensor allocation");
 
-    const float previousWidth = sensor.width();
-    const float previousHeight = sensor.height();
-    const uint32_t previousResolutionX = sensor.resolutionX();
-    const uint32_t previousResolutionY = sensor.resolutionY();
-    const std::string previousImageSensorPath(sensor.getImageSensorPath());
-    std::string previousImageSensorLoadStatus;
-    if (sensor.ptr()) {
-        previousImageSensorLoadStatus = sensor.DispatchCPU([](const auto* concreteSensor) {
-            return std::string(concreteSensor->imageSensorLoadStatus);
-        });
-    } else {
-        previousImageSensorLoadStatus = sensor.imageSensorLoadStatus;
-    }
     std::string previousPsfGridPath;
     if (const auto* scatter = sensor.CastOrNullptr<ScatterPsfSensor>())
         previousPsfGridPath = scatter->psfGridPath;
@@ -71,17 +43,12 @@ void allocateSensor(Sensor& sensor)
     nr::rstd::allocator<SensorType> allocator;
     SensorType* concrete = allocator.allocate(1);
     allocator.construct(concrete);
-    concrete->setImageSensorPath(previousImageSensorPath);
-    std::snprintf(concrete->imageSensorLoadStatus, sizeof(concrete->imageSensorLoadStatus), "%s",
-        previousImageSensorLoadStatus.c_str());
-    concrete->setDimensionsMm(previousWidth, previousHeight);
-    concrete->setResolution(previousResolutionX, previousResolutionY);
     if constexpr (requires { concrete->psfGrid; }) {
         concrete->psfGridPath = previousPsfGridPath;
         if (!concrete->psfGridPath.empty())
             concrete->loadPsfGrid();
     }
-    sensor = Sensor(concrete);
+    static_cast<TaggedSensor&>(sensor) = TaggedSensor(concrete);
 }
 
 template <typename SensorType>
@@ -89,28 +56,9 @@ void cloneSensor(Sensor& destination, const Sensor& source)
 {
     destination.freeConcrete();
 
-    const float width = source.width();
-    const float height = source.height();
-    const uint32_t resolutionX = source.resolutionX();
-    const uint32_t resolutionY = source.resolutionY();
-    const std::string imageSensorPath(source.getImageSensorPath());
-    std::string imageSensorLoadStatus;
-    if (source.ptr()) {
-        imageSensorLoadStatus = source.DispatchCPU([](const auto* concreteSensor) {
-            return std::string(concreteSensor->imageSensorLoadStatus);
-        });
-    } else {
-        imageSensorLoadStatus = source.imageSensorLoadStatus;
-    }
-
     nr::rstd::allocator<SensorType> allocator;
     SensorType* concrete = allocator.allocate(1);
     allocator.construct(concrete);
-    concrete->setImageSensorPath(imageSensorPath);
-    std::snprintf(concrete->imageSensorLoadStatus, sizeof(concrete->imageSensorLoadStatus), "%s",
-        imageSensorLoadStatus.c_str());
-    concrete->setDimensionsMm(width, height);
-    concrete->setResolution(resolutionX, resolutionY);
 
     if constexpr (std::is_same_v<SensorType, ScatterPsfSensor>) {
         if (const auto* scatter = source.CastOrNullptr<ScatterPsfSensor>()) {
@@ -126,7 +74,7 @@ void cloneSensor(Sensor& destination, const Sensor& source)
         }
     }
 
-    destination = Sensor(concrete);
+    static_cast<TaggedSensor&>(destination) = TaggedSensor(concrete);
 }
 
 bool beginSensorUi(const char* label)
@@ -170,9 +118,11 @@ bool renderPhysicalSensorRows(Sensor& sensor)
     std::array<char, 512> sensorBuffer{};
     std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensor.imageSensorPath);
     const float selectButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float reloadButtonWidth = ImGui::CalcTextSize("Reload").x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
     ImGuiManager::tableRowLabel("Sensor File");
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - reloadButtonWidth
+        - ImGui::GetStyle().ItemSpacing.x * 2.0f);
     if (ImGui::InputText("##ImageSensorPath", sensorBuffer.data(), sensorBuffer.size())) {
         sensor.setImageSensorPath(sensorBuffer.data());
         changed = true;
@@ -186,12 +136,10 @@ bool renderPhysicalSensorRows(Sensor& sensor)
             std::vector<std::string>{"Sensor Files", "*.json", "All Files", "*"});
     }
     ImGui::EndDisabled();
-
-    if (ImGui::Button("Load Sensor##ImageSensor")) {
+    ImGui::SameLine();
+    if (ImGui::Button("Reload##ImageSensor", ImVec2(reloadButtonWidth, 0))) {
         changed |= sensor.loadImageSensorDimensions();
     }
-    ImGui::SameLine();
-    ImGui::TextUnformatted(sensor.imageSensorLoadStatus);
 
     float currentWidthMm = sensor.width();
     float currentHeightMm = sensor.height();
@@ -204,22 +152,20 @@ bool renderPhysicalSensorRows(Sensor& sensor)
         changed = true;
     });
 
-    ImGuiManager::tableRowLabel("Resolution");
-    int w = static_cast<int>(sensor.resolutionX());
-    int h = static_cast<int>(sensor.resolutionY());
-    ImGui::PushItemWidth((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("x").x
-                          - ImGui::GetStyle().ItemSpacing.x * 2.f) * 0.5f);
-    if (ImGui::InputInt("##ResW", &w, 0, 0, ImGuiInputTextFlags_CharsDecimal))
+    int resolutionX = static_cast<int>(sensor.resolutionX());
+    int resolutionY = static_cast<int>(sensor.resolutionY());
+    ImGuiManager::tableRowLabel("Resolution X");
+    if (ImGui::InputInt("##ResolutionX", &resolutionX, 0, 0, ImGuiInputTextFlags_CharsDecimal)
+        && resolutionX > 0) {
+        sensor.setResolution(static_cast<uint32_t>(resolutionX), sensor.resolutionY());
         changed = true;
-    ImGui::SameLine();
-    ImGui::TextUnformatted("x");
-    ImGui::SameLine();
-    if (ImGui::InputInt("##ResH", &h, 0, 0, ImGuiInputTextFlags_CharsDecimal))
+    }
+    ImGuiManager::tableRowLabel("Resolution Y");
+    if (ImGui::InputInt("##ResolutionY", &resolutionY, 0, 0, ImGuiInputTextFlags_CharsDecimal)
+        && resolutionY > 0) {
+        sensor.setResolution(sensor.resolutionX(), static_cast<uint32_t>(resolutionY));
         changed = true;
-    ImGui::PopItemWidth();
-    sensor.setResolution(
-        static_cast<uint32_t>(std::clamp(w, 1, 16384)),
-        static_cast<uint32_t>(std::clamp(h, 1, 16384)));
+    }
 
     return changed;
 }
@@ -230,7 +176,7 @@ void freePsfGrid(PsfSensor& sensor)
     if (sensor.psfGrid == nullptr)
         return;
 
-    synchronizeBeforeManagedSensorMutation("PSF grid free");
+    nr::synchronizeBeforeManagedMutation("PSF grid free");
 
     ross::rstd::allocator<ross::InterpolatedPsfGrid> allocator;
     allocator.destroy(sensor.psfGrid);
@@ -306,33 +252,18 @@ bool renderPsfGridRows(PsfSensor& sensor)
 #ifndef NR_GPU_CODE
 std::string_view Sensor::getImageSensorPath() const
 {
-    if (ptr())
-        return DispatchCPU([](const auto* sensor) -> std::string_view {
-            return sensor->imageSensorPath;
-        });
     return imageSensorPath;
 }
 
 void Sensor::setImageSensorPath(std::string_view path)
 {
-    if (ptr()) {
-        DispatchCPU([&](auto* sensor) {
-            sensor->setImageSensorPath(path);
-        });
-    } else {
-        const size_t copyCount = std::min(path.size(), sizeof(imageSensorPath) - 1);
-        std::memcpy(imageSensorPath, path.data(), copyCount);
-        imageSensorPath[copyCount] = '\0';
-    }
+    const size_t copyCount = std::min(path.size(), sizeof(imageSensorPath) - 1);
+    std::memcpy(imageSensorPath, path.data(), copyCount);
+    imageSensorPath[copyCount] = '\0';
 }
 
 bool Sensor::loadImageSensorDimensions()
 {
-    if (ptr())
-        return DispatchCPU([](auto* sensor) {
-            return sensor->loadImageSensorDimensions();
-        });
-
     if (imageSensorPath[0] == '\0') {
         std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%s",
             "Sensor file path is required");
@@ -341,10 +272,10 @@ bool Sensor::loadImageSensorDimensions()
 
     try {
         const ross::ImageSensor loadedSensor = ross::ImageSensorReader::readFile(imageSensorPath);
-        setDimensionsMm(
-            loadedSensor.dimensions.width.millimeter(),
-            loadedSensor.dimensions.height.millimeter());
-        setResolution(loadedSensor.resolution.width, loadedSensor.resolution.height);
+        widthMm = std::max(0.001f, loadedSensor.dimensions.width.millimeter());
+        heightMm = std::max(0.001f, loadedSensor.dimensions.height.millimeter());
+        resolutionWidth = std::max(1u, static_cast<unsigned int>(loadedSensor.resolution.width));
+        resolutionHeight = std::max(1u, static_cast<unsigned int>(loadedSensor.resolution.height));
         std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%ux%u",
             loadedSensor.resolution.width, loadedSensor.resolution.height);
         LOG_INFO("Sensor: loaded image sensor " << imageSensorPath);
@@ -358,38 +289,18 @@ bool Sensor::loadImageSensorDimensions()
 
 void Sensor::freeConcrete()
 {
-    const float previousWidth = width();
-    const float previousHeight = height();
-    const uint32_t previousResolutionX = resolutionX();
-    const uint32_t previousResolutionY = resolutionY();
-    const std::string previousImageSensorPath(getImageSensorPath());
-    std::string previousImageSensorLoadStatus;
-    if (ptr()) {
-        previousImageSensorLoadStatus = DispatchCPU([](const auto* sensor) {
-            return std::string(sensor->imageSensorLoadStatus);
-        });
-    } else {
-        previousImageSensorLoadStatus = imageSensorLoadStatus;
-    }
+    if (!ptr())
+        return;
 
-    if (ptr()) {
-        synchronizeBeforeManagedSensorMutation("Sensor free");
-        DispatchCPU([](auto* concrete) {
-            using SensorType = std::remove_reference_t<decltype(*concrete)>;
-            delete concrete->imageSensorDialog;
-            concrete->imageSensorDialog = nullptr;
-            nr::rstd::allocator<SensorType> allocator;
-            allocator.destroy(concrete);
-            allocator.deallocate(concrete, 1);
-        });
-    }
+    nr::synchronizeBeforeManagedMutation("Sensor free");
+    DispatchCPU([](auto* concrete) {
+        using SensorType = std::remove_reference_t<decltype(*concrete)>;
+        nr::rstd::allocator<SensorType> allocator;
+        allocator.destroy(concrete);
+        allocator.deallocate(concrete, 1);
+    });
 
-    *this = Sensor(nullptr);
-    setImageSensorPath(previousImageSensorPath);
-    std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%s",
-        previousImageSensorLoadStatus.c_str());
-    setDimensionsMm(previousWidth, previousHeight);
-    setResolution(previousResolutionX, previousResolutionY);
+    static_cast<TaggedSensor&>(*this) = TaggedSensor(nullptr);
 }
 
 void Sensor::moveConcreteFrom(Sensor& other)
@@ -399,7 +310,7 @@ void Sensor::moveConcreteFrom(Sensor& other)
 
     freeConcrete();
     *this = other;
-    other = Sensor(nullptr);
+    static_cast<TaggedSensor&>(other) = TaggedSensor(nullptr);
 }
 
 void Sensor::cloneConcreteFrom(const Sensor& other)
@@ -407,18 +318,19 @@ void Sensor::cloneConcreteFrom(const Sensor& other)
     if (this == &other)
         return;
 
-    if (other.Is<ScatterPsfSensor>())
+    copyPhysicalFrom(other);
+    setImageSensorPath(other.getImageSensorPath());
+    std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%s",
+        other.imageSensorLoadStatus);
+
+    if (!other) {
+        allocateRectangular();
+    } else if (other.Is<ScatterPsfSensor>())
         cloneSensor<ScatterPsfSensor>(*this, other);
     else if (other.Is<GatherPsfSensor>())
         cloneSensor<GatherPsfSensor>(*this, other);
     else if (other.Is<RectangularSensor>())
         cloneSensor<RectangularSensor>(*this, other);
-    else {
-        freeConcrete();
-        setImageSensorPath(other.getImageSensorPath());
-        setDimensionsMm(other.width(), other.height());
-        setResolution(other.resolutionX(), other.resolutionY());
-    }
 }
 
 void Sensor::allocateRectangular()
@@ -435,13 +347,30 @@ void Sensor::allocateGatherPsf()
 {
     allocateSensor<GatherPsfSensor>(*this);
 }
+
+uint32_t Sensor::reloadPsfGrid()
+{
+    if (auto* scatter = CastOrNullptr<ScatterPsfSensor>()) {
+        scatter->loadPsfGrid();
+        return scatter->psfBinCount();
+    }
+    if (auto* gather = CastOrNullptr<GatherPsfSensor>()) {
+        gather->loadPsfGrid();
+        return gather->psfBinCount();
+    }
+    return 0;
+}
 #endif
 
 bool Sensor::renderUi()
 {
 #ifndef NR_GPU_CODE
-    if (ptr())
-        return DispatchCPU([this](auto* sensor) { return sensor->renderUi(*this); });
+    if (auto* rectangular = CastOrNullptr<RectangularSensor>())
+        return rectangular->renderUi(*this);
+    if (auto* scatter = CastOrNullptr<ScatterPsfSensor>())
+        return scatter->renderUi(*this);
+    if (auto* gather = CastOrNullptr<GatherPsfSensor>())
+        return gather->renderUi(*this);
     return renderPhysicalSensorRows(*this);
 #else
     return false;
@@ -455,8 +384,8 @@ bool RectangularSensor::renderUi(Sensor& owner)
 
     bool changed = false;
     if (ImGui::BeginTable("SensorTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        changed |= Sensor::renderUi();
         changed |= renderSensorTypeCombo(owner, RectangularSensorTypeIndex);
+        changed |= renderPhysicalSensorRows(owner);
         ImGui::EndTable();
     }
     ImGui::TreePop();
@@ -491,8 +420,8 @@ bool ScatterPsfSensor::renderUi(Sensor& owner)
 
     bool changed = false;
     if (ImGui::BeginTable("SensorTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        changed |= Sensor::renderUi();
         changed |= renderSensorTypeCombo(owner, ScatterPsfSensorTypeIndex);
+        changed |= renderPhysicalSensorRows(owner);
         if (owner.Is<ScatterPsfSensor>())
             changed |= renderPsfGridRows(*this);
         ImGui::EndTable();
@@ -559,8 +488,8 @@ bool GatherPsfSensor::renderUi(Sensor& owner)
 
     bool changed = false;
     if (ImGui::BeginTable("SensorTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        changed |= Sensor::renderUi();
         changed |= renderSensorTypeCombo(owner, GatherPsfSensorTypeIndex);
+        changed |= renderPhysicalSensorRows(owner);
         if (owner.Is<GatherPsfSensor>())
             changed |= renderPsfGridRows(*this);
         ImGui::EndTable();

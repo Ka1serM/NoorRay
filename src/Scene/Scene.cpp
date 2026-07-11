@@ -340,6 +340,25 @@ std::vector<std::shared_ptr<MeshInstance>> Scene::getMeshInstances() const {
     return result;
 }
 
+void Scene::markMeshInstanceTransformDirty(const uint32_t instanceIndex) {
+    if (instanceIndex == ~0u)
+        return;
+    if (std::ranges::find(dirtyMeshInstanceIndices, instanceIndex) == dirtyMeshInstanceIndices.end())
+        dirtyMeshInstanceIndices.push_back(instanceIndex);
+}
+
+uint32_t Scene::getMeshInstanceIndex(const SceneObject* object) const {
+    uint32_t instanceIndex = 0;
+    for (const auto& obj : sceneObjects) {
+        if (!std::dynamic_pointer_cast<MeshInstance>(obj))
+            continue;
+        if (obj.get() == object)
+            return instanceIndex;
+        ++instanceIndex;
+    }
+    return ~0u;
+}
+
 std::vector<std::shared_ptr<GaussianInstance>> Scene::getGaussianInstances() const {
     std::vector<std::shared_ptr<GaussianInstance>> result;
     for (const auto& obj : sceneObjects)

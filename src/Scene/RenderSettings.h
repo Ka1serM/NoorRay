@@ -11,6 +11,12 @@ enum class BufferVisualization : int
 
 enum class GaussianProxyType : int;
 
+enum class GaussianShadingMode : int
+{
+    GlobalIllumination,
+    DirectColor,
+};
+
 class RenderSettings
 {
 public:
@@ -23,6 +29,7 @@ public:
     int transparentBackground{};
     float gaussianCutoffSigma{3.0f};
     int gaussianProxyType{0}; // GaussianProxyType::Icosahedron
+    GaussianShadingMode gaussianShadingMode{GaussianShadingMode::GlobalIllumination};
     int gaussianProxyOverdrawVisualization{};
     int gaussianProxyOverdrawMax{1024};
     BufferVisualization bufferVisualization{BufferVisualization::Beauty};

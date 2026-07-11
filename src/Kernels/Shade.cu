@@ -201,6 +201,14 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 albedo.values[i] = rgbSigmoidEval(
                     spectrumCoeffs.x, spectrumCoeffs.y, spectrumCoeffs.z, wl.lambda[i]);
 
+            if (params.scene.renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor)
+            {
+                state.radiance += state.throughput * albedo;
+                params.queues.pathStates[hit.sampleIndex] = state;
+                continuePath = false;
+            }
+            else
+            {
             const float inv4Pi = 0.07957747154594767f; // 1/(4*pi)
             const glm::vec3 gaussianPos = hit.positionOrDirection;
 
@@ -309,6 +317,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 continuation.sampleIndex = hit.sampleIndex;
             }
             params.queues.pathStates[hit.sampleIndex] = state;
+            }
         }
         else if (isMiss)
         {

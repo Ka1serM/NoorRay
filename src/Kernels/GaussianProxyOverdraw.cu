@@ -3,7 +3,6 @@
 #include <optix_device.h>
 
 #include "Raytracing/SceneData.h"
-#include "Samplers/RandomSampler.h"
 
 extern "C"
 {
@@ -48,28 +47,16 @@ extern "C" __global__ void __raygen__gaussianProxyOverdraw()
 
     const uint32_t x = pixel % params.frame.width;
     const uint32_t y = pixel / params.frame.width;
-    const float nx = (static_cast<float>(x) + 0.5f)
-                   / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
-    const float ny = 1.0f - (static_cast<float>(y) + 0.5f)
-                   / static_cast<float>(params.frame.height) * 2.0f;
-
-    glm::vec3 origin{};
-    glm::vec3 direction{};
-    float cameraWeight = 1.0f;
-    RandomState rng = seedRandom(static_cast<uint64_t>(pixel));
-    SampledWavelengths wl = SampledWavelengths::sampleVisible(0.5f);
-    const bool active = params.scene.camera->Dispatch([&](const auto* camera) {
-        return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
-            pixel, wl, true);
-    });
+    const PathRayWorkItem ray = params.queues.aovRayQueue[pixel];
 
     uint32_t count = 0;
-    if (active)
+    if (isfinite(ray.direction.x) && isfinite(ray.direction.y) && isfinite(ray.direction.z)
+        && dot(ray.direction, ray.direction) > 0.0f)
     {
         optixTrace(
             params.scene.tlasHandle,
-            make_float3(origin.x, origin.y, origin.z),
-            make_float3(direction.x, direction.y, direction.z),
+            make_float3(ray.origin.x, ray.origin.y, ray.origin.z),
+            make_float3(ray.direction.x, ray.direction.y, ray.direction.z),
             0.001f, 1000.0f, 0.0f,
             0x02,
             OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,

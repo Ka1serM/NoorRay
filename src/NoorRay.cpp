@@ -149,6 +149,12 @@ void NoorRay::runUi() {
         if (renderer->beginFrame()) {
             const vk::CommandBuffer cmd = renderer->getCurrentCommandBuffer();
 
+            // Run UI logic (and any resulting scene mutations, e.g. material
+            // sliders or transform gizmos) before this frame's wavefront
+            // kernels are dispatched below, so edits never race an in-flight
+            // kernel reading the same UMA-backed scene data.
+            imGuiManager->updateUi();
+
             {
                 if (auto* cam = scene.getActiveCamera()) {
                     const glm::uvec2 resolution = cam->getCamera()->getSensor().resolution();
@@ -209,38 +215,52 @@ void NoorRay::runUi() {
                         if (scene.isDirty(TLAS))     raytracer->updateTLAS();
 
                         const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
-                        const int spp = std::max(1, scene.getRenderSettings().samples);
-                        const int maxSamples = std::max(1, scene.getRenderSettings().maxSamples);
+                        const RenderSettings& renderSettings = scene.getRenderSettings();
+                        const bool proxyOverdraw =
+                            renderSettings.gaussianProxyOverdrawVisualization != 0;
+                        const int spp = std::max(1, renderSettings.samples);
+                        const int maxSamples = std::max(1, renderSettings.maxSamples);
 
-                        if (resetAccumulation) {
+                        if (proxyOverdraw) {
                             frame = 0;
                             submittedSamples = 0;
                             renderComplete = false;
-                        }
-
-                        if (renderComplete) {
-                            debugPanel->setSampleInfo(submittedSamples, maxSamples);
-                        } else {
-                            if (!resetAccumulation)
-                                ++frame;
-
                             scene.clearDirtyFlags();
                             firstFrame = false;
-                            raytracer->render(PushData{.frame = frame});
-                            // render() harvests the completed frame's CUDA events
-                            // before asynchronously submitting the next frame.
+                            raytracer->render(PushData{.frame = 0});
                             debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
+                            debugPanel->setSampleInfo(0, 0);
+                        } else {
+                            if (resetAccumulation) {
+                                frame = 0;
+                                submittedSamples = 0;
+                                renderComplete = false;
+                            }
 
-                            submittedSamples = std::min((frame + 1) * spp, maxSamples);
-                            renderComplete = submittedSamples >= maxSamples;
-                            debugPanel->setSampleInfo(
-                                submittedSamples, maxSamples);
+                            if (renderComplete) {
+                                debugPanel->setSampleInfo(submittedSamples, maxSamples);
+                            } else {
+                                if (!resetAccumulation)
+                                    ++frame;
+
+                                scene.clearDirtyFlags();
+                                firstFrame = false;
+                                raytracer->render(PushData{.frame = frame});
+                                // render() harvests the completed frame's CUDA events
+                                // before asynchronously submitting the next frame.
+                                debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
+
+                                submittedSamples = std::min((frame + 1) * spp, maxSamples);
+                                renderComplete = submittedSamples >= maxSamples;
+                                debugPanel->setSampleInfo(
+                                    submittedSamples, maxSamples);
+                            }
                         }
                     }
                 }
             }
 
-            imGuiManager->render(cmd, renderer->getCurrentColorImageView(), renderer->getSwapchainExtent());
+            imGuiManager->renderDrawData(cmd, renderer->getCurrentColorImageView(), renderer->getSwapchainExtent());
             renderer->endFrame();
         }
     }

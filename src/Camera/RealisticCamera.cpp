@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include <string>
 #include <stdexcept>
+#include "CUDA/ManagedMemory.h"
 #include "Raytracing/Sellmeier.h"
 #include "Log.h"
 #include "UI/ImGuiManager.h"
@@ -61,6 +62,11 @@ RealisticCamera::~RealisticCamera()
 
 void RealisticCamera::freeRossLens()
 {
+    if (rossLens == nullptr && exitPupil == nullptr)
+        return;
+
+    nr::synchronizeBeforeManagedMutation("RealisticCamera optics free");
+
     if (exitPupil != nullptr) {
         ross::rstd::allocator<ross::ExitPupil> pupilAlloc;
         pupilAlloc.destroy(exitPupil);

@@ -12,8 +12,6 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
     const PathState state = params.queues.pathStates[pixel];
     const float alpha = static_cast<float>((state.packedCounters >> CounterHitShift) & 1u);
 
-    const uint32_t x = pixel % params.frame.width;
-    const uint32_t y = pixel / params.frame.width;
     SensorSampleContext ctx{};
     ctx.accumulation = params.accumulation;
     ctx.psfBuckets = params.psfGatherBuckets;
@@ -28,20 +26,16 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
     const Sensor& sensor = params.scene.camera->Dispatch([](const auto* camera) -> const Sensor& {
         return camera->sensor;
     });
-    if (sensor) {
-        sensor.Dispatch([&](const auto* concreteSensor) {
-            concreteSensor->addSample(pixel, state.radiance, state.wl, 1.0f, ctx);
-        });
-        if (sensor.Is<RectangularSensor>() || sensor.Is<GatherPsfSensor>()) {
-            const glm::vec4 out = params.accumulation[pixel];
-            surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
-                params.output.color, x * sizeof(float4), y);
-        }
-    } else {
-        RectangularSensor direct;
-        direct.copyPhysicalFrom(sensor);
-        direct.addSample(pixel, state.radiance, state.wl, 1.0f, ctx);
+    const bool deferredOutput = sensor.Is<ScatterPsfSensor>();
+    sensor.Dispatch([&](const auto* concreteSensor) {
+        concreteSensor->addSample(pixel, state.radiance, state.wl, 1.0f, ctx);
+    });
+
+    if (!deferredOutput)
+    {
         const glm::vec4 out = params.accumulation[pixel];
+        const uint32_t x = pixel % params.frame.width;
+        const uint32_t y = pixel / params.frame.width;
         surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
             params.output.color, x * sizeof(float4), y);
     }

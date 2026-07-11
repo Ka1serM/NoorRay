@@ -55,6 +55,31 @@ const Sensor& Camera::getSensor() const
     return sensor;
 }
 
+float Camera::getFocalLength() const
+{
+    if (ptr())
+        return DispatchCPU([](const auto* cam) { return cam->focalLengthMm; });
+    return focalLengthMm;
+}
+
+void Camera::setCameraToWorld(const glm::mat4& m)
+{
+    if (ptr())
+        DispatchCPU([&m](auto* cam) { cam->cameraToWorld = m; });
+    else
+        cameraToWorld = m;
+}
+
+Camera Camera::cloneBaseState() const
+{
+    Camera state = ptr()
+        ? DispatchCPU([](const auto* cam) { return static_cast<const Camera&>(*cam); })
+        : *this;
+    static_cast<TaggedCamera&>(state) = TaggedCamera(nullptr);
+    static_cast<TaggedSensor&>(state.sensor) = TaggedSensor(nullptr);
+    return state;
+}
+
 bool Camera::renderUi()
 {
     bool changed = false;

@@ -1,9 +1,13 @@
 #include "Viewport.h"
+#include <cstring>
 #include <iostream>
 
 #include "Globals.h"
 #include "Log.h"
 #include "ViewportSpv.h"
+#include "ViewportBillboardsSpv.h"
+#include "Scene/Scene.h"
+#include "Scene/LightInstance.h"
 
 namespace
 {
@@ -15,6 +19,13 @@ struct ViewportPushConstants
     float    exposure;
     int32_t  bufferVisualization;
     int32_t  tonemappingEnabled;
+};
+
+struct BillboardPushConstants
+{
+    glm::mat4 viewProjection;
+    glm::vec2 screenSize;
+    float     radius;
 };
 }
 
@@ -28,6 +39,7 @@ Viewport::Viewport(Context& context, const uint32_t width, const uint32_t height
 : context(context),
   outputImage(context, width, height, outputImageFormat,
       vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+      vk::ImageUsageFlagBits::eColorAttachment |
       vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst)
 {
     shaderModule = context.getDevice().createShaderModuleUnique(
@@ -61,6 +73,9 @@ Viewport::Viewport(Context& context, const uint32_t width, const uint32_t height
 
     writeDescriptors(0, color0, albedo0, normal0, crypto0, position0);
     writeDescriptors(1, color1, albedo1, normal1, crypto1, position1);
+
+    createBillboardPipeline();
+    reserveBillboards(1);
 }
 
 void Viewport::writeDescriptors(const uint32_t bufferIndex,
@@ -90,15 +105,180 @@ void Viewport::writeDescriptors(const uint32_t bufferIndex,
     context.getDevice().updateDescriptorSets(writes, {});
 }
 
+void Viewport::createBillboardPipeline()
+{
+    billboardShaderModule = context.getDevice().createShaderModuleUnique(
+        {{}, noorRayViewportBillboardsSpvLength, reinterpret_cast<const uint32_t*>(noorRayViewportBillboardsSpv)});
+
+    const vk::DescriptorSetLayoutBinding billboardBinding{
+        0, vk::DescriptorType::eStorageBuffer, 1,
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment};
+    billboardDescriptorSetLayout = context.getDevice().createDescriptorSetLayoutUnique(
+        {{}, 1, &billboardBinding});
+
+    const vk::PushConstantRange pushConstantRange(
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        0, sizeof(BillboardPushConstants));
+    billboardPipelineLayout = context.getDevice().createPipelineLayoutUnique(
+        {{}, 1, &*billboardDescriptorSetLayout, 1, &pushConstantRange});
+
+    const vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 1, &*billboardDescriptorSetLayout);
+    billboardDescriptorSet = std::move(context.getDevice().allocateDescriptorSetsUnique(allocInfo).front());
+
+    const std::array stages{
+        vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eVertex, *billboardShaderModule, "vertMain"),
+        vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eFragment, *billboardShaderModule, "fragMain"),
+    };
+
+    // No vertex buffers — the vertex shader builds a screen-facing quad from
+    // SV_VertexID/SV_InstanceID and reads billboard data straight out of the
+    // storage buffer.
+    constexpr vk::PipelineVertexInputStateCreateInfo vertexInput{};
+    constexpr vk::PipelineInputAssemblyStateCreateInfo inputAssembly(
+        {}, vk::PrimitiveTopology::eTriangleStrip, false);
+
+    constexpr vk::PipelineViewportStateCreateInfo viewportState({}, 1, nullptr, 1, nullptr);
+
+    vk::PipelineRasterizationStateCreateInfo rasterization{};
+    rasterization.polygonMode = vk::PolygonMode::eFill;
+    rasterization.cullMode = vk::CullModeFlagBits::eNone;
+    rasterization.lineWidth = 1.0f;
+
+    vk::PipelineMultisampleStateCreateInfo multisample{};
+    multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+
+    vk::PipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.blendEnable = true;
+    blendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+    blendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    blendAttachment.colorBlendOp = vk::BlendOp::eAdd;
+    blendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+    blendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eZero;
+    blendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
+    blendAttachment.colorWriteMask =
+        vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+    const vk::PipelineColorBlendStateCreateInfo colorBlend({}, false, vk::LogicOp::eCopy, 1, &blendAttachment);
+
+    const std::array dynamicStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+    const vk::PipelineDynamicStateCreateInfo dynamicState({}, dynamicStates);
+
+    const vk::Format colorFormat = outputImage.getFormat();
+    vk::PipelineRenderingCreateInfo renderingCreateInfo{};
+    renderingCreateInfo.colorAttachmentCount = 1;
+    renderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+
+    vk::GraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.pNext = &renderingCreateInfo;
+    pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
+    pipelineInfo.pStages = stages.data();
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterization;
+    pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = *billboardPipelineLayout;
+
+    billboardPipeline = context.getDevice().createGraphicsPipelineUnique({}, pipelineInfo).value;
+}
+
+void Viewport::reserveBillboards(const uint32_t capacity)
+{
+    if (capacity <= billboardCapacity)
+        return;
+
+    // The descriptor set may still be referenced by an in-flight command buffer from
+    // a previous frame; growth is rare (only when the light count exceeds the current
+    // capacity), so a wait here is cheap insurance against rewriting a live binding.
+    if (billboardCapacity > 0)
+        context.getDevice().waitIdle();
+
+    billboardBuffer = Buffer(context, Buffer::Type::Storage, capacity * sizeof(ViewportBillboard));
+    billboardCapacity = capacity;
+    writeBillboardDescriptor();
+}
+
+void Viewport::writeBillboardDescriptor()
+{
+    const vk::WriteDescriptorSet write = vk::WriteDescriptorSet()
+        .setDstSet(billboardDescriptorSet.get())
+        .setDstBinding(0)
+        .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+        .setBufferInfo(billboardBuffer.getDescriptorInfo())
+        .setDescriptorCount(1);
+    context.getDevice().updateDescriptorSets(write, {});
+}
+
+void Viewport::updateBillboards(const Scene& scene)
+{
+    std::vector<ViewportBillboard> entries;
+    for (const auto& obj : scene.getSceneObjects())
+    {
+        if (const auto* light = dynamic_cast<LightInstance*>(obj.get()))
+        {
+            entries.push_back(ViewportBillboard{
+                glm::vec4(light->getWorldTransform().getPosition(), static_cast<float>(light->lightType)),
+                glm::vec4(light->getColor(), 1.0f)});
+        }
+    }
+
+    reserveBillboards(entries.empty() ? 1 : static_cast<uint32_t>(entries.size()));
+    if (!entries.empty())
+        std::memcpy(billboardBuffer.getMappedData(), entries.data(), entries.size() * sizeof(ViewportBillboard));
+    billboardCount = static_cast<uint32_t>(entries.size());
+}
+
 Viewport::~Viewport()
 {
     LOG_INFO("Destroying Viewport");
+}
+
+void Viewport::drawBillboards(const vk::CommandBuffer commandBuffer, const glm::mat4& viewProjection)
+{
+    vk::RenderingAttachmentInfo colorAttachment{};
+    colorAttachment.setImageView(outputImage.getView());
+    colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
+    colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
+    colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
+
+    vk::RenderingInfo renderingInfo{};
+    renderingInfo.setRenderArea(vk::Rect2D({0, 0}, {outputImage.getWidth(), outputImage.getHeight()}));
+    renderingInfo.setLayerCount(1);
+    renderingInfo.setColorAttachments(colorAttachment);
+
+    commandBuffer.beginRendering(renderingInfo);
+
+    // Negative height flips Vulkan's Y-down viewport convention back to the Y-up
+    // NDC that glm::perspective() (used for the camera matrix) assumes.
+    commandBuffer.setViewport(0, vk::Viewport(
+        0.0f, static_cast<float>(outputImage.getHeight()),
+        static_cast<float>(outputImage.getWidth()), -static_cast<float>(outputImage.getHeight()), 0.0f, 1.0f));
+    commandBuffer.setScissor(0, vk::Rect2D({0, 0}, {outputImage.getWidth(), outputImage.getHeight()}));
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *billboardPipeline);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *billboardPipelineLayout, 0,
+                                     billboardDescriptorSet.get(), {});
+
+    const BillboardPushConstants pushConstants{
+        viewProjection,
+        glm::vec2(static_cast<float>(outputImage.getWidth()), static_cast<float>(outputImage.getHeight())),
+        ViewportBillboardPixelRadius};
+    commandBuffer.pushConstants(
+        *billboardPipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        0, sizeof(pushConstants), &pushConstants);
+
+    commandBuffer.draw(4, billboardCount, 0, 0);
+
+    commandBuffer.endRendering();
 }
 
 void Viewport::dispatch(
     const vk::CommandBuffer commandBuffer,
     const uint32_t bufferIndex,
     const uint32_t selectedIndex,
+    const glm::mat4& viewProjection,
     const float exposure,
     const int bufferVisualization,
     const int tonemappingEnabled)
@@ -115,6 +295,12 @@ void Viewport::dispatch(
     const uint32_t groupCountX = (outputImage.getWidth()  + ViewportGroupSize - 1) / ViewportGroupSize;
     const uint32_t groupCountY = (outputImage.getHeight() + ViewportGroupSize - 1) / ViewportGroupSize;
     commandBuffer.dispatch(groupCountX, groupCountY, 1);
+
+    if (billboardCount > 0)
+    {
+        outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal);
+        drawBillboards(commandBuffer, viewProjection);
+    }
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
@@ -135,6 +321,7 @@ void Viewport::resize(const uint32_t width, const uint32_t height,
     {
         outputImage = Image(context, width, height, outputImageFormat,
             vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+            vk::ImageUsageFlagBits::eColorAttachment |
             vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
     }
     writeDescriptors(0, color0, albedo0, normal0, crypto0, position0);

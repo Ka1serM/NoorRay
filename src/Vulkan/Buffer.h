@@ -15,6 +15,11 @@ public:
 
     Buffer(const Context& context, Type type, vk::DeviceSize size, const void* data = nullptr, vk::BufferUsageFlags usage = {}, vk::MemoryPropertyFlags memoryProps = {});
 
+    // Host-visible, host-coherent buffer allocated outside VMA so its memory can be
+    // exported and imported into CUDA (see nr::cuda::UniqueSharedBuffer).
+    Buffer(const Context& context, vk::DeviceSize size, vk::BufferUsageFlags usage,
+           vk::ExternalMemoryHandleTypeFlagBits externalHandleType);
+
     // Move Semantics
     Buffer(const Buffer&) = delete;
     Buffer& operator=(const Buffer&) = delete;
@@ -26,8 +31,10 @@ public:
     const vk::Buffer& getBuffer() const { return buffer; }
     const vk::DeviceMemory& getMemory() const { return memory; }
     void* getMappedData() const { return mappedData; }
+    vk::DeviceSize getSize() const { return descBufferInfo.range; }
 
 private:
+    vk::Device device;
     VmaAllocator allocator;
     vk::Buffer buffer;
     VmaAllocation allocation;

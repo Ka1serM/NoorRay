@@ -54,6 +54,11 @@ void LightInstance::onTransformUpdated()
     }
 }
 
+glm::vec3 LightInstance::getColor() const
+{
+    return std::visit([](const auto& l) { return l.color; }, light);
+}
+
 std::unique_ptr<SceneObject> LightInstance::clone() const
 {
     auto c = std::make_unique<LightInstance>(scene, getName() + " (copy)",

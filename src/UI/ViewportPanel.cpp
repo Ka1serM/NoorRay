@@ -12,6 +12,8 @@
 #include "SDL3/SDL_mouse.h"
 #include "Camera/CameraInstance.h"
 #include "Scene/MeshInstance.h"
+#include "Scene/LightInstance.h"
+#include "Vulkan/Viewport.h"
 
 ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, const uint32_t width, const uint32_t height)
     : ImGuiComponent(name), context(context), scene(scene), outputCrypto(&outputCrypto), outputPosition(&outputPosition), width(width), height(height),
@@ -424,9 +426,55 @@ void ViewportPanel::handlePositionPicking() const {
 }
 
 
+bool ViewportPanel::handleBillboardPicking() const {
+    auto* camera = scene.getActiveCamera();
+    if (!camera)
+        return false;
+
+    // A little more forgiving than the visual icon so small targets are still easy to click.
+    constexpr float pickRadius = ViewportBillboardPixelRadius * 2.0f;
+
+    const vec2 pixel = vec2(screenToPixel());
+    const mat4 viewProjection = camera->getProjectionMatrix() * camera->getViewMatrix();
+
+    std::shared_ptr<LightInstance> closest;
+    float closestDistSq = pickRadius * pickRadius;
+
+    for (const auto& obj : scene.getSceneObjects()) {
+        const auto light = std::dynamic_pointer_cast<LightInstance>(obj);
+        if (!light)
+            continue;
+
+        const vec4 clip = viewProjection * vec4(light->getWorldTransform().getPosition(), 1.0f);
+        if (clip.w <= 0.0f)
+            continue; // behind the camera
+
+        const vec2 ndc = vec2(clip) / clip.w;
+        const vec2 center(
+            (ndc.x * 0.5f + 0.5f) * static_cast<float>(width),
+            (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(height));
+
+        const vec2 delta = pixel - center;
+        const float distSq = dot(delta, delta);
+        if (distSq <= closestDistSq) {
+            closestDistSq = distSq;
+            closest = light;
+        }
+    }
+
+    if (!closest)
+        return false;
+
+    scene.setActiveObjectId(closest->getId());
+    return true;
+}
+
 void ViewportPanel::handleObjectPicking() const {
+    if (handleBillboardPicking())
+        return;
+
     const ivec2 pixel = screenToPixel();
-    
+
     vk::BufferImageCopy copyRegion{};
     copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
     copyRegion.imageOffset = vk::Offset3D{ pixel.x, pixel.y, 0 };

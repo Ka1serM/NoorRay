@@ -525,27 +525,34 @@ void Raytracer::updateTLAS()
 
 void Raytracer::updateLights()
 {
-    // Scene light arrays are managed allocations and may move when their size
-    // changes. Refresh both pointers and counts before the next kernel launch.
+    // Light arrays live in a Vulkan-allocated buffer imported into CUDA (see
+    // nr::cuda::SharedVector), so the host and device see the same content through
+    // two different pointers. Kernels get the device pointer; the host-side weight
+    // sum below must use the host pointer instead of dereferencing gpuScene's fields.
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    gpuScene.pointLights = scene.getPointLights();
-    gpuScene.spotLights = scene.getSpotLights();
-    gpuScene.rectLights = scene.getRectLights();
-    gpuScene.directionalLights = scene.getDirectionalLights();
+    gpuScene.pointLights = scene.getPointLightsDevice();
+    gpuScene.spotLights = scene.getSpotLightsDevice();
+    gpuScene.rectLights = scene.getRectLightsDevice();
+    gpuScene.directionalLights = scene.getDirectionalLightsDevice();
     gpuScene.pointLightCount = scene.getPointLightCount();
     gpuScene.spotLightCount = scene.getSpotLightCount();
     gpuScene.rectLightCount = scene.getRectLightCount();
     gpuScene.directionalLightCount = scene.getDirectionalLightCount();
 
+    const PointLight* pointLights = scene.getPointLights();
+    const SpotLight* spotLights = scene.getSpotLights();
+    const RectLight* rectLights = scene.getRectLights();
+    const DirectionalLight* directionalLights = scene.getDirectionalLights();
+
     float analyticWeight = 0.0f;
     for (uint32_t i = 0; i < gpuScene.pointLightCount; ++i)
-        analyticWeight += gpuScene.pointLights[i].selectionWeight();
+        analyticWeight += pointLights[i].selectionWeight();
     for (uint32_t i = 0; i < gpuScene.spotLightCount; ++i)
-        analyticWeight += gpuScene.spotLights[i].selectionWeight();
+        analyticWeight += spotLights[i].selectionWeight();
     for (uint32_t i = 0; i < gpuScene.rectLightCount; ++i)
-        analyticWeight += gpuScene.rectLights[i].selectionWeight();
+        analyticWeight += rectLights[i].selectionWeight();
     for (uint32_t i = 0; i < gpuScene.directionalLightCount; ++i)
-        analyticWeight += gpuScene.directionalLights[i].selectionWeight();
+        analyticWeight += directionalLights[i].selectionWeight();
     gpuScene.analyticLightSelectionWeight = analyticWeight;
 }
 

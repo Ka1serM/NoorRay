@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "ImGuiComponent.h"
+#include <chrono>
 #include <string>
 
 class DebugPanel : public ImGuiComponent {
@@ -13,10 +14,15 @@ public:
     int getBvhMode() const { return visualizeBVH; }
 
 private:
-    float fps = 0.0f;
-    float m_raytraceMs = 0.0f;
+    float m_avgFps = 0.0f;
+    float m_avgMs = 0.0f;
     int m_currentSample = 0;
     int m_maxSamples = 0;
+
+    double m_accumMs = 0.0;
+    double m_accumFps = 0.0;
+    int m_frameCount = 0;
+    std::chrono::steady_clock::time_point m_lastResetTime = std::chrono::steady_clock::now();
 
     int visualizeBVH = 0; // 0 = Disabled, 1-3 = Modes
 

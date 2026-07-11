@@ -11,7 +11,10 @@
 #include "Light/DirectionalLight.h"
 #include "Scene/SceneObject.h"
 
-Scene::Scene(Context& context) : context(context)
+Scene::Scene(Context& context)
+    : context(context),
+      pointLights(context), spotLights(context),
+      rectLights(context), directionalLights(context)
 {
     nr::rstd::allocator<Environment> allocator;
     environment = allocator.allocate(1);

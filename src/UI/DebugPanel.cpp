@@ -11,8 +11,20 @@ void DebugPanel::setSampleInfo(const int current, const int max) {
 }
 
 void DebugPanel::onComputeFinished(const float raytraceMs) {
-    m_raytraceMs = raytraceMs;
-    fps = raytraceMs > 0.0f ? 1000.0f / raytraceMs : 0.0f;
+    m_accumMs += raytraceMs;
+    m_accumFps += raytraceMs > 0.0f ? 1000.0f / raytraceMs : 0.0f;
+    m_frameCount++;
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration<double>(now - m_lastResetTime).count();
+    if (elapsed >= 1.0) {
+        m_avgMs = static_cast<float>(m_accumMs / m_frameCount);
+        m_avgFps = static_cast<float>(m_accumFps / m_frameCount);
+        m_accumMs = 0.0;
+        m_accumFps = 0.0;
+        m_frameCount = 0;
+        m_lastResetTime = now;
+    }
 }
 
 void DebugPanel::renderUi() {
@@ -21,10 +33,10 @@ void DebugPanel::renderUi() {
     if (ImGui::BeginTable("Debug Table", 2, ImGuiTableFlags_SizingStretchProp)) {
 
         ImGuiManager::tableRowLabel("FPS");
-        ImGui::Text("%.2f", fps);
+        ImGui::Text("%.2f", m_avgFps);
 
         ImGuiManager::tableRowLabel("Raytrace");
-        ImGui::Text("%.2f ms", m_raytraceMs);
+        ImGui::Text("%.2f ms", m_avgMs);
 
         ImGuiManager::tableRowLabel("Samples");
         ImGui::Text("%d / %d", m_currentSample, m_maxSamples);

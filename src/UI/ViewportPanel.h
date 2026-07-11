@@ -14,6 +14,7 @@ public:
     ivec2 screenToPixel() const;
     void renderUi() override;
     void handleObjectPicking() const;
+    bool handleBillboardPicking() const;
     void handlePositionPicking() const;
     void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
     void setAovImages(Image& crypto, Image& position);

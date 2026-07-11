@@ -180,8 +180,13 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
         environment.updateDerivedSettings();
     }
 
-    if (file.render_settings)
+    if (file.render_settings) {
         scene.getRenderSettings().maxSamples = file.render_settings->max_samples;
+        scene.getRenderSettings().gaussianShadingMode =
+            file.render_settings->gaussian_shading_mode == static_cast<int>(GaussianShadingMode::DirectColor)
+                ? GaussianShadingMode::DirectColor
+                : GaussianShadingMode::GlobalIllumination;
+    }
 
     if (file.camera)
         addCamera(scene, *file.camera);

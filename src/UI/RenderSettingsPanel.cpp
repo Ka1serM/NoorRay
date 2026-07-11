@@ -93,6 +93,23 @@ void RenderSettingsPanel::renderUi()
             scene.setDirtyFlag(TLAS);
         }
 
+        static constexpr const char* kGaussianShadingNames[] =
+            { "Global Illumination", "Direct Color" };
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Gaussian Shading");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        int gaussianShading = static_cast<int>(settings.gaussianShadingMode);
+        if (ImGui::Combo(
+            "##GaussianShading", &gaussianShading,
+            kGaussianShadingNames, IM_ARRAYSIZE(kGaussianShadingNames)))
+        {
+            settings.gaussianShadingMode =
+                static_cast<GaussianShadingMode>(gaussianShading);
+            changed = true;
+        }
+
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Proxy Overdraw");

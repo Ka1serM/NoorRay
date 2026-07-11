@@ -61,6 +61,7 @@ nr::sceneio::RenderSettingsFile makeRenderSettingsFile(const RenderSettings& set
 {
     return {
         .max_samples = settings.maxSamples,
+        .gaussian_shading_mode = static_cast<int>(settings.gaussianShadingMode),
     };
 }
 

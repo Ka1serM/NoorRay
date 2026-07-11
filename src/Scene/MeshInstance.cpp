@@ -20,6 +20,7 @@ std::unique_ptr<SceneObject> MeshInstance::clone() const {
 void MeshInstance::onTransformUpdated() {
     SceneObject::onTransformUpdated();
     scene.setDirtyFlag(TLAS);
+    scene.markMeshInstanceTransformDirty(scene.getMeshInstanceIndex(this));
 }
 
 bool MeshInstance::renderUi() {

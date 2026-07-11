@@ -222,6 +222,8 @@ void ViewportPanel::handleInput() {
     if (!isViewportHovered)
         return;
 
+    handleScrollZoom();
+
     // Start camera movement
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         beginMouseCapture();
@@ -232,6 +234,24 @@ void ViewportPanel::handleInput() {
     // Handle object picking (only if not using a gizmo or moving the camera)
     if (!isCapturingMouse && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsUsing() && !ImViewGuizmo::IsUsing() && !ImViewGuizmo::IsOver() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         handleObjectPicking();
+}
+
+void ViewportPanel::handleScrollZoom() {
+    auto* camera = scene.getActiveCamera();
+    if (!camera || isCapturingMouse || ImGuizmo::IsUsing() ||
+        ImViewGuizmo::IsUsing() || ImViewGuizmo::IsOver())
+    {
+        return;
+    }
+
+    const float wheel = ImGui::GetIO().MouseWheel;
+    if (wheel == 0.0f)
+        return;
+
+    constexpr float dollySpeed = 0.05f;
+    constexpr float wheelToDragPixels = 10.0f;
+    const vec3 forward = normalize(camera->getRotation() * CameraInstance::LocalForward);
+    camera->setPosition(camera->getPosition() + forward * (wheel * wheelToDragPixels * dollySpeed));
 }
 
 void ViewportPanel::handleTransformGizmo() {

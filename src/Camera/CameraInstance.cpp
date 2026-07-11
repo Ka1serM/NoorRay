@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include "Camera/RealisticCamera.h"
 #include "Camera/RossPsfCamera.h"
+#include "CUDA/ManagedMemory.h"
 #include "CUDA/rstd/Allocator.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/quaternion.hpp"
@@ -23,21 +24,20 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
     std::string sharedLensPath;
     std::string sharedGlassCatalogPaths;
     if (gpuCamera != nullptr && *gpuCamera) {
-        state = gpuCamera->DispatchCPU([](const auto* camera) {
-            return static_cast<const Camera&>(*camera);
-        });
-        gpuCamera->DispatchCPU([&](const auto* camera) {
-            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(*camera)>, RealisticCamera>) {
-                sharedLensPath = camera->getLensPath();
-                sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
-            } else if constexpr (std::is_same_v<std::remove_cvref_t<decltype(*camera)>, RossPsfCamera>) {
-                sharedLensPath = camera->getLensPath();
-                sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
-            }
-        });
-        gpuCamera->DispatchCPU([&](auto* camera) {
-            transferredSensor.moveConcreteFrom(camera->sensor);
-        });
+        // A previous frame's kernels may still be reading gpuCamera's fields
+        // (e.g. Finalize.cu dispatching through camera->sensor) asynchronously
+        // on the render stream. Sync before mutating any of that UMA state
+        // below, not just inside freeCamera() further down.
+        nr::synchronizeBeforeManagedMutation("Camera allocate");
+        state = gpuCamera->cloneBaseState();
+        if (const auto* camera = gpuCamera->CastOrNullptr<RealisticCamera>()) {
+            sharedLensPath = camera->getLensPath();
+            sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
+        } else if (const auto* camera = gpuCamera->CastOrNullptr<RossPsfCamera>()) {
+            sharedLensPath = camera->getLensPath();
+            sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
+        }
+        transferredSensor.moveConcreteFrom(gpuCamera->getSensor());
         state.sensor = Sensor(nullptr);
     }
     freeCamera();
@@ -75,6 +75,7 @@ void CameraInstance::freeCamera()
 {
     if (gpuCamera == nullptr || !*gpuCamera)
         return;
+    nr::synchronizeBeforeManagedMutation("Camera free");
     gpuCamera->DispatchCPU([](auto* cam) {
         using CameraType = std::remove_reference_t<decltype(*cam)>;
         cam->sensor.freeConcrete();
@@ -96,15 +97,13 @@ CameraInstance::CameraInstance(Scene& scene, const std::string& name, Transform 
     allocator.construct(gpuCamera);
     *gpuCamera = camera;
     if (*gpuCamera) {
-        gpuCamera->DispatchCPU([](auto* cam) {
-            if (!cam->sensor) {
-                using CameraType = std::remove_cvref_t<decltype(*cam)>;
-                if constexpr (std::is_same_v<CameraType, RossPsfCamera>)
-                    cam->sensor.allocateGatherPsf();
-                else
-                    cam->sensor.allocateRectangular();
-            }
-        });
+        Sensor& sensor = gpuCamera->getSensor();
+        if (!sensor) {
+            if (gpuCamera->Is<RossPsfCamera>())
+                sensor.allocateGatherPsf();
+            else
+                sensor.allocateRectangular();
+        }
     }
     rebuildCamera();
 }
@@ -118,12 +117,8 @@ CameraInstance::CameraInstance(const CameraInstance& other)
     gpuCamera = allocator.allocate(1);
     allocator.construct(gpuCamera);
     allocateCamera(other.getProjectionType());
-    const Camera state = other.gpuCamera->DispatchCPU([](const auto* camera) {
-        return static_cast<const Camera&>(*camera);
-    });
-    const Sensor& otherSensor = other.gpuCamera->DispatchCPU([](const auto* camera) -> const Sensor& {
-        return camera->sensor;
-    });
+    const Camera state = other.gpuCamera->cloneBaseState();
+    const Sensor& otherSensor = other.gpuCamera->getSensor();
     gpuCamera->DispatchCPU([&](auto* camera) {
         static_cast<Camera&>(*camera) = state;
         camera->sensor = Sensor(nullptr);
@@ -185,9 +180,7 @@ void CameraInstance::rebuildCamera()
         vec4(-dir,          0.f),
         vec4(getPosition(), 1.f));
 
-    gpuCamera->DispatchCPU([&](auto* cam) {
-        cam->cameraToWorld = cameraToWorld;
-    });
+    gpuCamera->setCameraToWorld(cameraToWorld);
 }
 
 void CameraInstance::onTransformUpdated()
@@ -240,9 +233,9 @@ mat4 CameraInstance::getViewMatrix() const
 
 mat4 CameraInstance::getProjectionMatrix() const
 {
-    const Sensor& sensor = gpuCamera->DispatchCPU([](const auto* camera) -> const Sensor& { return camera->sensor; });
+    const Sensor& sensor = gpuCamera->getSensor();
     const float aspect = sensor.aspectRatio();
-    const float focalLength = gpuCamera->DispatchCPU([](const auto* camera) { return camera->focalLengthMm; });
+    const float focalLength = gpuCamera->getFocalLength();
     const float fovY = 2.f * std::atan(sensor.height() / (2.f * focalLength));
     return perspective(fovY, aspect, 0.01f, 10000.f);
 }
@@ -253,7 +246,7 @@ void CameraInstance::setArcballPivot(const vec3& pivot)
 {
     arcballPivot = pivot;
     const float distance = std::max(0.001f, glm::distance(getPosition(), pivot));
-    gpuCamera->DispatchCPU([&](auto* camera) { camera->focusDistance = distance; });
+    gpuCamera->setFocusDistance(distance);
 }
 
 // ── update (input) ───────────────────────────────────────────────────────────
@@ -329,8 +322,7 @@ bool CameraInstance::renderUi()
 
     bool changed = false;
     if (ImGui::BeginTable("CameraTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        // projection type switcher
-        ImGuiManager::tableRowLabel("Projection");
+        ImGuiManager::tableRowLabel("Type");
         static const CameraProjectionType projectionTypes[] = {
             CameraProjectionType::Perspective, CameraProjectionType::ThinLens,
             CameraProjectionType::Realistic,   CameraProjectionType::RossPsf,

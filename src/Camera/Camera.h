@@ -19,18 +19,17 @@ class FisheyeCamera;
 class RealisticCamera;
 class RossPsfCamera;
 
-class Camera : public nr::TaggedPointer<
+using TaggedCamera = nr::TaggedPointer<
     PerspectiveCamera,
     ThinLensCamera,
     OrthographicCamera,
     FisheyeCamera,
     RealisticCamera,
-    RossPsfCamera>
-{
+    RossPsfCamera>;
+
+class Camera : public TaggedCamera {
 public:
-    using nr::TaggedPointer<
-        PerspectiveCamera, ThinLensCamera, OrthographicCamera,
-        FisheyeCamera, RealisticCamera, RossPsfCamera>::TaggedPointer;
+    using TaggedCamera::TaggedCamera;
 
     Sensor sensor;
     glm::mat4 cameraToWorld{1.f};
@@ -48,6 +47,9 @@ public:
     const Sensor& getSensor() const;
     void setFocalLength(float focalLength);
     void setFocusDistance(float v);
+    float getFocalLength() const;
+    void setCameraToWorld(const glm::mat4& m);
+    Camera cloneBaseState() const;
     bool renderUi();
     float focalLengthForFov(float fovDegrees) const;
     float fovForFocalLength(float focalLength) const;

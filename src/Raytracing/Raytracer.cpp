@@ -536,6 +536,7 @@ void Raytracer::updateTLAS()
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     auto& gpuInstances = scene.getGpuInstancesRef();
     tlas.build(optixCtx, stream, scene, gpuInstances);
+    scene.clearDirtyMeshInstanceIndices();
     gpuScene.tlasHandle = tlas.getTraversable();
     gpuScene.instances = gpuInstances.data();
     gpuScene.meshInstanceCount = static_cast<uint32_t>(gpuInstances.size());
@@ -780,9 +781,14 @@ void Raytracer::render(const PushData& pushData)
     const RenderSettings& renderSettings = scene.getRenderSettings();
     params.frame.cutoffDistanceSq = renderSettings.gaussianCutoffSigma
                                  * renderSettings.gaussianCutoffSigma;
+    const bool gaussianDirectColor =
+        renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor;
     const uint32_t samplesPerFrame = static_cast<uint32_t>(std::max(1, renderSettings.samples));
-    const uint32_t maxShaderBounces = std::min(MaxBounces - 1,
+    const uint32_t requestedMaxShaderBounces = std::min(MaxBounces - 1,
         static_cast<uint32_t>(std::max(renderSettings.maxBounces, 1)));
+    const uint32_t maxShaderBounces = gaussianDirectColor && gpuScene.meshInstanceCount == 0
+        ? 1u
+        : requestedMaxShaderBounces;
 
     Sensor& activeSensor = activeCamera->getCamera()->getSensor();
     prepareSensorFrame(activeSensor, params, pushData.frame == 0);
@@ -794,8 +800,9 @@ void Raytracer::render(const PushData& pushData)
     // would launch a full-width raygen every bounce just to find an empty
     // queue, so skip it entirely in that case.
     const bool mayGenerateShadowRays = gpuScene.meshInstanceCount > 0 ||
-        gpuScene.pointLightCount > 0 || gpuScene.spotLightCount > 0 ||
-        gpuScene.rectLightCount > 0 || gpuScene.directionalLightCount > 0;
+        (!gaussianDirectColor &&
+            (gpuScene.pointLightCount > 0 || gpuScene.spotLightCount > 0 ||
+             gpuScene.rectLightCount > 0 || gpuScene.directionalLightCount > 0));
 
     if (m_timingEnabled)
         NR_GPU_CHECK(cudaEventRecord(m_startEvent, stream));
@@ -812,6 +819,8 @@ void Raytracer::render(const PushData& pushData)
 
     if (renderSettings.gaussianProxyOverdrawVisualization != 0)
     {
+        kernelStats.time("GenerateProxyOverdrawRays", stream,
+            [&] { launchGenerateAov(params, stream); });
         kernelStats.time("ProxyOverdraw", stream,
             [&] { launchProxyOverdraw(params, stream); });
     }

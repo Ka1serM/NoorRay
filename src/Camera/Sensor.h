@@ -44,9 +44,11 @@ struct SensorSampleContext {
     const float* cieZ{};
 };
 
-class Sensor : public nr::TaggedPointer<RectangularSensor, ScatterPsfSensor, GatherPsfSensor> {
+using TaggedSensor = nr::TaggedPointer<RectangularSensor, ScatterPsfSensor, GatherPsfSensor>;
+
+class Sensor : public TaggedSensor {
 public:
-    using nr::TaggedPointer<RectangularSensor, ScatterPsfSensor, GatherPsfSensor>::TaggedPointer;
+    using TaggedSensor::TaggedSensor;
 
     float widthMm{5.784f};
     float heightMm{3.264f};
@@ -77,6 +79,7 @@ public:
     void allocateRectangular();
     void allocateScatterPsf();
     void allocateGatherPsf();
+    uint32_t reloadPsfGrid();
 #endif
 
     bool renderUi();
@@ -113,22 +116,22 @@ NR_CPU_GPU inline void sensorAtomicAdd(float* ptr, float value)
 
 NR_CPU_GPU inline float Sensor::width() const
 {
-    return ptr() ? Dispatch([](const auto* s) { return s->widthMm; }) : widthMm;
+    return widthMm;
 }
 
 NR_CPU_GPU inline float Sensor::height() const
 {
-    return ptr() ? Dispatch([](const auto* s) { return s->heightMm; }) : heightMm;
+    return heightMm;
 }
 
 NR_CPU_GPU inline uint32_t Sensor::resolutionX() const
 {
-    return ptr() ? Dispatch([](const auto* s) { return s->resolutionWidth; }) : resolutionWidth;
+    return resolutionWidth;
 }
 
 NR_CPU_GPU inline uint32_t Sensor::resolutionY() const
 {
-    return ptr() ? Dispatch([](const auto* s) { return s->resolutionHeight; }) : resolutionHeight;
+    return resolutionHeight;
 }
 
 NR_CPU_GPU inline glm::uvec2 Sensor::resolution() const
@@ -138,28 +141,14 @@ NR_CPU_GPU inline glm::uvec2 Sensor::resolution() const
 
 NR_CPU_GPU inline void Sensor::setResolution(uint32_t w, uint32_t h)
 {
-    if (ptr()) {
-        Dispatch([&](auto* s) {
-            s->resolutionWidth = std::max(1u, w);
-            s->resolutionHeight = std::max(1u, h);
-        });
-    } else {
-        resolutionWidth = std::max(1u, w);
-        resolutionHeight = std::max(1u, h);
-    }
+    resolutionWidth = w;
+    resolutionHeight = h;
 }
 
 NR_CPU_GPU inline void Sensor::setDimensionsMm(float w, float h)
 {
-    if (ptr()) {
-        Dispatch([&](auto* s) {
-            s->widthMm = std::max(0.001f, w);
-            s->heightMm = std::max(0.001f, h);
-        });
-    } else {
-        widthMm = std::max(0.001f, w);
-        heightMm = std::max(0.001f, h);
-    }
+    widthMm = std::max(0.001f, w);
+    heightMm = std::max(0.001f, h);
 }
 
 NR_CPU_GPU inline void Sensor::copyPhysicalFrom(const Sensor& other)

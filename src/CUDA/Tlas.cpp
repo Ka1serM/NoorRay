@@ -7,6 +7,7 @@
 
 #include "CUDA/Checks.h"
 #include "CUDA/GaussianProxyBlas.h"
+#include "CUDA/rstd/Memory.h"
 #include "Mesh/MeshAsset.h"
 #include "Mesh/GaussianAsset.h"
 #include "Scene/GaussianInstance.h"
@@ -109,12 +110,100 @@ void Tlas::buildGaussianInstances(
     }
 }
 
+void Tlas::updateMeshInstanceInPlace(
+    const Scene& scene,
+    nr::rstd::vector<GpuInstance>& instancesOut,
+    const uint32_t index)
+{
+    const auto meshInstances = scene.getMeshInstances();
+    const MeshInstance& instance = *meshInstances[index];
+    const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
+    const mat4 worldToObject = inverse(objectToWorld);
+    const uint32_t meshIndex = instance.getMeshIndex();
+    const auto& asset = scene.getMeshAsset(meshIndex);
+
+    GpuInstance gpuInstance{};
+    gpuInstance.objectToWorld = objectToWorld;
+    gpuInstance.normalToWorld = glm::mat3(transpose(worldToObject));
+    gpuInstance.meshIndex = meshIndex;
+    instancesOut[index] = gpuInstance;
+
+    // instanceBuffer is managed memory: writing here is immediately visible
+    // to the GPU, no upload needed. Safe because the caller (Raytracer::
+    // updateTLAS) synchronizes the stream before touching this buffer.
+    OptixInstance& destination = instancePtr()[index];
+    const auto transform = toOptixTransform(objectToWorld);
+    std::copy(transform.begin(), transform.end(), destination.transform);
+    destination.instanceId = index;
+    destination.sbtOffset = 0;
+    destination.visibilityMask = 0x01;
+    destination.flags = OPTIX_INSTANCE_FLAG_NONE;
+    destination.traversableHandle = asset.getBlas().getTraversable();
+}
+
+bool Tlas::tryPartialUpdate(
+    const OptixDeviceContext context,
+    const cudaStream_t stream,
+    const Scene& scene,
+    nr::rstd::vector<GpuInstance>& instancesOut)
+{
+    const auto& dirtyIndices = scene.getDirtyMeshInstanceIndices();
+    if (tlasHandle == 0 || instanceBuffer == 0 || dirtyIndices.empty())
+        return false;
+
+    const auto meshInstances = scene.getMeshInstances();
+    if (meshInstances.size() != meshInstanceCount
+        || static_cast<uint32_t>(instancesOut.size()) != meshInstanceCount
+        || scene.getGaussianCount() != instanceCount - meshInstanceCount)
+        return false;
+
+    for (const uint32_t index : dirtyIndices)
+        if (index >= meshInstanceCount)
+            return false;
+
+    for (const uint32_t index : dirtyIndices)
+        updateMeshInstanceInPlace(scene, instancesOut, index);
+
+    OptixBuildInput buildInput{};
+    buildInput.type = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
+    buildInput.instanceArray.instances = instanceBuffer;
+    buildInput.instanceArray.numInstances = instanceCount;
+
+    OptixAccelBuildOptions options{};
+    options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE | OPTIX_BUILD_FLAG_ALLOW_UPDATE;
+    options.operation = OPTIX_BUILD_OPERATION_UPDATE;
+
+    OptixAccelBufferSizes sizes{};
+    NR_OPTIX_CHECK(optixAccelComputeMemoryUsage(context, &options, &buildInput, 1, &sizes));
+
+    void* scratch = nullptr;
+    NR_GPU_CHECK(cudaMallocAsync(&scratch, sizes.tempUpdateSizeInBytes, stream));
+    NR_OPTIX_CHECK(optixAccelBuild(
+        context,
+        stream,
+        &options,
+        &buildInput,
+        1,
+        reinterpret_cast<CUdeviceptr>(scratch),
+        sizes.tempUpdateSizeInBytes,
+        tlasBuffer,
+        tlasBufferSize,
+        &tlasHandle,
+        nullptr,
+        0));
+    NR_GPU_CHECK(cudaFreeAsync(scratch, stream));
+    return true;
+}
+
 void Tlas::build(
     const OptixDeviceContext context,
     const cudaStream_t stream,
     const Scene& scene,
     nr::rstd::vector<GpuInstance>& instancesOut)
 {
+    if (tryPartialUpdate(context, stream, scene, instancesOut))
+        return;
+
     auto accelInstances = buildInstanceInputs(scene, instancesOut);
     meshInstanceCount = static_cast<uint32_t>(instancesOut.size());
 
@@ -154,21 +243,16 @@ void Tlas::buildInternal(
         destination.traversableHandle = source.blasHandle;
     }
 
+    // instanceBuffer is managed (UMA) memory so the instance array can be
+    // updated in place by tryPartialUpdate() without any host->device copy.
     const size_t instanceBytes = optixInstances.size() * sizeof(OptixInstance);
     if (instanceBuffer == 0 || instanceCount != instances.size())
     {
         if (instanceBuffer != 0)
-            NR_GPU_CHECK(cudaFreeAsync(reinterpret_cast<void*>(instanceBuffer), stream));
-        void* allocation = nullptr;
-        NR_GPU_CHECK(cudaMallocAsync(&allocation, instanceBytes, stream));
-        instanceBuffer = reinterpret_cast<CUdeviceptr>(allocation);
+            nr::rstd::deallocate_managed(reinterpret_cast<void*>(instanceBuffer));
+        instanceBuffer = reinterpret_cast<CUdeviceptr>(nr::rstd::allocate_managed(instanceBytes));
     }
-    NR_GPU_CHECK(cudaMemcpyAsync(
-        reinterpret_cast<void*>(instanceBuffer),
-        optixInstances.data(),
-        instanceBytes,
-        cudaMemcpyHostToDevice,
-        stream));
+    std::memcpy(reinterpret_cast<void*>(instanceBuffer), optixInstances.data(), instanceBytes);
 
     OptixBuildInput buildInput{};
     buildInput.type = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
@@ -221,7 +305,7 @@ void Tlas::destroy(const cudaStream_t stream) noexcept
         proxyBlas = nullptr;
     }
     if (instanceBuffer != 0)
-        cudaFreeAsync(reinterpret_cast<void*>(instanceBuffer), stream);
+        nr::rstd::deallocate_managed(reinterpret_cast<void*>(instanceBuffer));
     if (tlasBuffer != 0)
         cudaFreeAsync(reinterpret_cast<void*>(tlasBuffer), stream);
     instanceBuffer = 0;

@@ -30,6 +30,22 @@ add_subdirectory("${ROSS_ROOT}/ext/ordered_map" "${CMAKE_BINARY_DIR}/ross/ordere
 add_subdirectory("${ROSS_ROOT}/ext/gilbert" "${CMAKE_BINARY_DIR}/ross/gilbert" EXCLUDE_FROM_ALL)
 add_subdirectory("${ROSS_ROOT}/ext/lodepng" "${CMAKE_BINARY_DIR}/ross/lodepng" EXCLUDE_FROM_ALL)
 
+foreach(_nr_pic_target
+        fmt
+        spdlog
+        nlohmann_json
+        CLI11
+        cpptrace-lib
+        magic_enum
+        tabulate
+        morton
+        gilbert
+        lodepng)
+    if(TARGET ${_nr_pic_target})
+        set_target_properties(${_nr_pic_target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endforeach()
+
 add_library(hash-library STATIC
     "${ROSS_ROOT}/ext/hash-library/crc32.cpp"
     "${ROSS_ROOT}/ext/hash-library/digest.cpp"
@@ -38,12 +54,18 @@ add_library(hash-library STATIC
     "${ROSS_ROOT}/ext/hash-library/sha1.cpp"
     "${ROSS_ROOT}/ext/hash-library/sha256.cpp"
     "${ROSS_ROOT}/ext/hash-library/sha3.cpp")
+set_target_properties(hash-library PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(hash-library PUBLIC "${ROSS_ROOT}/ext/hash-library")
 
 add_subdirectory("${ROSS_ROOT}/openlensfileio/ext/text_encoding_detect"
                  "${CMAKE_BINARY_DIR}/ross/text_encoding_detect" EXCLUDE_FROM_ALL)
 add_subdirectory("${ROSS_ROOT}/openlensfileio/src/openlensfileio/main"
                  "${CMAKE_BINARY_DIR}/ross/openlensfileio" EXCLUDE_FROM_ALL)
+foreach(_nr_pic_target text_encoding_detect openlensfileio)
+    if(TARGET ${_nr_pic_target})
+        set_target_properties(${_nr_pic_target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endforeach()
 
 set(OPENEXR_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(OPENEXR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -60,7 +82,8 @@ set_target_properties(libross PROPERTIES
     CUDA_STANDARD_REQUIRED ON
     CUDA_ARCHITECTURES "${NR_CUDA_ARCH}"
     CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS OFF)
+    CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+    POSITION_INDEPENDENT_CODE ON)
 target_compile_options(libross PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)

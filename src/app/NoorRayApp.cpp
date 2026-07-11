@@ -1,4 +1,4 @@
-#include "NoorRay.h"
+#include "NoorRayApp.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -36,7 +36,7 @@
 
 // ── GUI constructor ───────────────────────────────────────────────────────────
 
-NoorRay::NoorRay(const int windowWidth, const int windowHeight)
+NoorRayApp::NoorRayApp(const int windowWidth, const int windowHeight)
     : context(windowWidth, windowHeight)
     , scene(context)
     , renderer(std::make_unique<Renderer>(context, windowWidth, windowHeight))
@@ -85,7 +85,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
 
 // ── Headless constructor ──────────────────────────────────────────────────────
 
-NoorRay::NoorRay(const std::string& scenePath, const int spp,
+NoorRayApp::NoorRayApp(const std::string& scenePath, const int spp,
                  const std::string& outputPath, const int width, const int height,
                  const bool statsEnabled)
     : context(1, 1, /*headless=*/true)
@@ -118,11 +118,11 @@ NoorRay::NoorRay(const std::string& scenePath, const int spp,
     raytracer = std::make_unique<Raytracer>(context, scene);
 }
 
-NoorRay::~NoorRay() = default;
+NoorRayApp::~NoorRayApp() = default;
 
 // ── runUi ─────────────────────────────────────────────────────────────────────
 
-void NoorRay::runUi() {
+void NoorRayApp::runUi() {
     auto* debugPanel       = dynamic_cast<DebugPanel*>(imGuiManager->getComponent("Debug"));
     auto* viewportPanel    = dynamic_cast<ViewportPanel*>(imGuiManager->getComponent("Viewport"));
     auto* renderPanel      = dynamic_cast<RenderPanel*>(imGuiManager->getComponent("Render"));
@@ -297,7 +297,7 @@ void NoorRay::runUi() {
 
 // ── runCli ────────────────────────────────────────────────────────────────────
 
-void NoorRay::runCli() {
+void NoorRayApp::runCli() {
     if (m_cliSpp <= 0)
         throw std::invalid_argument("Samples per pixel must be greater than zero");
 

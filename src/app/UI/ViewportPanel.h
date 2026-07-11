@@ -1,8 +1,8 @@
 ﻿#pragma once
 
-#include "../Vulkan/Context.h"
-#include "../Vulkan/Image.h"
-#include "../UI/ImGuiComponent.h"
+#include "Vulkan/Context.h"
+#include "Vulkan/Image.h"
+#include "UI/ImGuiComponent.h"
 #include <string>
 #include "imgui.h" //needed here for ImGuizmo!
 #include "ImGuizmo.h"

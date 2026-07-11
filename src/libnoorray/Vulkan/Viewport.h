@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../Vulkan/Context.h"
-#include "../Vulkan/Image.h"
-#include "../Vulkan/Buffer.h"
+#include "Vulkan/Context.h"
+#include "Vulkan/Image.h"
+#include "Vulkan/Buffer.h"
 #include <array>
 #include <cstdint>
 

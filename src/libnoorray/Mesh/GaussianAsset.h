@@ -41,6 +41,7 @@ public:
     bool renderUi() override;
 
     const nr::rstd::vector<Gaussian>& getGaussians() const { return gaussians; }
+    nr::rstd::vector<Gaussian>& getGaussians() { return gaussians; }
     uint32_t getGaussianCount() const { return static_cast<uint32_t>(gaussians.size()); }
 
     const std::string& getPath() const { return path; }

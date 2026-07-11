@@ -9,7 +9,7 @@ class ImGuiManager;
 class Raytracer;
 class Viewport;
 
-class NoorRay {
+class NoorRayApp {
     Context context;
     Scene scene;
     std::unique_ptr<Renderer> renderer;
@@ -22,10 +22,10 @@ class NoorRay {
     bool m_cliStats = false;
 
 public:
-    NoorRay(int windowWidth, int windowHeight);
-    NoorRay(const std::string& scenePath, int spp,
+    NoorRayApp(int windowWidth, int windowHeight);
+    NoorRayApp(const std::string& scenePath, int spp,
             const std::string& outputPath, int width, int height, bool statsEnabled = false);
-    ~NoorRay();
+    ~NoorRayApp();
 
     void runUi();
     void runCli();

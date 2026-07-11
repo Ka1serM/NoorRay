@@ -2,7 +2,7 @@
 #include <imgui.h>
 #include <utility>
 
-#include "../UI/ImGuiManager.h"
+#include "UI/ImGuiManager.h"
 
 MeshInstance::MeshInstance(Scene& scene, const std::string& name, const uint32_t meshIndex, const Transform& transf)
     : SceneObject(scene, name, transf), meshIndex(meshIndex)

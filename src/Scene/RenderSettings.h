@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Raytracing/GaussianProxyBlas.h"
+
 enum class BufferVisualization : int
 {
     Beauty,
@@ -8,8 +10,6 @@ enum class BufferVisualization : int
     Cryptomatte,
     Position,
 };
-
-enum class GaussianProxyType : int;
 
 enum class GaussianShadingMode : int
 {
@@ -25,12 +25,12 @@ public:
     int maxBounces{10};
     int russianRouletteStartBounce{3};
     float exposure{};
-    int tonemappingEnabled{1};
-    int transparentBackground{};
+    bool tonemappingEnabled{false};
+    bool transparentBackground{false};
     float gaussianCutoffSigma{3.0f};
-    int gaussianProxyType{0}; // GaussianProxyType::Icosahedron
+    GaussianProxyType gaussianProxyType{GaussianProxyType::Icosahedron};
     GaussianShadingMode gaussianShadingMode{GaussianShadingMode::GlobalIllumination};
-    int gaussianProxyOverdrawVisualization{};
+    bool gaussianProxyOverdrawVisualization{false};
     int gaussianProxyOverdrawMax{1024};
     BufferVisualization bufferVisualization{BufferVisualization::Beauty};
 };

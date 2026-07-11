@@ -438,7 +438,7 @@ bool ViewportPanel::handleBillboardPicking() const {
         return false;
 
     // A little more forgiving than the visual icon so small targets are still easy to click.
-    constexpr float pickRadius = ViewportBillboardPixelRadius * 2.0f;
+    constexpr float pickRadius = ViewportBillboardPixelRadius;
 
     const vec2 pixel = vec2(screenToPixel());
     const mat4 viewProjection = camera->getProjectionMatrix() * camera->getViewMatrix();

@@ -281,7 +281,7 @@ void Viewport::dispatch(
     const glm::mat4& viewProjection,
     const float exposure,
     const int bufferVisualization,
-    const int tonemappingEnabled,
+    const bool tonemappingEnabled,
     const bool showBillboards)
 {
     outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
@@ -289,7 +289,7 @@ void Viewport::dispatch(
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0,
                                      descriptorSets[bufferIndex].get(), {});
     const ViewportPushConstants pushConstants{
-        selectedIndex, exposure, bufferVisualization, tonemappingEnabled};
+        selectedIndex, exposure, bufferVisualization, tonemappingEnabled ? 1 : 0};
     commandBuffer.pushConstants(
         *pipelineLayout, vk::ShaderStageFlagBits::eCompute,
         0, sizeof(pushConstants), &pushConstants);

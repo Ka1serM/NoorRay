@@ -24,7 +24,7 @@ struct ViewportBillboard
 
 // Fixed screen-space half-size of a billboard icon, in pixels. Shared with
 // ViewportPanel's click-picking radius so hit-testing matches what's drawn.
-constexpr float ViewportBillboardPixelRadius = 24.0f;
+constexpr float ViewportBillboardPixelRadius = 64.0f;
 
 class Viewport {
 public:
@@ -44,7 +44,7 @@ public:
         const glm::mat4& viewProjection,
         float exposure,
         int bufferVisualization,
-        int tonemappingEnabled,
+        bool tonemappingEnabled,
         bool showBillboards = true);
     // Rebuilds the billboard list from the scene's current objects (cheap: a
     // handful of structs memcpy'd into a host-visible buffer). Call once per

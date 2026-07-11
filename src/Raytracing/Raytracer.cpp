@@ -776,6 +776,7 @@ void Raytracer::render(const PushData& pushData)
         width, height};
     params.frame.width = width;
     params.frame.height = height;
+    params.frame.frameIndex = pushData.frame;
     params.accumulation = accumulation;
 
     const RenderSettings& renderSettings = scene.getRenderSettings();

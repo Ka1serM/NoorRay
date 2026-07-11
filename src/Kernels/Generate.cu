@@ -29,11 +29,21 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         const uint32_t y = pixel / params.frame.width;
         // A fixed random rotation decorrelates neighboring pixels while each
         // pixel retains the low-discrepancy R2 sequence over accumulated samples.
-        uint32_t jitterRng = pcgHash(pixel ^ 0x9e3779b9u);
-        const glm::vec2 rotation(randomFloat(jitterRng), randomFloat(jitterRng));
-        glm::vec2 jitter = R2Sampler::sample(params.frame.totalAccumulated) + rotation;
-        jitter.x -= floorf(jitter.x);
-        jitter.y -= floorf(jitter.y);
+        // While the camera is being moved, freeze the sample at the pixel
+        // center instead: a jittered live-preview reads as shimmer/noise
+        // during motion, and there's no accumulation to converge it anyway.
+        // frame 0 covers both the very first frame and every frame while
+        // resetAccumulation keeps re-triggering (continuous camera drag/orbit/fly).
+        const bool cameraMoving = params.frame.frameIndex == 0;
+        glm::vec2 jitter(0.5f, 0.5f);
+        if (!cameraMoving)
+        {
+            uint32_t jitterRng = pcgHash(pixel ^ 0x9e3779b9u);
+            const glm::vec2 rotation(randomFloat(jitterRng), randomFloat(jitterRng));
+            jitter = R2Sampler::sample(params.frame.totalAccumulated) + rotation;
+            jitter.x -= floorf(jitter.x);
+            jitter.y -= floorf(jitter.y);
+        }
         const float nx = (static_cast<float>(x) + jitter.x) / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y) / static_cast<float>(params.frame.height) * 2.0f;
         active = params.scene.camera->Dispatch([&](const auto* camera) {

@@ -233,6 +233,10 @@ void ViewportPanel::handleInput() {
             handlePositionPicking();
     }
 
+    // Toggle overlays
+    if (ImGui::IsKeyPressed(ImGuiKey_H))
+        m_showOverlays = !m_showOverlays;
+
     // Handle object picking (only if not using a gizmo or moving the camera)
     if (!isCapturingMouse && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsUsing() && !ImViewGuizmo::IsUsing() && !ImViewGuizmo::IsOver() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         handleObjectPicking();
@@ -381,9 +385,11 @@ void ViewportPanel::renderUi() {
     drawBackground();
     drawImageAndUpdateState();
 
-    renderToolbar();
-    handleTransformGizmo();
-    handleViewGizmo();
+    if (m_showOverlays) {
+        renderToolbar();
+        handleTransformGizmo();
+        handleViewGizmo();
+    }
     handleInput();
     
     if (isCapturingMouse) {
@@ -470,7 +476,7 @@ bool ViewportPanel::handleBillboardPicking() const {
 }
 
 void ViewportPanel::handleObjectPicking() const {
-    if (handleBillboardPicking())
+    if (m_showOverlays && handleBillboardPicking())
         return;
 
     const ivec2 pixel = screenToPixel();

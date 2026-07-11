@@ -21,6 +21,8 @@ public:
     void resize(uint32_t width, uint32_t height, vk::Format imageFormat);
     ~ViewportPanel() override;
 
+    bool showOverlays() const { return m_showOverlays; }
+
     ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, uint32_t width, uint32_t height);
     void updateLayout();
 
@@ -53,6 +55,7 @@ private:
     ImVec2 viewportSize{};
     
     bool isViewportHovered{false};
+    bool m_showOverlays = true;
     float uiScale{1.0f};
     // Precomputed baseGizmoSizeClipSpace * uiScale * referenceViewportWidth; only viewportSize.x varies per frame.
     float gizmoSizeClipSpaceScale{1.0f};

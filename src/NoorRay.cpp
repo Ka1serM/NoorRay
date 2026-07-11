@@ -57,12 +57,7 @@ NoorRay::NoorRay(const int windowWidth, const int windowHeight)
     scene.add(std::make_unique<CameraInstance>(
         scene, "Camera", Transform{glm::vec3(0.0f, 0.0f, 5.0f)}, Camera(realisticCamera)));
 
-    // TEMP-BILLBOARD-RASTER-TEST
-    scene.add(std::make_unique<LightInstance>(scene, "TestPoint", Transform(glm::vec3(0.f, 0.f, 0.f)), LightInstance::TypePoint));
-    scene.add(std::make_unique<LightInstance>(scene, "TestSpot", Transform(glm::vec3(-1.f, 0.5f, 0.f)), LightInstance::TypeSpot));
-    scene.add(std::make_unique<LightInstance>(scene, "TestRect", Transform(glm::vec3(1.f, 0.5f, 0.f)), LightInstance::TypeRect));
-    scene.add(std::make_unique<LightInstance>(scene, "TestDir", Transform(glm::vec3(0.f, -0.8f, 0.f)), LightInstance::TypeDirectional));
-    // END TEMP-BILLBOARD-RASTER-TEST
+
 
     raytracer = std::make_unique<Raytracer>(context, scene);
 
@@ -199,12 +194,14 @@ void NoorRay::runUi() {
                         const glm::mat4 viewProjection = scene.getActiveCamera()
                             ? scene.getActiveCamera()->getProjectionMatrix() * scene.getActiveCamera()->getViewMatrix()
                             : glm::mat4(1.0f);
-                        viewport->updateBillboards(scene);
+                        if (viewportPanel->showOverlays())
+                            viewport->updateBillboards(scene);
                         viewport->dispatch(
                             cmd, bufferIndex, selectedIndex, viewProjection,
                             proxyOverdraw ? 0.0f : renderSettings.exposure,
                             proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
-                            proxyOverdraw ? 0 : renderSettings.tonemappingEnabled);
+                            proxyOverdraw ? 0 : renderSettings.tonemappingEnabled,
+                            viewportPanel->showOverlays());
                         viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
                         displayedSelectionIndex = selectedIndex;
                     };

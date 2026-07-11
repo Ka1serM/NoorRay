@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 #include <string>
-#include "CUDA/Texture.h"
+#include "CUDA/Unique/Texture.h"
 #include "CUDA/rstd/Vector.h"
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
@@ -58,6 +58,7 @@ enum DirtyFlag : uint8_t {
     Accumulation = 1 << 3,
     EnvironmentCdf = 1 << 4,
     Lights       = 1 << 5,
+    CameraState  = 1 << 6,
 };
 
 class Scene {
@@ -79,7 +80,7 @@ class Scene {
     nr::rstd::vector<GpuInstance> gpuInstances;
     nr::rstd::vector<float> gaussianOpacities;
     nr::rstd::vector<glm::vec3> gaussianSpectrumCoeffs;
-    nr::rstd::vector<CudaTexture> cudaTextures;
+    nr::rstd::vector<nr::cuda::UniqueTexture> cudaTextures;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
 
@@ -173,9 +174,9 @@ public:
     nr::rstd::vector<GpuInstance>& getGpuInstancesRef() { return gpuInstances; }
 
     // Cuda textures
-    const CudaTexture* getCudaTextures() const { return cudaTextures.data(); }
+    const nr::cuda::UniqueTexture* getCudaTextures() const { return cudaTextures.data(); }
     uint32_t getCudaTextureCount() const { return static_cast<uint32_t>(cudaTextures.size()); }
-    nr::rstd::vector<CudaTexture>& getCudaTexturesRef() { return cudaTextures; }
+    nr::rstd::vector<nr::cuda::UniqueTexture>& getCudaTexturesRef() { return cudaTextures; }
 
     // Light registration (called by Scene internals)
     uint32_t registerLight(LightInstance& light);
@@ -192,7 +193,7 @@ public:
     void setDirtyFlag(DirtyFlag flag) { dirtyFlags |= flag; }
     void clearDirtyFlag(DirtyFlag flag) { dirtyFlags &= ~flag; }
     bool isDirty(DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
-    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf | Lights); }
+    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf | Lights | CameraState); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
 

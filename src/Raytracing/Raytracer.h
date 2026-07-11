@@ -11,11 +11,17 @@
 #include <vulkan/vulkan.hpp>
 
 #include "CUDA/KernelStats.h"
-#include "CUDA/Texture.h"
-#include "CUDA/Tlas.h"
-#include "CUDA/SharedImage.h"
+#include "CUDA/Unique/Texture.h"
+#include "CUDA/Unique/SharedImage.h"
+#include "CUDA/Unique/DeviceBuffer.h"
+#include "CUDA/Unique/Event.h"
+#include "CUDA/Unique/ExternalSemaphore.h"
+#include "CUDA/Unique/OptixModule.h"
+#include "CUDA/Unique/OptixPipeline.h"
+#include "CUDA/Unique/OptixProgramGroup.h"
 #include "IO/Bitmap.h"
 #include "Raytracing/SceneData.h"
+#include "Raytracing/Tlas.h"
 
 class CameraInstance;
 class Context;
@@ -33,6 +39,7 @@ struct FrameInfo
 struct PushData
 {
     int frame{};
+    uint32_t accumulatedSampleOffset{};
 };
 
 class Raytracer
@@ -88,25 +95,32 @@ private:
     uint32_t width{};
     uint32_t height{};
     cudaStream_t stream{};
-    SharedImage color[2];
-    SharedImage albedo[2];
-    SharedImage normal[2];
-    SharedImage cryptomatte[2];
-    SharedImage position[2];
+    nr::cuda::UniqueSharedImage color[2];
+    nr::cuda::UniqueSharedImage albedo[2];
+    nr::cuda::UniqueSharedImage normal[2];
+    nr::cuda::UniqueSharedImage cryptomatte[2];
+    nr::cuda::UniqueSharedImage position[2];
     vk::UniqueSemaphore renderReady;
     vk::UniqueSemaphore bufferReleased;
-    cudaExternalSemaphore_t cudaRenderReady{};
-    cudaExternalSemaphore_t cudaBufferReleased{};
+    nr::cuda::UniqueExternalSemaphore cudaRenderReady;
+    nr::cuda::UniqueExternalSemaphore cudaBufferReleased;
     Tlas tlas;
     WavefrontQueues queues{};
-    glm::vec4* accumulation{};
-    float* spectrumTableScaleDevice{};
-    float* spectrumTableCoeffsDevice{};
-    float* d65Device{};
-    float* cieXDevice{};
-    float* cieYDevice{};
-    float* cieZDevice{};
-    nr::openpbr::EnergyLutStorage openPbrLutStorage{};
+    nr::cuda::UniqueAsyncDeviceBuffer rayCountBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer pathStateBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer rayQueueBuffers[2];
+    nr::cuda::UniqueAsyncDeviceBuffer hitQueueBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer shadowQueueBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer aovRayQueueBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer aovHitQueueBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer accumulationBuffer;
+    nr::cuda::UniqueDeviceBuffer spectrumTableScaleDevice;
+    nr::cuda::UniqueDeviceBuffer spectrumTableCoeffsDevice;
+    nr::cuda::UniqueDeviceBuffer d65Device;
+    nr::cuda::UniqueDeviceBuffer cieXDevice;
+    nr::cuda::UniqueDeviceBuffer cieYDevice;
+    nr::cuda::UniqueDeviceBuffer cieZDevice;
+    nr::openpbr::EnergyLutStorage openPbrLutStorage;
     GpuSceneData gpuScene{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
@@ -114,32 +128,32 @@ private:
     uint64_t lastReadyValue{};
     uint64_t submittedFrame{};
     std::array<uint64_t, 2> lastUseValue{};
-    cudaEvent_t m_startEvent{};
-    cudaEvent_t m_stopEvent{};
+    nr::cuda::UniqueEvent m_startEvent;
+    nr::cuda::UniqueEvent m_stopEvent;
     float m_gpuTimeMs = 0.0f;
     bool m_timingEnabled = false;
     bool m_eventsRecorded = false;
     KernelStats kernelStats;
-    CUdeviceptr optixLaunchParamsDevice{};
+    nr::cuda::UniqueDeviceBuffer optixLaunchParamsDevice;
 
     // OptiX state
     OptixDeviceContext optixCtx{};
-    OptixModule optixModule{};
-    OptixProgramGroup optixExtendGroup{};
-    OptixProgramGroup optixConnectGroup{};
-    OptixProgramGroup optixProxyOverdrawGroup{};
-    OptixProgramGroup optixTriangleGroup{};
-    OptixProgramGroup optixGaussianHitGroup{};
-    OptixProgramGroup optixProxyOverdrawHitGroup{};
-    OptixProgramGroup optixMissGroup{};
-    OptixPipeline optixPipeline{};
-    OptixPipeline optixProxyOverdrawPipeline{};
-    CUdeviceptr optixExtendRecord{};
-    CUdeviceptr optixConnectRecord{};
-    CUdeviceptr optixProxyOverdrawRecord{};
-    CUdeviceptr optixHitgroupRecord{};
-    CUdeviceptr optixProxyOverdrawHitgroupRecord{};
-    CUdeviceptr optixMissRecord{};
+    nr::cuda::UniqueOptixModule optixModule;
+    nr::cuda::UniqueOptixProgramGroup optixExtendGroup;
+    nr::cuda::UniqueOptixProgramGroup optixConnectGroup;
+    nr::cuda::UniqueOptixProgramGroup optixProxyOverdrawGroup;
+    nr::cuda::UniqueOptixProgramGroup optixTriangleGroup;
+    nr::cuda::UniqueOptixProgramGroup optixGaussianHitGroup;
+    nr::cuda::UniqueOptixProgramGroup optixProxyOverdrawHitGroup;
+    nr::cuda::UniqueOptixProgramGroup optixMissGroup;
+    nr::cuda::UniqueOptixPipeline optixPipeline;
+    nr::cuda::UniqueOptixPipeline optixProxyOverdrawPipeline;
+    nr::cuda::UniqueDeviceBuffer optixExtendRecord;
+    nr::cuda::UniqueDeviceBuffer optixConnectRecord;
+    nr::cuda::UniqueDeviceBuffer optixProxyOverdrawRecord;
+    nr::cuda::UniqueDeviceBuffer optixHitgroupRecord;
+    nr::cuda::UniqueDeviceBuffer optixProxyOverdrawHitgroupRecord;
+    nr::cuda::UniqueDeviceBuffer optixMissRecord;
     OptixShaderBindingTable optixExtendSbt{};
     OptixShaderBindingTable optixConnectSbt{};
     OptixShaderBindingTable optixProxyOverdrawSbt{};

@@ -6,6 +6,8 @@
 #include <cuda_runtime_api.h>
 #include <optix.h>
 
+#include "CUDA/Unique/AsyncDeviceBuffer.h"
+
 enum class GaussianProxyType : int
 {
     Icosahedron,
@@ -25,14 +27,12 @@ public:
     GaussianProxyBlas& operator=(GaussianProxyBlas&& other) noexcept;
 
     void build(OptixDeviceContext context, cudaStream_t stream, GaussianProxyType type, float cutoffSigma);
-    void destroy(cudaStream_t stream) noexcept;
+    void reset() noexcept;
 
     OptixTraversableHandle getTraversable() const { return handle; }
     bool isValid() const { return handle != 0; }
 
 private:
-    void destroy() noexcept;
-
     OptixTraversableHandle handle{};
-    CUdeviceptr buffer{};
+    nr::cuda::UniqueAsyncDeviceBuffer buffer;
 };

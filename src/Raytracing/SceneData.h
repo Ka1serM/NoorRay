@@ -5,7 +5,7 @@
 #include <cuda_runtime_api.h>
 
 #include "Camera/Camera.h"
-#include "CUDA/Texture.h"
+#include "CUDA/Unique/Texture.h"
 #include "Raytracing/Output.h"
 #include "Raytracing/Types.h"
 #include "Scene/GpuInstance.h"
@@ -26,7 +26,7 @@ struct GpuSceneData
     const SpotLight* spotLights{};
     const RectLight* rectLights{};
     const DirectionalLight* directionalLights{};
-    const CudaTexture* textures{};
+    const nr::cuda::UniqueTexture* textures{};
     TlasHandle tlasHandle{};
     RenderSettings renderSettings{};
     const Environment* environment{};

@@ -1,4 +1,4 @@
-#include "CUDA/SharedImage.h"
+#include "CUDA/Unique/SharedImage.h"
 
 #include <array>
 #include <cuda_runtime.h>
@@ -21,9 +21,13 @@ cudaChannelFormatDesc toCudaFormat(const vk::Format format)
 }
 }
 
-void SharedImage::create(Context& context, const uint32_t width, const uint32_t height, const vk::Format format)
+void nr::cuda::UniqueSharedImage::create(
+    Context& context,
+    const uint32_t width,
+    const uint32_t height,
+    const vk::Format format)
 {
-    destroy();
+    reset();
 
     constexpr vk::ImageUsageFlags usage =
         vk::ImageUsageFlagBits::eStorage |
@@ -66,7 +70,7 @@ void SharedImage::create(Context& context, const uint32_t width, const uint32_t 
     });
 }
 
-void SharedImage::destroy() noexcept
+void nr::cuda::UniqueSharedImage::reset() noexcept
 {
     if (surface != 0)
         cudaDestroySurfaceObject(surface);

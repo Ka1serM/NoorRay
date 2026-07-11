@@ -454,8 +454,8 @@ uint32_t GatherPsfSensor::psfBinCount() const
 
 void GatherPsfSensor::freeScratch(cudaStream_t stream) noexcept
 {
-    nr::rstd::deallocate_device(psfGatherBuckets, stream);
-    psfGatherBuckets = nullptr;
+    (void)stream;
+    psfGatherBuckets.reset();
     psfGatherBucketCapacity = 0;
 }
 
@@ -471,13 +471,13 @@ void GatherPsfSensor::prepareFrame(const uint32_t width, const uint32_t height,
     const size_t required = static_cast<size_t>(width) * height * binCount;
     if (required > psfGatherBucketCapacity) {
         freeScratch(stream);
-        psfGatherBuckets = nr::rstd::allocate_device<PsfGatherBucketSample>(required, stream);
+        psfGatherBuckets.allocate(sizeof(PsfGatherBucketSample) * required, stream);
         psfGatherBucketCapacity = required;
     }
 
-    buckets = psfGatherBuckets;
+    buckets = psfGatherBuckets.as<PsfGatherBucketSample>();
     if (resetAccumulation)
-        NR_GPU_CHECK(cudaMemsetAsync(psfGatherBuckets, 0,
+        NR_GPU_CHECK(cudaMemsetAsync(psfGatherBuckets.get(), 0,
             sizeof(PsfGatherBucketSample) * psfGatherBucketCapacity, stream));
 }
 

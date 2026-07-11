@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <cuda_runtime_api.h>
+#include "CUDA/Unique/AsyncDeviceBuffer.h"
 #include "portable-file-dialogs.h"
 #endif
 
@@ -21,7 +22,7 @@ public:
     std::string psfGridPath;
     std::string psfLoadStatus;
     std::unique_ptr<pfd::open_file> psfGridDialog;
-    PsfGatherBucketSample* psfGatherBuckets{};
+    nr::cuda::UniqueAsyncDeviceBuffer psfGatherBuckets;
     size_t psfGatherBucketCapacity{};
 
     ~GatherPsfSensor();

@@ -20,12 +20,7 @@ Environment::~Environment()
 
 void Environment::destroyCdf() noexcept
 {
-    if (cdfTexture != 0)
-        cudaDestroyTextureObject(cdfTexture);
-    if (cdfArray != nullptr)
-        cudaFreeArray(cdfArray);
-    cdfTexture = 0;
-    cdfArray = nullptr;
+    cdfTexture.reset();
     cdfWidth = 0;
     cdfHeight = 0;
 }

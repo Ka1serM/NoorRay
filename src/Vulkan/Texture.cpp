@@ -1,4 +1,5 @@
 ﻿#include "Texture.h"
+#include <memory>
 #include <stdexcept>
 #include <stb_image.h>
 #include <string>
@@ -6,41 +7,43 @@
 
 #include "Scene/SceneImporter.h"
 
+namespace
+{
+struct StbiImageDeleter
+{
+    void operator()(void* pixels) const noexcept { stbi_image_free(pixels); }
+};
+}
+
 Texture::Texture(Context& context, const std::string& filepath, vk::Format format)
 {
     (void)context;
     int channels = 0;
     if (stbi_is_hdr(filepath.c_str()))
     {
-        float* rawPixels = stbi_loadf(filepath.c_str(), &width, &height, &channels, 4);
-        if (rawPixels == nullptr || width <= 0 || height <= 0)
-        {
-            stbi_image_free(rawPixels);
+        std::unique_ptr<float, StbiImageDeleter> rawPixels(
+            stbi_loadf(filepath.c_str(), &width, &height, &channels, 4));
+        if (!rawPixels || width <= 0 || height <= 0)
             throw std::runtime_error("Failed to load texture: " + filepath);
-        }
-        pixels.assign(rawPixels, rawPixels + static_cast<size_t>(width) * height * 4);
-        stbi_image_free(rawPixels);
+        pixels.assign(rawPixels.get(), rawPixels.get() + static_cast<size_t>(width) * height * 4);
     }
     else
     {
-        uint8_t* rawPixels = stbi_load(filepath.c_str(), &width, &height, &channels, 4);
-        if (rawPixels == nullptr || width <= 0 || height <= 0)
-        {
-            stbi_image_free(rawPixels);
+        std::unique_ptr<uint8_t, StbiImageDeleter> rawPixels(
+            stbi_load(filepath.c_str(), &width, &height, &channels, 4));
+        if (!rawPixels || width <= 0 || height <= 0)
             throw std::runtime_error("Failed to load texture: " + filepath);
-        }
         const size_t pixelCount = static_cast<size_t>(width) * height;
         pixels.resize(pixelCount * 4);
         for (size_t index = 0; index < pixels.size(); ++index)
         {
-            const float c = static_cast<float>(rawPixels[index]) / 255.0f;
+            const float c = static_cast<float>(rawPixels.get()[index]) / 255.0f;
             if (format == vk::Format::eR8G8B8A8Srgb)
                 pixels[index] = c <= 0.04045f ? c / 12.92f
                     : powf((c + 0.055f) / 1.055f, 2.4f);
             else
                 pixels[index] = c;
         }
-        stbi_image_free(rawPixels);
     }
     name = SceneImporter::nameFromPath(filepath);
 }

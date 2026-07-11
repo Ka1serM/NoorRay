@@ -6,11 +6,13 @@
 #include <cuda_runtime_api.h>
 #include <optix.h>
 
+#include "CUDA/Unique/AsyncDeviceBuffer.h"
+
 class Blas
 {
 public:
     Blas() = default;
-    ~Blas() noexcept;
+    ~Blas() noexcept = default;
 
     Blas(const Blas&) = delete;
     Blas& operator=(const Blas&) = delete;
@@ -25,13 +27,11 @@ public:
         uint32_t vertexStride,
         const uint32_t* indices,
         uint32_t triangleCount);
-    void destroy(cudaStream_t stream) noexcept;
+    void reset() noexcept;
 
     OptixTraversableHandle getTraversable() const { return handle; }
 
 private:
-    void destroy() noexcept;
-
     OptixTraversableHandle handle{};
-    CUdeviceptr buffer{};
+    nr::cuda::UniqueAsyncDeviceBuffer buffer;
 };

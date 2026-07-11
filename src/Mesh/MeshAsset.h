@@ -3,9 +3,9 @@
 #include <string>
 #include <vector>
 
-#include "CUDA/Blas.h"
 #include "CUDA/rstd/Vector.h"
 #include "Mesh/Material.h"
+#include "Raytracing/Blas.h"
 #include "Scene/Inspectable.h"
 
 #include <glm/vec2.hpp>

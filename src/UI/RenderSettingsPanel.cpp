@@ -5,7 +5,7 @@
 
 #include <imgui.h>
 
-#include "CUDA/GaussianProxyBlas.h"
+#include "Raytracing/GaussianProxyBlas.h"
 #include "Scene/RenderSettings.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"

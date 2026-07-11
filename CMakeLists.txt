@@ -310,10 +310,10 @@ add_custom_command(
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 
 add_library(NoorRayCuda STATIC
-        src/CUDA/Blas.cpp
-        src/CUDA/GaussianProxyBlas.cpp
-        src/CUDA/Texture.cpp
-        src/CUDA/SharedImage.cpp
+        src/Raytracing/Blas.cpp
+        src/Raytracing/GaussianProxyBlas.cpp
+        src/CUDA/Unique/Texture.cpp
+        src/CUDA/Unique/SharedImage.cpp
         src/CUDA/rstd/Memory.cpp
         src/Mesh/OpenPbrEnergy.cpp
         src/Kernels/Generate.cu
@@ -321,7 +321,7 @@ add_library(NoorRayCuda STATIC
         src/Kernels/Finalize.cu
         src/Kernels/GenerateAov.cu
         src/Kernels/ShadeAov.cu
-        src/CUDA/Tlas.cpp
+        src/Raytracing/Tlas.cpp
         src/Raytracing/RgbSpectrumTableData.cpp
         src/Raytracing/Raytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
@@ -419,7 +419,7 @@ if(NR_ENABLE_UNITY_BUILD)
         src/Vulkan/Viewport.cpp
         src/Vulkan/VmaImpl.cpp
         src/Mesh/GaussianAsset.cpp
-        src/CUDA/GaussianProxyBlas.cpp
+        src/Raytracing/GaussianProxyBlas.cpp
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 

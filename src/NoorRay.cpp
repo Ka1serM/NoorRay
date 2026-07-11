@@ -130,6 +130,8 @@ void NoorRay::runUi() {
     int submittedSamples = 0;
     bool renderComplete = false;
     uint64_t displayedRenderValue = 0;
+    uint32_t displayedBufferIndex = 0;
+    uint32_t displayedSelectionIndex = ~0u;
     bool isRunning = true, isFullscreen = false, firstFrame = true;
 
     while (isRunning) {
@@ -149,10 +151,8 @@ void NoorRay::runUi() {
         if (renderer->beginFrame()) {
             const vk::CommandBuffer cmd = renderer->getCurrentCommandBuffer();
 
-            // Run UI logic (and any resulting scene mutations, e.g. material
-            // sliders or transform gizmos) before this frame's wavefront
-            // kernels are dispatched below, so edits never race an in-flight
-            // kernel reading the same UMA-backed scene data.
+            // Run UI logic first. GPU-visible managed data is flushed below
+            // only when no CUDA render is in flight.
             imGuiManager->updateUi();
 
             {
@@ -182,19 +182,27 @@ void NoorRay::runUi() {
                     renderPanel->executeSave();
                 } else {
                     const FrameInfo completedFrame = raytracer->getFrameInfo();
-                    if (raytracer->isFrameReady()
-                        && completedFrame.readyValue > displayedRenderValue)
+                    const auto dispatchViewportOverlay = [&](const uint32_t bufferIndex)
                     {
-                        displayedRenderValue = completedFrame.readyValue;
                         const RenderSettings& renderSettings = scene.getRenderSettings();
                         const bool proxyOverdraw =
                             renderSettings.gaussianProxyOverdrawVisualization != 0;
+                        const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
                         viewport->dispatch(
-                            cmd, completedFrame.bufferIndex, scene.getActiveMeshInstanceIndex(),
+                            cmd, bufferIndex, selectedIndex,
                             proxyOverdraw ? 0.0f : renderSettings.exposure,
                             proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
                             proxyOverdraw ? 0 : renderSettings.tonemappingEnabled);
                         viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
+                        displayedSelectionIndex = selectedIndex;
+                    };
+
+                    if (raytracer->isFrameReady()
+                        && completedFrame.readyValue > displayedRenderValue)
+                    {
+                        displayedRenderValue = completedFrame.readyValue;
+                        displayedBufferIndex = completedFrame.bufferIndex;
+                        dispatchViewportOverlay(displayedBufferIndex);
                         viewportPanel->setAovImages(
                             raytracer->getOutputCrypto(completedFrame.bufferIndex),
                             raytracer->getOutputPosition(completedFrame.bufferIndex));
@@ -202,6 +210,11 @@ void NoorRay::runUi() {
                             completedFrame.renderReadySemaphore,
                             completedFrame.bufferReleasedSemaphore,
                             completedFrame.readyValue);
+                    }
+                    else if (displayedRenderValue != 0
+                        && scene.getActiveMeshInstanceIndex() != displayedSelectionIndex)
+                    {
+                        dispatchViewportOverlay(displayedBufferIndex);
                     }
 
                     // Keep at most one CUDA render in flight. ImGui continues to
@@ -213,6 +226,10 @@ void NoorRay::runUi() {
                         else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
                         if (scene.isDirty(Lights))   raytracer->updateLights();
                         if (scene.isDirty(TLAS))     raytracer->updateTLAS();
+                        if (scene.isDirty(CameraState)) {
+                            if (auto* camera = scene.getActiveCamera())
+                                camera->rebuildCamera();
+                        }
 
                         const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
                         const RenderSettings& renderSettings = scene.getRenderSettings();
@@ -245,12 +262,14 @@ void NoorRay::runUi() {
 
                                 scene.clearDirtyFlags();
                                 firstFrame = false;
-                                raytracer->render(PushData{.frame = frame});
+                                raytracer->render(PushData{
+                                    .frame = frame,
+                                    .accumulatedSampleOffset = static_cast<uint32_t>(submittedSamples)});
                                 // render() harvests the completed frame's CUDA events
                                 // before asynchronously submitting the next frame.
                                 debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
 
-                                submittedSamples = std::min((frame + 1) * spp, maxSamples);
+                                submittedSamples = std::min(submittedSamples + spp, maxSamples);
                                 renderComplete = submittedSamples >= maxSamples;
                                 debugPanel->setSampleInfo(
                                     submittedSamples, maxSamples);

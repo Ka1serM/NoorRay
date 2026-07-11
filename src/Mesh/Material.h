@@ -7,7 +7,7 @@
 #include <glm/vec4.hpp>
 
 #include "CUDA/Annotations.h"
-#include "CUDA/Texture.h"
+#include "CUDA/Unique/Texture.h"
 #include "Mesh/OpenPbrEnergy.h"
 #include "Raytracing/Bsdf.h"
 #include "Raytracing/RgbToSpectrum.h"
@@ -41,7 +41,7 @@ public:
     // result to a Bsdf, which owns all the actual BSDF math.
 
     NR_GPU Bsdf makeBsdf(
-        const CudaTexture* textures,
+        const nr::cuda::UniqueTexture* textures,
         const glm::vec2 uv,
         const glm::vec3 view,
         const glm::vec3 geometricNormal,
@@ -85,7 +85,7 @@ public:
     }
 
     NR_GPU SampledSpectrum emissionSpectral(
-        const CudaTexture* textures,
+        const nr::cuda::UniqueTexture* textures,
         const glm::vec2 uv,
         const SampledWavelengths& wl,
         const float* spectrumScale,

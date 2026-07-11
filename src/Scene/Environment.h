@@ -10,7 +10,7 @@
 using glm::vec3;
 
 #include "CUDA/Annotations.h"
-#include "CUDA/Texture.h"
+#include "CUDA/Unique/Texture.h"
 #include "Raytracing/RgbToSpectrum.h"
 #include "Samplers/RandomSampler.h"
 
@@ -35,8 +35,7 @@ public:
     float rotation{};
     float visibleExposure{};
     float lightingExposure{1.0f};
-    cudaArray_t cdfArray{};
-    cudaTextureObject_t cdfTexture{};
+    nr::cuda::UniqueTexture cdfTexture;
     int cdfWidth{};
     int cdfHeight{};
     float importanceWeight{};
@@ -66,7 +65,7 @@ public:
     // Solid-angle PDF of sampleDirection() returning `direction`.
     NR_GPU float pdf(const glm::vec3 direction) const
     {
-        if (cdfTexture == 0 || cdfWidth <= 0 || cdfHeight <= 0)
+        if (cdfTexture.getObject() == 0 || cdfWidth <= 0 || cdfHeight <= 0)
             return 1.0f / (4.0f * EnvironmentPi);
         const glm::vec2 texCoord = uv(direction);
         const int x = min(static_cast<int>(texCoord.x * cdfWidth), cdfWidth - 1);
@@ -89,7 +88,7 @@ public:
     NR_GPU EnvironmentSample sampleDirection(RandomState& rng) const
     {
         EnvironmentSample sample{};
-        if (cdfTexture == 0 || cdfWidth <= 0 || cdfHeight <= 0) {
+        if (cdfTexture.getObject() == 0 || cdfWidth <= 0 || cdfHeight <= 0) {
             const float z = 1.0f - 2.0f * randomFloat(rng);
             const float phi = 2.0f * EnvironmentPi * randomFloat(rng);
             const float radius = sqrtf(fmaxf(1.0f - z * z, 0.0f));
@@ -138,7 +137,7 @@ public:
     // Spectral radiance of the environment along `direction`. `cameraRay`
     // selects between the visible-background and lighting exposure scales.
     NR_GPU SampledSpectrum radiance(
-        const CudaTexture* textures, const uint32_t textureCount,
+        const nr::cuda::UniqueTexture* textures, const uint32_t textureCount,
         const glm::vec3 direction, const bool cameraRay,
         const SampledWavelengths& wl,
         const float* spectrumScale, const float* spectrumCoeffs, const float* d65Table) const
@@ -159,7 +158,7 @@ private:
     {
         x = max(0, min(x, cdfWidth - 1));
         y = max(0, min(y, cdfHeight - 1));
-        return tex2D<float4>(cdfTexture,
+        return tex2D<float4>(cdfTexture.getObject(),
             (static_cast<float>(x) + 0.5f) / static_cast<float>(cdfWidth),
             (static_cast<float>(y) + 0.5f) / static_cast<float>(cdfHeight));
     }

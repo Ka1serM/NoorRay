@@ -14,6 +14,9 @@
 #include <cuda_runtime_api.h>
 #include <optix.h>
 
+#include "CUDA/Unique/OptixDeviceContext.h"
+#include "CUDA/Unique/Stream.h"
+
 class Context {
 
     std::vector<const char*> RequiredDeviceExtensions = {
@@ -42,10 +45,10 @@ class Context {
     vk::PhysicalDevice physicalDevice;
     vk::UniqueDevice device;
 
-    VmaAllocator allocator;
+    VmaAllocator allocator{};
 
-    OptixDeviceContext optixCtx = nullptr;
-    cudaStream_t cudaStream = nullptr;
+    nr::cuda::UniqueOptixDeviceContext optixCtx;
+    nr::cuda::UniqueStream cudaStream;
     
     vk::Queue graphicsQueue;
     uint32_t graphicsFamilyIndex = UINT32_MAX;
@@ -91,7 +94,7 @@ public:
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
     VmaAllocator getAllocator() const { return allocator; }
 
-    OptixDeviceContext getOptixContext() const { return optixCtx; }
-    cudaStream_t getCudaStream() const { return cudaStream; }
+    OptixDeviceContext getOptixContext() const { return optixCtx.get(); }
+    cudaStream_t getCudaStream() const { return cudaStream.get(); }
 
 };

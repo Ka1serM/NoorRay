@@ -54,6 +54,7 @@ public:
     void resize(uint32_t width, uint32_t height);
     void render(const PushData& pushData);
     Bitmap renderOffline(uint32_t sampleCount);
+    void renderOfflineToDevice(float* rgbaDevice, uint32_t sampleCount);
 
     void setAovEnabled(bool enabled) { aovEnabled = enabled; }
     bool getAovEnabled() const { return aovEnabled; }

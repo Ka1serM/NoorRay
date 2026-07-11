@@ -3,7 +3,7 @@
 #include <imgui.h>
 #include "MeshInstance.h"
 #include "Scene.h"
-#include "../UI/ImGuiManager.h"
+#include "UI/ImGuiManager.h"
 
 SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : name(name), transform(transform), scene(scene), visible(true)
 {

@@ -9,6 +9,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 option(NR_ENABLE_UNITY_BUILD "Batch NoorRay C++ sources for faster compilation" ON)
 option(NR_ENABLE_PCH "Precompile common NoorRay C++ headers" ON)
+option(NR_BUILD_PYTHON "Build the pynoorray Python bindings" OFF)
 set(NR_UNITY_BUILD_BATCH_SIZE "8" CACHE STRING "Maximum sources per NoorRay unity batch")
 set(NR_CUDA_SPLIT_COMPILE_JOBS "0" CACHE STRING "NVCC optimization threads per CUDA translation unit (0 = all cores)")
 if(UNIX AND NOT APPLE)
@@ -39,6 +40,9 @@ set(SDL_STATIC ON CACHE BOOL "Build SDL3 as a static library" FORCE)
 set(SDL_SHARED OFF CACHE BOOL "Do not build SDL3 as a shared library" FORCE)
 set(SDL_ALSA OFF CACHE BOOL "NoorRay does not use SDL audio" FORCE)
 add_subdirectory(external/SDL)
+if(TARGET SDL3-static)
+    set_target_properties(SDL3-static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 
 # External Libraries
 add_subdirectory(external/glm)
@@ -97,6 +101,9 @@ include(cmake/ROSS.cmake)
 # upstream CLI and benchmark targets do not become part of the main build.
 include(FetchContent)
 include(external/GaussForge/cmakes/zlib.cmake)
+if(TARGET zlibstatic)
+    set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 
 FetchContent_Declare(
         libwebp
@@ -128,6 +135,7 @@ add_library(gauss_forge_readers STATIC
         external/GaussForge/src/io/spz_reader.cpp
         external/GaussForge/src/io/sog_reader.cpp
 )
+set_target_properties(gauss_forge_readers PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(gauss_forge_readers PUBLIC
         ${PROJECT_SOURCE_DIR}/external/GaussForge/include
 )
@@ -164,7 +172,9 @@ find_program(NR_SLANGC_EXECUTABLE
         REQUIRED
 )
 
-set(SHADER_DIR     "${PROJECT_SOURCE_DIR}/src/Shaders")
+set(NR_CORE_DIR "${PROJECT_SOURCE_DIR}/src/libnoorray")
+set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
+set(SHADER_DIR     "${NR_CORE_DIR}/Shaders")
 
 # Base slangc flags (software BVH, no USE_RAY_QUERY)
 set(SLANGC_BASE
@@ -263,6 +273,7 @@ add_library(imgui STATIC
         external/imgui/backends/imgui_impl_sdl3.cpp
         external/ImGuizmo/ImGuizmo.cpp
 )
+set_target_properties(imgui PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(imgui PUBLIC
         ${PROJECT_SOURCE_DIR}/external/imgui
         ${PROJECT_SOURCE_DIR}/external/ImGuizmo
@@ -274,22 +285,32 @@ target_link_libraries(imgui PUBLIC
         SDL3::SDL3-static
 )
 
-# Gather source files
-file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS src/*.cpp src/*.h)
-list(FILTER SRC_FILES EXCLUDE REGEX "/CUDA/")
-list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
-list(FILTER SRC_FILES EXCLUDE REGEX "/Raytracing/RgbSpectrumTableData\\.cpp$")
-list(FILTER SRC_FILES EXCLUDE REGEX "/Mesh/OpenPbrEnergy\\.cpp$")
-list(FILTER SRC_FILES EXCLUDE REGEX "/IO/BitmapReader\\.cpp$")
-list(FILTER SRC_FILES EXCLUDE REGEX "/IO/BitmapWriter\\.cpp$")
-list(FILTER SRC_FILES EXCLUDE REGEX "/StbImpl\\.cpp$")
+add_library(NoorRayUiSupport STATIC
+        src/app/UI/ImGuiManager.cpp
+        src/app/UI/ImGuiManager.h
+        src/app/UI/ImGuiComponent.h)
+set_target_properties(NoorRayUiSupport PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(NoorRayUiSupport PUBLIC cxx_std_23)
+target_include_directories(NoorRayUiSupport PUBLIC
+        "${NR_APP_DIR}"
+        "${NR_CORE_DIR}"
+        "${PROJECT_SOURCE_DIR}/external/VulkanMemoryAllocator/include"
+        "${CUDAToolkit_INCLUDE_DIRS}"
+        "${OPTIX_INCLUDE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(NoorRayUiSupport PUBLIC
+        imgui
+        Vulkan::Vulkan
+        SDL3::SDL3-static
+        glm)
 
 add_library(NoorRayIO STATIC
-        src/IO/BitmapReader.cpp
-        src/IO/BitmapWriter.cpp
-        src/StbImpl.cpp)
+        src/libnoorray/IO/BitmapReader.cpp
+        src/libnoorray/IO/BitmapWriter.cpp
+        src/libnoorray/StbImpl.cpp)
+set_target_properties(NoorRayIO PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(NoorRayIO PUBLIC cxx_std_23)
-target_include_directories(NoorRayIO PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_include_directories(NoorRayIO PUBLIC "${NR_CORE_DIR}")
 target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 
 set(NR_OPTIX_DEPFILE "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.d")
@@ -305,47 +326,50 @@ add_custom_command(
                 --generate-nonsystem-dependencies-with-compile
                 --dependency-output "${NR_OPTIX_DEPFILE}"
                 -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
-                "-I${PROJECT_SOURCE_DIR}/src"
+                "-I${NR_CORE_DIR}"
+                "-I${NR_APP_DIR}"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
                 "-I${OPTIX_INCLUDE_DIR}"
                 -o "${NR_OPTIX_PTX}"
-                "${PROJECT_SOURCE_DIR}/src/Kernels/Extend.cu"
+                "${NR_CORE_DIR}/Kernels/Extend.cu"
         DEPENDS
-                src/Kernels/Extend.cu
-                src/Kernels/Connect.cu
-                src/Kernels/GaussianHit.cu
-                src/Kernels/GaussianProxyOverdraw.cu
+                src/libnoorray/Kernels/Extend.cu
+                src/libnoorray/Kernels/Connect.cu
+                src/libnoorray/Kernels/GaussianHit.cu
+                src/libnoorray/Kernels/GaussianProxyOverdraw.cu
         DEPFILE "${NR_OPTIX_DEPFILE}"
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 
 add_library(NoorRayCuda STATIC
-        src/Raytracing/Blas.cpp
-        src/Raytracing/GaussianProxyBlas.cpp
-        src/CUDA/Unique/Texture.cpp
-        src/CUDA/Unique/SharedImage.cpp
-        src/CUDA/Unique/SharedBuffer.cpp
-        src/CUDA/rstd/Memory.cpp
-        src/Mesh/OpenPbrEnergy.cpp
-        src/Kernels/Generate.cu
-        src/Kernels/Shade.cu
-        src/Kernels/Finalize.cu
-        src/Kernels/GenerateAov.cu
-        src/Kernels/ShadeAov.cu
-        src/Raytracing/Tlas.cpp
-        src/Raytracing/RgbSpectrumTableData.cpp
-        src/Raytracing/Raytracer.cpp)
+        src/libnoorray/Raytracing/Blas.cpp
+        src/libnoorray/Raytracing/GaussianProxyBlas.cpp
+        src/libnoorray/CUDA/Unique/Texture.cpp
+        src/libnoorray/CUDA/Unique/SharedImage.cpp
+        src/libnoorray/CUDA/Unique/SharedBuffer.cpp
+        src/libnoorray/CUDA/rstd/Memory.cpp
+        src/libnoorray/Mesh/OpenPbrEnergy.cpp
+        src/libnoorray/Kernels/Generate.cu
+        src/libnoorray/Kernels/Shade.cu
+        src/libnoorray/Kernels/Finalize.cu
+        src/libnoorray/Kernels/GenerateAov.cu
+        src/libnoorray/Kernels/ShadeAov.cu
+        src/libnoorray/Raytracing/Tlas.cpp
+        src/libnoorray/Raytracing/RgbSpectrumTableData.cpp
+        src/libnoorray/Raytracing/Raytracer.cpp)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
 set_target_properties(NoorRayCuda PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
-        CUDA_RESOLVE_DEVICE_SYMBOLS OFF)
+        CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+        POSITION_INDEPENDENT_CODE ON)
 target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
 target_compile_definitions(NoorRayCuda PUBLIC
         NR_BACKEND_CUDA=1
         VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 target_include_directories(NoorRayCuda PUBLIC
-        "${PROJECT_SOURCE_DIR}/src"
+        "${NR_CORE_DIR}"
+        "${NR_APP_DIR}"
         "${PROJECT_SOURCE_DIR}/external/glm"
         "${PROJECT_SOURCE_DIR}/external/SDL/include"
         "${PROJECT_SOURCE_DIR}/external/VulkanMemoryAllocator/include"
@@ -366,6 +390,101 @@ target_link_libraries(NoorRayCuda PUBLIC
         GPUOpen::VulkanMemoryAllocator)
 target_link_libraries(NoorRayCuda PUBLIC libross)
 
+file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
+        "${NR_CORE_DIR}/*.cpp"
+        "${NR_CORE_DIR}/*.h")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/CUDA/")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Kernels/")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/RgbSpectrumTableData\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Blas\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/GaussianProxyBlas\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Tlas\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Mesh/OpenPbrEnergy\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapReader\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapWriter\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/StbImpl\\.cpp$")
+
+add_library(libnoorray STATIC ${NR_CORE_FILES})
+set_target_properties(libnoorray PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+        POSITION_INDEPENDENT_CODE ON)
+target_compile_features(libnoorray PUBLIC cxx_std_23)
+target_include_directories(libnoorray
+        PUBLIC
+        "${NR_CORE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        PRIVATE
+        "${NR_APP_DIR}")
+target_compile_definitions(libnoorray PUBLIC
+        NR_BACKEND_CUDA=1
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+        NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
+        NR_ROSS_RESOURCE_DIR="${PROJECT_SOURCE_DIR}/external/ROSS/resources")
+target_link_libraries(libnoorray
+        PUBLIC
+        NoorRayCuda
+        NoorRayIO
+        portable_file_dialogs
+        glm
+        Vulkan::Vulkan
+        SDL3::SDL3-static
+        tinygltf
+        tinyobjloader
+        tinyexr
+        stb
+        gauss_forge_readers
+        GPUOpen::VulkanMemoryAllocator
+        glaze
+        TBB::tbb
+        PRIVATE
+        imgui
+        NoorRayUiSupport)
+
+file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS
+        "${NR_APP_DIR}/*.cpp"
+        "${NR_APP_DIR}/*.h")
+list(FILTER NR_APP_FILES EXCLUDE REGEX "/UI/ImGuiManager\\.cpp$")
+
+if(NR_BUILD_PYTHON)
+    if(CMAKE_VERSION VERSION_LESS 3.18)
+        set(NR_PYTHON_DEV_MODULE Development)
+    else()
+        set(NR_PYTHON_DEV_MODULE Development.Module)
+    endif()
+
+    find_package(Python 3.12 COMPONENTS Interpreter ${NR_PYTHON_DEV_MODULE} REQUIRED)
+    add_subdirectory("${ROSS_ROOT}/ext/nanobind" "${CMAKE_BINARY_DIR}/pynoorray/nanobind" EXCLUDE_FROM_ALL)
+
+    nanobind_add_module(_pynoorray
+            src/pynoorray/PyNoorRay.cpp
+            src/pynoorray/PyRenderSession.cpp
+            src/pynoorray/PyRenderSession.h
+            src/pynoorray/pynoorray/__init__.py
+            src/pynoorray/pynoorray/training.py)
+    target_compile_features(_pynoorray PRIVATE cxx_std_23)
+    target_include_directories(_pynoorray PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/pynoorray"
+            "${NR_CORE_DIR}"
+            "${NR_APP_DIR}")
+    target_link_libraries(_pynoorray PRIVATE
+            "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
+            NoorRayUiSupport
+            CUDA::cudart_static)
+    target_compile_definitions(_pynoorray PRIVATE
+            NR_BACKEND_CUDA=1
+            VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+    add_custom_command(TARGET _pynoorray POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${PROJECT_SOURCE_DIR}/src/pynoorray/pynoorray"
+                    "$<TARGET_FILE_DIR:_pynoorray>/pynoorray"
+            COMMAND ${CMAKE_COMMAND} -E copy
+                    "$<TARGET_FILE:_pynoorray>"
+                    "$<TARGET_FILE_DIR:_pynoorray>/pynoorray/"
+            COMMENT "Copying pynoorray package")
+endif()
+
 # Resource handling on Windows
 if(WIN32)
     set(RESOURCE_RC_PATH "${CMAKE_BINARY_DIR}/resource.rc")
@@ -373,28 +492,34 @@ if(WIN32)
             "MAINICON ICON \"${PROJECT_SOURCE_DIR}/assets/icons/icon.ico\"\n"
     )
     message(STATUS "Generated resource.rc at ${RESOURCE_RC_PATH}")
-    list(APPEND SRC_FILES "${RESOURCE_RC_PATH}")
+    list(APPEND NR_APP_FILES "${RESOURCE_RC_PATH}")
 endif()
 
 # Executable target — WIN32 only applies on Windows (suppresses the console window
 # for GUI mode), but CLI mode still works because SDL_MAIN_HANDLED is set.
 if(WIN32)
-    add_executable(NoorRay WIN32 ${SRC_FILES})
+    add_executable(NoorRay WIN32 ${NR_APP_FILES})
 else()
-    add_executable(NoorRay ${SRC_FILES})
+    add_executable(NoorRay ${NR_APP_FILES})
 endif()
 set_target_properties(NoorRay PROPERTIES PREFIX "")
+set_target_properties(NoorRay PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_dependencies(NoorRay NoorRayShaders)
 
 target_include_directories(NoorRay PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
+        ${NR_APP_DIR}
+        ${NR_CORE_DIR}
         ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 # Link against all libraries
 target_link_libraries(NoorRay PRIVATE
+        libnoorray
+        NoorRayUiSupport
         NoorRayCuda
-        NoorRayIO
+        libross
         portable_file_dialogs
         glm
         imgui
@@ -413,9 +538,7 @@ target_link_libraries(NoorRay PRIVATE
 
 target_compile_definitions(NoorRay PRIVATE
         SDL_MAIN_HANDLED
-        NR_BACKEND_CUDA=1
-        NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
-        NR_ROSS_RESOURCE_DIR="${PROJECT_SOURCE_DIR}/external/ROSS/resources")
+        NR_BACKEND_CUDA=1)
 target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 
 if(NR_ENABLE_UNITY_BUILD)
@@ -423,14 +546,14 @@ if(NR_ENABLE_UNITY_BUILD)
             UNITY_BUILD ON
             UNITY_BUILD_BATCH_SIZE "${NR_UNITY_BUILD_BATCH_SIZE}")
     set_source_files_properties(
-        src/NoorRay.cpp
-        src/Scene/SceneImporter.cpp
-        src/StbImpl.cpp
-        src/UI/ImGuiManager.cpp
-        src/Vulkan/Viewport.cpp
-        src/Vulkan/VmaImpl.cpp
-        src/Mesh/GaussianAsset.cpp
-        src/Raytracing/GaussianProxyBlas.cpp
+        src/app/NoorRayApp.cpp
+        src/libnoorray/Scene/SceneImporter.cpp
+        src/libnoorray/StbImpl.cpp
+        src/app/UI/ImGuiManager.cpp
+        src/libnoorray/Vulkan/Viewport.cpp
+        src/libnoorray/Vulkan/VmaImpl.cpp
+        src/libnoorray/Mesh/GaussianAsset.cpp
+        src/libnoorray/Raytracing/GaussianProxyBlas.cpp
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 

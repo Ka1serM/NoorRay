@@ -1,7 +1,7 @@
 #include <iostream>
 #include <string>
 #include <cstring>
-#include "NoorRay.h"
+#include "NoorRayApp.h"
 #include "Log.h"
 
 static void printUsage()
@@ -20,7 +20,7 @@ int main(int argc, char* argv[])
 {
     if (argc < 2)
     {
-        NoorRay app(1680, 960);
+        NoorRayApp app(1680, 960);
         app.runUi();
         return 0;
     }
@@ -111,7 +111,7 @@ int main(int argc, char* argv[])
 
     try
     {
-        NoorRay app(scenePath, spp, outputPath, width, height, statsEnabled);
+        NoorRayApp app(scenePath, spp, outputPath, width, height, statsEnabled);
         app.runCli();
     }
     catch (const std::exception& e)

@@ -891,6 +891,40 @@ Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
     return Bitmap(width, height, std::move(pixels));
 }
 
+void Raytracer::renderOfflineToDevice(float* rgbaDevice, const uint32_t sampleCount)
+{
+    if (rgbaDevice == nullptr)
+        throw std::invalid_argument("Offline render destination pointer must not be null");
+    if (sampleCount == 0)
+        throw std::invalid_argument("Offline render sample count must be greater than zero");
+    if (sampleCount > static_cast<uint32_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("Offline render sample count exceeds the supported range");
+
+    CameraInstance* camera = scene.getActiveCamera();
+    if (camera == nullptr)
+        throw std::runtime_error("Cannot render a scene without an active camera");
+
+    RenderSettings& settings = scene.getRenderSettings();
+    const int previousSamplesPerFrame = settings.samples;
+    const int previousMaxSamples = settings.maxSamples;
+    settings.samples = static_cast<int>(sampleCount);
+    settings.maxSamples = static_cast<int>(sampleCount);
+    try {
+        render(PushData{.frame = 0});
+        NR_GPU_CHECK(cudaStreamSynchronize(stream));
+        kernelStats.harvestFrame();
+    } catch (...) {
+        settings.samples = previousSamplesPerFrame;
+        settings.maxSamples = previousMaxSamples;
+        throw;
+    }
+    settings.samples = previousSamplesPerFrame;
+    settings.maxSamples = previousMaxSamples;
+
+    const size_t byteCount = static_cast<size_t>(width) * height * sizeof(glm::vec4);
+    NR_GPU_CHECK(cudaMemcpy(rgbaDevice, accumulationBuffer.get(), byteCount, cudaMemcpyDeviceToDevice));
+}
+
 void Raytracer::debugSave(const std::string& path) const
 {
     NR_GPU_CHECK(cudaStreamSynchronize(stream));

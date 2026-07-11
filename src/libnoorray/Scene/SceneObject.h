@@ -6,7 +6,7 @@
 #include <memory>
 #include "Scene.h"
 #include "Inspectable.h"
-#include "../Mesh/Transform.h"
+#include "Mesh/Transform.h"
 
 class Scene;
 

@@ -1,6 +1,6 @@
 #include "GaussianInstance.h"
 #include <imgui.h>
-#include "../UI/ImGuiManager.h"
+#include "UI/ImGuiManager.h"
 
 GaussianInstance::GaussianInstance(Scene& scene, const std::string& name, const uint32_t gaussianAssetIndex, const Transform& transf)
     : SceneObject(scene, name, transf), gaussianAssetIndex(gaussianAssetIndex) {}

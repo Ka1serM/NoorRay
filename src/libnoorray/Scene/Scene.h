@@ -84,7 +84,7 @@ class Scene {
     // GPU data — unified memory arrays
     nr::rstd::vector<GpuInstance> gpuInstances;
     nr::rstd::vector<float> gaussianOpacities;
-    nr::rstd::vector<glm::vec3> gaussianSpectrumCoeffs;
+    nr::rstd::vector<glm::vec3> gaussianShCoeffs;
     nr::rstd::vector<nr::cuda::UniqueTexture> cudaTextures;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
@@ -149,7 +149,7 @@ public:
     uint32_t getGaussianCount() const;
     void buildGaussianRenderData();
     const float* getGaussianOpacities() const { return gaussianOpacities.data(); }
-    const glm::vec3* getGaussianSpectrumCoeffs() const { return gaussianSpectrumCoeffs.data(); }
+    const glm::vec3* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
     const std::vector<Texture>& getTextures() const { return textures; }
     std::vector<std::string> getTextureNames() const { return textureNames; }
 

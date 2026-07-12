@@ -81,10 +81,13 @@ NR_CPU_GPU inline void rgbLookupCoeffs(
     if (rgb.x > rgb.y) maxc = (rgb.x > rgb.z) ? 0 : 2;
     else               maxc = (rgb.y > rgb.z) ? 1 : 2;
 
-    const float* rgb_f = &rgb.x;
-    const float z = rgb_f[maxc];
-    const float x = rgb_f[(maxc + 1) % 3] * (NrRgbSpecRes - 1) / z;
-    const float y = rgb_f[(maxc + 2) % 3] * (NrRgbSpecRes - 1) / z;
+    // Do not index glm::vec3 through &rgb.x here. CUDA may pass an aligned
+    // vec3 with padding, so pointer arithmetic can read the wrong components.
+    const float z = maxc == 0 ? rgb.x : maxc == 1 ? rgb.y : rgb.z;
+    const float xComponent = maxc == 0 ? rgb.y : maxc == 1 ? rgb.z : rgb.x;
+    const float yComponent = maxc == 0 ? rgb.z : maxc == 1 ? rgb.x : rgb.y;
+    const float x = xComponent * (NrRgbSpecRes - 1) / z;
+    const float y = yComponent * (NrRgbSpecRes - 1) / z;
 
     const int xi = (int)x < NrRgbSpecRes - 2 ? (int)x : NrRgbSpecRes - 2;
     const int yi = (int)y < NrRgbSpecRes - 2 ? (int)y : NrRgbSpecRes - 2;

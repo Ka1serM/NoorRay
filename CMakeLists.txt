@@ -4,6 +4,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+add_compile_options($<$<CONFIG:Release>:-g>)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build dependencies as static libraries" FORCE)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -129,11 +130,13 @@ add_library(gauss_forge_readers STATIC
         external/GaussForge/src/core/validate.cpp
         external/GaussForge/src/io/ply_auto.cpp
         external/GaussForge/src/io/ply_reader.cpp
+        external/GaussForge/src/io/ply_writer.cpp
         external/GaussForge/src/io/ply_compressed_reader.cpp
         external/GaussForge/src/io/splat_reader.cpp
         external/GaussForge/src/io/ksplat_reader.cpp
         external/GaussForge/src/io/spz_reader.cpp
         external/GaussForge/src/io/sog_reader.cpp
+        external/GaussForge/src/io/sog_writer.cpp
 )
 set_target_properties(gauss_forge_readers PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(gauss_forge_readers PUBLIC
@@ -356,7 +359,9 @@ add_library(NoorRayCuda STATIC
         src/libnoorray/Kernels/ShadeAov.cu
         src/libnoorray/Raytracing/Tlas.cpp
         src/libnoorray/Raytracing/RgbSpectrumTableData.cpp
-        src/libnoorray/Raytracing/Raytracer.cpp)
+        src/libnoorray/Raytracing/Raytracer.cpp
+        src/libnoorray/Training/GaussianTrainRenderer.cpp
+        src/libnoorray/Training/GaussianTrainer.cu)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
 set_target_properties(NoorRayCuda PROPERTIES
@@ -387,7 +392,8 @@ target_link_libraries(NoorRayCuda PUBLIC
         Vulkan::Vulkan
         SDL3::SDL3-static
         portable_file_dialogs
-        GPUOpen::VulkanMemoryAllocator)
+        GPUOpen::VulkanMemoryAllocator
+        gauss_forge_readers)
 target_link_libraries(NoorRayCuda PUBLIC libross)
 
 file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
@@ -455,14 +461,14 @@ if(NR_BUILD_PYTHON)
     endif()
 
     find_package(Python 3.12 COMPONENTS Interpreter ${NR_PYTHON_DEV_MODULE} REQUIRED)
-    add_subdirectory("${ROSS_ROOT}/ext/nanobind" "${CMAKE_BINARY_DIR}/pynoorray/nanobind" EXCLUDE_FROM_ALL)
+    add_subdirectory("${PROJECT_SOURCE_DIR}/external/nanobind" "${CMAKE_BINARY_DIR}/pynoorray/nanobind" EXCLUDE_FROM_ALL)
 
     nanobind_add_module(_pynoorray
             src/pynoorray/PyNoorRay.cpp
             src/pynoorray/PyRenderSession.cpp
             src/pynoorray/PyRenderSession.h
-            src/pynoorray/pynoorray/__init__.py
-            src/pynoorray/pynoorray/training.py)
+            src/pynoorray/__init__.py)
+    set_target_properties(_pynoorray PROPERTIES DEBUG_POSTFIX "")
     target_compile_features(_pynoorray PRIVATE cxx_std_23)
     target_include_directories(_pynoorray PRIVATE
             "${PROJECT_SOURCE_DIR}/src/pynoorray"
@@ -475,10 +481,17 @@ if(NR_BUILD_PYTHON)
     target_compile_definitions(_pynoorray PRIVATE
             NR_BACKEND_CUDA=1
             VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+    # Keep the source layout flat. The extension and its Python files are
+    # installed into one package directory next to each other.
     add_custom_command(TARGET _pynoorray POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${PROJECT_SOURCE_DIR}/src/pynoorray/pynoorray"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
                     "$<TARGET_FILE_DIR:_pynoorray>/pynoorray"
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                    "$<TARGET_FILE_DIR:_pynoorray>/pynoorray/training.py"
+                    "$<TARGET_FILE_DIR:_pynoorray>/pynoorray/colmap.py"
+            COMMAND ${CMAKE_COMMAND} -E copy
+                    "${PROJECT_SOURCE_DIR}/src/pynoorray/__init__.py"
+                    "$<TARGET_FILE_DIR:_pynoorray>/pynoorray/__init__.py"
             COMMAND ${CMAKE_COMMAND} -E copy
                     "$<TARGET_FILE:_pynoorray>"
                     "$<TARGET_FILE_DIR:_pynoorray>/pynoorray/"

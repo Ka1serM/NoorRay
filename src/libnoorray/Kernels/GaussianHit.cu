@@ -14,18 +14,18 @@ extern "C" __global__ void __anyhit__gaussian()
     const uint32_t instanceId = optixGetInstanceId();
     const uint32_t globalGaussianId = instanceId;
 
-    const float opacity = params.scene.gaussianOpacities[globalGaussianId];
+    const float opacity = params.train.enabled
+        ? 1.0f / (1.0f + __expf(-params.train.opacityLogit[globalGaussianId]))
+        : params.scene.gaussianOpacities[globalGaussianId];
     if (opacity <= 0.0f)
     {
         optixIgnoreIntersection();
         return;
     }
 
-    // Mahalanobis distance in object space: the instance transform carries
-    // each Gaussian's true (untruncated) R*S — see GaussianAsset.cpp — so
-    // object-space coordinates here are already whitened and distanceSq is
-    // directly the squared Mahalanobis distance, with no per-hit correction
-    // factor. Compute closest-point-on-ray-to-origin distance.
+    // The instance transform carries each Gaussian's true (untruncated) R*S;
+    // object-space coordinates are already Mahalanobis space. Compute the
+    // closest-point-on-ray-to-origin distance.
     const float3 rayOrigin = optixGetObjectRayOrigin();
     const float3 rayDir    = optixGetObjectRayDirection();
     const float tClosest = -(rayOrigin.x * rayDir.x + rayOrigin.y * rayDir.y + rayOrigin.z * rayDir.z)

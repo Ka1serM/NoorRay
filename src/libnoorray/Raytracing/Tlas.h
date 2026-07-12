@@ -12,6 +12,7 @@
 #include "CUDA/Unique/AsyncDeviceBuffer.h"
 #include "CUDA/Unique/ManagedBuffer.h"
 #include "CUDA/rstd/Vector.h"
+#include "Mesh/GaussianCutoff.h"
 #include "Raytracing/GaussianProxyBlas.h"
 
 #include "Scene/GpuInstance.h"
@@ -84,6 +85,6 @@ private:
 
     std::unique_ptr<GaussianProxyBlas> proxyBlas;
     GaussianProxyType lastProxyType{GaussianProxyType::TriangularBipyramid};
-    float lastCutoffSigma{3.0f};
+    float lastCutoffSigma{GaussianCutoffSigma};
     uint32_t meshInstanceCount{};
 };

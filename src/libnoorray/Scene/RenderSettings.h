@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Raytracing/GaussianProxyBlas.h"
+#include "Scene/SphericalHarmonicsOrder.h"
 
 enum class BufferVisualization : int
 {
@@ -29,7 +30,8 @@ public:
     bool transparentBackground{false};
     float gaussianCutoffSigma{3.0f};
     GaussianProxyType gaussianProxyType{GaussianProxyType::Icosahedron};
-    GaussianShadingMode gaussianShadingMode{GaussianShadingMode::GlobalIllumination};
+    GaussianShadingMode gaussianShadingMode{GaussianShadingMode::DirectColor};
+    SphericalHarmonicsOrder gaussianRenderSphericalHarmonics{SphericalHarmonicsOrder::Degree3};
     bool gaussianProxyOverdrawVisualization{false};
     int gaussianProxyOverdrawMax{1024};
     BufferVisualization bufferVisualization{BufferVisualization::Beauty};

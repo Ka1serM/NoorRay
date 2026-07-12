@@ -25,6 +25,8 @@ extern "C" __global__ void __raygen__extend()
 
     HitWorkItem item{};
     item.sampleIndex = ray.sampleIndex;
+    item.rayOrigin = ray.origin;
+    item.rayDirection = ray.direction;
     if (hit.instanceIndex == InvalidIndex)
     {
         // Miss

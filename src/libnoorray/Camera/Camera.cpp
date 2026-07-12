@@ -4,6 +4,7 @@
 #include <cmath>
 #include <numbers>
 
+#include "CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
 
 float Camera::focalLengthForFov(const float fovDegrees) const
@@ -21,6 +22,7 @@ float Camera::fovForFocalLength(const float focalLength) const
 
 void Camera::setFocalLength(const float focalLength)
 {
+    nr::synchronizeBeforeManagedMutation("Camera focal length");
     if (ptr()) {
         DispatchCPU([focalLength](auto* cam) {
             cam->focalLengthMm = std::max(0.001f, focalLength);
@@ -34,6 +36,7 @@ void Camera::setFocalLength(const float focalLength)
 
 void Camera::setFocusDistance(const float v)
 {
+    nr::synchronizeBeforeManagedMutation("Camera focus distance");
     const float clamped = std::max(0.001f, v);
     if (ptr())
         DispatchCPU([clamped](auto* cam) { cam->focusDistance = clamped; });
@@ -64,6 +67,7 @@ float Camera::getFocalLength() const
 
 void Camera::setCameraToWorld(const glm::mat4& m)
 {
+    nr::synchronizeBeforeManagedMutation("Camera transform");
     if (ptr())
         DispatchCPU([&m](auto* cam) { cam->cameraToWorld = m; });
     else
@@ -84,6 +88,7 @@ bool Camera::renderUi()
 {
     bool changed = false;
     ImGuiManager::dragFloatRow("Field of View", fieldOfView, 0.1f, 1.f, 179.f, [&](float value) {
+        nr::synchronizeBeforeManagedMutation("Camera field of view");
         fieldOfView = std::clamp(value, 1.f, 179.f);
         focalLengthMm = focalLengthForFov(fieldOfView);
         changed = true;

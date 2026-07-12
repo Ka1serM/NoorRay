@@ -68,12 +68,24 @@ public:
     void updateLights();
     void updateTLAS();
 
+    // Read-only accessors for GaussianTrainRenderer: training reuses the
+    // same proxy-BVH machinery the interactive renderer already builds
+    // (updateTLAS()), rather than maintaining a second TLAS.
+    OptixTraversableHandle getGaussianTlasHandle() const { return tlas.getTraversable(); }
+    OptixDeviceContext getOptixDeviceContext() const { return optixCtx; }
+    cudaStream_t getCudaStream() const { return stream; }
+    void renderGaussianTrainForward(const GaussianTrainParams& params,
+        uint32_t width, uint32_t height);
+    void renderGaussianTrainBackward(const GaussianTrainParams& params,
+        uint32_t width, uint32_t height);
+
     FrameInfo getFrameInfo() const;
     bool isRenderInFlight() const;
     bool isFrameReady() const;
     float getGpuTimeMs() const { return m_gpuTimeMs; }
     uint32_t getWidth() const { return width; }
     uint32_t getHeight() const { return height; }
+    uint32_t getRayQueueCapacity() const { return queues.capacity; }
     void debugSave(const std::string& path) const;
     Image& getOutputColor() { return color[lastLaunched].getImage(); }
     Image& getOutputAlbedo() { return albedo[lastLaunched].getImage(); }

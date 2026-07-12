@@ -15,6 +15,7 @@
 #include "UI/RenderPanel.h"
 #include "UI/RenderSettingsPanel.h"
 #include "UI/LensViewerPanel.h"
+#include "UI/TrainingPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "stb_image_write.h"
@@ -78,6 +79,7 @@ NoorRayApp::NoorRayApp(const int windowWidth, const int windowHeight)
     imGuiManager->addComponent<RenderSettingsPanel>("Render Settings", scene);
     imGuiManager->addComponent<RenderPanel>("Render", context, *raytracer, *renderer, *viewport);
     imGuiManager->addComponent<LensViewerPanel>("Lens Viewer", scene);
+    imGuiManager->addComponent<TrainingPanel>("Training", scene, *raytracer);
     imGuiManager->addComponent<ViewportPanel>("Viewport", context, scene,
         viewport->getOutputImage(), raytracer->getOutputCrypto(), raytracer->getOutputPosition(),
         raytracer->getWidth(), raytracer->getHeight());
@@ -118,7 +120,11 @@ NoorRayApp::NoorRayApp(const std::string& scenePath, const int spp,
     raytracer = std::make_unique<Raytracer>(context, scene);
 }
 
-NoorRayApp::~NoorRayApp() = default;
+NoorRayApp::~NoorRayApp()
+{
+    // Panels may own native controllers that reference the raytracer.
+    imGuiManager.reset();
+}
 
 // ── runUi ─────────────────────────────────────────────────────────────────────
 
@@ -126,6 +132,7 @@ void NoorRayApp::runUi() {
     auto* debugPanel       = dynamic_cast<DebugPanel*>(imGuiManager->getComponent("Debug"));
     auto* viewportPanel    = dynamic_cast<ViewportPanel*>(imGuiManager->getComponent("Viewport"));
     auto* renderPanel      = dynamic_cast<RenderPanel*>(imGuiManager->getComponent("Render"));
+    auto* trainingPanel    = dynamic_cast<TrainingPanel*>(imGuiManager->getComponent("Training"));
 
     raytracer->setTimingEnabled(true);
 
@@ -230,6 +237,7 @@ void NoorRayApp::runUi() {
                     // present the last completed viewport image while it runs.
                     if (!raytracer->isRenderInFlight())
                     {
+                        trainingPanel->tick();
                         if (scene.isDirty(Meshes))   raytracer->updateMeshes();
                         if (scene.isDirty(Textures)) raytracer->updateTextures();
                         else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();

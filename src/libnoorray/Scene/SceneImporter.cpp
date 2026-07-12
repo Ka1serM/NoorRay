@@ -660,7 +660,8 @@ void SceneImporter::ImportGaussianScene(Scene& scene, const std::string& filepat
         throw std::runtime_error("File not found: " + filepath);
 
     const std::string name = nameFromPath(filePath.filename().string());
-    const uint32_t assetIndex = scene.add(GaussianAsset::CreateFromFile(scene, name, filePath.string()));
+    const uint32_t assetIndex =
+        scene.add(GaussianAsset::CreateFromFile(scene, name, filePath.string()));
     auto instance = std::make_unique<GaussianInstance>(scene, name, assetIndex, Transform{});
     instance->setSource("gaussian", filePath.string());
     scene.add(std::move(instance));

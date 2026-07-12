@@ -21,6 +21,7 @@
 #include "CUDA/rstd/Memory.h"
 #include "Log.h"
 #include "NoorRayOptixIr.h"
+#include "Mesh/GaussianCutoff.h"
 #include "Mesh/MeshAsset.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
@@ -518,7 +519,7 @@ void Raytracer::updateTLAS()
 
     scene.buildGaussianRenderData();
     gpuScene.gaussianOpacities = scene.getGaussianOpacities();
-    gpuScene.gaussianSpectrumCoeffs = scene.getGaussianSpectrumCoeffs();
+    gpuScene.gaussianShCoeffs = scene.getGaussianShCoeffs();
     gpuScene.gaussianCount = scene.getGaussianCount();
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
@@ -656,6 +657,7 @@ void Raytracer::launchShade(
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&shadeKernel), grid, blockSize, args, 0, stream));
 }
 
+
 void Raytracer::launchExtend(
     const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
 {
@@ -664,6 +666,95 @@ void Raytracer::launchExtend(
     NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
         optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
         &optixExtendSbt, launchCount, 1, 1));
+}
+
+void Raytracer::renderGaussianTrainForward(
+    const GaussianTrainParams& trainParams,
+    const uint32_t renderWidth, const uint32_t renderHeight)
+{
+    const size_t pixelCount = static_cast<size_t>(renderWidth) * renderHeight;
+    if (pixelCount > queues.capacity)
+        throw std::runtime_error("Training image exceeds the raytracing queue capacity");
+    CameraInstance* activeCamera = scene.getActiveCamera();
+    if (activeCamera == nullptr)
+        throw std::runtime_error("Gaussian training requires an active camera");
+
+    KernelParams params{};
+    params.scene = gpuScene;
+    params.scene.camera = activeCamera->getCamera();
+    params.queues = queues;
+    params.train = trainParams;
+    params.train.enabled = 1;
+    params.train.mode = RenderMode::Forward;
+    params.frame.width = renderWidth;
+    params.frame.height = renderHeight;
+    params.frame.cutoffDistanceSq = scene.getRenderSettings().gaussianCutoffSigma
+        * scene.getRenderSettings().gaussianCutoffSigma;
+
+    const size_t outputBytes = static_cast<size_t>(renderWidth) * renderHeight
+        * 3 * sizeof(float);
+    NR_GPU_CHECK(cudaMemsetAsync(params.train.outputColor, 0, outputBytes, stream));
+
+    for (uint32_t sample = 0; sample < trainParams.samplesPerPixel; ++sample)
+    {
+        NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0,
+            sizeof(uint32_t) * MaxBounces, stream));
+        params.frame.totalAccumulated = sample;
+        params.depth = 0;
+        launchGenerate(params, stream);
+        launchExtend(params, queues.capacity, stream);
+        launchShade(params, queues.capacity, stream);
+        launchFinalize(params, stream);
+    }
+    NR_GPU_CHECK(cudaStreamSynchronize(stream));
+}
+
+void Raytracer::renderGaussianTrainBackward(
+    const GaussianTrainParams& trainParams,
+    const uint32_t renderWidth, const uint32_t renderHeight)
+{
+    const size_t pixelCount = static_cast<size_t>(renderWidth) * renderHeight;
+    if (pixelCount > queues.capacity)
+        throw std::runtime_error("Training image exceeds the raytracing queue capacity");
+    CameraInstance* activeCamera = scene.getActiveCamera();
+    if (activeCamera == nullptr)
+        throw std::runtime_error("Gaussian training requires an active camera");
+
+    KernelParams params{};
+    params.scene = gpuScene;
+    params.scene.camera = activeCamera->getCamera();
+    params.queues = queues;
+    params.train = trainParams;
+    params.train.enabled = 1;
+    params.train.mode = RenderMode::Backward;
+    params.frame.width = renderWidth;
+    params.frame.height = renderHeight;
+    params.frame.cutoffDistanceSq = scene.getRenderSettings().gaussianCutoffSigma
+        * scene.getRenderSettings().gaussianCutoffSigma;
+
+    const uint32_t gaussianCount = params.train.gaussianCount;
+    NR_GPU_CHECK(cudaMemsetAsync(params.train.dPosition, 0,
+        sizeof(glm::vec3) * gaussianCount, stream));
+    NR_GPU_CHECK(cudaMemsetAsync(params.train.dLogScale, 0,
+        sizeof(glm::vec3) * gaussianCount, stream));
+    NR_GPU_CHECK(cudaMemsetAsync(params.train.dRotation, 0,
+        sizeof(glm::vec4) * gaussianCount, stream));
+    NR_GPU_CHECK(cudaMemsetAsync(params.train.dOpacityLogit, 0,
+        sizeof(float) * gaussianCount, stream));
+    NR_GPU_CHECK(cudaMemsetAsync(params.train.dColorRgb, 0,
+        sizeof(glm::vec3) * gaussianCount, stream));
+
+    for (uint32_t sample = 0; sample < trainParams.samplesPerPixel; ++sample)
+    {
+        NR_GPU_CHECK(cudaMemsetAsync(queues.rayCounts, 0,
+            sizeof(uint32_t) * MaxBounces, stream));
+        params.frame.totalAccumulated = sample;
+        params.depth = 0;
+        launchGenerate(params, stream);
+        launchExtend(params, queues.capacity, stream);
+        launchShade(params, queues.capacity, stream);
+    }
+    NR_GPU_CHECK(cudaStreamSynchronize(stream));
 }
 
 void Raytracer::launchConnect(

@@ -1,85 +1,59 @@
 #include "PyRenderSession.h"
 
-#include <stdexcept>
+#include <algorithm>
+#include <cstring>
 
 #include <nanobind/nanobind.h>
 
-#include "CUDA/Checks.h"
-
 namespace nb = nanobind;
 
-PyRenderSession::PyRenderSession(const uint32_t width, const uint32_t height)
-    : session(width, height)
+namespace
 {
+glm::mat4 rowMajorMatrix(const float* values)
+{
+    glm::mat4 result;
+    for (int row = 0; row < 4; ++row)
+        for (int column = 0; column < 4; ++column)
+            result[column][row] = values[row * 4 + column];
+    return result;
+}
 }
 
-PyRenderSession::~PyRenderSession()
+PyRenderSession::PyRenderSession(const uint32_t width, const uint32_t height) : session(width, height) {}
+
+void PyRenderSession::importFile(const std::string& path) { session.importFile(path); }
+void PyRenderSession::readScene(const std::string& path) { session.readScene(path); }
+void PyRenderSession::loadScene(const std::string& path) { session.loadScene(path); }
+
+void PyRenderSession::addPerspectiveCamera(
+    nb::ndarray<const float, nb::shape<3>, nb::c_contig> position, const float focalLengthMm)
 {
-    if (outputDevice)
-        cudaFree(outputDevice);
+    session.addPerspectiveCamera(glm::vec3(position(0), position(1), position(2)), focalLengthMm);
 }
 
-void PyRenderSession::loadScene(const std::string& scenePath)
+void PyRenderSession::setCameraToWorld(
+    nb::ndarray<const float, nb::shape<4, 4>, nb::c_contig> matrix)
 {
-    session.loadScene(scenePath);
+    session.setCameraToWorld(rowMajorMatrix(matrix.data()));
 }
 
-void PyRenderSession::setGaussianOpacity(const uint32_t gaussianIndex, const float opacity)
+void PyRenderSession::setCameraFocalLength(const float focalLengthMm) { session.setCameraFocalLength(focalLengthMm); }
+void PyRenderSession::setSamples(const int samples) { session.setSamples(samples); }
+void PyRenderSession::setMaxSamples(const int samples) { session.setMaxSamples(samples); }
+void PyRenderSession::setMaxBounces(const int bounces) { session.setMaxBounces(bounces); }
+void PyRenderSession::setExposure(const float exposure) { session.setExposure(exposure); }
+
+nb::ndarray<nb::numpy, float, nb::shape<-1, -1, 4>> PyRenderSession::render(const uint32_t spp)
 {
-    session.setGaussianOpacity(gaussianIndex, opacity);
+    const Bitmap bitmap = session.renderBitmap(std::max(1u, spp));
+    const size_t valueCount = static_cast<size_t>(bitmap.width()) * bitmap.height() * 4;
+    auto* pixels = new float[valueCount];
+    std::memcpy(pixels, bitmap.rgba(), valueCount * sizeof(float));
+    nb::capsule owner(pixels, [](void* pointer) noexcept { delete[] static_cast<float*>(pointer); });
+    const size_t shape[3] = {bitmap.height(), bitmap.width(), 4};
+    return {pixels, 3, shape, owner};
 }
 
-void PyRenderSession::ensureOutputBuffer()
-{
-    const std::size_t requiredBytes =
-        static_cast<std::size_t>(width()) * height() * 4 * sizeof(float);
-    if (requiredBytes == 0)
-        throw std::runtime_error("Render output has zero size");
-    if (requiredBytes == outputBytes)
-        return;
-
-    if (outputDevice)
-    {
-        cudaFree(outputDevice);
-        outputDevice = nullptr;
-        outputBytes = 0;
-    }
-
-    NR_GPU_CHECK(cudaMalloc(reinterpret_cast<void**>(&outputDevice), requiredBytes));
-    outputBytes = requiredBytes;
-}
-
-nb::ndarray<nb::pytorch, float, nb::shape<-1, -1, 4>, nb::device::cuda>
-PyRenderSession::render(const uint32_t spp)
-{
-    ensureOutputBuffer();
-    session.renderToDevice(outputDevice, spp);
-    NR_GPU_CHECK(cudaDeviceSynchronize());
-
-    const std::size_t shape[3] = {height(), width(), 4};
-    const nb::object owner = nb::cast(this, nb::rv_policy::reference);
-    return nb::ndarray<nb::pytorch, float, nb::shape<-1, -1, 4>, nb::device::cuda>(
-        outputDevice,
-        3,
-        shape,
-        owner,
-        nullptr,
-        nb::dtype<float>(),
-        nb::device::cuda::value,
-        0);
-}
-
-uint32_t PyRenderSession::width() const
-{
-    return session.width();
-}
-
-uint32_t PyRenderSession::height() const
-{
-    return session.height();
-}
-
-uint32_t PyRenderSession::gaussianCount() const
-{
-    return session.gaussianCount();
-}
+uint32_t PyRenderSession::width() const { return session.width(); }
+uint32_t PyRenderSession::height() const { return session.height(); }
+uint32_t PyRenderSession::gaussianCount() const { return session.gaussianCount(); }

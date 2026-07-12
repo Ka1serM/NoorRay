@@ -109,6 +109,21 @@ void RenderSettingsPanel::renderUi()
             changed = true;
         }
 
+        static constexpr const char* kSphericalHarmonicsNames[] =
+            { "Degree 0", "Degree 1", "Degree 2", "Degree 3" };
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("SH Render Limit");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        int renderOrder = static_cast<int>(settings.gaussianRenderSphericalHarmonics);
+        if (ImGui::Combo("##GaussianShRender", &renderOrder, kSphericalHarmonicsNames,
+            IM_ARRAYSIZE(kSphericalHarmonicsNames)))
+        {
+            settings.gaussianRenderSphericalHarmonics = static_cast<SphericalHarmonicsOrder>(renderOrder);
+            changed = true;
+        }
+
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Proxy Overdraw");

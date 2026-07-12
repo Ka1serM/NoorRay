@@ -21,6 +21,9 @@ struct EnvironmentFile {
 struct RenderSettingsFile {
     int max_samples{3000};
     int gaussian_shading_mode{};
+    // Accepted for compatibility with older scene files; no longer applied or written.
+    std::optional<int> gaussian_import_sh_degree;
+    int gaussian_render_sh_degree{3};
 };
 
 struct CameraFile {

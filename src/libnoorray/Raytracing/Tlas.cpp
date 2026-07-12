@@ -6,6 +6,7 @@
 #include <optix_stubs.h>
 
 #include "CUDA/Checks.h"
+#include "Mesh/GaussianCutoff.h"
 #include "Mesh/MeshAsset.h"
 #include "Mesh/GaussianAsset.h"
 #include "Scene/GaussianInstance.h"
@@ -73,7 +74,6 @@ void Tlas::buildGaussianInstances(
     const RenderSettings& rs = scene.getRenderSettings();
     const GaussianProxyType proxyType = rs.gaussianProxyType;
     const float cutoffSigma = rs.gaussianCutoffSigma;
-
     if (proxyBlas == nullptr || lastProxyType != proxyType || lastCutoffSigma != cutoffSigma)
     {
         if (proxyBlas == nullptr)
@@ -96,9 +96,9 @@ void Tlas::buildGaussianInstances(
         for (uint32_t i = 0; i < asset.getGaussianCount(); ++i)
         {
             // Bake the complete scene-instance TRS and the Gaussian asset's
-            // translation/rotation/sigma scale into one OptiX instance matrix
-            // on the CPU. The shared proxy BLAS carries cutoff scaling so the
-            // resulting OptiX object space remains Mahalanobis space.
+            // translation/rotation/sigma scale into one OptiX instance matrix.
+            // The shared proxy BLAS carries the maximum cutoff scaling. Keep
+            // the TLAS transform in true Gaussian Mahalanobis space.
             const mat4 gaussToInstance = toMat4(gaussians[i].transform);
             const mat4 worldTransform = instanceToWorld * gaussToInstance;
             inputs.push_back({toOptixTransform(worldTransform), proxyBlas->getTraversable(), gaussianGlobalId});

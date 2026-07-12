@@ -46,10 +46,23 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         }
         const float nx = (static_cast<float>(x) + jitter.x) / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y) / static_cast<float>(params.frame.height) * 2.0f;
-        active = params.scene.camera->Dispatch([&](const auto* camera) {
-            return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
-                pixel, wl);
-        });
+        if (params.train.enabled)
+        {
+            origin = glm::vec3(params.train.cameraToWorld[3]);
+            const glm::vec3 cameraDirection(
+                (static_cast<float>(x) + jitter.x - params.train.cx) / params.train.fx,
+                -(static_cast<float>(y) + jitter.y - params.train.cy) / params.train.fy,
+                -1.0f);
+            direction = glm::normalize(glm::vec3(params.train.cameraToWorld * glm::vec4(cameraDirection, 0.0f)));
+            cameraWeight = 1.0f;
+        }
+        else
+        {
+            active = params.scene.camera->Dispatch([&](const auto* camera) {
+                return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
+                    pixel, wl);
+            });
+        }
 
         // Camera samples rejected by the lens still represent a black sample.
         // Initialize their state so finalization does not reuse the previous path.
@@ -74,6 +87,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         state.radiance   = SampledSpectrum(0.f);
         state.rngState   = rng;
         state.etaScale   = 1.0f;
+        state.cameraWeight = cameraWeight;
 
         params.queues.pathStates[pixel] = state;
         ray.origin      = origin;

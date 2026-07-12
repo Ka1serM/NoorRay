@@ -1,8 +1,8 @@
 #pragma once
 
 // Gaussians are truncated to this many standard deviations. GaussianProxyBlas
-// scales the shared unit icosahedron proxy by this factor once, at BLAS-build
-// time, so it tightly bounds a default (unit-sigma) Gaussian's support region.
+// scales the shared proxy by this factor at BLAS-build time so it tightly
+// bounds the active Gaussian support region.
 // Gaussian.transform (GaussianAsset.h) then only has to carry each Gaussian's
 // own true R*S — applied for free by the hardware instance transform — so
 // GaussianHit.cu's density evaluation stays a plain exp(-0.5 * distanceSq)

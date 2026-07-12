@@ -64,7 +64,7 @@ void Scene::clear() {
     directionalLights.clear();
     gpuInstances.clear();
     gaussianOpacities.clear();
-    gaussianSpectrumCoeffs.clear();
+    gaussianShCoeffs.clear();
     cudaTextures.clear();
     activeCamera.reset();
     copiedObject.reset();
@@ -385,7 +385,9 @@ void Scene::buildGaussianRenderData()
         if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
             total += gi->getGaussianAsset().getGaussianCount();
     gaussianOpacities.resize(total);
-    gaussianSpectrumCoeffs.resize(total);
+    constexpr uint32_t coefficientsPerGaussian = 16;
+    gaussianShCoeffs.resize(static_cast<size_t>(total) * coefficientsPerGaussian);
+    std::fill(gaussianShCoeffs.begin(), gaussianShCoeffs.end(), glm::vec3(0.0f));
     uint32_t offset = 0;
     for (const auto& obj : sceneObjects)
     {
@@ -395,7 +397,11 @@ void Scene::buildGaussianRenderData()
             for (uint32_t i = 0; i < asset.getGaussianCount(); ++i)
             {
                 gaussianOpacities[offset] = asset.getGaussians()[i].opacity;
-                gaussianSpectrumCoeffs[offset] = asset.getGaussians()[i].spectrumCoeffs;
+                const auto& gaussian = asset.getGaussians()[i];
+                const uint32_t count = std::min(gaussian.shCoeffCount, coefficientsPerGaussian);
+                for (uint32_t coefficient = 0; coefficient < count; ++coefficient)
+                    gaussianShCoeffs[offset * coefficientsPerGaussian + coefficient] =
+                        gaussian.shCoeffs[coefficient];
                 ++offset;
             }
         }

@@ -15,4 +15,5 @@ CMakeUserPresets.json
 *.blend1
 *.spv
 /build
+/.venv
 /.idea

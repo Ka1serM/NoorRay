@@ -186,6 +186,8 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
             file.render_settings->gaussian_shading_mode == static_cast<int>(GaussianShadingMode::DirectColor)
                 ? GaussianShadingMode::DirectColor
                 : GaussianShadingMode::GlobalIllumination;
+        scene.getRenderSettings().gaussianRenderSphericalHarmonics =
+            clampSphericalHarmonicsOrder(file.render_settings->gaussian_render_sh_degree);
     }
 
     if (file.camera)

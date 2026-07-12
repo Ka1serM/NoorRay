@@ -161,6 +161,7 @@ void CameraInstance::loadRossPsfCamera(const std::string& lensPath, const std::s
 void CameraInstance::setApertureDiameter(float mm)
 {
     if (auto* rc = gpuCamera->CastOrNullptr<RealisticCamera>()) {
+        nr::synchronizeBeforeManagedMutation("Camera aperture");
         rc->apertureDiameterMm = std::max(0.0f, mm);
         rc->loadLensAndSensor();
     }

@@ -7,6 +7,7 @@
 #include "Camera/Camera.h"
 #include "CUDA/Unique/Texture.h"
 #include "Raytracing/Output.h"
+#include "Raytracing/GaussianTrainData.h"
 #include "Raytracing/Types.h"
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
@@ -49,7 +50,7 @@ struct GpuSceneData
     uint32_t textureCount{};
     // Gaussian splat data — flat GPU arrays.
     const float* gaussianOpacities{}; // sigmoid opacity, indexed by global id
-    const glm::vec3* gaussianSpectrumCoeffs{}; // precomputed (c0,c1,c2), indexed by global id
+    const glm::vec3* gaussianShCoeffs{}; // 16 raw 3DGS SH coefficients per Gaussian
     uint32_t gaussianCount{};
     uint32_t meshInstanceCount{}; // number of mesh instance slots (id space split)
 };
@@ -74,4 +75,5 @@ struct KernelParams
     PsfGatherBucketSample* psfGatherBuckets{};
     uint32_t psfBinCount{};
     uint32_t depth{};
+    GaussianTrainParams train{};
 };

@@ -38,6 +38,8 @@ struct alignas(16) PathState
     uint32_t packedCounters;
     uint32_t lastBsdfPdfBits;
     float etaScale;
+    glm::vec3 trainColor;
+    float cameraWeight{1.0f};
 };
 
 struct alignas(16) PathRayWorkItem
@@ -60,6 +62,10 @@ struct alignas(16) HitWorkItem
 {
     glm::vec3 positionOrDirection;
     uint32_t sampleIndex;
+    glm::vec3 rayOrigin;
+    uint32_t _rayPadding{};
+    glm::vec3 rayDirection;
+    uint32_t _rayDirectionPadding{};
     float attribute0;
     float attribute1;
     uint32_t instanceIndex;

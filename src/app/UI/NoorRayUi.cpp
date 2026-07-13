@@ -112,7 +112,8 @@ void NoorRayUi::run() {
             imGuiManager->updateUi();
 
             {
-                if (auto* cam = scene.getActiveCamera()) {
+                CameraInstance* viewportCamera = scene.getRenderCamera();
+                if (auto* cam = viewportCamera) {
                     const glm::uvec2 resolution = cam->getCamera()->getSensor().resolution();
                     if (resolution.x != raytracer->getWidth() || resolution.y != raytracer->getHeight()) {
                         context.getDevice().waitIdle();
@@ -131,7 +132,7 @@ void NoorRayUi::run() {
                     }
                 }
 
-                if (!scene.getActiveCamera()) {
+                if (!viewportCamera) {
                     frame = 0;
                     firstFrame = true;
                 } else if (renderPanel->isSaveRequested()) {
@@ -144,8 +145,8 @@ void NoorRayUi::run() {
                         const bool proxyOverdraw =
                             renderSettings.gaussianProxyOverdrawVisualization;
                         const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
-                        const glm::mat4 viewProjection = scene.getActiveCamera()
-                            ? scene.getActiveCamera()->getProjectionMatrix() * scene.getActiveCamera()->getViewMatrix()
+                        const glm::mat4 viewProjection = viewportCamera
+                            ? viewportCamera->getProjectionMatrix() * viewportCamera->getViewMatrix()
                             : glm::mat4(1.0f);
                         if (viewportPanel->showOverlays())
                             viewport->updateBillboards(scene);
@@ -198,10 +199,8 @@ void NoorRayUi::run() {
                         else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
                         if (scene.isDirty(Lights))   raytracer->updateLights();
                         if (scene.isDirty(TLAS))     raytracer->updateTLAS();
-                        if (scene.isDirty(CameraState)) {
-                            if (auto* camera = scene.getActiveCamera())
-                                camera->rebuildCamera();
-                        }
+                        if (scene.isDirty(CameraState))
+                            viewportCamera->rebuildCamera();
 
                         const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
                         const RenderSettings& renderSettings = scene.getRenderSettings();
@@ -216,7 +215,7 @@ void NoorRayUi::run() {
                             renderComplete = false;
                             scene.clearDirtyFlags();
                             firstFrame = false;
-                            raytracer->render(PushData{.frame = 0});
+                            raytracer->renderFrame(PushData{.frame = 0});
                             debugPanel->setSampleInfo(0, 0);
                         } else {
                             if (resetAccumulation) {
@@ -234,7 +233,7 @@ void NoorRayUi::run() {
 
                                 scene.clearDirtyFlags();
                                 firstFrame = false;
-                                raytracer->render(PushData{
+                                raytracer->renderFrame(PushData{
                                     .frame = frame,
                                     .accumulatedSampleOffset = static_cast<uint32_t>(submittedSamples)});
 

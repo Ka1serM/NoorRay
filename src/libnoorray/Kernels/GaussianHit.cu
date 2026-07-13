@@ -46,7 +46,7 @@ extern "C" __global__ void __anyhit__gaussian()
     const float pz = rayOrigin.z + hitT * rayDir.z;
     const float distanceSq = px * px + py * py + pz * pz;
 
-    // Precomputed cutoffDistanceSq (host-side, see Raytracer::render).
+    // Precomputed cutoffDistanceSq (host-side, see Raytracer::renderFrame).
     if (distanceSq >= params.frame.cutoffDistanceSq)
     {
         optixIgnoreIntersection();

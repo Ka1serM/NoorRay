@@ -12,6 +12,9 @@ inline bool synchronizeBeforeManagedMutation(const char* reason)
 {
 #if defined(NR_CUDA_ACTIVE)
     const cudaError_t result = cudaDeviceSynchronize();
+    // Synchronization reports asynchronous failures but does not consume the
+    // calling thread's last-error slot. Do not attribute it to the next launch.
+    (void)cudaGetLastError();
     if (result == cudaSuccess)
         return true;
 

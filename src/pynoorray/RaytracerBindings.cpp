@@ -10,7 +10,9 @@ using namespace nb::literals;
 void bindRaytracer(nb::module_& module)
 {
     nb::class_<Raytracer>(module, "Raytracer")
-        .def("render", nb::overload_cast<>(&Raytracer::render))
+        .def("render_frame", [](Raytracer& raytracer) {
+            raytracer.renderFrame(PushData{.frame = 0});
+        })
         .def("resize", &Raytracer::resize, "width"_a, "height"_a)
         .def("set_aov_enabled", &Raytracer::setAovEnabled, "enabled"_a)
         .def("set_stats_enabled", &Raytracer::setStatsEnabled, "enabled"_a)

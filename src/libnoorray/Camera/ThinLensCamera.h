@@ -19,6 +19,7 @@ public:
         float nx, float ny, RandomState& rng, uint32_t, SampledWavelengths&, bool centered = false) const
     {
         weight = 1.0f;
+        const Sensor& sensor = getSensor();
         const glm::vec2 scale{
             sensor.width() / (2.f * focalLengthMm),
             sensor.height() / (2.f * focalLengthMm)};

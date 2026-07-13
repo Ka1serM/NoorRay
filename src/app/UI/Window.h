@@ -34,7 +34,7 @@ public:
 
 private:
     SDL_Window* window{};
-    uint32_t width{1280};
-    uint32_t height{720};
+    uint32_t width{1920};
+    uint32_t height{810};
     float dpiScale{1.0f};
 };

@@ -17,7 +17,12 @@ Scene::Scene(Context& context)
     : context(context), environment(nr::rstd::make_unique<Environment>()),
       pointLights(context), spotLights(context),
       rectLights(context), directionalLights(context)
-{}
+{
+    auto camera = Camera::create(CameraProjectionType::Perspective);
+    viewportCamera = std::make_shared<CameraInstance>(
+        std::move(camera), "Viewport Camera", Transform(vec3(0.f, 0.f, 5.f)));
+    viewportCamera->scene = this;
+}
 
 Scene::~Scene() = default;
 
@@ -57,8 +62,10 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     // Adding another camera must not unexpectedly change the rendered view.
     // The first camera is selected as a useful default; later changes are explicit.
     if (auto camera = std::dynamic_pointer_cast<CameraInstance>(sharedObject);
-        camera && activeCamera.expired())
+        camera && activeCamera.expired()) {
         activeCamera = camera;
+        setDirtyFlag(CameraState);
+    }
 
     if (auto light = std::dynamic_pointer_cast<LightInstance>(sharedObject))
         registerLight(*light);
@@ -71,6 +78,9 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
 // ── Public lifetime API ───────────────────────────────────────────────────────
 
 void Scene::clear() {
+    // Switch rendering to the persistent viewport camera before scene-owned
+    // cameras are destroyed.
+    activeCamera.reset();
     sceneObjects.clear();
     meshAssets.clear();
     gaussianAssets.clear();
@@ -84,7 +94,6 @@ void Scene::clear() {
     gaussianOpacities.clear();
     gaussianShCoeffs.clear();
     cudaTextures.clear();
-    activeCamera.reset();
     copiedObject.reset();
     activeObjectId = 0;
     nextObjectId = 1;
@@ -97,7 +106,8 @@ void Scene::clear() {
     environment->visibleExposure = 0.0f;
     environment->lightingExposure = 1.0f;
     environment->updateDerivedSettings();
-    dirtyFlags = TLAS | Meshes | Textures | EnvironmentCdf | Lights | Accumulation;
+    dirtyFlags = TLAS | Meshes | Textures | EnvironmentCdf | Lights
+        | CameraState | Accumulation;
 }
 
 uint64_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
@@ -153,8 +163,19 @@ bool Scene::remove(SceneObject* objToRemove) {
 
     if (activeObjectId == (*it)->getId())
         activeObjectId = 0;
-    if (objToRemove == getActiveCamera())
-        activeCamera.reset();
+    if (objToRemove == getActiveCamera()) {
+        const auto replacement = std::ranges::find_if(sceneObjects,
+            [objToRemove](const std::shared_ptr<SceneObject>& object) {
+                return object.get() != objToRemove
+                    && dynamic_cast<CameraInstance*>(object.get()) != nullptr;
+            });
+        if (replacement != sceneObjects.end())
+            activeCamera = std::static_pointer_cast<CameraInstance>(*replacement);
+        else
+            activeCamera.reset();
+        setDirtyFlag(CameraState);
+        setDirtyFlag(Accumulation);
+    }
 
     sceneObjects.erase(it);
     notifyGeometryChanged();
@@ -177,6 +198,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 
     const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
     const bool wasActiveCamera = oldObject == getActiveCamera();
+    const bool replacedCamera = dynamic_cast<CameraInstance*>(oldObject) != nullptr;
     SceneObject* parent = oldObject->getParent();
     const auto parentPtr = findObjectPtr(parent);
 
@@ -184,6 +206,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
         parent->removeChild(oldObject);
 
     std::shared_ptr<SceneObject> newShared(std::move(newObject));
+    newShared->scene = this;
     newShared->setId(oldObject->getId());
 
     if (auto camera = std::dynamic_pointer_cast<CameraInstance>(newShared);
@@ -194,6 +217,9 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 
     *it = std::move(newShared);
 
+    if (replacedCamera || dynamic_cast<CameraInstance*>(sceneObjects[index].get()))
+        setDirtyFlag(CameraState);
+
     if (parentPtr)
         parentPtr->addChild(sceneObjects[index]);
 
@@ -202,15 +228,21 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 }
 
 bool Scene::setActiveCamera(CameraInstance* camera) {
+    if (!camera) {
+        activeCamera.reset();
+        setDirtyFlag(CameraState);
+        setDirtyFlag(Accumulation);
+        return true;
+    }
+
     const auto object = findObjectPtr(camera);
     const auto cameraPtr = std::dynamic_pointer_cast<CameraInstance>(object);
     if (!cameraPtr)
         return false;
 
-    if (cameraPtr.get() == getActiveCamera())
-        return true;
-
-    activeCamera = cameraPtr;
+    if (cameraPtr.get() != getActiveCamera())
+        activeCamera = cameraPtr;
+    setDirtyFlag(CameraState);
     setDirtyFlag(Accumulation);
     return true;
 }

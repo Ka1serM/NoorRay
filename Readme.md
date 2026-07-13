@@ -20,12 +20,17 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 ### Build Instructions
 
-
 #### Prerequisites
 
--   **Vulkan SDK:** Ensure the Vulkan SDK is installed and the `VULKAN_SDK` environment variable is set.
--   **CMake:** Version 3.10 or higher.
--   **Compiler:** A GCC 15-compatible C++26 compiler. **MinGW is recommended** (on Windows) due to usage of the `#embed` directive in the source code.
+- **Vulkan SDK:** Set `VULKAN_SDK` to the active SDK installation.
+- **CUDA Toolkit:** CUDA 13.x installed at `/usr/local/cuda`, with the compiler
+  at `/usr/local/cuda/bin/nvcc`.
+- **OptiX SDK:** OptiX 9.1 installed at `$HOME/Programs/OptixSDK`, with headers
+  under `$HOME/Programs/OptixSDK/include`.
+- **CMake:** Version 3.25 or newer.
+- **Compiler:** GCC/G++ 15 with C++23 support. CUDA compilation also uses G++ 15
+  as its host compiler.
+- **Python bindings:** `uv` and Python 3.12.
 
 
 #### Clone the Repository
@@ -33,35 +38,70 @@ My personal path tracer for exploring graphics programming and testing out new r
 Clone the repository including its submodules:
 
 ```bash
-git clone --recursive https://github.com/Ka1serM/VulkanToyPathtracer.git
-cd VulkanToyPathtracer
+git clone --recursive git@github.com:Ka1serM/NoorRay.git
+cd NoorRay
 ```
 
+If the repository was cloned without submodules:
 
-#### Building the Project
+```bash
+git submodule update --init --recursive
+```
 
-1.  Create a build directory:
+#### Python Environment
 
-    ```bash
-    mkdir build
-    cd build
-    ```
+Create the Python 3.12 environment used by both CMake and the run tasks:
 
-2.  Configure the project with CMake (MinGW + Release mode):
+```bash
+rm -rf .venv
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r src/pynoorray/requirements.txt
+```
 
-    ```bash
-    cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    ```
+Passing `Python_EXECUTABLE` during configuration is required. The native module
+must be built for the same CPython ABI that runs it.
 
-3.  Build the project:
+#### Configure
 
-    ```bash
-    cmake --build . --config Release
-    ```
+The following release configuration builds for NVIDIA RTX 30-series (`sm_86`)
+and RTX 40-series (`sm_89`) GPUs:
 
-4.  Run the executable:
+```bash
+cmake -S . -B build/release \
+  -DNR_CUDA_ROOT=/usr/local/cuda \
+  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
+  -DCMAKE_C_COMPILER=/usr/bin/gcc-15 \
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 \
+  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
+  -DPython_EXECUTABLE="$PWD/.venv/bin/python" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNR_CUDA_ARCH='86;89' \
+  -DNR_BUILD_PYTHON=ON \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
 
-    The output executable will be located in the `build/` directory.
+Use `build/debug` and `-DCMAKE_BUILD_TYPE=Debug` for a debug configuration.
+The equivalent commands are also available as Zed tasks.
+
+#### Build and Run
+
+Build and run the application:
+
+```bash
+cmake --build build/release --target NoorRay -j"$(nproc)"
+./build/release/NoorRay
+```
+
+Build and run the Python example:
+
+```bash
+cmake --build build/release --target _pynoorray -j"$(nproc)"
+PYTHONPATH="$PWD/build/release/lib" \
+  .venv/bin/python src/pynoorray/examples/pynoorray_render.py
+```
+
+The extension is copied to `build/release/lib/pynoorray/` and its filename must
+contain the `cpython-312` ABI suffix when used with this environment.
 
 
 ### Shader Compilation

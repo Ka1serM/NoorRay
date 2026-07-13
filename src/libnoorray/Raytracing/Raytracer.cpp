@@ -315,7 +315,7 @@ Raytracer::Raytracer(
         optixLaunchParamsDevice.allocate(sizeof(KernelParams));
     }
 
-    auto* cam = scene.getActiveCamera();
+    auto* cam = scene.getRenderCamera();
     auto* c = cam ? cam->getCamera() : nullptr;
     auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
     resize(res.x, res.y);
@@ -840,11 +840,24 @@ void Raytracer::launchShadeAov(const KernelParams& params, const cudaStream_t st
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&shadeAovKernel), grid, blockSize, args, 0, stream));
 }
 
-void Raytracer::render(const PushData& pushData)
+void Raytracer::renderFrame(const PushData& pushData)
 {
-    CameraInstance* activeCamera = scene.getActiveCamera();
+    CameraInstance* activeCamera = scene.getRenderCamera();
     if (!activeCamera)
         return;
+
+    const glm::uvec2 resolution = activeCamera->getCamera()->getSensor().resolution();
+    if (resolution.x == 0 || resolution.y == 0)
+        throw std::runtime_error("Cannot render with a zero-sized camera sensor");
+    if (resolution.x != width || resolution.y != height)
+        resize(resolution.x, resolution.y);
+
+    if (scene.isDirty(Meshes)) updateMeshes();
+    if (scene.isDirty(Textures)) updateTextures();
+    else if (scene.isDirty(EnvironmentCdf)) updateEnvironmentCdf();
+    if (scene.isDirty(Lights)) updateLights();
+    if (scene.isDirty(TLAS)) updateTLAS();
+    if (scene.isDirty(CameraState)) activeCamera->rebuildCamera();
 
     activeCamera->getCamera()->prepareForRender();
 
@@ -854,7 +867,8 @@ void Raytracer::render(const PushData& pushData)
     gpuScene.renderSettings = scene.getRenderSettings();
     const uint32_t buffer = nextBuffer;
     const uint64_t frameValue = ++submittedFrame;
-    if (!m_offlineRendering && lastUseValue[buffer] != 0)
+    const bool useViewportInterop = !context.isHeadless();
+    if (useViewportInterop && lastUseValue[buffer] != 0)
     {
         cudaExternalSemaphoreWaitParams waitParams{};
         waitParams.params.fence.value = lastUseValue[buffer];
@@ -899,7 +913,9 @@ void Raytracer::render(const PushData& pushData)
         renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor;
     const uint32_t configuredSamplesPerFrame =
         static_cast<uint32_t>(std::max(1, renderSettings.samples));
-    const uint32_t maxSamples = static_cast<uint32_t>(std::max(1, renderSettings.maxSamples));
+    const uint32_t maxSamples = context.isHeadless()
+        ? configuredSamplesPerFrame
+        : static_cast<uint32_t>(std::max(1, renderSettings.maxSamples));
     const uint32_t remainingSamples = pushData.accumulatedSampleOffset < maxSamples
         ? maxSamples - pushData.accumulatedSampleOffset
         : configuredSamplesPerFrame;
@@ -932,8 +948,11 @@ void Raytracer::render(const PushData& pushData)
     if (aovEnabled && aovStaleBuffers > 0)
     {
         kernelStats.time("GenerateAov", stream, [&] { launchGenerateAov(params, stream); });
+        NR_GPU_CHECK(cudaGetLastError());
         kernelStats.time("ExtendAov", stream, [&] { launchExtendAov(params, stream); });
+        NR_GPU_CHECK(cudaGetLastError());
         kernelStats.time("ShadeAov", stream, [&] { launchShadeAov(params, stream); });
+        NR_GPU_CHECK(cudaGetLastError());
         --aovStaleBuffers;
     }
 
@@ -985,7 +1004,7 @@ void Raytracer::render(const PushData& pushData)
         m_eventsRecorded = true;
     }
 
-    if (!m_offlineRendering)
+    if (useViewportInterop)
     {
         cudaExternalSemaphoreSignalParams signalParams{};
         signalParams.params.fence.value = frameValue;
@@ -996,113 +1015,7 @@ void Raytracer::render(const PushData& pushData)
     lastReadyValue = frameValue;
     lastUseValue[buffer] = frameValue;
     nextBuffer = 1 - buffer;
-}
-
-void Raytracer::prepareOfflineRender()
-{
-    CameraInstance* camera = scene.getActiveCamera();
-    if (camera == nullptr)
-        throw std::runtime_error("Cannot render a scene without an active camera");
-
-    const glm::uvec2 resolution = camera->getCamera()->getSensor().resolution();
-    if (resolution.x == 0 || resolution.y == 0)
-        throw std::runtime_error("Cannot render with a zero-sized camera sensor");
-    if (resolution.x != width || resolution.y != height)
-        resize(resolution.x, resolution.y);
-
-    if (scene.isDirty(Meshes)) updateMeshes();
-    if (scene.isDirty(Textures)) updateTextures();
-    else if (scene.isDirty(EnvironmentCdf)) updateEnvironmentCdf();
-    if (scene.isDirty(Lights)) updateLights();
-    if (scene.isDirty(TLAS)) updateTLAS();
-    if (scene.isDirty(CameraState)) camera->rebuildCamera();
     scene.clearDirtyFlags();
-}
-
-void Raytracer::renderSamples(const uint32_t sampleCount)
-{
-    if (sampleCount == 0)
-        throw std::invalid_argument("Offline render sample count must be greater than zero");
-    if (sampleCount > static_cast<uint32_t>(std::numeric_limits<int>::max()))
-        throw std::invalid_argument("Offline render sample count exceeds the supported range");
-
-    prepareOfflineRender();
-
-    RenderSettings& settings = scene.getRenderSettings();
-    const int previousSamplesPerFrame = settings.samples;
-    const int previousMaxSamples = settings.maxSamples;
-    settings.samples = static_cast<int>(sampleCount);
-    settings.maxSamples = static_cast<int>(sampleCount);
-    m_offlineRendering = true;
-    try {
-        render(PushData{.frame = 0});
-        NR_GPU_CHECK(cudaStreamSynchronize(stream));
-        kernelStats.harvestFrame();
-        lastUseValue = {};
-        lastReadyValue = 0;
-    } catch (...) {
-        m_offlineRendering = false;
-        settings.samples = previousSamplesPerFrame;
-        settings.maxSamples = previousMaxSamples;
-        throw;
-    }
-    m_offlineRendering = false;
-    settings.samples = previousSamplesPerFrame;
-    settings.maxSamples = previousMaxSamples;
-
-}
-
-void Raytracer::render()
-{
-    setAovEnabled(true);
-    renderSamples(static_cast<uint32_t>(
-        std::max(1, scene.getRenderSettings().samples)));
-}
-
-Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
-{
-    renderSamples(sampleCount);
-    std::vector<glm::vec4> pixels(static_cast<size_t>(width) * height);
-    NR_GPU_CHECK(cudaMemcpy(
-        pixels.data(), accumulationBuffer.get(), pixels.size() * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
-    return Bitmap(width, height, std::move(pixels));
-}
-
-void Raytracer::renderOfflineToDevice(float* rgbaDevice, const uint32_t sampleCount)
-{
-    if (rgbaDevice == nullptr)
-        throw std::invalid_argument("Offline render destination pointer must not be null");
-    if (sampleCount == 0)
-        throw std::invalid_argument("Offline render sample count must be greater than zero");
-    if (sampleCount > static_cast<uint32_t>(std::numeric_limits<int>::max()))
-        throw std::invalid_argument("Offline render sample count exceeds the supported range");
-
-    prepareOfflineRender();
-
-    RenderSettings& settings = scene.getRenderSettings();
-    const int previousSamplesPerFrame = settings.samples;
-    const int previousMaxSamples = settings.maxSamples;
-    settings.samples = static_cast<int>(sampleCount);
-    settings.maxSamples = static_cast<int>(sampleCount);
-    m_offlineRendering = true;
-    try {
-        render(PushData{.frame = 0});
-        NR_GPU_CHECK(cudaStreamSynchronize(stream));
-        kernelStats.harvestFrame();
-        lastUseValue = {};
-        lastReadyValue = 0;
-    } catch (...) {
-        m_offlineRendering = false;
-        settings.samples = previousSamplesPerFrame;
-        settings.maxSamples = previousMaxSamples;
-        throw;
-    }
-    m_offlineRendering = false;
-    settings.samples = previousSamplesPerFrame;
-    settings.maxSamples = previousMaxSamples;
-
-    const size_t byteCount = static_cast<size_t>(width) * height * sizeof(glm::vec4);
-    NR_GPU_CHECK(cudaMemcpy(rgbaDevice, accumulationBuffer.get(), byteCount, cudaMemcpyDeviceToDevice));
 }
 
 void Raytracer::debugSave(const std::string& path) const

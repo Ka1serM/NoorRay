@@ -77,7 +77,6 @@ RossPsfCamera::RossPsfCamera(std::unique_ptr<Sensor> ownedSensor)
 RossPsfCamera::~RossPsfCamera()
 {
     freeRossObjects();
-    sensor.freeConcrete();
 }
 
 void RossPsfCamera::freeRossObjects()
@@ -105,8 +104,7 @@ void RossPsfCamera::updateLensSettings()
         ross::CameraLens updatedLens(*sourceRossLens);
         if (apertureDiameterMm > 0.0f)
             updatedLens.changeAperture_mm(apertureDiameterMm);
-        if (focusDistance > 0.0f)
-            updatedLens.focusLens(focusDistance * 100.0f);
+        updatedLens.focusLens(focusDistance * 100.0f);
 
         ross::ExitPupilCalculator::CalculationSettings pupilSettings;
         ross::TaskReporter pupilReporter;
@@ -173,7 +171,7 @@ void RossPsfCamera::setApertureDiameter(const float millimeters)
 
 void RossPsfCamera::setOpticalFocusDistance(const float meters)
 {
-    const float requestedDistance = std::max(0.0f, meters);
+    const float requestedDistance = std::max(0.001f, meters);
     if (focusDistance == requestedDistance)
         return;
     focusDistance = requestedDistance;
@@ -187,10 +185,8 @@ void RossPsfCamera::prepareOptics()
 }
 
 RossPsfCamera::RossPsfCamera(const RossPsfCamera& other)
-    : Camera(other.cloneBaseState())
+    : Camera(other)
 {
-    sensor = Sensor(nullptr);
-    sensor.cloneConcreteFrom(other.getSensor());
     lensPath = other.lensPath;
     glassCatalogPaths = other.glassCatalogPaths;
     rayLutPath = other.rayLutPath;
@@ -263,14 +259,13 @@ void RossPsfCamera::loadLensSensorAndPsf(
         lensAllocator.construct(sourceRossLens.get(), loadedLens);
         if (resetLensSettings) {
             apertureDiameterMm = std::max(0.0f, loadedLens.getApertureRadius() * 20.0f);
-            focusDistance = 0.0f;
+            focusDistance = 5.0f;
         } else if (apertureDiameterMm > 0.0f) {
             loadedLens.changeAperture_mm(apertureDiameterMm);
         } else {
             apertureDiameterMm = std::max(0.0f, loadedLens.getApertureRadius() * 20.0f);
         }
-        if (focusDistance > 0.0f)
-            loadedLens.focusLens(focusDistance * 100.0f);
+        loadedLens.focusLens(focusDistance * 100.0f);
 
         rossLens.reset(lensAllocator.allocate(1));
         lensAllocator.construct(rossLens.get(), loadedLens);
@@ -429,7 +424,7 @@ bool RossPsfCamera::renderUi()
         setApertureDiameter(value);
         changed = true;
     });
-    ImGuiManager::dragFloatRow("Focus Distance (0 = lens file)", focusDistance, 0.1f, 0.0f, 10000.f, [&](float value) {
+    ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
         setOpticalFocusDistance(value);
         changed = true;
     });

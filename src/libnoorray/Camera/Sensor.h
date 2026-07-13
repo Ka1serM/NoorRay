@@ -28,6 +28,7 @@ class open_file;
 class RectangularSensor;
 class ScatterPsfSensor;
 class GatherPsfSensor;
+class Sensor;
 
 enum class SensorType : int
 {
@@ -69,7 +70,8 @@ NR_CPU_GPU inline void updateNoiseMoments(
     ctx.noiseMoments[pixel] = moments;
 }
 
-using TaggedSensor = nr::TaggedPointer<RectangularSensor, ScatterPsfSensor, GatherPsfSensor>;
+using TaggedSensor = nr::TaggedObject<Sensor,
+    RectangularSensor, ScatterPsfSensor, GatherPsfSensor>;
 
 class Sensor : public nr::UnifiedMemoryObject, public TaggedSensor {
 public:
@@ -103,16 +105,9 @@ public:
     void setImageSensorPath(std::string_view path);
     bool loadImageSensorDimensions();
     SensorType getType() const;
-    void switchTo(SensorType type);
     std::string getPsfGridPath() const;
     void setPsfGridPath(std::string path);
     void loadPsfGrid(std::string path);
-    void freeConcrete();
-    void moveConcreteFrom(Sensor& other);
-    void cloneConcreteFrom(const Sensor& other);
-    void allocateRectangular();
-    void allocateScatterPsf();
-    void allocateGatherPsf();
     uint32_t reloadPsfGrid();
     void requestType(SensorType type) { requestedType = static_cast<int>(type); }
     bool consumeRequestedType(SensorType& type)

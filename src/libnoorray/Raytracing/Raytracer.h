@@ -19,7 +19,6 @@
 #include "CUDA/Unique/OptixModule.h"
 #include "CUDA/Unique/OptixPipeline.h"
 #include "CUDA/Unique/OptixProgramGroup.h"
-#include "IO/Bitmap.h"
 #include "Raytracing/SceneData.h"
 #include "Raytracing/Tlas.h"
 
@@ -52,10 +51,7 @@ public:
     Raytracer& operator=(const Raytracer&) = delete;
 
     void resize(uint32_t width, uint32_t height);
-    void render();
-    void render(const PushData& pushData);
-    Bitmap renderOffline(uint32_t sampleCount);
-    void renderOfflineToDevice(float* rgbaDevice, uint32_t sampleCount);
+    void renderFrame(const PushData& pushData);
 
     void setAovEnabled(bool enabled) { aovEnabled = enabled; }
     bool getAovEnabled() const { return aovEnabled; }
@@ -150,7 +146,6 @@ private:
     float m_gpuTimeMs = 0.0f;
     bool m_timingEnabled = false;
     bool m_eventsRecorded = false;
-    bool m_offlineRendering = false;
     float* m_noiseVarianceSumHost{};
     uint32_t m_noiseResultSampleCount{};
     KernelStats kernelStats;
@@ -179,8 +174,6 @@ private:
     OptixShaderBindingTable optixProxyOverdrawSbt{};
 
     void allocateQueues();
-    void renderSamples(uint32_t sampleCount);
-    void prepareOfflineRender();
     void freeQueues() noexcept;
     void freeSceneData() noexcept;
     void launchGenerate(const KernelParams& params, cudaStream_t stream) const;

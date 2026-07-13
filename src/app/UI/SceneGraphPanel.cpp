@@ -71,7 +71,7 @@ void SceneGraphPanel::drawNode(const std::shared_ptr<SceneObject>& node) {
     if (auto* camera = dynamic_cast<CameraInstance*>(node.get())) {
         const bool isActiveCamera = camera == scene.getActiveCamera();
         if (ImGui::RadioButton("##ActiveCamera", isActiveCamera))
-            scene.setActiveCamera(camera);
+            scene.setActiveCamera(isActiveCamera ? nullptr : camera);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(isActiveCamera ? "Active render camera" : "Set as active render camera");
         ImGui::SameLine();

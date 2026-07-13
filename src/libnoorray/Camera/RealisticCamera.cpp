@@ -76,7 +76,7 @@ void RealisticCamera::setApertureDiameter(const float millimeters)
 
 void RealisticCamera::setOpticalFocusDistance(const float meters)
 {
-    const float requestedDistance = std::max(0.0f, meters);
+    const float requestedDistance = std::max(0.001f, meters);
     if (focusDistance == requestedDistance)
         return;
     focusDistance = requestedDistance;
@@ -90,10 +90,8 @@ void RealisticCamera::prepareOptics()
 }
 
 RealisticCamera::RealisticCamera(const RealisticCamera& other)
-    : Camera(other.cloneBaseState())
+    : Camera(other)
 {
-    sensor = Sensor(nullptr);
-    sensor.cloneConcreteFrom(other.getSensor());
     lensPath = other.lensPath;
     glassCatalogPaths = other.glassCatalogPaths;
     effectiveFocalLengthM = other.effectiveFocalLengthM;
@@ -131,7 +129,6 @@ void RealisticCamera::setOpticsPaths(std::string lensPath_, std::string glassCat
 RealisticCamera::~RealisticCamera()
 {
     freeRossLens();
-    sensor.freeConcrete();
 }
 
 void RealisticCamera::freeRossLens()
@@ -157,8 +154,7 @@ void RealisticCamera::updateLensSettings()
         ross::CameraLens updatedLens(*sourceRossLens);
         if (apertureDiameterMm > 0.0f)
             updatedLens.changeAperture_mm(apertureDiameterMm);
-        if (focusDistance > 0.0f)
-            updatedLens.focusLens(focusDistance * 100.0f);
+        updatedLens.focusLens(focusDistance * 100.0f);
 
         ross::ExitPupilCalculator::CalculationSettings settings;
         ross::TaskReporter reporter;
@@ -212,14 +208,13 @@ void RealisticCamera::loadLensAndSensor(const bool resetLensSettings)
         lensAlloc.construct(sourceRossLens.get(), loaded);
         if (resetLensSettings) {
             apertureDiameterMm = std::max(0.0f, loaded.getApertureRadius() * 20.0f);
-            focusDistance = 0.0f;
+            focusDistance = 5.0f;
         } else if (apertureDiameterMm > 0.0f) {
             loaded.changeAperture_mm(apertureDiameterMm);
         } else {
             apertureDiameterMm = std::max(0.0f, loaded.getApertureRadius() * 20.0f);
         }
-        if (focusDistance > 0.0f)
-            loaded.focusLens(focusDistance * 100.0f);
+        loaded.focusLens(focusDistance * 100.0f);
 
         rossLens.reset(lensAlloc.allocate(1));
         lensAlloc.construct(rossLens.get(), loaded);
@@ -328,7 +323,7 @@ bool RealisticCamera::renderUi()
         changed = true;
     });
 
-    ImGuiManager::dragFloatRow("Focus Distance (0 = lens file)", focusDistance, 0.1f, 0.0f, 10000.f, [&](float value) {
+    ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
         setOpticalFocusDistance(value);
         changed = true;
     });

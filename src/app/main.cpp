@@ -5,7 +5,6 @@
 #include "NoorRaySession.h"
 #include "UI/NoorRayUi.h"
 #include "Camera/CameraInstance.h"
-#include "IO/BitmapWriter.h"
 #include "Log.h"
 #include "Raytracing/Raytracer.h"
 
@@ -102,13 +101,11 @@ void runCli(const CliOptions& options)
     Raytracer& raytracer = *session.raytracer;
     raytracer.setStatsEnabled(options.statsEnabled);
     raytracer.setTimingEnabled(options.statsEnabled);
+    session.scene.getRenderSettings().samples = options.samplesPerPixel;
     LOG_INFO("Rendering @ " << options.samplesPerPixel << " spp");
-    const Bitmap bitmap = raytracer.renderOffline(
-        static_cast<uint32_t>(options.samplesPerPixel));
-
-    std::string writeError;
-    if (!BitmapWriter::write(options.outputPath, bitmap, {}, &writeError))
-        throw std::runtime_error("Failed to save bitmap: " + writeError);
+    raytracer.renderFrame(PushData{.frame = 0});
+    raytracer.getOutputColor().save(options.outputPath);
+    raytracer.harvestKernelStats();
     LOG_INFO("Saved: " << options.outputPath);
     if (options.statsEnabled)
         raytracer.printKernelStats();

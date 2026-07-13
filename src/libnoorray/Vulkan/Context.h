@@ -97,6 +97,7 @@ public:
     const vk::CommandPool& getCommandPool() const { return commandPool.get(); }
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
     VmaAllocator getAllocator() const { return allocator; }
+    bool isHeadless() const { return headless; }
 
     OptixDeviceContext getOptixContext() const { return optixCtx.get(); }
     cudaStream_t getCudaStream() const { return cudaStream.get(); }

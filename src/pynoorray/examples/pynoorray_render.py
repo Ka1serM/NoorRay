@@ -76,7 +76,7 @@ def main():
         target.position = nr.Vector3(0.0, 0.0, target_z)
         camera_instance.camera.focus_distance = focus_distance
         camera_instance.camera.aperture_diameter = aperture_diameter
-        session.raytracer.render()
+        session.raytracer.render_frame()
         beauty = session.raytracer.beauty
         beauty.save(str(output))
         elapsed_seconds = perf_counter() - start_time

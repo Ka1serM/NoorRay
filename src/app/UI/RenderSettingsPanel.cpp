@@ -54,6 +54,24 @@ void RenderSettingsPanel::renderUi()
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Noise Limit");
+        ImGui::TableSetColumnIndex(1);
+        changed |= ImGui::Checkbox("##NoiseLimitEnabled", &settings.noiseLimitEnabled);
+
+        if (settings.noiseLimitEnabled)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Noise Level");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            changed |= ImGui::SliderFloat(
+                "##NoiseLevel", &settings.noiseLevel, 0.000001f, 0.1f, "%.6f",
+                ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Max Bounces");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);

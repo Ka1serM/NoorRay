@@ -18,6 +18,6 @@ public:
     std::unique_ptr<SceneObject> clone() const override;
 
     uint32_t getMeshIndex() const { return meshIndex; }
-    const MeshAsset& getMeshAsset() const { return scene.getMeshAsset(meshIndex); }
+    const MeshAsset& getMeshAsset() const { return scene->getMeshAsset(meshIndex); }
     void onTransformUpdated() override;
 };

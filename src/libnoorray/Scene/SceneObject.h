@@ -17,7 +17,7 @@ protected:
     uint64_t id = 0;
     std::string name;
     Transform transform;
-    Scene& scene;
+    Scene* scene{};
 
     std::weak_ptr<SceneObject> parent;
     std::vector<std::weak_ptr<SceneObject>> children;
@@ -27,6 +27,7 @@ protected:
     std::string sourcePath;
 
 public:
+    SceneObject(const std::string& name, const Transform& transform);
     SceneObject(Scene& scene, const std::string& name, const Transform& transform);
     SceneObject(const SceneObject& other);
     virtual std::unique_ptr<SceneObject> clone() const;

@@ -4,18 +4,29 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_beta.h>
+#include <cstdint>
 #include <vector>
 #include <functional>
 #include <mutex>
 
 #include "vk_mem_alloc.h"
-#include "SDL3/SDL_video.h"
 
 #include <cuda_runtime_api.h>
 #include <optix.h>
 
 #include "CUDA/Unique/OptixDeviceContext.h"
 #include "CUDA/Unique/Stream.h"
+
+class VulkanSurfaceProvider
+{
+public:
+    virtual ~VulkanSurfaceProvider() = default;
+    virtual PFN_vkGetInstanceProcAddr getVulkanInstanceProcAddr() const = 0;
+    virtual std::vector<const char*> getRequiredVulkanInstanceExtensions() const = 0;
+    virtual vk::SurfaceKHR createVulkanSurface(vk::Instance instance) const = 0;
+    virtual uint32_t getWidth() const = 0;
+    virtual uint32_t getHeight() const = 0;
+};
 
 class Context {
 
@@ -32,11 +43,8 @@ class Context {
 #endif
     };
 
-    SDL_Window* window = nullptr;
-    int windowWidth;
-    int windowHeight;
-    float dpiScale = 1;
     bool headless = false;
+    VulkanSurfaceProvider* surfaceProvider{};
     bool validationEnabled = false;
 
     vk::UniqueInstance instance;
@@ -61,9 +69,10 @@ class Context {
     void pickPhysicalDevice();
     void createLogicalDevice();
     void createAllocator();
+    explicit Context(VulkanSurfaceProvider* provider);
 public:
-    // headless = true: skips window, surface, presentation, and swapchain requirements.
-    Context(int width, int height, bool headless = false);
+    Context();
+    explicit Context(VulkanSurfaceProvider& provider);
     ~Context();
 
     // Helper functions
@@ -79,11 +88,6 @@ public:
         void* pUserData);
 
     // Getters
-    SDL_Window* getWindow() const { return window; }
-    uint32_t getWindowWidth() const { return windowWidth; }
-    uint32_t getWindowHeight() const { return windowHeight; }
-    float getDPIScale() const { return dpiScale; }
-
     const vk::Instance& getInstance() const { return instance.get(); }
     const vk::SurfaceKHR& getSurface() const { return surface.get(); }
     const vk::PhysicalDevice& getPhysicalDevice() const { return physicalDevice; }

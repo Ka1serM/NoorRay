@@ -1,10 +1,29 @@
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
-#include <cstring>
-#include "NoorRayApp.h"
+#include "NoorRaySession.h"
+#include "UI/NoorRayUi.h"
+#include "Camera/CameraInstance.h"
+#include "IO/BitmapWriter.h"
 #include "Log.h"
+#include "Raytracing/Raytracer.h"
 
-static void printUsage()
+namespace
+{
+
+struct CliOptions
+{
+    std::string scenePath;
+    std::string outputPath{"output.exr"};
+    int samplesPerPixel{64};
+    int width{};
+    int height{};
+    bool statsEnabled{};
+    bool showHelp{};
+};
+
+void printUsage()
 {
     std::cerr << "Usage:\n"
         << "  NoorRay                                                     # GUI mode\n"
@@ -16,108 +35,111 @@ static void printUsage()
         << "  --stats              Print a per-kernel GPU timing breakdown after rendering\n";
 }
 
-int main(int argc, char* argv[])
+const char* requireValue(const int argc, char* argv[], int& index)
 {
-    if (argc < 2)
-    {
-        NoorRayApp app(1680, 960);
-        app.runUi();
-        return 0;
-    }
+    if (++index >= argc)
+        throw std::invalid_argument(std::string("Missing value after ") + argv[index - 1]);
+    return argv[index];
+}
 
-    std::string scenePath;
-    std::string outputPath = "output.exr";
-    int spp = 64;
-    int width = 0, height = 0;
-    bool statsEnabled = false;
+CliOptions parseOptions(const int argc, char* argv[])
+{
+    CliOptions options;
 
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg = argv[i];
         if (arg == "--help" || arg == "-h")
+            options.showHelp = true;
+        else if (arg == "--scene" || arg == "--import" || arg == "--ply")
+            options.scenePath = requireValue(argc, argv, i);
+        else if (arg == "--spp")
+            options.samplesPerPixel = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--output")
+            options.outputPath = requireValue(argc, argv, i);
+        else if (arg == "--width")
+            options.width = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--height")
+            options.height = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--stats")
+            options.statsEnabled = true;
+        else if (arg.starts_with("--"))
+            throw std::invalid_argument("Unknown flag: " + arg);
+        else
+            throw std::invalid_argument("Unexpected positional argument: " + arg);
+    }
+
+    if (!options.showHelp && options.scenePath.empty())
+        throw std::invalid_argument("No scene file specified. Use --scene.");
+    if (options.samplesPerPixel < 1)
+        throw std::invalid_argument("--spp must be greater than zero");
+    if (options.width < 0 || options.height < 0)
+        throw std::invalid_argument("--width and --height cannot be negative");
+    return options;
+}
+
+void runCli(const CliOptions& options)
+{
+    noorray::NoorRaySession session;
+    session.scene.load(options.scenePath);
+    if (!session.scene.getActiveCamera())
+    {
+        auto camera = Camera::create(CameraProjectionType::Perspective);
+        auto instance = std::make_unique<CameraInstance>(std::move(camera), "Camera",
+            Transform{glm::vec3(0.0f, 2.0f, 5.0f)});
+        session.scene.add(std::move(instance));
+    }
+    if (auto* camera = session.scene.getActiveCamera();
+        camera && (options.width > 0 || options.height > 0))
+    {
+        Sensor& sensor = camera->getCamera()->getSensor();
+        const glm::uvec2 resolution = sensor.resolution();
+        sensor.setResolution(
+            options.width > 0 ? static_cast<uint32_t>(options.width) : resolution.x,
+            options.height > 0 ? static_cast<uint32_t>(options.height) : resolution.y);
+    }
+
+    Raytracer& raytracer = *session.raytracer;
+    raytracer.setStatsEnabled(options.statsEnabled);
+    raytracer.setTimingEnabled(options.statsEnabled);
+    LOG_INFO("Rendering @ " << options.samplesPerPixel << " spp");
+    const Bitmap bitmap = raytracer.renderOffline(
+        static_cast<uint32_t>(options.samplesPerPixel));
+
+    std::string writeError;
+    if (!BitmapWriter::write(options.outputPath, bitmap, {}, &writeError))
+        throw std::runtime_error("Failed to save bitmap: " + writeError);
+    LOG_INFO("Saved: " << options.outputPath);
+    if (options.statsEnabled)
+        raytracer.printKernelStats();
+}
+
+}
+
+int main(const int argc, char* argv[])
+{
+    try
+    {
+        if (argc == 1)
+        {
+            NoorRayUi ui;
+            ui.run();
+            return 0;
+        }
+
+        const CliOptions options = parseOptions(argc, argv);
+        if (options.showHelp)
         {
             printUsage();
             return 0;
         }
-        else if (arg == "--scene" || arg == "--import" || arg == "--ply")
-        {
-            if (i + 1 >= argc)
-            {
-                LOG_ERROR("Missing path after " << arg);
-                return 1;
-            }
-            scenePath = argv[++i];
-        }
-        else if (arg == "--spp")
-        {
-            if (i + 1 >= argc)
-            {
-                LOG_ERROR("Missing value after --spp");
-                return 1;
-            }
-            spp = std::stoi(argv[++i]);
-        }
-        else if (arg == "--output")
-        {
-            if (i + 1 >= argc)
-            {
-                LOG_ERROR("Missing path after --output");
-                return 1;
-            }
-            outputPath = argv[++i];
-        }
-        else if (arg == "--width")
-        {
-            if (i + 1 >= argc)
-            {
-                LOG_ERROR("Missing value after --width");
-                return 1;
-            }
-            width = std::stoi(argv[++i]);
-        }
-        else if (arg == "--height")
-        {
-            if (i + 1 >= argc)
-            {
-                LOG_ERROR("Missing value after --height");
-                return 1;
-            }
-            height = std::stoi(argv[++i]);
-        }
-        else if (arg == "--stats")
-        {
-            statsEnabled = true;
-        }
-        else if (arg.find("--") == 0)
-        {
-            LOG_ERROR("Unknown flag: " << arg);
-            printUsage();
-            return 1;
-        }
-        else
-        {
-            LOG_ERROR("Unexpected positional argument: " << arg);
-            printUsage();
-            return 1;
-        }
-    }
-
-    if (scenePath.empty())
-    {
-        LOG_ERROR("No scene file specified. Use --scene.");
-        printUsage();
-        return 1;
-    }
-
-    try
-    {
-        NoorRayApp app(scenePath, spp, outputPath, width, height, statsEnabled);
-        app.runCli();
+        runCli(options);
+        return 0;
     }
     catch (const std::exception& e)
     {
         LOG_ERROR(e.what());
+        printUsage();
         return 1;
     }
-    return 0;
 }

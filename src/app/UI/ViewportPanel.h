@@ -9,6 +9,8 @@
 #include "Scene/Scene.h"
 #include "Vulkan/Buffer.h"
 
+class Window;
+
 class ViewportPanel : public ImGuiComponent {
 public:
     ivec2 screenToPixel() const;
@@ -23,10 +25,13 @@ public:
 
     bool showOverlays() const { return m_showOverlays; }
 
-    ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, uint32_t width, uint32_t height);
+    ViewportPanel(const std::string& name, Window& window, Context& context, Scene& scene,
+        const Image& outputColor, Image& outputCrypto, Image& outputPosition,
+        uint32_t width, uint32_t height);
     void updateLayout();
 
 private:
+    Window& window;
     Context& context;
     Scene& scene;
     Image* outputCrypto;

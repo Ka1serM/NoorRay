@@ -7,16 +7,8 @@
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
 #include "Camera/Camera.h"
+#include "CUDA/rstd/UniquePtr.h"
 #include "Scene/SceneObject.h"
-
-enum class CameraProjectionType : int {
-    Perspective,
-    Orthographic,
-    Fisheye,
-    ThinLens,
-    Realistic,
-    RossPsf,
-};
 
 class CameraInstance : public SceneObject {
 public:
@@ -25,20 +17,24 @@ public:
     static constexpr vec3 LocalUp{0.f, 1.f, 0.f};
     static constexpr vec3 LocalRight{1.f, 0.f, 0.f};
 
-    CameraInstance(Scene& scene, const std::string& name, Transform transform, Camera camera);
+    explicit CameraInstance(std::unique_ptr<Camera> camera,
+        const std::string& name = "Camera",
+        Transform transform = {});
     CameraInstance(const CameraInstance& other);
     ~CameraInstance();
 
     std::string getType() const override { return "Camera"; }
     bool renderUi() override;
-    void update();
+    void update(float mouseDeltaX, float mouseDeltaY);
     void onTransformUpdated() override;
 
     CameraProjectionType getProjectionType() const;
     const char* getProjectionName() const;
 
-    Camera* getCamera() { return gpuCamera; }
-    const Camera* getCamera() const { return gpuCamera; }
+    Camera* getCamera() { return camera.get(); }
+    const Camera* getCamera() const { return camera.get(); }
+    Camera* getGpuCamera() { return camera.get(); }
+    const Camera* getGpuCamera() const { return camera.get(); }
     mat4 getViewMatrix() const;
     virtual mat4 getProjectionMatrix() const;
 
@@ -50,19 +46,15 @@ public:
     bool getArcballActive() const { return arcballMode; }
 
     void switchTo(CameraProjectionType type);
-    void loadRealisticLens(const std::string& lensPath, const std::string& glassCatalogPaths);
-    void loadRossPsfCamera(const std::string& lensPath, const std::string& glassCatalogPaths,
-                           const std::string& rayLutPath);
-    void setApertureDiameter(float mm);
     std::unique_ptr<SceneObject> clone() const override;
 
     void rebuildCamera();
 
 private:
-    Camera* gpuCamera{};           // Stable unified-memory handle to the active camera type
+    nr::rstd::unique_ptr<Camera> camera;
     vec3 arcballPivot{};
     bool arcballMode = false;
 
     void allocateCamera(CameraProjectionType type);
-    void freeCamera();
+    void tagCamera();
 };

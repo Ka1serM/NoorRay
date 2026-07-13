@@ -75,6 +75,7 @@ target_include_directories(stb INTERFACE
 add_library(tinyexr STATIC
         external/tinyexr/tinyexr.cc
         external/tinyexr/deps/miniz/miniz.c)
+set_target_properties(tinyexr PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(tinyexr PUBLIC
         ${PROJECT_SOURCE_DIR}/external/tinyexr
         ${PROJECT_SOURCE_DIR}/external/tinyexr/deps/miniz)
@@ -291,25 +292,6 @@ target_link_libraries(imgui PUBLIC
         SDL3::SDL3-static
 )
 
-add_library(NoorRayUiSupport STATIC
-        src/app/UI/ImGuiManager.cpp
-        src/app/UI/ImGuiManager.h
-        src/app/UI/ImGuiComponent.h)
-set_target_properties(NoorRayUiSupport PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_features(NoorRayUiSupport PUBLIC cxx_std_23)
-target_include_directories(NoorRayUiSupport PUBLIC
-        "${NR_APP_DIR}"
-        "${NR_CORE_DIR}"
-        "${PROJECT_SOURCE_DIR}/external/VulkanMemoryAllocator/include"
-        "${CUDAToolkit_INCLUDE_DIRS}"
-        "${OPTIX_INCLUDE_DIR}"
-        "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(NoorRayUiSupport PUBLIC
-        imgui
-        Vulkan::Vulkan
-        SDL3::SDL3-static
-        glm)
-
 add_library(NoorRayIO STATIC
         src/libnoorray/IO/BitmapReader.cpp
         src/libnoorray/IO/BitmapWriter.cpp
@@ -393,7 +375,6 @@ target_link_libraries(NoorRayCuda PUBLIC
         glm
         stb
         Vulkan::Vulkan
-        SDL3::SDL3-static
         portable_file_dialogs
         GPUOpen::VulkanMemoryAllocator
         gauss_forge_readers)
@@ -415,6 +396,7 @@ list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapWriter\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/StbImpl\\.cpp$")
 
 add_library(libnoorray STATIC ${NR_CORE_FILES})
+add_dependencies(libnoorray NoorRayShaders)
 set_target_properties(libnoorray PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS OFF
@@ -438,7 +420,6 @@ target_link_libraries(libnoorray
         portable_file_dialogs
         glm
         Vulkan::Vulkan
-        SDL3::SDL3-static
         tinygltf
         tinyobjloader
         tinyexr
@@ -448,13 +429,11 @@ target_link_libraries(libnoorray
         glaze
         TBB::tbb
         PRIVATE
-        imgui
-        NoorRayUiSupport)
+        imgui)
 
 file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS
         "${NR_APP_DIR}/*.cpp"
         "${NR_APP_DIR}/*.h")
-list(FILTER NR_APP_FILES EXCLUDE REGEX "/UI/ImGuiManager\\.cpp$")
 
 if(NR_BUILD_PYTHON)
     if(CMAKE_VERSION VERSION_LESS 3.18)
@@ -466,20 +445,21 @@ if(NR_BUILD_PYTHON)
     find_package(Python 3.12 COMPONENTS Interpreter ${NR_PYTHON_DEV_MODULE} REQUIRED)
     add_subdirectory("${PROJECT_SOURCE_DIR}/external/nanobind" "${CMAKE_BINARY_DIR}/pynoorray/nanobind" EXCLUDE_FROM_ALL)
 
+    file(GLOB NR_PYTHON_BINDINGS CONFIGURE_DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/pynoorray/*Bindings.cpp")
+
     nanobind_add_module(_pynoorray
             src/pynoorray/PyNoorRay.cpp
-            src/pynoorray/PyRenderSession.cpp
-            src/pynoorray/PyRenderSession.h
+            src/pynoorray/Bindings.h
+            ${NR_PYTHON_BINDINGS}
             src/pynoorray/__init__.py)
     set_target_properties(_pynoorray PROPERTIES DEBUG_POSTFIX "")
     target_compile_features(_pynoorray PRIVATE cxx_std_23)
     target_include_directories(_pynoorray PRIVATE
             "${PROJECT_SOURCE_DIR}/src/pynoorray"
-            "${NR_CORE_DIR}"
-            "${NR_APP_DIR}")
+            "${NR_CORE_DIR}")
     target_link_libraries(_pynoorray PRIVATE
             "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
-            NoorRayUiSupport
             CUDA::cudart_static)
     target_compile_definitions(_pynoorray PRIVATE
             NR_BACKEND_CUDA=1
@@ -533,7 +513,6 @@ target_include_directories(NoorRay PRIVATE
 # Link against all libraries
 target_link_libraries(NoorRay PRIVATE
         libnoorray
-        NoorRayUiSupport
         NoorRayCuda
         libross
         portable_file_dialogs
@@ -562,7 +541,7 @@ if(NR_ENABLE_UNITY_BUILD)
             UNITY_BUILD ON
             UNITY_BUILD_BATCH_SIZE "${NR_UNITY_BUILD_BATCH_SIZE}")
     set_source_files_properties(
-        src/app/NoorRayApp.cpp
+        src/app/UI/NoorRayUi.cpp
         src/libnoorray/Scene/SceneImporter.cpp
         src/libnoorray/StbImpl.cpp
         src/app/UI/ImGuiManager.cpp

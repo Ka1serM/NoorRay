@@ -20,6 +20,8 @@ struct EnvironmentFile {
 
 struct RenderSettingsFile {
     int max_samples{3000};
+    bool noise_limit_enabled{false};
+    float noise_level{0.0001f};
     int gaussian_shading_mode{};
     // Accepted for compatibility with older scene files; no longer applied or written.
     std::optional<int> gaussian_import_sh_degree;
@@ -39,6 +41,9 @@ struct CameraFile {
     std::string lens;
     std::string sensor;
     std::string glass_catalogs;
+    std::string sensor_type{"rectangular"};
+    std::string psf;
+    std::string ray_lut;
 };
 
 struct MaterialFile {

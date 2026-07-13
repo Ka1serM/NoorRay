@@ -72,6 +72,7 @@ struct KernelParams
     OutputSurfaces output;
     GpuFrameSettings frame;
     glm::vec4* accumulation{};
+    glm::vec2* noiseMoments{}; // Per-pixel luminance mean and Welford M2.
     PsfGatherBucketSample* psfGatherBuckets{};
     uint32_t psfBinCount{};
     uint32_t depth{};

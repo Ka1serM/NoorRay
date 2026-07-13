@@ -2,6 +2,11 @@
 #include <stdexcept>
 #include <cstring>
 #include <iostream>
+#include <vector>
+#include <glm/gtc/packing.hpp>
+#include "CUDA/Checks.h"
+#include "IO/Bitmap.h"
+#include "IO/BitmapWriter.h"
 #include "Log.h"
 
 // Move Constructor Implementation
@@ -15,9 +20,10 @@ Image::Image(Image&& other) noexcept
       view(std::move(other.view)), // vk::Unique handles have their own move
       descImageInfo(other.descImageInfo),
       layout(other.layout),
-        format(other.format),
+      format(other.format),
       width(other.width),
-      height(other.height)
+      height(other.height),
+      cudaArray(other.cudaArray)
 {
     // Reset the source object so its destructor does nothing
     other.image = VK_NULL_HANDLE;
@@ -26,6 +32,7 @@ Image::Image(Image&& other) noexcept
     other.allocationSize = 0;
     other.device = VK_NULL_HANDLE;
     other.allocator = VK_NULL_HANDLE;
+    other.cudaArray = nullptr;
 }
 
 // Move Assignment Operator Implementation
@@ -54,6 +61,7 @@ Image& Image::operator=(Image&& other) noexcept
         format = other.format;
         width = other.width;
         height = other.height;
+        cudaArray = other.cudaArray;
 
         // Reset the source object
         other.image = VK_NULL_HANDLE;
@@ -62,6 +70,7 @@ Image& Image::operator=(Image&& other) noexcept
         other.allocationSize = 0;
         other.device = VK_NULL_HANDLE;
         other.allocator = VK_NULL_HANDLE;
+        other.cudaArray = nullptr;
     }
     return *this;
 }
@@ -250,6 +259,52 @@ Image::~Image() {
         device.destroyImage(image);
         device.freeMemory(externalMemory);
     }
+}
+
+Bitmap Image::toBitmap() const
+{
+    if (cudaArray == nullptr)
+        throw std::runtime_error("Image is not CUDA-readable");
+    NR_GPU_CHECK(cudaDeviceSynchronize());
+
+    const size_t pixelCount = static_cast<size_t>(width) * height;
+    std::vector<glm::vec4> pixels(pixelCount);
+    if (format == vk::Format::eR32G32B32A32Sfloat) {
+        NR_GPU_CHECK(cudaMemcpy2DFromArray(pixels.data(), width * sizeof(glm::vec4),
+            cudaArray, 0, 0, width * sizeof(glm::vec4), height, cudaMemcpyDeviceToHost));
+    } else if (format == vk::Format::eR8G8B8A8Unorm) {
+        std::vector<uchar4> packed(pixelCount);
+        NR_GPU_CHECK(cudaMemcpy2DFromArray(packed.data(), width * sizeof(uchar4),
+            cudaArray, 0, 0, width * sizeof(uchar4), height, cudaMemcpyDeviceToHost));
+        for (size_t i = 0; i < pixelCount; ++i)
+            pixels[i] = glm::vec4(packed[i].x, packed[i].y, packed[i].z, packed[i].w) / 255.0f;
+    } else if (format == vk::Format::eR16G16B16A16Sfloat) {
+        std::vector<ushort4> packed(pixelCount);
+        NR_GPU_CHECK(cudaMemcpy2DFromArray(packed.data(), width * sizeof(ushort4),
+            cudaArray, 0, 0, width * sizeof(ushort4), height, cudaMemcpyDeviceToHost));
+        for (size_t i = 0; i < pixelCount; ++i) {
+            pixels[i] = glm::vec4(
+                glm::unpackHalf1x16(packed[i].x), glm::unpackHalf1x16(packed[i].y),
+                glm::unpackHalf1x16(packed[i].z), glm::unpackHalf1x16(packed[i].w));
+        }
+    } else if (format == vk::Format::eR32Uint) {
+        std::vector<uint32_t> packed(pixelCount);
+        NR_GPU_CHECK(cudaMemcpy2DFromArray(packed.data(), width * sizeof(uint32_t),
+            cudaArray, 0, 0, width * sizeof(uint32_t), height, cudaMemcpyDeviceToHost));
+        for (size_t i = 0; i < pixelCount; ++i)
+            pixels[i] = glm::vec4(static_cast<float>(packed[i]), 0.0f, 0.0f, 1.0f);
+    } else {
+        throw std::runtime_error("Image format cannot be read back");
+    }
+    return Bitmap(width, height, std::move(pixels));
+}
+
+void Image::save(const std::string& path) const
+{
+    const Bitmap bitmap = toBitmap();
+    std::string error;
+    if (!BitmapWriter::write(path, bitmap, {}, &error))
+        throw std::runtime_error("Failed to save image: " + error);
 }
 
 void Image::setImageLayout(const vk::CommandBuffer& cmd, const vk::ImageLayout newLayout) {

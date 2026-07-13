@@ -6,6 +6,12 @@
 
 class FisheyeCamera : public Camera {
 public:
+#ifndef NR_GPU_CODE
+    FisheyeCamera();
+    explicit FisheyeCamera(std::unique_ptr<Sensor> sensor);
+    FisheyeCamera(const FisheyeCamera& other);
+    ~FisheyeCamera();
+#endif
     float fStop{0.f};
     float bokehBias{1.f};
 

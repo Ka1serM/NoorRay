@@ -14,9 +14,13 @@
 #include "Scene/MeshInstance.h"
 #include "Scene/LightInstance.h"
 #include "Vulkan/Viewport.h"
+#include "UI/Window.h"
 
-ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition, const uint32_t width, const uint32_t height)
-    : ImGuiComponent(name), context(context), scene(scene), outputCrypto(&outputCrypto), outputPosition(&outputPosition), width(width), height(height),
+ViewportPanel::ViewportPanel(const std::string& name, Window& window, Context& context,
+    Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition,
+    const uint32_t width, const uint32_t height)
+    : ImGuiComponent(name), window(window), context(context), scene(scene),
+    outputCrypto(&outputCrypto), outputPosition(&outputPosition), width(width), height(height),
     displayImage(context, width, height, outputColor.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
     cryptoStagingBuffer(context, Buffer::Type::Custom, sizeof(uint32_t), nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
     positionStagingBuffer(context, Buffer::Type::Custom, sizeof(float) * 4, nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
@@ -52,7 +56,7 @@ ViewportPanel::ViewportPanel(const std::string& name, Context& context, Scene& s
 
     // DPI scale is fixed for the lifetime of the window (see Context::dpiScale), so
     // everything derived from it below only needs to be set up once, not per frame.
-    uiScale = context.getDPIScale();
+    uiScale = window.getDpiScale();
 
     // ImGizmo Style
     ImGuizmo::Style& style = ImGuizmo::GetStyle();
@@ -189,7 +193,7 @@ void ViewportPanel::beginMouseCapture() {
         return;
     isCapturingMouse = true;
     SDL_GetMouseState(&oldX, &oldY);
-    SDL_SetWindowRelativeMouseMode(context.getWindow(), true);
+    window.setRelativeMouseMode(true);
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
     // Clear any initial delta movement
     (void)SDL_GetRelativeMouseState(nullptr, nullptr); 
@@ -199,9 +203,9 @@ void ViewportPanel::endMouseCapture() {
     if (!isCapturingMouse)
         return;
     isCapturingMouse = false;
-    SDL_SetWindowRelativeMouseMode(context.getWindow(), false);
+    window.setRelativeMouseMode(false);
     ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-    SDL_WarpMouseInWindow(context.getWindow(), oldX, oldY);
+    window.warpMouse(oldX, oldY);
 
     auto* camera = scene.getActiveCamera();
     if (camera && camera->getArcballActive())
@@ -394,7 +398,10 @@ void ViewportPanel::renderUi() {
     
     if (isCapturingMouse) {
         if (auto* camera = scene.getActiveCamera())
-            camera->update();
+        {
+            const auto [deltaX, deltaY] = window.getRelativeMouseDelta();
+            camera->update(deltaX, deltaY);
+        }
     }
     
     ImGui::End();

@@ -5,8 +5,15 @@
 #include "Scene.h"
 #include "UI/ImGuiManager.h"
 
-SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform) : name(name), transform(transform), scene(scene), visible(true)
+SceneObject::SceneObject(const std::string& name, const Transform& transform)
+    : name(name), transform(transform), visible(true)
 {
+}
+
+SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform& transform)
+    : SceneObject(name, transform)
+{
+    this->scene = &scene;
 }
 
 SceneObject::SceneObject(const SceneObject& other)
@@ -99,7 +106,7 @@ bool SceneObject::renderUi() {
     if (anyChanged)
     {
         onTransformUpdated();
-       scene.setDirtyFlag(Accumulation);
+       if (scene) scene->setDirtyFlag(Accumulation);
     }
     return anyChanged;
 }
@@ -119,7 +126,7 @@ Transform SceneObject::getWorldTransform() const {
 }
 
 void SceneObject::onTransformUpdated() {
-    scene.setDirtyFlag(Accumulation);
+    if (scene) scene->setDirtyFlag(Accumulation);
     for (const auto& child : getChildren())
         child->onTransformUpdated();
 }

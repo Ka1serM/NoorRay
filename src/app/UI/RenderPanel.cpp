@@ -111,14 +111,14 @@ void RenderPanel::renderUi() {
         ImGui::TableSetupColumn("Widget", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Output Folder");
         ImGui::TableSetColumnIndex(1);
-        float buttonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        float buttonWidth = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - buttonWidth - ImGui::GetStyle().ItemSpacing.x);
         ImGui::InputText("##savePath", const_cast<char*>(saveLocation.c_str()), saveLocation.size() + 1, ImGuiInputTextFlags_ReadOnly);
         ImGui::PopItemWidth(); ImGui::SameLine();
 
         // The button is disabled if the dialog pointer is not null (i.e., active).
         ImGui::BeginDisabled(m_folderDialog != nullptr);
-        if (ImGui::Button("Select", ImVec2(buttonWidth, 0)))
+        if (ImGui::Button("...##OutputFolder", ImVec2(buttonWidth, 0)))
             m_folderDialog = std::make_unique<pfd::select_folder>("Select Render Output Folder", ".");
 
         ImGui::EndDisabled();

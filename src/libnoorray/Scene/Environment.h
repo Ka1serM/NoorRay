@@ -14,6 +14,8 @@ using glm::vec3;
 #include "Raytracing/RgbToSpectrum.h"
 #include "Samplers/RandomSampler.h"
 
+class Texture;
+
 inline constexpr float EnvironmentPi = 3.14159265358979323846f;
 
 struct EnvironmentSample
@@ -39,6 +41,7 @@ public:
     int cdfWidth{};
     int cdfHeight{};
     float importanceWeight{};
+    int cdfDirty{1};
 
     Environment();
     ~Environment();
@@ -47,6 +50,8 @@ public:
 
     void destroyCdf() noexcept;
     void updateDerivedSettings();
+    void setHdriTexture(const Texture& texture);
+    void clearHdriTexture();
 
     static std::vector<float> computeCdf(const float* hdr, int w, int h);
 

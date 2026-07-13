@@ -14,7 +14,6 @@
 #include "Camera/RealisticCamera.h"
 #include "Camera/RossPsfCamera.h"
 #include "Camera/ThinLensCamera.h"
-#include "CUDA/rstd/Allocator.h"
 #include "Mesh/MeshAsset.h"
 #include "Mesh/Transform.h"
 #include "Raytracing/Sellmeier.h"
@@ -35,6 +34,22 @@ Transform toTransform(const nr::sceneio::ObjectFile& object)
     return {toVec3(object.position), toVec3(object.rotation_euler), toVec3(object.scale)};
 }
 
+std::vector<std::string> splitPaths(const std::string& paths)
+{
+    std::vector<std::string> result;
+    std::stringstream stream(paths);
+    for (std::string path; std::getline(stream, path, ';');)
+        if (!path.empty()) result.push_back(std::move(path));
+    return result;
+}
+
+SensorType sensorType(const std::string& type)
+{
+    if (type == "scatter_psf") return SensorType::ScatterPsf;
+    if (type == "gather_psf") return SensorType::GatherPsf;
+    return SensorType::Rectangular;
+}
+
 Material toMaterial(const nr::sceneio::MaterialFile& file)
 {
     Material material{};
@@ -51,51 +66,41 @@ Material toMaterial(const nr::sceneio::MaterialFile& file)
     return material;
 }
 
-Camera makeCamera(const nr::sceneio::CameraFile& file)
+std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
 {
-    Camera camera;
-    if (file.type == "realistic") {
-        nr::rstd::allocator<RealisticCamera> allocator;
-        RealisticCamera* realistic = allocator.allocate(1);
-        allocator.construct(realistic);
+    CameraProjectionType projection = CameraProjectionType::Perspective;
+    if (file.type == "realistic") projection = CameraProjectionType::Realistic;
+    else if (file.type == "rosspsf" || file.type == "hybridpsf")
+        projection = CameraProjectionType::HybridPsf;
+    else if (file.type == "thinlens") projection = CameraProjectionType::ThinLens;
+    else if (file.type == "fisheye") projection = CameraProjectionType::Fisheye;
+    else if (file.type == "orthographic") projection = CameraProjectionType::Orthographic;
+
+    std::unique_ptr<Sensor> sensor;
+    const SensorType type = sensorType(file.sensor_type);
+    if (type == SensorType::ScatterPsf)
+        sensor = std::make_unique<ScatterPsfSensor>();
+    else if (type == SensorType::GatherPsf)
+        sensor = std::make_unique<GatherPsfSensor>();
+    else
+        sensor = std::make_unique<RectangularSensor>();
+    std::unique_ptr<Camera> camera = Camera::create(projection, std::move(sensor));
+    if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get()))
         realistic->apertureDiameterMm = file.aperture_diameter;
-        camera = Camera(realistic);
-    } else if (file.type == "rosspsf") {
-        nr::rstd::allocator<RossPsfCamera> allocator;
-        RossPsfCamera* rossPsf = allocator.allocate(1);
-        allocator.construct(rossPsf);
-        rossPsf->apertureDiameterMm = file.aperture_diameter;
-        camera = Camera(rossPsf);
-    } else if (file.type == "thinlens") {
-        nr::rstd::allocator<ThinLensCamera> allocator;
-        ThinLensCamera* thinLens = allocator.allocate(1);
-        allocator.construct(thinLens);
+    else if (auto* hybrid = dynamic_cast<RossPsfCamera*>(camera.get()))
+        hybrid->apertureDiameterMm = file.aperture_diameter;
+    else if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get())) {
         thinLens->fStop = file.aperture_diameter;
         thinLens->bokehBias = std::max(0.001f, file.bokeh_bias);
-        camera = Camera(thinLens);
-    } else if (file.type == "fisheye") {
-        nr::rstd::allocator<FisheyeCamera> allocator;
-        FisheyeCamera* fisheye = allocator.allocate(1);
-        allocator.construct(fisheye);
+    } else if (auto* fisheye = dynamic_cast<FisheyeCamera*>(camera.get())) {
         fisheye->fStop = file.aperture_diameter;
         fisheye->bokehBias = std::max(0.001f, file.bokeh_bias);
-        camera = Camera(fisheye);
-    } else if (file.type == "orthographic") {
-        nr::rstd::allocator<OrthographicCamera> allocator;
-        OrthographicCamera* orthographic = allocator.allocate(1);
-        allocator.construct(orthographic);
-        camera = Camera(orthographic);
-    } else {
-        nr::rstd::allocator<PerspectiveCamera> allocator;
-        PerspectiveCamera* perspective = allocator.allocate(1);
-        allocator.construct(perspective);
-        camera = Camera(perspective);
     }
 
-    camera.setFocalLength(file.focal_length);
-    camera.setFocusDistance(file.focus_distance);
-    camera.getSensor().setImageSensorPath(file.sensor);
-    camera.getSensor().setResolution(
+    camera->setFocalLength(file.focal_length);
+    camera->setFocusDistance(file.focus_distance);
+    camera->getSensor().setImageSensorPath(file.sensor);
+    camera->getSensor().setResolution(
         std::max(file.resolution[0], 1u),
         std::max(file.resolution[1], 1u));
     return camera;
@@ -103,13 +108,21 @@ Camera makeCamera(const nr::sceneio::CameraFile& file)
 
 void addCamera(Scene& scene, const nr::sceneio::CameraFile& file)
 {
-    Camera camera = makeCamera(file);
-    Transform transform{toVec3(file.position), toVec3(file.rotation_euler), toVec3(file.scale)};
-    auto cameraInstance = std::make_unique<CameraInstance>(scene, "Camera", transform, camera);
+    std::unique_ptr<Camera> camera = makeCamera(file);
     if (file.type == "realistic" && !file.lens.empty() && !file.sensor.empty())
-        cameraInstance->loadRealisticLens(file.lens, file.glass_catalogs);
-    else if (file.type == "rosspsf" && !file.lens.empty() && !file.sensor.empty())
-        cameraInstance->loadRossPsfCamera(file.lens, file.glass_catalogs, {});
+        dynamic_cast<RealisticCamera&>(*camera).load(
+            file.lens, splitPaths(file.glass_catalogs));
+    else if ((file.type == "rosspsf" || file.type == "hybridpsf")
+        && !file.lens.empty() && !file.sensor.empty()) {
+        Sensor& sensor = camera->getSensor();
+        if (!file.psf.empty())
+            sensor.setPsfGridPath(file.psf);
+        dynamic_cast<RossPsfCamera&>(*camera).load(
+            file.lens, splitPaths(file.glass_catalogs), file.ray_lut);
+    }
+    Transform transform{toVec3(file.position), toVec3(file.rotation_euler), toVec3(file.scale)};
+    auto cameraInstance = std::make_unique<CameraInstance>(
+        std::move(camera), "Camera", transform);
     scene.add(std::move(cameraInstance));
 }
 
@@ -182,6 +195,8 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
 
     if (file.render_settings) {
         scene.getRenderSettings().maxSamples = file.render_settings->max_samples;
+        scene.getRenderSettings().noiseLimitEnabled = file.render_settings->noise_limit_enabled;
+        scene.getRenderSettings().noiseLevel = std::max(file.render_settings->noise_level, 0.0f);
         scene.getRenderSettings().gaussianShadingMode =
             file.render_settings->gaussian_shading_mode == static_cast<int>(GaussianShadingMode::DirectColor)
                 ? GaussianShadingMode::DirectColor

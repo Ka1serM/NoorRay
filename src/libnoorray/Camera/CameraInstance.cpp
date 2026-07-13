@@ -2,16 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <imgui.h>
 #include "Camera/RealisticCamera.h"
 #include "Camera/RossPsfCamera.h"
 #include "CUDA/ManagedMemory.h"
-#include "CUDA/rstd/Allocator.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/quaternion.hpp"
-#include "SDL3/SDL_mouse.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
 
@@ -19,92 +18,57 @@
 
 void CameraInstance::allocateCamera(CameraProjectionType type)
 {
-    Camera state{};
-    Sensor transferredSensor(nullptr);
+    Camera state = camera->cloneBaseState();
+    std::unique_ptr<Sensor> transferredSensor = camera->releaseSensor();
     std::string sharedLensPath;
     std::string sharedGlassCatalogPaths;
-    if (gpuCamera != nullptr && *gpuCamera) {
-        // A previous frame's kernels may still be reading gpuCamera's fields
-        // (e.g. Finalize.cu dispatching through camera->sensor) asynchronously
-        // on the render stream. Sync before mutating any of that UMA state
-        // below, not just inside freeCamera() further down.
-        nr::synchronizeBeforeManagedMutation("Camera allocate");
-        state = gpuCamera->cloneBaseState();
-        if (const auto* camera = gpuCamera->CastOrNullptr<RealisticCamera>()) {
-            sharedLensPath = camera->getLensPath();
-            sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
-        } else if (const auto* camera = gpuCamera->CastOrNullptr<RossPsfCamera>()) {
-            sharedLensPath = camera->getLensPath();
-            sharedGlassCatalogPaths = camera->getGlassCatalogPaths();
-        }
-        transferredSensor.moveConcreteFrom(gpuCamera->getSensor());
-        state.sensor = Sensor(nullptr);
+    if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
+        sharedLensPath = realistic->getLensPath();
+        sharedGlassCatalogPaths = realistic->getGlassCatalogPaths();
+    } else if (const auto* hybrid = camera->CastOrNullptr<RossPsfCamera>()) {
+        sharedLensPath = hybrid->getLensPath();
+        sharedGlassCatalogPaths = hybrid->getGlassCatalogPaths();
     }
-    freeCamera();
-    auto allocate = [&]<typename T>() {
-        nr::rstd::allocator<T> allocator;
-        T* camera = allocator.allocate(1);
-        allocator.construct(camera);
-        static_cast<Camera&>(*camera) = state;
-        camera->sensor.moveConcreteFrom(transferredSensor);
-        if (!camera->sensor)
-            camera->sensor.allocateRectangular();
-        if constexpr (std::is_same_v<T, RealisticCamera> || std::is_same_v<T, RossPsfCamera>)
-            camera->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
-        if constexpr (std::is_same_v<T, RossPsfCamera>) {
-            if (!sharedLensPath.empty() && !camera->sensor.getImageSensorPath().empty())
-                camera->loadLensSensorAndPsf();
-        } else if constexpr (std::is_same_v<T, RealisticCamera>) {
-            if (!sharedLensPath.empty() && !camera->sensor.getImageSensorPath().empty())
-                camera->loadLensAndSensor();
-        }
-        *gpuCamera = Camera(camera);
-    };
-    switch (type) {
-    case CameraProjectionType::ThinLens: allocate.template operator()<ThinLensCamera>(); break;
-    case CameraProjectionType::Orthographic: allocate.template operator()<OrthographicCamera>(); break;
-    case CameraProjectionType::Fisheye: allocate.template operator()<FisheyeCamera>(); break;
-    case CameraProjectionType::Realistic: allocate.template operator()<RealisticCamera>(); break;
-    case CameraProjectionType::RossPsf: allocate.template operator()<RossPsfCamera>(); break;
-    case CameraProjectionType::Perspective:
-    default: allocate.template operator()<PerspectiveCamera>(); break;
-    }
-}
+    state.sensor = Sensor(nullptr);
 
-void CameraInstance::freeCamera()
-{
-    if (gpuCamera == nullptr || !*gpuCamera)
-        return;
-    nr::synchronizeBeforeManagedMutation("Camera free");
-    gpuCamera->DispatchCPU([](auto* cam) {
-        using CameraType = std::remove_reference_t<decltype(*cam)>;
-        cam->sensor.freeConcrete();
-        nr::rstd::allocator<CameraType> allocator;
-        allocator.destroy(cam);
-        allocator.deallocate(cam, 1);
-    });
-    *gpuCamera = Camera(nullptr);
+    camera.reset(Camera::create(type, std::move(transferredSensor)).release());
+    static_cast<Camera&>(*camera) = state;
+    tagCamera();
+
+    if (auto* realistic = camera->CastOrNullptr<RealisticCamera>())
+        realistic->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
+    else if (auto* hybrid = camera->CastOrNullptr<RossPsfCamera>())
+        hybrid->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
+
 }
 
 // ── constructor / destructor ──────────────────────────────────────────────────
 
-CameraInstance::CameraInstance(Scene& scene, const std::string& name, Transform transform,
-                               Camera camera)
-    : SceneObject(scene, name, transform)
+void CameraInstance::tagCamera()
 {
-    nr::rstd::allocator<Camera> allocator;
-    gpuCamera = allocator.allocate(1);
-    allocator.construct(gpuCamera);
-    *gpuCamera = camera;
-    if (*gpuCamera) {
-        Sensor& sensor = gpuCamera->getSensor();
-        if (!sensor) {
-            if (gpuCamera->Is<RossPsfCamera>())
-                sensor.allocateGatherPsf();
-            else
-                sensor.allocateRectangular();
-        }
-    }
+    if (auto* concrete = dynamic_cast<PerspectiveCamera*>(camera.get()))
+        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
+    else if (auto* concrete = dynamic_cast<ThinLensCamera*>(camera.get()))
+        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
+    else if (auto* concrete = dynamic_cast<OrthographicCamera*>(camera.get()))
+        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
+    else if (auto* concrete = dynamic_cast<FisheyeCamera*>(camera.get()))
+        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
+    else if (auto* concrete = dynamic_cast<RealisticCamera*>(camera.get()))
+        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
+    else if (auto* concrete = dynamic_cast<RossPsfCamera*>(camera.get()))
+        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
+    else
+        throw std::invalid_argument("CameraInstance requires a concrete Camera type");
+}
+
+CameraInstance::CameraInstance(
+    std::unique_ptr<Camera> ownedCamera, const std::string& name, Transform transform)
+    : SceneObject(name, transform), camera(ownedCamera.release())
+{
+    if (!camera)
+        throw std::invalid_argument("CameraInstance requires a Camera");
+    tagCamera();
     rebuildCamera();
 }
 
@@ -113,59 +77,24 @@ CameraInstance::CameraInstance(const CameraInstance& other)
       arcballPivot(other.arcballPivot),
       arcballMode(other.arcballMode)
 {
-    nr::rstd::allocator<Camera> allocator;
-    gpuCamera = allocator.allocate(1);
-    allocator.construct(gpuCamera);
-    allocateCamera(other.getProjectionType());
-    const Camera state = other.gpuCamera->cloneBaseState();
-    const Sensor& otherSensor = other.gpuCamera->getSensor();
-    gpuCamera->DispatchCPU([&](auto* camera) {
-        static_cast<Camera&>(*camera) = state;
-        camera->sensor = Sensor(nullptr);
-        camera->sensor.cloneConcreteFrom(otherSensor);
+    nr::synchronizeBeforeManagedMutation("Camera clone");
+    other.camera->DispatchCPU([&](const auto* source) {
+        using CameraType = std::remove_cvref_t<decltype(*source)>;
+        camera.reset(new CameraType(*source));
     });
+    tagCamera();
     rebuildCamera();
 }
 
-CameraInstance::~CameraInstance()
-{
-    freeCamera();
-    nr::rstd::allocator<Camera> allocator;
-    allocator.destroy(gpuCamera);
-    allocator.deallocate(gpuCamera, 1);
-}
+CameraInstance::~CameraInstance() = default;
 
 // ── core ──────────────────────────────────────────────────────────────────────
 
 void CameraInstance::markDirty()
 {
-    scene.setDirtyFlag(CameraState);
-    scene.setDirtyFlag(Accumulation);
-}
-
-void CameraInstance::loadRealisticLens(const std::string& lensPath, const std::string& glassCatalogPaths)
-{
-    if (auto* rc = gpuCamera->CastOrNullptr<RealisticCamera>())
-        rc->load(lensPath, glassCatalogPaths);
-    scene.setDirtyFlag(Accumulation);
-}
-
-void CameraInstance::loadRossPsfCamera(const std::string& lensPath, const std::string& glassCatalogPaths,
-    const std::string& rayLutPath)
-{
-    if (auto* rc = gpuCamera->CastOrNullptr<RossPsfCamera>())
-        rc->load(lensPath, glassCatalogPaths, rayLutPath);
-    scene.setDirtyFlag(Accumulation);
-}
-
-void CameraInstance::setApertureDiameter(float mm)
-{
-    if (auto* rc = gpuCamera->CastOrNullptr<RealisticCamera>()) {
-        nr::synchronizeBeforeManagedMutation("Camera aperture");
-        rc->apertureDiameterMm = std::max(0.0f, mm);
-        rc->loadLensAndSensor();
-    }
-    scene.setDirtyFlag(Accumulation);
+    if (!scene) return;
+    scene->setDirtyFlag(CameraState);
+    scene->setDirtyFlag(Accumulation);
 }
 
 void CameraInstance::rebuildCamera()
@@ -181,13 +110,14 @@ void CameraInstance::rebuildCamera()
         vec4(-dir,          0.f),
         vec4(getPosition(), 1.f));
 
-    gpuCamera->setCameraToWorld(cameraToWorld);
+    camera->setCameraToWorld(cameraToWorld);
 }
 
 void CameraInstance::onTransformUpdated()
 {
     SceneObject::onTransformUpdated();
-    scene.setDirtyFlag(CameraState);
+    rebuildCamera();
+    if (scene) scene->setDirtyFlag(CameraState);
 }
 
 void CameraInstance::switchTo(CameraProjectionType type)
@@ -207,21 +137,21 @@ std::unique_ptr<SceneObject> CameraInstance::clone() const
 
 CameraProjectionType CameraInstance::getProjectionType() const
 {
-    if (gpuCamera->Is<ThinLensCamera>())    return CameraProjectionType::ThinLens;
-    if (gpuCamera->Is<OrthographicCamera>()) return CameraProjectionType::Orthographic;
-    if (gpuCamera->Is<FisheyeCamera>())     return CameraProjectionType::Fisheye;
-    if (gpuCamera->Is<RealisticCamera>())   return CameraProjectionType::Realistic;
-    if (gpuCamera->Is<RossPsfCamera>())     return CameraProjectionType::RossPsf;
+    if (camera->Is<ThinLensCamera>())    return CameraProjectionType::ThinLens;
+    if (camera->Is<OrthographicCamera>()) return CameraProjectionType::Orthographic;
+    if (camera->Is<FisheyeCamera>())     return CameraProjectionType::Fisheye;
+    if (camera->Is<RealisticCamera>())   return CameraProjectionType::Realistic;
+    if (camera->Is<RossPsfCamera>())     return CameraProjectionType::HybridPsf;
     return CameraProjectionType::Perspective;
 }
 
 const char* CameraInstance::getProjectionName() const
 {
-    if (gpuCamera->Is<ThinLensCamera>())    return "Thin Lens";
-    if (gpuCamera->Is<OrthographicCamera>()) return "Orthographic";
-    if (gpuCamera->Is<FisheyeCamera>())     return "Fisheye";
-    if (gpuCamera->Is<RealisticCamera>())   return "Realistic";
-    if (gpuCamera->Is<RossPsfCamera>())     return "Hybrid PSF";
+    if (camera->Is<ThinLensCamera>())    return "Thin Lens";
+    if (camera->Is<OrthographicCamera>()) return "Orthographic";
+    if (camera->Is<FisheyeCamera>())     return "Fisheye";
+    if (camera->Is<RealisticCamera>())   return "Realistic";
+    if (camera->Is<RossPsfCamera>())     return "Hybrid PSF";
     return "Perspective";
 }
 
@@ -234,9 +164,9 @@ mat4 CameraInstance::getViewMatrix() const
 
 mat4 CameraInstance::getProjectionMatrix() const
 {
-    const Sensor& sensor = gpuCamera->getSensor();
+    const Sensor& sensor = camera->getSensor();
     const float aspect = sensor.aspectRatio();
-    const float focalLength = gpuCamera->getFocalLength();
+    const float focalLength = camera->getFocalLength();
     const float fovY = 2.f * std::atan(sensor.height() / (2.f * focalLength));
     return perspective(fovY, aspect, 0.01f, 10000.f);
 }
@@ -247,18 +177,16 @@ void CameraInstance::setArcballPivot(const vec3& pivot)
 {
     arcballPivot = pivot;
     const float distance = std::max(0.001f, glm::distance(getPosition(), pivot));
-    gpuCamera->setFocusDistance(distance);
+    camera->setFocusDistance(distance);
 }
 
 // ── update (input) ───────────────────────────────────────────────────────────
 
-void CameraInstance::update()
+void CameraInstance::update(const float dx, const float dy)
 {
     const vec3 oldPosition = getPosition();
     const quat oldRotation = getRotation();
 
-    float dx = 0.f, dy = 0.f;
-    SDL_GetRelativeMouseState(&dx, &dy);
     ImGuiIO& io = ImGui::GetIO();
 
     if (arcballMode) {
@@ -325,7 +253,7 @@ bool CameraInstance::renderUi()
         ImGuiManager::tableRowLabel("Type");
         static const CameraProjectionType projectionTypes[] = {
             CameraProjectionType::Perspective, CameraProjectionType::ThinLens,
-            CameraProjectionType::Realistic,   CameraProjectionType::RossPsf,
+            CameraProjectionType::Realistic,   CameraProjectionType::HybridPsf,
             CameraProjectionType::Orthographic, CameraProjectionType::Fisheye,
         };
         static const char* projectionNames[] = {
@@ -339,12 +267,24 @@ bool CameraInstance::renderUi()
             changed = true;
         }
 
-        changed |= gpuCamera->DispatchCPU([](auto* cam) { return cam->renderUi(); });
+        changed |= camera->DispatchCPU([](auto* cam) { return cam->renderUi(); });
+        SensorType requestedSensorType{};
+        if (camera->getSensor().consumeRequestedType(requestedSensorType)) {
+            const Sensor& currentSensor = camera->getSensor();
+            if (requestedSensorType == SensorType::ScatterPsf)
+                camera->setSensor(std::make_unique<ScatterPsfSensor>(currentSensor));
+            else if (requestedSensorType == SensorType::GatherPsf)
+                camera->setSensor(std::make_unique<GatherPsfSensor>(currentSensor));
+            else
+                camera->setSensor(std::make_unique<RectangularSensor>(currentSensor));
+            changed = true;
+        }
         ImGui::EndTable();
     }
     ImGui::TreePop();
 
-    if (changed)
-        scene.setDirtyFlag(Accumulation);
+    if (changed) {
+        if (scene) scene->setDirtyFlag(Accumulation);
+    }
     return instanceChanged || changed;
 }

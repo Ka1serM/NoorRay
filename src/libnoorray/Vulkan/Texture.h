@@ -5,9 +5,12 @@
 #include <vector>
 
 class Texture {
+    friend class Scene;
+
     std::string name;
     int width = 0;
     int height = 0;
+    int sceneIndex = -1;
 
     std::vector<float> pixels;
 
@@ -18,5 +21,6 @@ public:
     const std::string& getName() const { return name; }
     int getWidth() const { return width; }
     int getHeight() const { return height; }
+    int getSceneIndex() const { return sceneIndex; }
     const std::vector<float>& getPixels() const { return pixels; }
 };

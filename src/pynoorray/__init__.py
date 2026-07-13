@@ -1,5 +1,6 @@
-from ._pynoorray import RenderSession
+from ._pynoorray import *
+from ._pynoorray import NoorRaySession
 
 __all__ = [
-    "RenderSession",
+    "NoorRaySession",
 ]

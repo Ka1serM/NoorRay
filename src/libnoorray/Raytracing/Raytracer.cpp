@@ -73,6 +73,7 @@ nr::cuda::UniqueDeviceBuffer uploadRecord(const OptixProgramGroup group)
 
 extern NR_GPU_KERNEL void generateKernel(KernelParams);
 extern NR_GPU_KERNEL void finalizeKernel(KernelParams);
+extern NR_GPU_KERNEL void reduceNoiseVarianceKernel(KernelParams, float*);
 extern NR_GPU_KERNEL void resolveScatterPsfKernel(KernelParams);
 extern NR_GPU_KERNEL void applyGatherPsfKernel(KernelParams);
 extern NR_GPU_KERNEL void shadeKernel(KernelParams);
@@ -250,6 +251,8 @@ Raytracer::Raytracer(
 
     m_startEvent.create();
     m_stopEvent.create();
+    NR_GPU_CHECK(cudaMallocHost(&m_noiseVarianceSumHost, sizeof(float)));
+    *m_noiseVarianceSumHost = std::numeric_limits<float>::infinity();
 
     auto createSemaphore = [&]() -> vk::UniqueSemaphore {
         vk::ExportSemaphoreCreateInfo exportInfo{};
@@ -324,6 +327,9 @@ Raytracer::~Raytracer()
 {
     if (stream != nullptr)
         cudaStreamSynchronize(stream);
+    if (m_noiseVarianceSumHost != nullptr)
+        cudaFreeHost(m_noiseVarianceSumHost);
+    m_noiseVarianceSumHost = nullptr;
     tlas.reset();
     freeSceneData();
     freeQueues();
@@ -397,6 +403,7 @@ void Raytracer::allocateQueues()
     aovRayQueueBuffer.allocate(sizeof(PathRayWorkItem) * queues.capacity, stream);
     aovHitQueueBuffer.allocate(sizeof(HitWorkItem) * queues.capacity, stream);
     accumulationBuffer.allocate(sizeof(glm::vec4) * static_cast<size_t>(width) * height, stream);
+    noiseVarianceSumBuffer.allocate(sizeof(float), stream);
 
     queues.rayCounts = rayCountBuffer.as<uint32_t>();
     queues.pathStates = pathStateBuffer.as<PathState>();
@@ -421,6 +428,8 @@ void Raytracer::freeQueues() noexcept
     aovRayQueueBuffer.reset();
     aovHitQueueBuffer.reset();
     accumulationBuffer.reset();
+    noiseMomentsBuffer.reset();
+    noiseVarianceSumBuffer.reset();
     queues = {};
 }
 
@@ -465,6 +474,7 @@ void Raytracer::updateEnvironmentCdf()
     Environment& env = scene.getEnvironment();
     gpuScene.environment = &env;
     env.destroyCdf();
+    env.cdfDirty = 0;
 
     const int textureIndex = env.textureIndex;
     const auto& textures = scene.getTextures();
@@ -575,6 +585,21 @@ void Raytracer::launchFinalize(const KernelParams& params, const cudaStream_t st
     NR_GPU_CHECK(cudaLaunchKernel(reinterpret_cast<const void*>(&finalizeKernel), grid, blockSize, args, 0, stream));
 }
 
+void Raytracer::launchNoiseReduction(const KernelParams& params, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const uint32_t count = params.frame.width * params.frame.height;
+    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
+    float* varianceSum = noiseVarianceSumBuffer.as<float>();
+    NR_GPU_CHECK(cudaMemsetAsync(varianceSum, 0, sizeof(float), stream));
+    void* args[] = { const_cast<KernelParams*>(&params), &varianceSum };
+    NR_GPU_CHECK(cudaLaunchKernel(
+        reinterpret_cast<const void*>(&reduceNoiseVarianceKernel),
+        grid, blockSize, args, 0, stream));
+    NR_GPU_CHECK(cudaMemcpyAsync(
+        m_noiseVarianceSumHost, varianceSum, sizeof(float), cudaMemcpyDeviceToHost, stream));
+}
+
 void Raytracer::launchResolveScatterPsf(const KernelParams& params, const cudaStream_t stream) const
 {
     constexpr uint32_t blockSize = 256;
@@ -681,7 +706,7 @@ void Raytracer::renderGaussianTrainForward(
 
     KernelParams params{};
     params.scene = gpuScene;
-    params.scene.camera = activeCamera->getCamera();
+    params.scene.camera = activeCamera->getGpuCamera();
     params.queues = queues;
     params.train = trainParams;
     params.train.enabled = 1;
@@ -722,7 +747,7 @@ void Raytracer::renderGaussianTrainBackward(
 
     KernelParams params{};
     params.scene = gpuScene;
-    params.scene.camera = activeCamera->getCamera();
+    params.scene.camera = activeCamera->getGpuCamera();
     params.queues = queues;
     params.train = trainParams;
     params.train.enabled = 1;
@@ -821,10 +846,15 @@ void Raytracer::render(const PushData& pushData)
     if (!activeCamera)
         return;
 
+    activeCamera->getCamera()->prepareForRender();
+
+    if (scene.getEnvironment().cdfDirty != 0)
+        updateEnvironmentCdf();
+
     gpuScene.renderSettings = scene.getRenderSettings();
     const uint32_t buffer = nextBuffer;
     const uint64_t frameValue = ++submittedFrame;
-    if (lastUseValue[buffer] != 0)
+    if (!m_offlineRendering && lastUseValue[buffer] != 0)
     {
         cudaExternalSemaphoreWaitParams waitParams{};
         waitParams.params.fence.value = lastUseValue[buffer];
@@ -840,7 +870,7 @@ void Raytracer::render(const PushData& pushData)
     KernelParams params{};
     params.scene = gpuScene;
     params.scene.renderSettings = scene.getRenderSettings();
-    params.scene.camera = activeCamera->getCamera();
+    params.scene.camera = activeCamera->getGpuCamera();
     params.queues = queues;
     params.output = {
         color[buffer].getSurface(),
@@ -855,11 +885,25 @@ void Raytracer::render(const PushData& pushData)
     params.accumulation = accumulationBuffer.as<glm::vec4>();
 
     const RenderSettings& renderSettings = scene.getRenderSettings();
+    if (renderSettings.noiseLimitEnabled && !noiseMomentsBuffer)
+        noiseMomentsBuffer.allocate(
+            sizeof(glm::vec2) * static_cast<size_t>(width) * height, stream);
+    params.noiseMoments = renderSettings.noiseLimitEnabled
+        ? noiseMomentsBuffer.as<glm::vec2>() : nullptr;
+    if (params.noiseMoments != nullptr && pushData.frame == 0)
+        NR_GPU_CHECK(cudaMemsetAsync(
+            params.noiseMoments, 0, sizeof(glm::vec2) * width * height, stream));
     params.frame.cutoffDistanceSq = renderSettings.gaussianCutoffSigma
                                  * renderSettings.gaussianCutoffSigma;
     const bool gaussianDirectColor =
         renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor;
-    const uint32_t samplesPerFrame = static_cast<uint32_t>(std::max(1, renderSettings.samples));
+    const uint32_t configuredSamplesPerFrame =
+        static_cast<uint32_t>(std::max(1, renderSettings.samples));
+    const uint32_t maxSamples = static_cast<uint32_t>(std::max(1, renderSettings.maxSamples));
+    const uint32_t remainingSamples = pushData.accumulatedSampleOffset < maxSamples
+        ? maxSamples - pushData.accumulatedSampleOffset
+        : configuredSamplesPerFrame;
+    const uint32_t samplesPerFrame = std::min(configuredSamplesPerFrame, remainingSamples);
     const uint32_t requestedMaxShaderBounces = std::min(MaxBounces - 1,
         static_cast<uint32_t>(std::max(renderSettings.maxBounces, 1)));
     const uint32_t maxShaderBounces = gaussianDirectColor && gpuScene.meshInstanceCount == 0
@@ -924,9 +968,14 @@ void Raytracer::render(const PushData& pushData)
         }
         const uint32_t accumulatedBeforeFrame = pushData.accumulatedSampleOffset;
         const uint32_t accumulatedAfterFrame = pushData.accumulatedSampleOffset + samplesPerFrame;
-        const uint32_t maxSamples = static_cast<uint32_t>(std::max(1, renderSettings.maxSamples));
         const bool finalSample = accumulatedBeforeFrame < maxSamples && accumulatedAfterFrame >= maxSamples;
         applySensorAfterFrame(activeSensor, params, stream, finalSample);
+        if (renderSettings.noiseLimitEnabled)
+        {
+            m_noiseResultSampleCount = accumulatedAfterFrame;
+            kernelStats.time("NoiseVariance", stream,
+                [&] { launchNoiseReduction(params, stream); });
+        }
     }
     NR_GPU_CHECK(cudaPeekAtLastError());
 
@@ -936,6 +985,7 @@ void Raytracer::render(const PushData& pushData)
         m_eventsRecorded = true;
     }
 
+    if (!m_offlineRendering)
     {
         cudaExternalSemaphoreSignalParams signalParams{};
         signalParams.params.fence.value = frameValue;
@@ -948,34 +998,70 @@ void Raytracer::render(const PushData& pushData)
     nextBuffer = 1 - buffer;
 }
 
-Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
+void Raytracer::prepareOfflineRender()
+{
+    CameraInstance* camera = scene.getActiveCamera();
+    if (camera == nullptr)
+        throw std::runtime_error("Cannot render a scene without an active camera");
+
+    const glm::uvec2 resolution = camera->getCamera()->getSensor().resolution();
+    if (resolution.x == 0 || resolution.y == 0)
+        throw std::runtime_error("Cannot render with a zero-sized camera sensor");
+    if (resolution.x != width || resolution.y != height)
+        resize(resolution.x, resolution.y);
+
+    if (scene.isDirty(Meshes)) updateMeshes();
+    if (scene.isDirty(Textures)) updateTextures();
+    else if (scene.isDirty(EnvironmentCdf)) updateEnvironmentCdf();
+    if (scene.isDirty(Lights)) updateLights();
+    if (scene.isDirty(TLAS)) updateTLAS();
+    if (scene.isDirty(CameraState)) camera->rebuildCamera();
+    scene.clearDirtyFlags();
+}
+
+void Raytracer::renderSamples(const uint32_t sampleCount)
 {
     if (sampleCount == 0)
         throw std::invalid_argument("Offline render sample count must be greater than zero");
     if (sampleCount > static_cast<uint32_t>(std::numeric_limits<int>::max()))
         throw std::invalid_argument("Offline render sample count exceeds the supported range");
 
-    CameraInstance* camera = scene.getActiveCamera();
-    if (camera == nullptr)
-        throw std::runtime_error("Cannot render a scene without an active camera");
+    prepareOfflineRender();
 
     RenderSettings& settings = scene.getRenderSettings();
     const int previousSamplesPerFrame = settings.samples;
     const int previousMaxSamples = settings.maxSamples;
     settings.samples = static_cast<int>(sampleCount);
     settings.maxSamples = static_cast<int>(sampleCount);
+    m_offlineRendering = true;
     try {
         render(PushData{.frame = 0});
         NR_GPU_CHECK(cudaStreamSynchronize(stream));
         kernelStats.harvestFrame();
+        lastUseValue = {};
+        lastReadyValue = 0;
     } catch (...) {
+        m_offlineRendering = false;
         settings.samples = previousSamplesPerFrame;
         settings.maxSamples = previousMaxSamples;
         throw;
     }
+    m_offlineRendering = false;
     settings.samples = previousSamplesPerFrame;
     settings.maxSamples = previousMaxSamples;
 
+}
+
+void Raytracer::render()
+{
+    setAovEnabled(true);
+    renderSamples(static_cast<uint32_t>(
+        std::max(1, scene.getRenderSettings().samples)));
+}
+
+Bitmap Raytracer::renderOffline(const uint32_t sampleCount)
+{
+    renderSamples(sampleCount);
     std::vector<glm::vec4> pixels(static_cast<size_t>(width) * height);
     NR_GPU_CHECK(cudaMemcpy(
         pixels.data(), accumulationBuffer.get(), pixels.size() * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
@@ -991,24 +1077,27 @@ void Raytracer::renderOfflineToDevice(float* rgbaDevice, const uint32_t sampleCo
     if (sampleCount > static_cast<uint32_t>(std::numeric_limits<int>::max()))
         throw std::invalid_argument("Offline render sample count exceeds the supported range");
 
-    CameraInstance* camera = scene.getActiveCamera();
-    if (camera == nullptr)
-        throw std::runtime_error("Cannot render a scene without an active camera");
+    prepareOfflineRender();
 
     RenderSettings& settings = scene.getRenderSettings();
     const int previousSamplesPerFrame = settings.samples;
     const int previousMaxSamples = settings.maxSamples;
     settings.samples = static_cast<int>(sampleCount);
     settings.maxSamples = static_cast<int>(sampleCount);
+    m_offlineRendering = true;
     try {
         render(PushData{.frame = 0});
         NR_GPU_CHECK(cudaStreamSynchronize(stream));
         kernelStats.harvestFrame();
+        lastUseValue = {};
+        lastReadyValue = 0;
     } catch (...) {
+        m_offlineRendering = false;
         settings.samples = previousSamplesPerFrame;
         settings.maxSamples = previousMaxSamples;
         throw;
     }
+    m_offlineRendering = false;
     settings.samples = previousSamplesPerFrame;
     settings.maxSamples = previousMaxSamples;
 
@@ -1089,4 +1178,22 @@ bool Raytracer::isFrameReady() const
 {
     return lastReadyValue != 0
         && context.getDevice().getSemaphoreCounterValue(renderReady.get()) >= lastReadyValue;
+}
+
+float Raytracer::getGpuTimeMs()
+{
+    if (m_timingEnabled && m_eventsRecorded)
+    {
+        NR_GPU_CHECK(cudaEventSynchronize(m_stopEvent.get()));
+        NR_GPU_CHECK(cudaEventElapsedTime(&m_gpuTimeMs, m_startEvent.get(), m_stopEvent.get()));
+    }
+    return m_gpuTimeMs;
+}
+
+
+float Raytracer::getAverageNoiseVariance() const
+{
+    if (m_noiseVarianceSumHost == nullptr || m_noiseResultSampleCount < 2 || width == 0 || height == 0)
+        return std::numeric_limits<float>::infinity();
+    return *m_noiseVarianceSumHost / static_cast<float>(width * height);
 }

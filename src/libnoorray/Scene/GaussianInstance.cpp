@@ -16,7 +16,7 @@ std::unique_ptr<SceneObject> GaussianInstance::clone() const
 void GaussianInstance::onTransformUpdated()
 {
     SceneObject::onTransformUpdated();
-    scene.setDirtyFlag(TLAS);
+    scene->setDirtyFlag(TLAS);
 }
 
 bool GaussianInstance::renderUi()
@@ -26,7 +26,7 @@ bool GaussianInstance::renderUi()
     if (!ImGui::TreeNodeEx("Gaussian Asset###GaussianProperties", ImGuiTreeNodeFlags_Framed))
         return changed;
     if (ImGui::BeginTable("GaussianTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        changed |= scene.getGaussianAsset(gaussianAssetIndex).renderUi();
+        changed |= scene->getGaussianAsset(gaussianAssetIndex).renderUi();
         ImGui::EndTable();
     }
     ImGui::TreePop();

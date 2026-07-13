@@ -18,6 +18,9 @@ if(UNIX AND NOT APPLE)
 endif()
 set(NR_CUDA_ARCH "89" CACHE STRING "CUDA architecture (e.g. 89 for sm_89)")
 set(CMAKE_CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
+# A single PTX file is generated below, so select the first architecture when
+# the build is configured with multiple CUDA architectures.
+list(GET NR_CUDA_ARCH 0 NR_OPTIX_CUDA_ARCH)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMAKE")
 
 find_package(CUDAToolkit 13 REQUIRED)
@@ -323,7 +326,7 @@ add_custom_command(
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
         COMMAND "${CMAKE_CUDA_COMPILER}"
                 -ccbin "${CMAKE_CXX_COMPILER}"
-                --ptx --gpu-architecture=compute_${NR_CUDA_ARCH} --std=c++20
+                --ptx --gpu-architecture=compute_${NR_OPTIX_CUDA_ARCH} --std=c++20
                 --generate-line-info --expt-relaxed-constexpr
                 "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
                 --generate-nonsystem-dependencies-with-compile
@@ -363,7 +366,7 @@ add_library(NoorRayCuda STATIC
         src/libnoorray/Training/GaussianTrainRenderer.cpp
         src/libnoorray/Training/GaussianTrainer.cu)
 add_dependencies(NoorRayCuda NoorRayOptixIr)
-set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES ${NR_CUDA_ARCH})
+set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 set_target_properties(NoorRayCuda PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS OFF

@@ -71,6 +71,9 @@ set(OPENEXR_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(OPENEXR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(OPENEXR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(OPENEXR_INSTALL OFF CACHE BOOL "" FORCE)
+# The host Imath package can report success without exporting the target name
+# required by this vendored OpenEXR release. Use OpenEXR's pinned dependency.
+set(OPENEXR_FORCE_INTERNAL_IMATH ON CACHE BOOL "" FORCE)
 add_subdirectory("${ROSS_ROOT}/pbrt-v4/src/ext/openexr"
                  "${CMAKE_BINARY_DIR}/ross/openexr" EXCLUDE_FROM_ALL)
 add_subdirectory("${ROSS_ROOT}/libross/main" "${CMAKE_BINARY_DIR}/ross/libross" EXCLUDE_FROM_ALL)

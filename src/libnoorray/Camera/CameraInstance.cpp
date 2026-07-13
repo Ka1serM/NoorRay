@@ -18,6 +18,8 @@
 
 void CameraInstance::allocateCamera(CameraProjectionType type)
 {
+    nr::synchronizeBeforeManagedMutation("Camera projection replacement");
+
     Camera state = camera->cloneBaseState();
     std::unique_ptr<Sensor> transferredSensor = camera->releaseSensor();
     std::string sharedLensPath;
@@ -29,8 +31,6 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
         sharedLensPath = hybrid->getLensPath();
         sharedGlassCatalogPaths = hybrid->getGlassCatalogPaths();
     }
-    state.sensor = Sensor(nullptr);
-
     camera.reset(Camera::create(type, std::move(transferredSensor)).release());
     static_cast<Camera&>(*camera) = state;
     tagCamera();
@@ -86,7 +86,12 @@ CameraInstance::CameraInstance(const CameraInstance& other)
     rebuildCamera();
 }
 
-CameraInstance::~CameraInstance() = default;
+CameraInstance::~CameraInstance()
+{
+    // Render kernels dereference the camera and its sensor from managed memory.
+    // Retire any frame that still references them before unique_ptr frees either.
+    nr::synchronizeBeforeManagedMutation("Camera destruction");
+}
 
 // ── core ──────────────────────────────────────────────────────────────────────
 

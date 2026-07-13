@@ -90,6 +90,7 @@ class Scene {
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
 
+    std::shared_ptr<CameraInstance> viewportCamera;
     std::weak_ptr<CameraInstance> activeCamera;
     uint64_t activeObjectId = 0;
     uint64_t nextObjectId = 1;
@@ -167,6 +168,11 @@ public:
 
     // Camera
     CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }
+    CameraInstance* getRenderCamera() const {
+        if (auto camera = activeCamera.lock())
+            return camera.get();
+        return viewportCamera.get();
+    }
     bool setActiveCamera(CameraInstance* camera);
 
     // Light GPU data, Vulkan/CUDA-shared. Host pointers (below) are for CPU-side use

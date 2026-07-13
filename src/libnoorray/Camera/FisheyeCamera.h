@@ -19,6 +19,7 @@ public:
         float nx, float ny, RandomState& rng, uint32_t, SampledWavelengths&, bool centered = false) const
     {
         weight = 1.0f;
+        const Sensor& sensor = getSensor();
         const float aspect = sensor.width() / sensor.height();
         const float sx = nx * aspect;
         const float sy = ny;

@@ -207,13 +207,13 @@ void ViewportPanel::endMouseCapture() {
     ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     window.warpMouse(oldX, oldY);
 
-    auto* camera = scene.getActiveCamera();
+    auto* camera = scene.getRenderCamera();
     if (camera && camera->getArcballActive())
         camera->setArcballActive(false);
 }
 
 void ViewportPanel::handleInput() {
-    if (!scene.getActiveCamera()) {
+    if (!scene.getRenderCamera()) {
         if (isCapturingMouse)
             endMouseCapture();
         return;
@@ -247,7 +247,7 @@ void ViewportPanel::handleInput() {
 }
 
 void ViewportPanel::handleScrollZoom() {
-    auto* camera = scene.getActiveCamera();
+    auto* camera = scene.getRenderCamera();
     if (!camera || isCapturingMouse || ImGuizmo::IsUsing() ||
         ImViewGuizmo::IsUsing() || ImViewGuizmo::IsOver())
     {
@@ -269,7 +269,7 @@ void ViewportPanel::handleTransformGizmo() {
     if (!activeObject)
         return;
 
-    auto* camera = scene.getActiveCamera();
+    auto* camera = scene.getRenderCamera();
     if (!camera)
         return;
     
@@ -294,15 +294,16 @@ void ViewportPanel::handleTransformGizmo() {
 }
 
 void ViewportPanel::handleViewGizmo() const {
-    auto* camera = scene.getActiveCamera();
+    auto* camera = scene.getRenderCamera();
     if (!camera)
         return;
 
     vec3 position = camera->getPosition();
     quat rotation = camera->getRotation();
 
-    vec3 pivot {};
-    if (const auto activeObject = scene.getActiveObjectPtr())
+    vec3 pivot = camera->getArcballPivot();
+    if (const auto activeObject = scene.getActiveObjectPtr();
+        activeObject && activeObject.get() != camera)
         pivot = activeObject->getPosition();
 
     ImViewGuizmo::BeginFrame();
@@ -397,7 +398,7 @@ void ViewportPanel::renderUi() {
     handleInput();
     
     if (isCapturingMouse) {
-        if (auto* camera = scene.getActiveCamera())
+        if (auto* camera = scene.getRenderCamera())
         {
             const auto [deltaX, deltaY] = window.getRelativeMouseDelta();
             camera->update(deltaX, deltaY);
@@ -411,7 +412,7 @@ void ViewportPanel::handlePositionPicking() const {
 
     const ivec2 pixelCoords = screenToPixel();
     
-    auto* camera = scene.getActiveCamera();
+    auto* camera = scene.getRenderCamera();
     if (!camera)
         return;
 
@@ -440,7 +441,7 @@ void ViewportPanel::handlePositionPicking() const {
 
 
 bool ViewportPanel::handleBillboardPicking() const {
-    auto* camera = scene.getActiveCamera();
+    auto* camera = scene.getRenderCamera();
     if (!camera)
         return false;
 

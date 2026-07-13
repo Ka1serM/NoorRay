@@ -8,26 +8,31 @@
 #include <type_traits>
 
 #include "CUDA/ManagedMemory.h"
-#include "CUDA/rstd/Allocator.h"
 #include "UI/ImGuiManager.h"
 
 Camera::~Camera() = default;
 
 Camera::Camera(std::unique_ptr<Sensor> ownedSensor)
-    : sensorOwner(ownedSensor.release())
+    : sensor(ownedSensor.release())
 {
-    if (!sensorOwner)
+    if (!sensor)
         throw std::invalid_argument("Camera requires a Sensor");
     tagSensor();
     std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
-        sensorOwner->getPsfGridPath().c_str());
+        sensor->getPsfGridPath().c_str());
 }
 
 Camera::Camera(const Camera& other)
-    : TaggedCamera(other), sensor(other.sensor), cameraToWorld(other.cameraToWorld)
+    : TaggedCamera(other), cameraToWorld(other.cameraToWorld)
     , fieldOfView(other.fieldOfView), focalLengthMm(other.focalLengthMm)
     , focusDistance(other.focusDistance)
 {
+    const Sensor& source = other.getSensor();
+    source.DispatchCPU([this, &source](const auto* concrete) {
+        using SensorType = std::remove_cvref_t<decltype(*concrete)>;
+        sensor.reset(new SensorType(source));
+    });
+    tagSensor();
     std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
         other.retainedPsfGridPath);
 }
@@ -36,13 +41,6 @@ Camera& Camera::operator=(const Camera& other)
 {
     if (this == &other)
         return *this;
-    static_cast<TaggedCamera&>(*this) = static_cast<const TaggedCamera&>(other);
-    if (sensorOwner) {
-        sensor.copyPhysicalFrom(*sensorOwner);
-        static_cast<TaggedSensor&>(sensor) = static_cast<const TaggedSensor&>(*sensorOwner);
-    } else {
-        sensor = other.sensor;
-    }
     cameraToWorld = other.cameraToWorld;
     fieldOfView = other.fieldOfView;
     focalLengthMm = other.focalLengthMm;
@@ -55,23 +53,21 @@ Camera& Camera::operator=(const Camera& other)
 void Camera::tagSensor()
 {
     TaggedSensor tagged;
-    if (auto* concrete = dynamic_cast<ScatterPsfSensor*>(sensorOwner.get()))
+    if (auto* concrete = dynamic_cast<ScatterPsfSensor*>(sensor.get()))
         tagged = TaggedSensor(concrete);
-    else if (auto* concrete = dynamic_cast<GatherPsfSensor*>(sensorOwner.get()))
+    else if (auto* concrete = dynamic_cast<GatherPsfSensor*>(sensor.get()))
         tagged = TaggedSensor(concrete);
-    else if (auto* concrete = dynamic_cast<RectangularSensor*>(sensorOwner.get()))
+    else if (auto* concrete = dynamic_cast<RectangularSensor*>(sensor.get()))
         tagged = TaggedSensor(concrete);
     else
         throw std::invalid_argument("Camera requires a concrete Sensor type");
 
-    static_cast<TaggedSensor&>(*sensorOwner) = tagged;
-    sensor.copyPhysicalFrom(*sensorOwner);
-    static_cast<TaggedSensor&>(sensor) = tagged;
+    static_cast<TaggedSensor&>(*sensor) = tagged;
 }
 
 std::unique_ptr<Sensor> Camera::releaseSensor()
 {
-    return std::unique_ptr<Sensor>(sensorOwner.release());
+    return std::unique_ptr<Sensor>(sensor.release());
 }
 
 void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
@@ -79,17 +75,18 @@ void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
     if (!newSensor)
         throw std::invalid_argument("Camera requires a Sensor");
 
-    const std::string psfPath = sensorOwner
-        ? sensorOwner->getPsfGridPath() : std::string{};
+    nr::synchronizeBeforeManagedMutation("Camera sensor replacement");
+
+    const std::string psfPath = getSensor().getPsfGridPath();
     if (!psfPath.empty())
         std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s", psfPath.c_str());
 
-    sensorOwner.reset(newSensor.release());
+    sensor.reset(newSensor.release());
     tagSensor();
-    if (sensorOwner->getType() != SensorType::Rectangular
+    if (sensor->getType() != SensorType::Rectangular
         && retainedPsfGridPath[0] != '\0'
-        && sensorOwner->getPsfGridPath().empty())
-        sensorOwner->loadPsfGrid(retainedPsfGridPath);
+        && sensor->getPsfGridPath().empty())
+        sensor->loadPsfGrid(retainedPsfGridPath);
 }
 
 std::unique_ptr<Camera> Camera::create(
@@ -131,51 +128,35 @@ FisheyeCamera::FisheyeCamera(std::unique_ptr<Sensor> ownedSensor)
     : Camera(std::move(ownedSensor)) {}
 
 PerspectiveCamera::PerspectiveCamera(const PerspectiveCamera& other)
-    : Camera(other.cloneBaseState())
-{
-    sensor = Sensor(nullptr);
-    sensor.cloneConcreteFrom(other.getSensor());
-}
+    : Camera(other) {}
 
 
 ThinLensCamera::ThinLensCamera(const ThinLensCamera& other)
-    : Camera(other.cloneBaseState()), fStop(other.fStop), bokehBias(other.bokehBias)
-{
-    sensor = Sensor(nullptr);
-    sensor.cloneConcreteFrom(other.getSensor());
-}
+    : Camera(other), fStop(other.fStop), bokehBias(other.bokehBias) {}
 
 
 OrthographicCamera::OrthographicCamera(const OrthographicCamera& other)
-    : Camera(other.cloneBaseState())
-{
-    sensor = Sensor(nullptr);
-    sensor.cloneConcreteFrom(other.getSensor());
-}
+    : Camera(other) {}
 
 
 FisheyeCamera::FisheyeCamera(const FisheyeCamera& other)
-    : Camera(other.cloneBaseState()), fStop(other.fStop), bokehBias(other.bokehBias)
-{
-    sensor = Sensor(nullptr);
-    sensor.cloneConcreteFrom(other.getSensor());
-}
+    : Camera(other), fStop(other.fStop), bokehBias(other.bokehBias) {}
 
 
-PerspectiveCamera::~PerspectiveCamera() { sensor.freeConcrete(); }
-ThinLensCamera::~ThinLensCamera() { sensor.freeConcrete(); }
-OrthographicCamera::~OrthographicCamera() { sensor.freeConcrete(); }
-FisheyeCamera::~FisheyeCamera() { sensor.freeConcrete(); }
+PerspectiveCamera::~PerspectiveCamera() = default;
+ThinLensCamera::~ThinLensCamera() = default;
+OrthographicCamera::~OrthographicCamera() = default;
+FisheyeCamera::~FisheyeCamera() = default;
 
 float Camera::focalLengthForFov(const float fovDegrees) const
 {
     const float halfAngle = glm::radians(std::clamp(fovDegrees, 1.f, 179.f)) * 0.5f;
-    return sensor.width() / (2.f * std::tan(halfAngle));
+    return getSensor().width() / (2.f * std::tan(halfAngle));
 }
 
 float Camera::fovForFocalLength(const float focalLength) const
 {
-    const float fov = 2.f * std::atan(sensor.width() / (2.f * std::max(0.001f, focalLength)))
+    const float fov = 2.f * std::atan(getSensor().width() / (2.f * std::max(0.001f, focalLength)))
         * (180.f / std::numbers::pi_v<float>);
     return std::clamp(fov, 1.f, 179.f);
 }
@@ -230,24 +211,6 @@ void Camera::prepareForRender()
     });
 }
 
-Sensor& Camera::getSensor()
-{
-    if (sensorOwner)
-        return *sensorOwner;
-    if (ptr())
-        return DispatchCPU([](auto* cam) -> Sensor& { return cam->sensor; });
-    return sensor;
-}
-
-const Sensor& Camera::getSensor() const
-{
-    if (sensorOwner)
-        return *sensorOwner;
-    if (ptr())
-        return DispatchCPU([](const auto* cam) -> const Sensor& { return cam->sensor; });
-    return sensor;
-}
-
 float Camera::getFocalLength() const
 {
     if (ptr())
@@ -266,11 +229,17 @@ void Camera::setCameraToWorld(const glm::mat4& m)
 
 Camera Camera::cloneBaseState() const
 {
-    Camera state = ptr()
-        ? DispatchCPU([](const auto* cam) { return static_cast<const Camera&>(*cam); })
-        : *this;
-    static_cast<TaggedCamera&>(state) = TaggedCamera(nullptr);
-    static_cast<TaggedSensor&>(state.sensor) = TaggedSensor(nullptr);
+    const Camera* source = ptr()
+        ? DispatchCPU([](const auto* cam) { return static_cast<const Camera*>(cam); })
+        : this;
+
+    Camera state;
+    state.cameraToWorld = source->cameraToWorld;
+    state.fieldOfView = source->fieldOfView;
+    state.focalLengthMm = source->focalLengthMm;
+    state.focusDistance = source->focusDistance;
+    std::snprintf(state.retainedPsfGridPath, sizeof(state.retainedPsfGridPath), "%s",
+        source->retainedPsfGridPath);
     return state;
 }
 

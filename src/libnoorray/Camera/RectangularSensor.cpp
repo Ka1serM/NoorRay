@@ -39,7 +39,6 @@ Sensor& Sensor::operator=(const Sensor& other)
 {
     if (this == &other)
         return *this;
-    static_cast<TaggedSensor&>(*this) = static_cast<const TaggedSensor&>(other);
     widthMm = other.widthMm;
     heightMm = other.heightMm;
     resolutionWidth = other.resolutionWidth;
@@ -77,56 +76,6 @@ constexpr int GatherPsfSensorTypeIndex = 2;
 
 constexpr std::array<const char*, 3> SensorTypeNames{
     "Rectangular", "Scatter PSF", "Gather PSF"};
-
-template <typename SensorType>
-void allocateSensor(Sensor& sensor)
-{
-    nr::synchronizeBeforeManagedMutation("Sensor allocation");
-
-    std::string previousPsfGridPath;
-    if (const auto* scatter = sensor.CastOrNullptr<ScatterPsfSensor>())
-        previousPsfGridPath = scatter->psfGridPath;
-    if (const auto* gather = sensor.CastOrNullptr<GatherPsfSensor>())
-        previousPsfGridPath = gather->psfGridPath;
-
-    sensor.freeConcrete();
-
-    nr::rstd::allocator<SensorType> allocator;
-    SensorType* concrete = allocator.allocate(1);
-    allocator.construct(concrete);
-    if constexpr (requires { concrete->psfGrid; }) {
-        concrete->psfGridPath = previousPsfGridPath;
-        if (!concrete->psfGridPath.empty())
-            concrete->loadPsfGrid();
-    }
-    static_cast<TaggedSensor&>(sensor) = TaggedSensor(concrete);
-}
-
-template <typename SensorType>
-void cloneSensor(Sensor& destination, const Sensor& source)
-{
-    destination.freeConcrete();
-
-    nr::rstd::allocator<SensorType> allocator;
-    SensorType* concrete = allocator.allocate(1);
-    allocator.construct(concrete);
-
-    if constexpr (std::is_same_v<SensorType, ScatterPsfSensor>) {
-        if (const auto* scatter = source.CastOrNullptr<ScatterPsfSensor>()) {
-            concrete->psfGridPath = scatter->psfGridPath;
-            if (!concrete->psfGridPath.empty())
-                concrete->loadPsfGrid();
-        }
-    } else if constexpr (std::is_same_v<SensorType, GatherPsfSensor>) {
-        if (const auto* gather = source.CastOrNullptr<GatherPsfSensor>()) {
-            concrete->psfGridPath = gather->psfGridPath;
-            if (!concrete->psfGridPath.empty())
-                concrete->loadPsfGrid();
-        }
-    }
-
-    static_cast<TaggedSensor&>(destination) = TaggedSensor(concrete);
-}
 
 bool beginSensorUi(const char* label)
 {
@@ -335,18 +284,6 @@ SensorType Sensor::getType() const
     return SensorType::Rectangular;
 }
 
-void Sensor::switchTo(const SensorType type)
-{
-    if (getType() == type)
-        return;
-    if (type == SensorType::ScatterPsf)
-        allocateScatterPsf();
-    else if (type == SensorType::GatherPsf)
-        allocateGatherPsf();
-    else
-        allocateRectangular();
-}
-
 std::string Sensor::getPsfGridPath() const
 {
     if (const auto* scatter = CastOrNullptr<ScatterPsfSensor>())
@@ -375,67 +312,6 @@ void Sensor::loadPsfGrid(std::string path)
 {
     setPsfGridPath(std::move(path));
     reloadPsfGrid();
-}
-
-void Sensor::freeConcrete()
-{
-    if (!ptr())
-        return;
-
-    nr::synchronizeBeforeManagedMutation("Sensor free");
-    DispatchCPU([](auto* concrete) {
-        using SensorType = std::remove_reference_t<decltype(*concrete)>;
-        nr::rstd::allocator<SensorType> allocator;
-        allocator.destroy(concrete);
-        allocator.deallocate(concrete, 1);
-    });
-
-    static_cast<TaggedSensor&>(*this) = TaggedSensor(nullptr);
-}
-
-void Sensor::moveConcreteFrom(Sensor& other)
-{
-    if (this == &other)
-        return;
-
-    freeConcrete();
-    *this = other;
-    static_cast<TaggedSensor&>(other) = TaggedSensor(nullptr);
-}
-
-void Sensor::cloneConcreteFrom(const Sensor& other)
-{
-    if (this == &other)
-        return;
-
-    copyPhysicalFrom(other);
-    setImageSensorPath(other.getImageSensorPath());
-    std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%s",
-        other.imageSensorLoadStatus);
-
-    if (!other) {
-        allocateRectangular();
-    } else if (other.Is<ScatterPsfSensor>())
-        cloneSensor<ScatterPsfSensor>(*this, other);
-    else if (other.Is<GatherPsfSensor>())
-        cloneSensor<GatherPsfSensor>(*this, other);
-    else if (other.Is<RectangularSensor>())
-        cloneSensor<RectangularSensor>(*this, other);
-}
-
-void Sensor::allocateRectangular()
-{
-    allocateSensor<RectangularSensor>(*this);
-}
-
-void Sensor::allocateScatterPsf()
-{
-    allocateSensor<ScatterPsfSensor>(*this);
-}
-
-void Sensor::allocateGatherPsf()
-{
-    allocateSensor<GatherPsfSensor>(*this);
 }
 
 uint32_t Sensor::reloadPsfGrid()

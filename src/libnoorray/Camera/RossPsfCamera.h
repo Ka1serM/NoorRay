@@ -48,6 +48,7 @@ public:
             return false;
 
         wavelengths.terminateSecondary();
+        const Sensor& sensor = getSensor();
         const float width = static_cast<float>(sensor.resolutionX());
         const float height = static_cast<float>(sensor.resolutionY());
         const float px = (nx * 0.5f + 0.5f) * width;

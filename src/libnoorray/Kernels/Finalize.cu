@@ -35,7 +35,7 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
     ctx.cieZ = params.scene.cieZ;
 
     const Sensor& sensor = params.scene.camera->Dispatch([](const auto* camera) -> const Sensor& {
-        return camera->sensor;
+        return camera->getSensor();
     });
     const bool deferredOutput = sensor.Is<ScatterPsfSensor>();
     sensor.Dispatch([&](const auto* concreteSensor) {
@@ -88,7 +88,7 @@ NR_GPU_KERNEL void resolveScatterPsfKernel(const KernelParams params)
         return;
 
     const Sensor& sensor = params.scene.camera->Dispatch([](const auto* camera) -> const Sensor& {
-        return camera->sensor;
+        return camera->getSensor();
     });
     const ScatterPsfSensor* scatterSensor = sensor.CastOrNullptr<ScatterPsfSensor>();
     if (scatterSensor == nullptr)
@@ -109,7 +109,7 @@ NR_GPU_KERNEL void applyGatherPsfKernel(const KernelParams params)
         return;
 
     const Sensor& sensor = params.scene.camera->Dispatch([](const auto* camera) -> const Sensor& {
-        return camera->sensor;
+        return camera->getSensor();
     });
     const GatherPsfSensor* gatherSensor = sensor.CastOrNullptr<GatherPsfSensor>();
     if (gatherSensor == nullptr)

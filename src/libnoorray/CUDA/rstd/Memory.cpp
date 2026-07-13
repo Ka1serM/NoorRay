@@ -1,4 +1,5 @@
 #include "CUDA/rstd/Memory.h"
+#include "CUDA/UnifiedMemoryObject.h"
 
 #if defined(NR_BACKEND_CUDA)
 
@@ -39,6 +40,21 @@ void deallocate_managed(void* p) noexcept
         cudaFree(p);
 }
 
+}
+
+void* nr::UnifiedMemoryObject::operator new(const std::size_t size)
+{
+    return rstd::allocate_managed(size);
+}
+
+void nr::UnifiedMemoryObject::operator delete(void* pointer) noexcept
+{
+    rstd::deallocate_managed(pointer);
+}
+
+void nr::UnifiedMemoryObject::operator delete(void* pointer, std::size_t) noexcept
+{
+    rstd::deallocate_managed(pointer);
 }
 
 #endif

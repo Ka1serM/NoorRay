@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Camera/Sensor.h"
+#include "CUDA/rstd/UniquePtr.h"
 
 #if !defined(NR_OPTIX_PTX_BUILD)
 #include "libross/imaging/interpolatedpsfgrid/InterpolatedPsfGrid.h"
@@ -14,9 +15,11 @@
 
 class ScatterPsfSensor : public RectangularSensor {
 public:
-    ross::InterpolatedPsfGrid* psfGrid{};
+    nr::rstd::unique_ptr<ross::InterpolatedPsfGrid> psfGrid;
 
 #ifndef NR_GPU_CODE
+    ScatterPsfSensor() = default;
+    explicit ScatterPsfSensor(const Sensor& other);
     std::string psfGridPath;
     std::string psfLoadStatus;
     std::unique_ptr<pfd::open_file> psfGridDialog;
@@ -50,9 +53,10 @@ public:
 #if defined(NR_OPTIX_PTX_BUILD)
         (void)pixel; (void)L; (void)wl; (void)sampleWeight; (void)ctx;
 #else
-        if (psfGrid == nullptr || ctx.accumulation == nullptr)
+        if (!psfGrid || ctx.accumulation == nullptr)
             return;
         glm::vec3 rgb = sensorRGBFromSpectrum(L, wl, ctx.cieX, ctx.cieY, ctx.cieZ);
+        updateNoiseMoments(pixel, rgb, ctx);
         const uint32_t x = pixel % ctx.width;
         const uint32_t y = pixel / ctx.width;
         auto addSplat = [=](const ross::Vector2i& dest, float psfWeight) {

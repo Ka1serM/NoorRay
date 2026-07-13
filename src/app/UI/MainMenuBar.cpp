@@ -3,8 +3,6 @@
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Camera/CameraInstance.h"
-#include "Camera/ThinLensCamera.h"
-#include "CUDA/rstd/Allocator.h"
 #include <SDL3/SDL.h>
 #include <iostream>
 #include "Log.h"
@@ -74,12 +72,10 @@ void MainMenuBar::renderAddMenu() const {
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Camera")) {
-            nr::rstd::allocator<ThinLensCamera> allocator;
-            ThinLensCamera* thinLens = allocator.allocate(1);
-            allocator.construct(thinLens);
-            auto camera = std::make_unique<CameraInstance>(
-                scene, "Camera", Transform(vec3(0.f, 0.f, 5.f)), Camera(thinLens));
-            scene.setActiveObjectId(scene.add(std::move(camera)));
+            auto camera = Camera::create(CameraProjectionType::ThinLens);
+            auto instance = std::make_unique<CameraInstance>(
+                std::move(camera), "Camera", Transform(vec3(0.f, 0.f, 5.f)));
+            scene.setActiveObjectId(scene.add(std::move(instance)));
         }
         ImGui::EndMenu();
     }

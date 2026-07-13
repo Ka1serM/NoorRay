@@ -9,6 +9,7 @@
 #include "Vulkan/Context.h"
 
 class ImGuiComponent;
+class Window;
 
 class ImGuiManager {
 public:
@@ -17,7 +18,8 @@ public:
         Light
     };
     
-    ImGuiManager(Context& context, uint32_t numImages, vk::SurfaceFormatKHR renderTargetFormat);
+    ImGuiManager(Window& window, Context& context, uint32_t numImages,
+        vk::SurfaceFormatKHR renderTargetFormat);
     ~ImGuiManager();
     // Runs widget logic for all components (including any resulting scene
     // mutations) and finalizes ImGui's draw data. Must be called before any
@@ -52,7 +54,6 @@ public:
     void SetTheme(Theme theme);
     Theme GetCurrentTheme() const { return currentTheme; }
 private:
-    Context& context;
     std::vector<std::unique_ptr<ImGuiComponent>> components;
     Theme currentTheme = Theme::Dark;
 };

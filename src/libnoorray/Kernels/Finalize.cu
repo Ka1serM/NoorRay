@@ -24,6 +24,7 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
 
     SensorSampleContext ctx{};
     ctx.accumulation = params.accumulation;
+    ctx.noiseMoments = params.noiseMoments;
     ctx.psfBuckets = params.psfGatherBuckets;
     ctx.width = params.frame.width;
     ctx.height = params.frame.height;
@@ -49,6 +50,34 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
         surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
             params.output.color, x * sizeof(float4), y);
     }
+}
+
+NR_GPU_KERNEL void reduceNoiseVarianceKernel(const KernelParams params, float* varianceSum)
+{
+    constexpr uint32_t BlockSize = 256;
+    __shared__ float partial[BlockSize];
+
+    const uint32_t pixel = NR_GPU_LAUNCH_IDX;
+    const uint32_t pixelCount = params.frame.width * params.frame.height;
+    const uint32_t sampleCount = params.frame.totalAccumulated + 1;
+    float varianceOfMean = 0.0f;
+    if (pixel < pixelCount && sampleCount > 1 && params.noiseMoments != nullptr)
+    {
+        const float m2 = params.noiseMoments[pixel].y;
+        varianceOfMean = fmaxf(m2, 0.0f)
+            / (static_cast<float>(sampleCount - 1) * static_cast<float>(sampleCount));
+    }
+
+    partial[threadIdx.x] = varianceOfMean;
+    __syncthreads();
+    for (uint32_t stride = BlockSize / 2; stride != 0; stride /= 2)
+    {
+        if (threadIdx.x < stride)
+            partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+        atomicAdd(varianceSum, partial[0]);
 }
 
 NR_GPU_KERNEL void resolveScatterPsfKernel(const KernelParams params)

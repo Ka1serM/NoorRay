@@ -57,6 +57,7 @@ public:
     Image& getImage() { return image; }
     const Image& getImage() const { return image; }
     cudaSurfaceObject_t getSurface() const { return surface; }
+    cudaArray_t getArray() const { return cudaArray; }
 
 private:
     Image image;

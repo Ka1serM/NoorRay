@@ -58,6 +58,7 @@ void nr::cuda::UniqueSharedImage::create(
     NR_GPU_CHECK(cudaExternalMemoryGetMappedMipmappedArray(
         &cudaMipmappedArray, cudaMemory, &arrayDesc));
     NR_GPU_CHECK(cudaGetMipmappedArrayLevel(&cudaArray, cudaMipmappedArray, 0));
+    image.setCudaArray(cudaArray);
 
     cudaResourceDesc resourceDesc{};
     resourceDesc.resType = cudaResourceTypeArray;

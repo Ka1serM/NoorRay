@@ -5,6 +5,12 @@
 
 class PerspectiveCamera : public Camera {
 public:
+#ifndef NR_GPU_CODE
+    PerspectiveCamera();
+    explicit PerspectiveCamera(std::unique_ptr<Sensor> sensor);
+    PerspectiveCamera(const PerspectiveCamera& other);
+    ~PerspectiveCamera();
+#endif
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, RandomState&, uint32_t, SampledWavelengths&, bool = false) const
     {

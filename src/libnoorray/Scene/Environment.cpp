@@ -2,9 +2,12 @@
 
 #include <cmath>
 #include <numeric>
+#include <stdexcept>
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
+
+#include "Vulkan/Texture.h"
 
 static constexpr float kPi = 3.14159265f;
 
@@ -23,6 +26,7 @@ void Environment::destroyCdf() noexcept
     cdfTexture.reset();
     cdfWidth = 0;
     cdfHeight = 0;
+    cdfDirty = 1;
 }
 
 void Environment::updateDerivedSettings()
@@ -35,6 +39,21 @@ void Environment::updateDerivedSettings()
     const float luminance = std::max(
         0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b, 0.0f);
     importanceWeight = 4.0f * kPi * luminance * std::max(lightingExposureScale, 0.0f);
+    cdfDirty = 1;
+}
+
+void Environment::setHdriTexture(const Texture& texture)
+{
+    if (texture.getSceneIndex() < 0)
+        throw std::invalid_argument("The HDRI texture must be added to a Scene first");
+    textureIndex = texture.getSceneIndex();
+    cdfDirty = 1;
+}
+
+void Environment::clearHdriTexture()
+{
+    textureIndex = -1;
+    cdfDirty = 1;
 }
 
 std::vector<float> Environment::computeCdf(const float* hdr, const int w, const int h)

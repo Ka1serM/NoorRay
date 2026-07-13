@@ -1,8 +1,12 @@
 #pragma once
 
 #include "Context.h"
+#include <cuda_runtime_api.h>
+#include <string>
 #include <vulkan/vulkan.hpp>
 #include <vk_mem_alloc.h>
+
+class Bitmap;
 
 class Image {
 public:
@@ -28,6 +32,9 @@ public:
     vk::DeviceMemory getMemory() const { return externalMemory; }
     vk::DeviceSize getAllocationSize() const { return allocationSize; }
     bool isExportable() const { return externalMemory != VK_NULL_HANDLE; }
+    void setCudaArray(cudaArray_t array) { cudaArray = array; }
+    Bitmap toBitmap() const;
+    void save(const std::string& path) const;
 
     uint32_t getWidth() const { return width; }
     uint32_t getHeight() const { return height; }
@@ -49,4 +56,5 @@ private:
     vk::Format format;
     uint32_t width;
     uint32_t height;
+    cudaArray_t cudaArray{};
 };

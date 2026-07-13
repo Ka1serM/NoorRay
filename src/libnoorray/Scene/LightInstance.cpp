@@ -37,19 +37,19 @@ void LightInstance::onTransformUpdated()
 
     switch (lightType) {
     case TypePoint:
-        scene.pointLights[lightIndex].position = pos;
+        scene->pointLights[lightIndex].position = pos;
         break;
     case TypeSpot:
-        scene.spotLights[lightIndex].position = pos;
-        scene.spotLights[lightIndex].direction = dir;
+        scene->spotLights[lightIndex].position = pos;
+        scene->spotLights[lightIndex].direction = dir;
         break;
     case TypeRect:
-        scene.rectLights[lightIndex].position = pos;
-        scene.rectLights[lightIndex].direction = dir;
-        scene.rectLights[lightIndex].tangent = tangent;
+        scene->rectLights[lightIndex].position = pos;
+        scene->rectLights[lightIndex].direction = dir;
+        scene->rectLights[lightIndex].tangent = tangent;
         break;
     case TypeDirectional:
-        scene.directionalLights[lightIndex].direction = dir;
+        scene->directionalLights[lightIndex].direction = dir;
         break;
     }
 }
@@ -61,7 +61,7 @@ glm::vec3 LightInstance::getColor() const
 
 std::unique_ptr<SceneObject> LightInstance::clone() const
 {
-    auto c = std::make_unique<LightInstance>(scene, getName() + " (copy)",
+    auto c = std::make_unique<LightInstance>(*scene, getName() + " (copy)",
                                              transform, lightType);
     c->light = light;
     return c;
@@ -83,25 +83,25 @@ bool LightInstance::renderUi()
     bool changed = SceneObject::renderUi();
     switch (lightType) {
     case TypePoint:
-        changed |= scene.pointLights[lightIndex].renderUi();
-        light = scene.pointLights[lightIndex];
+        changed |= scene->pointLights[lightIndex].renderUi();
+        light = scene->pointLights[lightIndex];
         break;
     case TypeSpot:
-        changed |= scene.spotLights[lightIndex].renderUi();
-        light = scene.spotLights[lightIndex];
+        changed |= scene->spotLights[lightIndex].renderUi();
+        light = scene->spotLights[lightIndex];
         break;
     case TypeRect:
-        changed |= scene.rectLights[lightIndex].renderUi();
-        light = scene.rectLights[lightIndex];
+        changed |= scene->rectLights[lightIndex].renderUi();
+        light = scene->rectLights[lightIndex];
         break;
     case TypeDirectional:
-        changed |= scene.directionalLights[lightIndex].renderUi();
-        light = scene.directionalLights[lightIndex];
+        changed |= scene->directionalLights[lightIndex].renderUi();
+        light = scene->directionalLights[lightIndex];
         break;
     }
     if (changed) {
-        scene.setDirtyFlag(Lights);
-        scene.setDirtyFlag(Accumulation);
+        scene->setDirtyFlag(Lights);
+        scene->setDirtyFlag(Accumulation);
     }
     return changed;
 }

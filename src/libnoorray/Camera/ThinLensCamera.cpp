@@ -19,6 +19,6 @@ bool ThinLensCamera::renderUi()
         bokehBias = std::max(0.001f, value);
         changed = true;
     });
-    const bool sensorChanged = sensor.renderUi();
+    const bool sensorChanged = getSensor().renderUi();
     return changed || sensorChanged;
 }

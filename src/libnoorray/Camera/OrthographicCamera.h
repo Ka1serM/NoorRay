@@ -5,6 +5,12 @@
 
 class OrthographicCamera : public Camera {
 public:
+#ifndef NR_GPU_CODE
+    OrthographicCamera();
+    explicit OrthographicCamera(std::unique_ptr<Sensor> sensor);
+    OrthographicCamera(const OrthographicCamera& other);
+    ~OrthographicCamera();
+#endif
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, RandomState&, uint32_t, SampledWavelengths&, bool = false) const
     {

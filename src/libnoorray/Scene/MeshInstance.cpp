@@ -19,8 +19,8 @@ std::unique_ptr<SceneObject> MeshInstance::clone() const {
 
 void MeshInstance::onTransformUpdated() {
     SceneObject::onTransformUpdated();
-    scene.setDirtyFlag(TLAS);
-    scene.markMeshInstanceTransformDirty(scene.getMeshInstanceIndex(this));
+    scene->setDirtyFlag(TLAS);
+    scene->markMeshInstanceTransformDirty(scene->getMeshInstanceIndex(this));
 }
 
 bool MeshInstance::renderUi() {
@@ -31,7 +31,7 @@ bool MeshInstance::renderUi() {
         return changed;
 
     if (ImGui::BeginTable("MeshTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        changed |= scene.getMeshAsset(meshIndex).renderUi();
+        changed |= scene->getMeshAsset(meshIndex).renderUi();
         ImGui::EndTable();
     }
     ImGui::TreePop();

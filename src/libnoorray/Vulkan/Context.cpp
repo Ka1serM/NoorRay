@@ -8,9 +8,6 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
-
 #include <cuda_runtime_api.h>
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
@@ -49,45 +46,23 @@ static int selectCudaDeviceForVulkan(const vk::PhysicalDevice physicalDevice)
     throw std::runtime_error("No CUDA device matches the selected Vulkan physical device UUID");
 }
 
-Context::Context(const int width, const int height, const bool isHeadless)
-    : windowWidth(width), windowHeight(height), headless(isHeadless)
+Context::Context()
+    : Context(nullptr)
+{
+}
+
+Context::Context(VulkanSurfaceProvider& provider)
+    : Context(&provider)
+{
+}
+
+Context::Context(VulkanSurfaceProvider* provider)
+    : headless(provider == nullptr), surfaceProvider(provider)
 {
     try {
-        if (!headless) {
-#ifdef __linux__
-            SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
-            SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
-
-            if (std::getenv("WAYLAND_DISPLAY") && !std::getenv("SDL_VIDEO_DRIVER")) {
-                SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
-            }
-#endif
-            if (!SDL_Init(SDL_INIT_VIDEO)) {
-                LOG_FATAL("Failed to initialize SDL: " << SDL_GetError());
-                throw std::runtime_error("Failed to initialize SDL.");
-            }
-            if (!SDL_Vulkan_LoadLibrary(nullptr)) {
-                LOG_FATAL("Failed to load Vulkan library via SDL: " << SDL_GetError());
-                throw std::runtime_error("Failed to load Vulkan library.");
-            }
-
-            const float dpiScaleFloat = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-            if (dpiScaleFloat != 0.0f) {
-                dpiScale = dpiScaleFloat;
-                windowWidth  = static_cast<int>(static_cast<float>(windowWidth)  * dpiScale);
-                windowHeight = static_cast<int>(static_cast<float>(windowHeight) * dpiScale);
-            }
-            window = SDL_CreateWindow("NoorRay by Marcel K.", windowWidth, windowHeight,
-                SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-            if (!window) {
-                LOG_FATAL("Failed to create SDL window: " << SDL_GetError());
-                throw std::runtime_error("Failed to create SDL window.");
-            }
-        }
-
         const auto vkGetInstanceProcAddr = headless
             ? &::vkGetInstanceProcAddr
-            : reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+            : surfaceProvider->getVulkanInstanceProcAddr();
         if (!vkGetInstanceProcAddr) {
             LOG_FATAL("Failed to get vkGetInstanceProcAddr");
             throw std::runtime_error("Failed to get vkGetInstanceProcAddr.");
@@ -118,14 +93,9 @@ Context::Context(const int width, const int height, const bool isHeadless)
         }
 #endif
 
-        if (!headless) {
-            VkSurfaceKHR rawSurface;
-            if (!SDL_Vulkan_CreateSurface(window, instance.get(), nullptr, &rawSurface)) {
-                LOG_FATAL("Failed to create window surface with SDL: " << SDL_GetError());
-                throw std::runtime_error("Failed to create window surface.");
-            }
-            surface = vk::UniqueSurfaceKHR(vk::SurfaceKHR(rawSurface), {instance.get()});
-        }
+        if (!headless)
+            surface = vk::UniqueSurfaceKHR(
+                surfaceProvider->createVulkanSurface(instance.get()), {instance.get()});
         
         pickPhysicalDevice();
         createLogicalDevice();
@@ -217,15 +187,8 @@ void Context::createAllocator() {
 
 void Context::createVulkanInstance() {
 std::vector<const char*> extensions;
-if (!headless) {
-    unsigned int sdlExtensionCount = 0;
-    const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-    if (!sdlExtensions) {
-        LOG_FATAL("Failed to get Vulkan instance extensions from SDL: " << SDL_GetError());
-        throw std::runtime_error("Failed to get Vulkan instance extensions.");
-    }
-    extensions.assign(sdlExtensions, sdlExtensions + sdlExtensionCount);
-}
+if (!headless)
+    extensions = surfaceProvider->getRequiredVulkanInstanceExtensions();
 std::vector<const char*> layers;
 
 // --- Create the Debug Messenger Info ---
@@ -524,13 +487,4 @@ Context::~Context() {
         allocator = VK_NULL_HANDLE;
     }
 
-    if (!headless) {
-        if (window != nullptr)
-        {
-            SDL_DestroyWindow(window);
-            window = nullptr;
-        }
-        SDL_Vulkan_UnloadLibrary();
-        SDL_Quit();
-    }
 }

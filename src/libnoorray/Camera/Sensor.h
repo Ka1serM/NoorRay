@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string_view>
 #ifndef NR_GPU_CODE
+#include <memory>
 #include <string>
 #endif
 
@@ -13,6 +14,7 @@
 
 #include "CUDA/Annotations.h"
 #include "CUDA/TaggedPointer.h"
+#include "CUDA/UnifiedMemoryObject.h"
 #include "Raytracing/Spectrum.h"
 
 namespace ross {
@@ -27,6 +29,13 @@ class RectangularSensor;
 class ScatterPsfSensor;
 class GatherPsfSensor;
 
+enum class SensorType : int
+{
+    Rectangular,
+    ScatterPsf,
+    GatherPsf,
+};
+
 struct PsfGatherBucketSample {
     double rgbSum[3]{};
     double count{};
@@ -34,6 +43,7 @@ struct PsfGatherBucketSample {
 
 struct SensorSampleContext {
     glm::vec4* accumulation{};
+    glm::vec2* noiseMoments{};
     PsfGatherBucketSample* psfBuckets{};
     uint32_t width{};
     uint32_t height{};
@@ -44,11 +54,30 @@ struct SensorSampleContext {
     const float* cieZ{};
 };
 
+NR_CPU_GPU inline void updateNoiseMoments(
+    const uint32_t pixel, const glm::vec3& rgb, const SensorSampleContext& ctx)
+{
+    if (ctx.noiseMoments == nullptr)
+        return;
+
+    const float luminance = 0.2126f * rgb.x + 0.7152f * rgb.y + 0.0722f * rgb.z;
+    glm::vec2 moments = ctx.noiseMoments[pixel];
+    const float sampleCount = static_cast<float>(ctx.totalAccumulated + 1);
+    const float delta = luminance - moments.x;
+    moments.x += delta / sampleCount;
+    moments.y += delta * (luminance - moments.x);
+    ctx.noiseMoments[pixel] = moments;
+}
+
 using TaggedSensor = nr::TaggedPointer<RectangularSensor, ScatterPsfSensor, GatherPsfSensor>;
 
-class Sensor : public TaggedSensor {
+class Sensor : public nr::UnifiedMemoryObject, public TaggedSensor {
 public:
     using TaggedSensor::TaggedSensor;
+    Sensor() = default;
+    Sensor(const Sensor& other);
+    Sensor& operator=(const Sensor& other);
+    virtual ~Sensor();
 
     float widthMm{5.784f};
     float heightMm{3.264f};
@@ -73,6 +102,11 @@ public:
     std::string_view getImageSensorPath() const;
     void setImageSensorPath(std::string_view path);
     bool loadImageSensorDimensions();
+    SensorType getType() const;
+    void switchTo(SensorType type);
+    std::string getPsfGridPath() const;
+    void setPsfGridPath(std::string path);
+    void loadPsfGrid(std::string path);
     void freeConcrete();
     void moveConcreteFrom(Sensor& other);
     void cloneConcreteFrom(const Sensor& other);
@@ -80,9 +114,21 @@ public:
     void allocateScatterPsf();
     void allocateGatherPsf();
     uint32_t reloadPsfGrid();
+    void requestType(SensorType type) { requestedType = static_cast<int>(type); }
+    bool consumeRequestedType(SensorType& type)
+    {
+        if (requestedType < 0)
+            return false;
+        type = static_cast<SensorType>(requestedType);
+        requestedType = -1;
+        return true;
+    }
 #endif
 
     bool renderUi();
+
+private:
+    int requestedType{-1};
 };
 
 NR_CPU_GPU inline glm::vec3 sensorRGBFromSpectrum(

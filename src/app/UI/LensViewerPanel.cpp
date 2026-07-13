@@ -74,13 +74,13 @@ void LensViewerPanel::retraceRays(const RealisticCamera& camera)
 {
     rays.clear();
     settingsDirty = false;
-    if (camera.rossLens == nullptr || camera.rossLens->surfaces.empty())
+    if (!camera.rossLens || camera.rossLens->surfaces.empty())
         return;
 
     const ross::CameraLens& lens = *camera.rossLens;
     const LensViewerRaytracer tracer(lens);
 
-    const uint32_t resolutionHeight = std::max(1u, camera.sensor.resolutionHeight);
+    const uint32_t resolutionHeight = std::max(1u, camera.getSensor().resolutionHeight);
     const uint32_t stride = std::max(1u, static_cast<uint32_t>(std::max(1, pixelStride)));
     std::vector<uint32_t> rows;
     for (uint32_t y = 0; y < resolutionHeight; y += stride)
@@ -113,7 +113,7 @@ void LensViewerPanel::drawCanvas(const RealisticCamera* camera)
 {
     // Gather the plotted bounds (surfaces + traced rays) in the lens' native z/height frame.
     float zMin = 0.0f, zMax = 0.0f, heightMax = 0.0f;
-    if (camera != nullptr && camera->rossLens != nullptr) {
+    if (camera != nullptr && camera->rossLens) {
         for (const auto& surf : camera->rossLens->surfaces) {
             const float z = surf.center;
             zMin = std::min(zMin, z);
@@ -172,7 +172,7 @@ void LensViewerPanel::drawCanvas(const RealisticCamera* camera)
             IM_COL32(200, 200, 60, 255), 2.0f);
     }
 
-    if (camera != nullptr && camera->rossLens != nullptr) {
+    if (camera != nullptr && camera->rossLens) {
         for (const auto& surf : camera->rossLens->surfaces) {
             const float z = surf.center;
             if (surf.isAperture()) {
@@ -275,7 +275,8 @@ void LensViewerPanel::renderUi()
     }
 
     ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::DragInt("Pixel stride", &pixelStride, 1.0f, 1, static_cast<int>(camera->sensor.resolutionHeight)))
+    if (ImGui::DragInt("Pixel stride", &pixelStride, 1.0f, 1,
+        static_cast<int>(camera->getSensor().resolutionHeight)))
         settingsDirty = true;
     ImGui::SameLine();
     if (ImGui::Button("Fit View"))

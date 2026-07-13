@@ -9,6 +9,7 @@ public:
     
     void onComputeFinished(float raytraceMs);
     void setSampleInfo(int current, int max);
+    void resetRenderTimer();
     void renderUi() override;
 
     int getBvhMode() const { return visualizeBVH; }
@@ -23,6 +24,8 @@ private:
     double m_accumFps = 0.0;
     int m_frameCount = 0;
     std::chrono::steady_clock::time_point m_lastResetTime = std::chrono::steady_clock::now();
+
+    double m_renderTimeSeconds = 0.0;
 
     int visualizeBVH = 0; // 0 = Disabled, 1-3 = Modes
 

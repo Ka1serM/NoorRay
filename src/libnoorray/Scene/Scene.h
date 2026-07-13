@@ -7,6 +7,7 @@
 #include "CUDA/Unique/Texture.h"
 #include "CUDA/Unique/SharedVector.h"
 #include "CUDA/rstd/Vector.h"
+#include "CUDA/rstd/UniquePtr.h"
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
 #include "Mesh/MeshAsset.h"
@@ -70,7 +71,7 @@ class Scene {
     std::vector<std::string> textureNames;
     nr::rstd::vector<MeshAsset> meshAssets;
     nr::rstd::vector<GaussianAsset> gaussianAssets;
-    Environment* environment{};
+    nr::rstd::unique_ptr<Environment> environment;
     RenderSettings renderSettings{};
 
     // Light arrays — Vulkan-allocated, imported into CUDA/OptiX via an external memory
@@ -110,12 +111,16 @@ public:
     Scene(Context& context);
     ~Scene();
 
+    void load(const std::string& path);
+    void importFile(const std::string& path);
+    void read(const std::string& path);
+
     // Object lifetime
     void clear();
     uint64_t add(std::unique_ptr<SceneObject> sceneObject);
     uint32_t add(MeshAsset meshAsset);
     uint32_t add(GaussianAsset gaussianAsset);
-    void add(Texture&& texture);
+    Texture& add(Texture&& texture);
     bool removeObject(uint64_t objectId);
     bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
 
@@ -162,6 +167,7 @@ public:
 
     // Camera
     CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }
+    bool setActiveCamera(CameraInstance* camera);
 
     // Light GPU data, Vulkan/CUDA-shared. Host pointers (below) are for CPU-side use
     // (UI, transform updates, host-side selection-weight sums); the *Device variants

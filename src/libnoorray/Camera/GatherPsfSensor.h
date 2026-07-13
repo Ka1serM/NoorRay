@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Camera/Sensor.h"
+#include "CUDA/rstd/UniquePtr.h"
 
 #if !defined(NR_OPTIX_PTX_BUILD)
 #include "libross/imaging/interpolatedpsfgrid/InterpolatedPsfGrid.h"
@@ -16,9 +17,11 @@
 
 class GatherPsfSensor : public RectangularSensor {
 public:
-    ross::InterpolatedPsfGrid* psfGrid{};
+    nr::rstd::unique_ptr<ross::InterpolatedPsfGrid> psfGrid;
 
 #ifndef NR_GPU_CODE
+    GatherPsfSensor() = default;
+    explicit GatherPsfSensor(const Sensor& other);
     std::string psfGridPath;
     std::string psfLoadStatus;
     std::unique_ptr<pfd::open_file> psfGridDialog;
@@ -42,7 +45,7 @@ public:
         (void)pixel; (void)width; (void)height; (void)psfBinCount; (void)psfBuckets;
         return glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
 #else
-        if (psfGrid == nullptr || psfBuckets == nullptr || psfBinCount == 0)
+        if (!psfGrid || psfBuckets == nullptr || psfBinCount == 0)
             return glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
 
         const size_t pixelCount = static_cast<size_t>(width) * height;
@@ -100,7 +103,7 @@ public:
 #else
         RectangularSensor::addSample(pixel, L, wl, sampleWeight, ctx);
 
-        if (psfGrid == nullptr || ctx.psfBuckets == nullptr)
+        if (!psfGrid || ctx.psfBuckets == nullptr)
             return;
         glm::vec3 rgb = sensorRGBFromSpectrum(L, wl, ctx.cieX, ctx.cieY, ctx.cieZ);
         const size_t bin = psfGrid->nearestPsfIndex(wl[0] * 0.001f);

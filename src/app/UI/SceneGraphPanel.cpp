@@ -1,5 +1,6 @@
 ﻿#include "SceneGraphPanel.h"
 #include "Scene/SceneObject.h"
+#include "Camera/CameraInstance.h"
 #include <imgui.h>
 #include <algorithm>
 #include <iterator>
@@ -66,6 +67,16 @@ void SceneGraphPanel::drawNode(const std::shared_ptr<SceneObject>& node) {
     if (node->getChildren().empty())
         flags |= ImGuiTreeNodeFlags_Leaf;
 
+    ImGui::PushID(node.get());
+    if (auto* camera = dynamic_cast<CameraInstance*>(node.get())) {
+        const bool isActiveCamera = camera == scene.getActiveCamera();
+        if (ImGui::RadioButton("##ActiveCamera", isActiveCamera))
+            scene.setActiveCamera(camera);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(isActiveCamera ? "Active render camera" : "Set as active render camera");
+        ImGui::SameLine();
+    }
+
     const std::string label = node->getName() + "##SceneObject" + std::to_string(objectId);
     const bool node_open = ImGui::TreeNodeEx(label.c_str(), flags);
 
@@ -97,4 +108,5 @@ void SceneGraphPanel::drawNode(const std::shared_ptr<SceneObject>& node) {
             drawNode(child);
         ImGui::TreePop();
     }
+    ImGui::PopID();
 }

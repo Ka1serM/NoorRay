@@ -23,6 +23,8 @@ class RenderSettings
 public:
     int samples{1};
     int maxSamples{3000};
+    bool noiseLimitEnabled{false};
+    float noiseLevel{0.0001f};
     int maxBounces{10};
     int russianRouletteStartBounce{3};
     float exposure{};

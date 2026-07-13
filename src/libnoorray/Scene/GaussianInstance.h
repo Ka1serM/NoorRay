@@ -15,7 +15,7 @@ public:
     std::unique_ptr<SceneObject> clone() const override;
 
     uint32_t getGaussianAssetIndex() const { return gaussianAssetIndex; }
-    const GaussianAsset& getGaussianAsset() const { return scene.getGaussianAsset(gaussianAssetIndex); }
+    const GaussianAsset& getGaussianAsset() const { return scene->getGaussianAsset(gaussianAssetIndex); }
 
     void onTransformUpdated() override;
 };

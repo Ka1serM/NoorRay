@@ -10,7 +10,7 @@
   },
   {
     "label": "configure debug",
-    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Debug -DNR_CUDA_ARCH='86;89' -DNR_BUILD_PYTHON=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && rm -f build/current && cmake -E create_symlink debug build/current",
+    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Debug -DNR_CUDA_ARCH='86;89' -DNR_BUILD_PYTHON=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -19,7 +19,7 @@
   },
   {
     "label": "configure release",
-    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH='86;89' -DNR_BUILD_PYTHON=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && rm -f build/current && cmake -E create_symlink release build/current",
+    "command": "CUDACXX=/usr/local/cuda/bin/nvcc CUDAToolkit_ROOT=/usr/local/cuda VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH='86;89' -DNR_BUILD_PYTHON=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -27,8 +27,8 @@
     "hide": "never"
   },
   {
-    "label": "build libnoorray",
-    "command": "cmake --build build/current --target libnoorray -j$(nproc)",
+    "label": "build libnoorray Debug",
+    "command": "cmake --build build/debug --target libnoorray -j$(nproc)",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -36,8 +36,8 @@
     "hide": "never"
   },
   {
-    "label": "build NoorRay",
-    "command": "cmake --build build/current --target NoorRay -j$(nproc)",
+    "label": "build libnoorray Release",
+    "command": "cmake --build build/release --target libnoorray -j$(nproc)",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -45,8 +45,8 @@
     "hide": "never"
   },
   {
-    "label": "build pynoorray",
-    "command": "cmake --build build/current --target _pynoorray -j$(nproc)",
+    "label": "build NoorRay Debug",
+    "command": "cmake --build build/debug --target NoorRay -j$(nproc)",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -54,8 +54,26 @@
     "hide": "never"
   },
   {
-    "label": "run NoorRay",
-    "command": "cmake --build build/current --target NoorRay -j$(nproc) && ./build/current/NoorRay",
+    "label": "build NoorRay Release",
+    "command": "cmake --build build/release --target NoorRay -j$(nproc)",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "build pynoorray Release",
+    "command": "cmake --build build/release --target _pynoorray -j$(nproc)",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "run NoorRay Debug",
+    "command": "cmake --build build/debug --target NoorRay -j$(nproc) && ./build/debug/NoorRay",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": true,
     "allow_concurrent_runs": false,
@@ -63,8 +81,17 @@
     "hide": "never"
   },
   {
-    "label": "run pynoorray",
-    "command": "cmake --build build/current --target _pynoorray -j$(nproc) && PYTHONPATH=$ZED_WORKTREE_ROOT/build/current/lib python - <<'PY'\nimport pynoorray\nr = pynoorray.RenderSession(64, 64)\nprint(pynoorray.RenderSession, hasattr(r, 'import_file'), hasattr(r, 'add_perspective_camera'), hasattr(r, 'render'))\nPY",
+    "label": "run NoorRay Release",
+    "command": "cmake --build build/release --target NoorRay -j$(nproc) && ./build/release/NoorRay",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "run pynoorray Release",
+    "command": "cmake --build build/release --target _pynoorray -j$(nproc) && PYTHONPATH=$ZED_WORKTREE_ROOT/build/release/lib $ZED_WORKTREE_ROOT/.venv/bin/python $ZED_WORKTREE_ROOT/src/pynoorray/examples/pynoorray_render.py",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 #include <imgui.h>
@@ -18,6 +19,56 @@
 #include "libross/foundation/gpu/types/Allocator.h"
 #include "libross/imaging/imagesensor/ImageSensorReader.h"
 #include "portable-file-dialogs.h"
+
+Sensor::~Sensor() = default;
+
+Sensor::Sensor(const Sensor& other)
+    : TaggedSensor(nullptr)
+    , widthMm(other.width())
+    , heightMm(other.height())
+    , resolutionWidth(other.resolutionX())
+    , resolutionHeight(other.resolutionY())
+{
+    std::snprintf(imageSensorPath, sizeof(imageSensorPath), "%s",
+        std::string(other.getImageSensorPath()).c_str());
+    std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%s",
+        other.imageSensorLoadStatus);
+}
+
+Sensor& Sensor::operator=(const Sensor& other)
+{
+    if (this == &other)
+        return *this;
+    static_cast<TaggedSensor&>(*this) = static_cast<const TaggedSensor&>(other);
+    widthMm = other.widthMm;
+    heightMm = other.heightMm;
+    resolutionWidth = other.resolutionWidth;
+    resolutionHeight = other.resolutionHeight;
+    std::memcpy(imageSensorPath, other.imageSensorPath, sizeof(imageSensorPath));
+    std::memcpy(imageSensorLoadStatus, other.imageSensorLoadStatus,
+        sizeof(imageSensorLoadStatus));
+    imageSensorDialog = nullptr;
+    return *this;
+}
+
+RectangularSensor::RectangularSensor(const Sensor& other)
+    : Sensor(other)
+{
+}
+
+ScatterPsfSensor::ScatterPsfSensor(const Sensor& other)
+    : RectangularSensor(other), psfGridPath(other.getPsfGridPath())
+{
+    if (!psfGridPath.empty())
+        loadPsfGrid();
+}
+
+GatherPsfSensor::GatherPsfSensor(const Sensor& other)
+    : RectangularSensor(other), psfGridPath(other.getPsfGridPath())
+{
+    if (!psfGridPath.empty())
+        loadPsfGrid();
+}
 
 namespace {
 constexpr int RectangularSensorTypeIndex = 0;
@@ -87,17 +138,10 @@ bool renderSensorTypeCombo(Sensor& owner, int currentTypeIndex)
 {
     ImGuiManager::tableRowLabel("Type");
     int typeIndex = currentTypeIndex;
-    if (!ImGui::Combo("##SensorType", &typeIndex, SensorTypeNames.data(), static_cast<int>(SensorTypeNames.size())))
+    if (!ImGui::Combo("##SensorType", &typeIndex, SensorTypeNames.data(),
+            static_cast<int>(SensorTypeNames.size())))
         return false;
-
-    if (typeIndex == currentTypeIndex)
-        return false;
-    if (typeIndex == RectangularSensorTypeIndex)
-        owner.allocateRectangular();
-    else if (typeIndex == ScatterPsfSensorTypeIndex)
-        owner.allocateScatterPsf();
-    else if (typeIndex == GatherPsfSensorTypeIndex)
-        owner.allocateGatherPsf();
+    owner.requestType(static_cast<SensorType>(typeIndex));
     return true;
 }
 
@@ -117,12 +161,11 @@ bool renderPhysicalSensorRows(Sensor& sensor)
 
     std::array<char, 512> sensorBuffer{};
     std::snprintf(sensorBuffer.data(), sensorBuffer.size(), "%s", sensor.imageSensorPath);
-    const float selectButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float reloadButtonWidth = ImGui::CalcTextSize("Reload").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float browseButtonWidth = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
     ImGuiManager::tableRowLabel("Sensor File");
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - reloadButtonWidth
-        - ImGui::GetStyle().ItemSpacing.x * 2.0f);
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - browseButtonWidth
+        - ImGui::GetStyle().ItemSpacing.x);
     if (ImGui::InputText("##ImageSensorPath", sensorBuffer.data(), sensorBuffer.size())) {
         sensor.setImageSensorPath(sensorBuffer.data());
         changed = true;
@@ -130,16 +173,12 @@ bool renderPhysicalSensorRows(Sensor& sensor)
     ImGui::PopItemWidth();
     ImGui::SameLine();
     ImGui::BeginDisabled(sensor.imageSensorDialog != nullptr);
-    if (ImGui::Button("Select##ImageSensor", ImVec2(selectButtonWidth, 0))) {
+    if (ImGui::Button("...##ImageSensor", ImVec2(browseButtonWidth, 0))) {
         sensor.imageSensorDialog = new pfd::open_file(
             "Select Sensor File", ".",
             std::vector<std::string>{"Sensor Files", "*.json", "All Files", "*"});
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Reload##ImageSensor", ImVec2(reloadButtonWidth, 0))) {
-        changed |= sensor.loadImageSensorDimensions();
-    }
 
     float currentWidthMm = sensor.width();
     float currentHeightMm = sensor.height();
@@ -167,21 +206,23 @@ bool renderPhysicalSensorRows(Sensor& sensor)
         changed = true;
     }
 
+    ImGuiManager::tableRowLabel("");
+    if (ImGui::Button("Reload##ImageSensor", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
+        changed |= sensor.loadImageSensorDimensions();
+    }
+
     return changed;
 }
 
 template <typename PsfSensor>
 void freePsfGrid(PsfSensor& sensor)
 {
-    if (sensor.psfGrid == nullptr)
+    if (!sensor.psfGrid)
         return;
 
     nr::synchronizeBeforeManagedMutation("PSF grid free");
 
-    ross::rstd::allocator<ross::InterpolatedPsfGrid> allocator;
-    allocator.destroy(sensor.psfGrid);
-    allocator.deallocate(sensor.psfGrid, 1);
-    sensor.psfGrid = nullptr;
+    sensor.psfGrid.reset();
 }
 
 template <typename PsfSensor>
@@ -195,9 +236,9 @@ void loadPsfGrid(PsfSensor& sensor, const char* sensorName)
     }
 
     try {
-        ross::rstd::allocator<ross::InterpolatedPsfGrid> allocator;
-        sensor.psfGrid = allocator.allocate(1);
-        allocator.construct(sensor.psfGrid, std::filesystem::path(sensor.psfGridPath));
+        nr::rstd::allocator<ross::InterpolatedPsfGrid> allocator;
+        sensor.psfGrid.reset(allocator.allocate(1));
+        allocator.construct(sensor.psfGrid.get(), std::filesystem::path(sensor.psfGridPath));
         sensor.psfLoadStatus = "loaded, psf bins: " + std::to_string(sensor.psfGrid->metadata.psfs.size());
         LOG_INFO(sensorName << ": " << sensor.psfLoadStatus);
     } catch (const std::exception& e) {
@@ -223,16 +264,16 @@ bool renderPsfGridRows(PsfSensor& sensor)
     std::array<char, 512> psfBuffer{};
     std::snprintf(psfBuffer.data(), psfBuffer.size(), "%s", sensor.psfGridPath.c_str());
 
-    const float selectButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float browseButtonWidth = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
     ImGuiManager::tableRowLabel("PSF Grid");
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - browseButtonWidth - ImGui::GetStyle().ItemSpacing.x);
     if (ImGui::InputText("##SensorPsfGrid", psfBuffer.data(), psfBuffer.size())) {
         sensor.psfGridPath = psfBuffer.data();
         changed = true;
     }
     ImGui::PopItemWidth();
     ImGui::SameLine();
-    if (ImGui::Button("Select##SensorPsfGrid")) {
+    if (ImGui::Button("...##SensorPsfGrid", ImVec2(browseButtonWidth, 0))) {
         sensor.psfGridDialog = std::make_unique<pfd::open_file>(
             "Select PSF Grid JSON", ".",
             std::vector<std::string>{"JSON", "*.json", "All Files", "*"});
@@ -285,6 +326,55 @@ bool Sensor::loadImageSensorDimensions()
         LOG_ERROR("Sensor: " << imageSensorLoadStatus);
         return false;
     }
+}
+
+SensorType Sensor::getType() const
+{
+    if (Is<ScatterPsfSensor>()) return SensorType::ScatterPsf;
+    if (Is<GatherPsfSensor>()) return SensorType::GatherPsf;
+    return SensorType::Rectangular;
+}
+
+void Sensor::switchTo(const SensorType type)
+{
+    if (getType() == type)
+        return;
+    if (type == SensorType::ScatterPsf)
+        allocateScatterPsf();
+    else if (type == SensorType::GatherPsf)
+        allocateGatherPsf();
+    else
+        allocateRectangular();
+}
+
+std::string Sensor::getPsfGridPath() const
+{
+    if (const auto* scatter = CastOrNullptr<ScatterPsfSensor>())
+        return scatter->psfGridPath;
+    if (const auto* gather = CastOrNullptr<GatherPsfSensor>())
+        return gather->psfGridPath;
+    return {};
+}
+
+void Sensor::setPsfGridPath(std::string path)
+{
+    if (auto* scatter = CastOrNullptr<ScatterPsfSensor>())
+    {
+        scatter->psfGridPath = std::move(path);
+        return;
+    }
+    if (auto* gather = CastOrNullptr<GatherPsfSensor>())
+    {
+        gather->psfGridPath = std::move(path);
+        return;
+    }
+    throw std::runtime_error("Select a scatter or gather PSF sensor before loading a PSF grid");
+}
+
+void Sensor::loadPsfGrid(std::string path)
+{
+    setPsfGridPath(std::move(path));
+    reloadPsfGrid();
 }
 
 void Sensor::freeConcrete()
@@ -410,7 +500,7 @@ void ScatterPsfSensor::loadPsfGrid()
 
 uint32_t ScatterPsfSensor::psfBinCount() const
 {
-    return psfGrid == nullptr ? 0u : static_cast<uint32_t>(psfGrid->metadata.psfs.size());
+    return psfGrid ? static_cast<uint32_t>(psfGrid->metadata.psfs.size()) : 0u;
 }
 
 bool ScatterPsfSensor::renderUi(Sensor& owner)
@@ -449,7 +539,7 @@ void GatherPsfSensor::loadPsfGrid()
 
 uint32_t GatherPsfSensor::psfBinCount() const
 {
-    return psfGrid == nullptr ? 0u : static_cast<uint32_t>(psfGrid->metadata.psfs.size());
+    return psfGrid ? static_cast<uint32_t>(psfGrid->metadata.psfs.size()) : 0u;
 }
 
 void GatherPsfSensor::freeScratch(cudaStream_t stream) noexcept
@@ -465,7 +555,7 @@ void GatherPsfSensor::prepareFrame(const uint32_t width, const uint32_t height,
 {
     buckets = nullptr;
     binCount = psfBinCount();
-    if (psfGrid == nullptr || binCount == 0)
+    if (!psfGrid || binCount == 0)
         return;
 
     const size_t required = static_cast<size_t>(width) * height * binCount;

@@ -8,11 +8,12 @@
 #include "backends/imgui_impl_vulkan.h"
 #include "glm/gtc/type_ptr.inl"
 #include "Vulkan/Context.h"
+#include "UI/Window.h"
 #include <array>
 #include "Log.h"
 
-ImGuiManager::ImGuiManager(Context& context, const uint32_t numImages, const vk::SurfaceFormatKHR targetFormat)
-    : context(context)
+ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numImages,
+    const vk::SurfaceFormatKHR targetFormat)
 {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -33,20 +34,20 @@ ImGuiManager::ImGuiManager(Context& context, const uint32_t numImages, const vk:
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
 
-    const float font_size = 18.0f * context.getDPIScale();
+    const float font_size = 18.0f * window.getDpiScale();
     io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(noorRayImGuiFont), noorRayImGuiFontLength,
         font_size, &font_config);
 
     ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(context.getDPIScale());
+    style.ScaleAllSizes(window.getDpiScale());
 
     if (const SDL_SystemTheme theme = SDL_GetSystemTheme(); theme == SDL_SYSTEM_THEME_LIGHT)
         SetTheme(Theme::Light);
     else
         SetTheme(Theme::Dark);
 
-    ImGui_ImplSDL3_InitForVulkan(context.getWindow());
+    ImGui_ImplSDL3_InitForVulkan(window.nativeHandle());
 
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.Instance = context.getInstance();
@@ -138,49 +139,6 @@ ImGuiComponent* ImGuiManager::getComponent(const std::string& name) const {
         if (component->getName() == name)
             return component.get();
     return nullptr;
-}
-
-void ImGuiManager::tableRowLabel(const char* label) {
-    if (ImGui::GetCurrentTable()) {
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(label);
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-    } else {
-        ImGui::TextUnformatted(label);
-        ImGui::SameLine();
-    }
-}
-
-void ImGuiManager::checkboxRow(const char* label, bool value, const std::function<void(bool)>& setter) {
-    tableRowLabel(label);
-    if (ImGui::Checkbox((std::string("##") + label).c_str(), &value))
-        setter(value);
-}
-
-void ImGuiManager::dragFloatRow(const char* label, float value, const float speed, const float min, const float max, const std::function<void(float)>& setter) {
-    tableRowLabel(label);
-    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max, "%.3f", ImGuiSliderFlags_AlwaysClamp))
-        setter(value);
-}
-
-void ImGuiManager::dragFloat3Row(const char* label, glm::vec3 value, const float speed, const std::function<void(glm::vec3)>& setter) {
-    tableRowLabel(label);
-    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed))
-        setter(value);
-}
-
-void ImGuiManager::colorEdit3Row(const char* label, const glm::vec3 value, const std::function<void(glm::vec3)>& setter) {
-    tableRowLabel(label);
-    if (glm::vec3 temp = value; ImGui::ColorEdit3((std::string("##") + label).c_str(), glm::value_ptr(temp)))
-        setter(temp);
-}
-
-void ImGuiManager::colorEdit4Row(const char* label, const glm::vec4 value, const std::function<void(glm::vec4)>& setter) {
-    tableRowLabel(label);
-    if (glm::vec4 temp = value; ImGui::ColorEdit4((std::string("##") + label).c_str(), glm::value_ptr(temp)))
-        setter(temp);
 }
 
 static ImVec4 mult(const ImVec4& c, float a) {

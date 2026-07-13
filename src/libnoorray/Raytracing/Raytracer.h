@@ -52,6 +52,7 @@ public:
     Raytracer& operator=(const Raytracer&) = delete;
 
     void resize(uint32_t width, uint32_t height);
+    void render();
     void render(const PushData& pushData);
     Bitmap renderOffline(uint32_t sampleCount);
     void renderOfflineToDevice(float* rgbaDevice, uint32_t sampleCount);
@@ -82,7 +83,8 @@ public:
     FrameInfo getFrameInfo() const;
     bool isRenderInFlight() const;
     bool isFrameReady() const;
-    float getGpuTimeMs() const { return m_gpuTimeMs; }
+    float getGpuTimeMs();
+    float getAverageNoiseVariance() const;
     uint32_t getWidth() const { return width; }
     uint32_t getHeight() const { return height; }
     uint32_t getRayQueueCapacity() const { return queues.capacity; }
@@ -127,6 +129,8 @@ private:
     nr::cuda::UniqueAsyncDeviceBuffer aovRayQueueBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer aovHitQueueBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer accumulationBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer noiseMomentsBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer noiseVarianceSumBuffer;
     nr::cuda::UniqueDeviceBuffer spectrumTableScaleDevice;
     nr::cuda::UniqueDeviceBuffer spectrumTableCoeffsDevice;
     nr::cuda::UniqueDeviceBuffer d65Device;
@@ -146,6 +150,9 @@ private:
     float m_gpuTimeMs = 0.0f;
     bool m_timingEnabled = false;
     bool m_eventsRecorded = false;
+    bool m_offlineRendering = false;
+    float* m_noiseVarianceSumHost{};
+    uint32_t m_noiseResultSampleCount{};
     KernelStats kernelStats;
     nr::cuda::UniqueDeviceBuffer optixLaunchParamsDevice;
 
@@ -172,10 +179,13 @@ private:
     OptixShaderBindingTable optixProxyOverdrawSbt{};
 
     void allocateQueues();
+    void renderSamples(uint32_t sampleCount);
+    void prepareOfflineRender();
     void freeQueues() noexcept;
     void freeSceneData() noexcept;
     void launchGenerate(const KernelParams& params, cudaStream_t stream) const;
     void launchFinalize(const KernelParams& params, cudaStream_t stream) const;
+    void launchNoiseReduction(const KernelParams& params, cudaStream_t stream) const;
     void launchResolveScatterPsf(const KernelParams& params, cudaStream_t stream) const;
     void launchApplyGatherPsf(const KernelParams& params, cudaStream_t stream) const;
     void prepareSensorFrame(Sensor& sensor, KernelParams& params, bool resetAccumulation);

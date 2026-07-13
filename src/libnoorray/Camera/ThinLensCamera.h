@@ -6,6 +6,12 @@
 
 class ThinLensCamera : public Camera {
 public:
+#ifndef NR_GPU_CODE
+    ThinLensCamera();
+    explicit ThinLensCamera(std::unique_ptr<Sensor> sensor);
+    ThinLensCamera(const ThinLensCamera& other);
+    ~ThinLensCamera();
+#endif
     float fStop{0.f};
     float bokehBias{1.f};
 

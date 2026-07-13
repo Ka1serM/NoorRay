@@ -10,22 +10,36 @@
 #include "Light/SpotLight.h"
 #include "Light/DirectionalLight.h"
 #include "Scene/SceneObject.h"
+#include "Scene/SceneImporter.h"
+#include "Scene/SceneReader.h"
 
 Scene::Scene(Context& context)
-    : context(context),
+    : context(context), environment(nr::rstd::make_unique<Environment>()),
       pointLights(context), spotLights(context),
       rectLights(context), directionalLights(context)
+{}
+
+Scene::~Scene() = default;
+
+void Scene::load(const std::string& path)
 {
-    nr::rstd::allocator<Environment> allocator;
-    environment = allocator.allocate(1);
-    allocator.construct(environment);
+    if (SceneImporter::IsSceneFile(path))
+        read(path);
+    else
+    {
+        clear();
+        importFile(path);
+    }
 }
 
-Scene::~Scene()
+void Scene::importFile(const std::string& path)
 {
-    nr::rstd::allocator<Environment> allocator;
-    allocator.destroy(environment);
-    allocator.deallocate(environment, 1);
+    SceneImporter::ImportFile(*this, path);
+}
+
+void Scene::read(const std::string& path)
+{
+    SceneReader::Read(*this, path);
 }
 
 void Scene::notifyGeometryChanged() {
@@ -36,10 +50,14 @@ void Scene::notifyGeometryChanged() {
 // ── Internal registration ─────────────────────────────────────────────────────
 
 uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
+    sceneObject->scene = this;
     std::shared_ptr<SceneObject> sharedObject(std::move(sceneObject));
     sharedObject->setId(nextObjectId++);
 
-    if (auto camera = std::dynamic_pointer_cast<CameraInstance>(sharedObject))
+    // Adding another camera must not unexpectedly change the rendered view.
+    // The first camera is selected as a useful default; later changes are explicit.
+    if (auto camera = std::dynamic_pointer_cast<CameraInstance>(sharedObject);
+        camera && activeCamera.expired())
         activeCamera = camera;
 
     if (auto light = std::dynamic_pointer_cast<LightInstance>(sharedObject))
@@ -102,10 +120,12 @@ uint32_t Scene::add(GaussianAsset gaussianAsset) {
     return index;
 }
 
-void Scene::add(Texture&& texture) {
+Texture& Scene::add(Texture&& texture) {
+    texture.sceneIndex = static_cast<int>(textures.size());
     textureNames.push_back(texture.getName());
     textures.push_back(std::move(texture));
     setDirtyFlag(Textures);
+    return textures.back();
 }
 
 bool Scene::remove(SceneObject* objToRemove) {
@@ -156,6 +176,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
         return false;
 
     const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
+    const bool wasActiveCamera = oldObject == getActiveCamera();
     SceneObject* parent = oldObject->getParent();
     const auto parentPtr = findObjectPtr(parent);
 
@@ -165,8 +186,11 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     std::shared_ptr<SceneObject> newShared(std::move(newObject));
     newShared->setId(oldObject->getId());
 
-    if (auto camera = std::dynamic_pointer_cast<CameraInstance>(newShared))
+    if (auto camera = std::dynamic_pointer_cast<CameraInstance>(newShared);
+        camera && (wasActiveCamera || activeCamera.expired()))
         activeCamera = camera;
+    else if (wasActiveCamera)
+        activeCamera.reset();
 
     *it = std::move(newShared);
 
@@ -174,6 +198,20 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
         parentPtr->addChild(sceneObjects[index]);
 
     notifyGeometryChanged();
+    return true;
+}
+
+bool Scene::setActiveCamera(CameraInstance* camera) {
+    const auto object = findObjectPtr(camera);
+    const auto cameraPtr = std::dynamic_pointer_cast<CameraInstance>(object);
+    if (!cameraPtr)
+        return false;
+
+    if (cameraPtr.get() == getActiveCamera())
+        return true;
+
+    activeCamera = cameraPtr;
+    setDirtyFlag(Accumulation);
     return true;
 }
 

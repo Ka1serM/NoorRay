@@ -10,7 +10,12 @@ void DebugPanel::setSampleInfo(const int current, const int max) {
     m_maxSamples = max;
 }
 
+void DebugPanel::resetRenderTimer() {
+    m_renderTimeSeconds = 0.0;
+}
+
 void DebugPanel::onComputeFinished(const float raytraceMs) {
+    m_renderTimeSeconds += static_cast<double>(raytraceMs) / 1000.0;
     m_accumMs += raytraceMs;
     m_accumFps += raytraceMs > 0.0f ? 1000.0f / raytraceMs : 0.0f;
     m_frameCount++;
@@ -30,7 +35,7 @@ void DebugPanel::onComputeFinished(const float raytraceMs) {
 void DebugPanel::renderUi() {
     ImGui::Begin(name.c_str());
 
-    if (ImGui::BeginTable("Debug Table", 2, ImGuiTableFlags_SizingStretchProp)) {
+    if (ImGui::BeginTable("Timings Table", 2, ImGuiTableFlags_SizingStretchProp)) {
 
         ImGuiManager::tableRowLabel("FPS");
         ImGui::Text("%.2f", m_avgFps);
@@ -40,6 +45,9 @@ void DebugPanel::renderUi() {
 
         ImGuiManager::tableRowLabel("Samples");
         ImGui::Text("%d / %d", m_currentSample, m_maxSamples);
+
+        ImGuiManager::tableRowLabel("Render Time");
+        ImGui::Text("%.2f s", m_renderTimeSeconds);
 
         //ImGuiManager::tableRowLabel("Show BVH");
         //ImGui::Combo("##BVHMode", &visualizeBVH, modes, IM_ARRAYSIZE(modes));

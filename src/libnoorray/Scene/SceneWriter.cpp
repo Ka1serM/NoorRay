@@ -61,6 +61,8 @@ nr::sceneio::RenderSettingsFile makeRenderSettingsFile(const RenderSettings& set
 {
     return {
         .max_samples = settings.maxSamples,
+        .noise_limit_enabled = settings.noiseLimitEnabled,
+        .noise_level = settings.noiseLevel,
         .gaussian_shading_mode = static_cast<int>(settings.gaussianShadingMode),
         .gaussian_render_sh_degree = static_cast<int>(settings.gaussianRenderSphericalHarmonics),
     };
@@ -75,15 +77,15 @@ nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
     case CameraProjectionType::Fisheye: file.type = "fisheye"; break;
     case CameraProjectionType::ThinLens: file.type = "thinlens"; break;
     case CameraProjectionType::Realistic: file.type = "realistic"; break;
-    case CameraProjectionType::RossPsf: file.type = "rosspsf"; break;
+    case CameraProjectionType::HybridPsf: file.type = "hybridpsf"; break;
     case CameraProjectionType::Perspective: file.type = "perspective"; break;
     }
 
     file.position = fromVec3(cameraInstance.getPosition());
     file.rotation_euler = fromVec3(cameraInstance.getRotationEuler());
     file.scale = fromVec3(cameraInstance.getScale());
-    file.focal_length = camera->focalLengthMm;
-    file.focus_distance = camera->focusDistance;
+    file.focal_length = camera->getFocalLength();
+    file.focus_distance = camera->getFocusDistance();
     if (const auto* thinLens = camera->CastOrNullptr<ThinLensCamera>()) {
         file.aperture_diameter = thinLens->fStop;
         file.bokeh_bias = thinLens->bokehBias;
@@ -93,12 +95,19 @@ nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
     const glm::uvec2 resolution = camera->getSensor().resolution();
     file.resolution = {resolution.x, resolution.y};
     file.sensor = std::string(camera->getSensor().getImageSensorPath());
+    switch (camera->getSensor().getType()) {
+    case SensorType::ScatterPsf: file.sensor_type = "scatter_psf"; break;
+    case SensorType::GatherPsf: file.sensor_type = "gather_psf"; break;
+    case SensorType::Rectangular: file.sensor_type = "rectangular"; break;
+    }
+    file.psf = camera->getSensor().getPsfGridPath();
     if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
         file.lens = realistic->getLensPath();
         file.glass_catalogs = realistic->getGlassCatalogPaths();
     } else if (const auto* rossPsf = camera->CastOrNullptr<RossPsfCamera>()) {
         file.lens = rossPsf->getLensPath();
         file.glass_catalogs = rossPsf->getGlassCatalogPaths();
+        file.ray_lut = rossPsf->getRayLutPath();
     }
     return file;
 }

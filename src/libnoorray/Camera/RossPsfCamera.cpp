@@ -22,6 +22,7 @@
 #include "libross/imaging/cameralens/raylut/FindRayThroughApertureCenterRayGenerator.h"
 #include "libross/imaging/cameralens/raylut/io/read/RayLUTFileReader.h"
 #include "libross/imaging/cameralens/raylut/io/write/RayLUTFileWriter.h"
+#include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupilCalculator.h"
 #include "libross/imaging/cameralens/raytracing/findapertureray/FindRayThroughApertureCenter.h"
 #include "libross/imaging/imagesensor/ImageSensorReader.h"
 #include "libross/imaging/imagesensor/ImageSensorSampler.h"
@@ -63,35 +64,86 @@ std::string joinRossPsfPathsWithSemicolons(const std::vector<std::string>& paths
 }
 }
 
+RossPsfCamera::RossPsfCamera()
+    : RossPsfCamera(std::make_unique<GatherPsfSensor>())
+{
+}
+
+RossPsfCamera::RossPsfCamera(std::unique_ptr<Sensor> ownedSensor)
+    : Camera(std::move(ownedSensor))
+{
+}
+
 RossPsfCamera::~RossPsfCamera()
 {
     freeRossObjects();
+    sensor.freeConcrete();
 }
 
 void RossPsfCamera::freeRossObjects()
 {
-    if (rayLut == nullptr && rossSensor == nullptr && rossLens == nullptr)
+    if (!rayLut && !exitPupil && !rossSensor && !rossLens && !sourceRossLens)
         return;
 
     nr::synchronizeBeforeManagedMutation("RossPsfCamera optics free");
 
-    if (rayLut != nullptr) {
-        ross::rstd::allocator<ross::RayLUT> allocator;
-        allocator.destroy(rayLut);
-        allocator.deallocate(rayLut, 1);
-        rayLut = nullptr;
-    }
-    if (rossSensor != nullptr) {
-        ross::rstd::allocator<ross::ImageSensor> allocator;
-        allocator.destroy(rossSensor);
-        allocator.deallocate(rossSensor, 1);
-        rossSensor = nullptr;
-    }
-    if (rossLens != nullptr) {
-        ross::rstd::allocator<ross::CameraLens> allocator;
-        allocator.destroy(rossLens);
-        allocator.deallocate(rossLens, 1);
-        rossLens = nullptr;
+    rayLut.reset();
+    exitPupil.reset();
+    rossSensor.reset();
+    rossLens.reset();
+    sourceRossLens.reset();
+}
+
+void RossPsfCamera::updateLensSettings()
+{
+    opticsUpdatePending = false;
+    if (!sourceRossLens || !rossSensor)
+        return;
+
+    nr::synchronizeBeforeManagedMutation("RossPsfCamera optics update");
+    try {
+        ross::CameraLens updatedLens(*sourceRossLens);
+        if (apertureDiameterMm > 0.0f)
+            updatedLens.changeAperture_mm(apertureDiameterMm);
+        if (focusDistance > 0.0f)
+            updatedLens.focusLens(focusDistance * 100.0f);
+
+        ross::ExitPupilCalculator::CalculationSettings pupilSettings;
+        ross::TaskReporter pupilReporter;
+        ross::ExitPupilCalculator pupilCalculator(
+            updatedLens, rossSensor->getDiagonal().centimeter(), pupilSettings, pupilReporter);
+        ross::ExitPupil updatedPupil = pupilCalculator.calculate();
+
+        const ross::Resolution resolution(
+            getSensor().resolutionX(), getSensor().resolutionY());
+        ross::RayLUT updatedLut(resolution, std::max(1, rayLutStepSize));
+        ross::ImageSensorSampler imageSensorSampler(*rossSensor);
+        ross::FindRayThroughApertureCenter findApertureRay(updatedLens);
+        ross::FindRayThroughApertureCenterRayGenerator generator(
+            findApertureRay, imageSensorSampler, resolution,
+            std::max(1, samplesPerDimension));
+        updatedLut.populate(generator, {
+            ross::FraunhoferLines::C,
+            ross::FraunhoferLines::d,
+            ross::FraunhoferLines::F});
+
+        nr::rstd::allocator<ross::CameraLens> lensAllocator;
+        nr::rstd::unique_ptr<ross::CameraLens> newLens(lensAllocator.allocate(1));
+        lensAllocator.construct(newLens.get(), updatedLens);
+        nr::rstd::allocator<ross::ExitPupil> pupilAllocator;
+        nr::rstd::unique_ptr<ross::ExitPupil> newPupil(pupilAllocator.allocate(1));
+        pupilAllocator.construct(newPupil.get(), updatedPupil);
+        nr::rstd::allocator<ross::RayLUT> lutAllocator;
+        nr::rstd::unique_ptr<ross::RayLUT> newLut(lutAllocator.allocate(1));
+        lutAllocator.construct(newLut.get(), std::move(updatedLut));
+
+        rossLens = std::move(newLens);
+        exitPupil = std::move(newPupil);
+        rayLut = std::move(newLut);
+        opticsDirty = true;
+    } catch (const std::exception& error) {
+        loadStatus = error.what();
+        LOG_ERROR("RossPsfCamera: " << loadStatus);
     }
 }
 
@@ -103,14 +155,90 @@ void RossPsfCamera::load(std::string lensPath_, std::string glassCatalogPaths_, 
     loadLensSensorAndPsf();
 }
 
+void RossPsfCamera::load(std::string lensPath_,
+    const std::vector<std::string>& glassCatalogPaths_, std::string rayLutPath_)
+{
+    load(std::move(lensPath_), joinRossPsfPathsWithSemicolons(glassCatalogPaths_),
+        std::move(rayLutPath_));
+}
+
+void RossPsfCamera::setApertureDiameter(const float millimeters)
+{
+    const float requestedDiameter = std::max(0.0f, millimeters);
+    if (apertureDiameterMm == requestedDiameter)
+        return;
+    apertureDiameterMm = requestedDiameter;
+    opticsUpdatePending = static_cast<bool>(sourceRossLens);
+}
+
+void RossPsfCamera::setOpticalFocusDistance(const float meters)
+{
+    const float requestedDistance = std::max(0.0f, meters);
+    if (focusDistance == requestedDistance)
+        return;
+    focusDistance = requestedDistance;
+    opticsUpdatePending = static_cast<bool>(sourceRossLens);
+}
+
+void RossPsfCamera::prepareOptics()
+{
+    if (opticsUpdatePending)
+        updateLensSettings();
+}
+
+RossPsfCamera::RossPsfCamera(const RossPsfCamera& other)
+    : Camera(other.cloneBaseState())
+{
+    sensor = Sensor(nullptr);
+    sensor.cloneConcreteFrom(other.getSensor());
+    lensPath = other.lensPath;
+    glassCatalogPaths = other.glassCatalogPaths;
+    rayLutPath = other.rayLutPath;
+    loadStatus = other.loadStatus;
+    opticsDirty = other.opticsDirty;
+    opticsUpdatePending = other.opticsUpdatePending;
+    apertureDiameterMm = other.apertureDiameterMm;
+    rayLutStepSize = other.rayLutStepSize;
+    samplesPerDimension = other.samplesPerDimension;
+
+    if (other.rossLens) {
+        nr::rstd::allocator<ross::CameraLens> allocator;
+        rossLens.reset(allocator.allocate(1));
+        allocator.construct(rossLens.get(), *other.rossLens);
+    }
+    if (other.sourceRossLens) {
+        nr::rstd::allocator<ross::CameraLens> allocator;
+        sourceRossLens.reset(allocator.allocate(1));
+        allocator.construct(sourceRossLens.get(), *other.sourceRossLens);
+    }
+    if (other.exitPupil) {
+        nr::rstd::allocator<ross::ExitPupil> allocator;
+        exitPupil.reset(allocator.allocate(1));
+        allocator.construct(exitPupil.get(), *other.exitPupil);
+    }
+    if (other.rossSensor) {
+        nr::rstd::allocator<ross::ImageSensor> allocator;
+        rossSensor.reset(allocator.allocate(1));
+        allocator.construct(rossSensor.get(), *other.rossSensor);
+    }
+    if (other.rayLut) {
+        nr::rstd::allocator<ross::RayLUT> allocator;
+        rayLut.reset(allocator.allocate(1));
+        allocator.construct(rayLut.get(), *other.rayLut);
+    }
+}
+
 void RossPsfCamera::setOpticsPaths(std::string lensPath_, std::string glassCatalogPaths_)
 {
     lensPath = std::move(lensPath_);
     glassCatalogPaths = std::move(glassCatalogPaths_);
 }
 
-void RossPsfCamera::loadLensSensorAndPsf(const bool buildRayLut)
+void RossPsfCamera::loadLensSensorAndPsf(
+    const bool buildRayLut, const bool resetLensSettings)
 {
+    opticsUpdatePending = false;
+    Sensor& sensor = getSensor();
     freeRossObjects();
     opticsDirty = true;
 
@@ -130,13 +258,22 @@ void RossPsfCamera::loadLensSensorAndPsf(const bool buildRayLut)
 
         ross::CameraLens loadedLens =
             ross::CameraLensSystemReader::readCameraLens(lensPath, catalogs);
-        if (apertureDiameterMm > 0.0f)
+        nr::rstd::allocator<ross::CameraLens> lensAllocator;
+        sourceRossLens.reset(lensAllocator.allocate(1));
+        lensAllocator.construct(sourceRossLens.get(), loadedLens);
+        if (resetLensSettings) {
+            apertureDiameterMm = std::max(0.0f, loadedLens.getApertureRadius() * 20.0f);
+            focusDistance = 0.0f;
+        } else if (apertureDiameterMm > 0.0f) {
             loadedLens.changeAperture_mm(apertureDiameterMm);
-        loadedLens.focusLens(focusDistance * 100.0f);
+        } else {
+            apertureDiameterMm = std::max(0.0f, loadedLens.getApertureRadius() * 20.0f);
+        }
+        if (focusDistance > 0.0f)
+            loadedLens.focusLens(focusDistance * 100.0f);
 
-        ross::rstd::allocator<ross::CameraLens> lensAllocator;
-        rossLens = lensAllocator.allocate(1);
-        lensAllocator.construct(rossLens, loadedLens);
+        rossLens.reset(lensAllocator.allocate(1));
+        lensAllocator.construct(rossLens.get(), loadedLens);
 
         const ross::ImageSensor loadedSensor =
             ross::ImageSensorReader::readFile(std::string(sensor.getImageSensorPath()));
@@ -147,9 +284,18 @@ void RossPsfCamera::loadLensSensorAndPsf(const bool buildRayLut)
         sensor.loadImageSensorDimensions();
         const uint32_t psfBinCount = sensor.reloadPsfGrid();
 
-        ross::rstd::allocator<ross::ImageSensor> sensorAllocator;
-        rossSensor = sensorAllocator.allocate(1);
-        sensorAllocator.construct(rossSensor, loadedSensor);
+        nr::rstd::allocator<ross::ImageSensor> sensorAllocator;
+        rossSensor.reset(sensorAllocator.allocate(1));
+        sensorAllocator.construct(rossSensor.get(), loadedSensor);
+
+        ross::ExitPupilCalculator::CalculationSettings pupilSettings;
+        ross::TaskReporter pupilReporter;
+        ross::ExitPupilCalculator pupilCalculator(
+            *rossLens, loadedSensor.getDiagonal().centimeter(), pupilSettings, pupilReporter);
+        ross::ExitPupil computedPupil = pupilCalculator.calculate();
+        nr::rstd::allocator<ross::ExitPupil> pupilAllocator;
+        exitPupil.reset(pupilAllocator.allocate(1));
+        pupilAllocator.construct(exitPupil.get(), computedPupil);
 
         const bool cacheHit = !rayLutPath.empty() && std::filesystem::exists(rayLutPath);
         if (buildRayLut) {
@@ -170,9 +316,9 @@ void RossPsfCamera::loadLensSensorAndPsf(const bool buildRayLut)
                     ross::RayLUTFileWriter().write(rayLutPath, loadedLut);
             }
 
-            ross::rstd::allocator<ross::RayLUT> lutAllocator;
-            rayLut = lutAllocator.allocate(1);
-            lutAllocator.construct(rayLut, std::move(loadedLut));
+            nr::rstd::allocator<ross::RayLUT> lutAllocator;
+            rayLut.reset(lutAllocator.allocate(1));
+            lutAllocator.construct(rayLut.get(), std::move(loadedLut));
         }
 
         focalLengthMm = rossLens->metadata.focalLength * 10.0f;
@@ -191,11 +337,12 @@ void RossPsfCamera::loadLensSensorAndPsf(const bool buildRayLut)
 
 bool RossPsfCamera::renderUi()
 {
+    Sensor& sensor = getSensor();
     if (lensDialog && lensDialog->ready(0)) {
         const auto selection = lensDialog->result();
         if (!selection.empty()) {
             lensPath = selection.front();
-            loadLensSensorAndPsf();
+            loadLensSensorAndPsf(true, true);
         }
         lensDialog.reset();
     }
@@ -228,19 +375,19 @@ bool RossPsfCamera::renderUi()
     std::snprintf(rayLutBuffer.data(), rayLutBuffer.size(), "%s", rayLutPath.c_str());
 
     bool changed = false;
-    const float selectButtonWidth = ImGui::CalcTextSize("Select").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float browseButtonWidth = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
     auto pathRow = [&](const char* label, const char* id, auto& buffer, std::string& target,
                        auto openDialog) {
         ImGuiManager::tableRowLabel(label);
-        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - browseButtonWidth - ImGui::GetStyle().ItemSpacing.x);
         if (ImGui::InputText(id, buffer.data(), buffer.size())) {
             target = buffer.data();
             changed = true;
         }
         ImGui::PopItemWidth();
         ImGui::SameLine();
-        if (ImGui::Button((std::string("Select") + id).c_str()))
+        if (ImGui::Button((std::string("...") + id).c_str(), ImVec2(browseButtonWidth, 0)))
             openDialog();
     };
 
@@ -256,7 +403,10 @@ bool RossPsfCamera::renderUi()
             pfd::opt::multiselect);
     });
     ImGuiManager::tableRowLabel("Ray LUT");
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x - selectButtonWidth * 2.0f - ImGui::GetStyle().ItemSpacing.x * 2.0f);
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x
+        - ImGui::CalcTextSize("Load").x - ImGui::CalcTextSize("Save As").x
+        - ImGui::GetStyle().FramePadding.x * 4.0f
+        - ImGui::GetStyle().ItemSpacing.x * 2.0f);
     if (ImGui::InputText("##RossPsfRayLut", rayLutBuffer.data(), rayLutBuffer.size())) {
         rayLutPath = rayLutBuffer.data();
         changed = true;
@@ -276,13 +426,11 @@ bool RossPsfCamera::renderUi()
     }
 
     ImGuiManager::dragFloatRow("Aperture Diameter (mm)", apertureDiameterMm, 0.1f, 0.f, 64.f, [&](float value) {
-        apertureDiameterMm = std::max(0.f, value);
-        loadLensSensorAndPsf();
+        setApertureDiameter(value);
         changed = true;
     });
-    ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
-        focusDistance = std::max(0.001f, value);
-        loadLensSensorAndPsf();
+    ImGuiManager::dragFloatRow("Focus Distance (0 = lens file)", focusDistance, 0.1f, 0.0f, 10000.f, [&](float value) {
+        setOpticalFocusDistance(value);
         changed = true;
     });
 
@@ -294,12 +442,14 @@ bool RossPsfCamera::renderUi()
     samplesPerDimension = std::max(1, samplesPerDimension);
 
     if (ImGui::Button("Reload##RossPsfCamera")) {
-        loadLensSensorAndPsf();
+        loadLensSensorAndPsf(true, true);
         changed = true;
     }
     ImGui::SameLine();
     ImGui::TextUnformatted(loadStatus.c_str());
 
     const bool sensorChanged = sensor.renderUi();
+    if (sensorChanged && !lensPath.empty())
+        loadLensSensorAndPsf();
     return changed || sensorChanged;
 }

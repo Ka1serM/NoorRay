@@ -16,7 +16,8 @@ public:
     float bokehBias{1.f};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState& rng, uint32_t, SampledWavelengths&, bool centered = false) const
+        float nx, float ny, const glm::vec2 lensSample, uint32_t, SampledWavelengths&,
+        bool centered = false) const
     {
         weight = 1.0f;
         const Sensor& sensor = getSensor();
@@ -36,8 +37,8 @@ public:
         direction = glm::vec3(sx * scale, sy * scale, -cosf(theta));
         const float apertureRadiusM = centered ? 0.0f : apertureDiameterMm * 0.0005f;
         if (apertureRadiusM > 0.f) {
-            const float angle  = 6.28318530718f * randomFloat(rng);
-            const float rAperture = apertureRadiusM * sqrtf(randomFloat(rng));
+            const float angle  = 6.28318530718f * lensSample.x;
+            const float rAperture = apertureRadiusM * sqrtf(lensSample.y);
             origin = glm::vec3(cosf(angle) * rAperture, sinf(angle) * rAperture, 0.f);
             const glm::vec3 focusPoint = direction *
                 ((focusDistanceCm * 0.01f) / fmaxf(-direction.z, 1e-5f));

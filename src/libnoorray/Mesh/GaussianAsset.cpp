@@ -30,7 +30,8 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <imgui.h>
-#include <libross/foundation/parallel/ParallelLoops.h>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include "UI/ImGuiManager.h"
 #include "Log.h"
 #include "Scene/CoordinateSystem.h"
@@ -208,9 +209,11 @@ GaussianAsset GaussianAsset::CreateFromFile(
     {
         const size_t begin = count * interval / progressIntervalCount;
         const size_t end = count * (interval + 1) / progressIntervalCount;
-        ross::parallelFor2d(static_cast<int>(end - begin), 1, [&](const ross::Index2d index)
+        tbb::parallel_for(tbb::blocked_range<size_t>(begin, end, 1024),
+            [&](const tbb::blocked_range<size_t>& range)
         {
-            const size_t i = begin + static_cast<size_t>(index.x);
+            for (size_t i = range.begin(); i != range.end(); ++i)
+            {
             Gaussian& g = gaussians[i];
 
             // Position
@@ -255,6 +258,7 @@ GaussianAsset GaussianAsset::CreateFromFile(
                 const size_t source = (i * sourceHigherCoefficientCount + coefficient - 1) * 3;
                 g.shCoeffs[coefficient] = glm::vec3(
                     ir.sh[source + 0], ir.sh[source + 1], ir.sh[source + 2]);
+            }
             }
         });
 

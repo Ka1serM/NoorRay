@@ -17,6 +17,10 @@
 
 
 static constexpr uint32_t InvalidIndex = ~0u;
+static constexpr uint8_t MeshVisibility = uint8_t{1} << 0u;
+static constexpr uint8_t GaussianVisibility = uint8_t{1} << 1u;
+static constexpr uint8_t SceneVisibility = MeshVisibility | GaussianVisibility;
+static constexpr uint8_t FullVisibility = ~uint8_t{0};
 
 using TlasHandle = uint64_t;
 
@@ -51,26 +55,26 @@ struct alignas(16) PathRayWorkItem
 
 // HitWorkItem carries per-hit data from Extend to Shade.  Fields are shared
 // between mesh and gaussian hits through a union-like convention:
-//   positionOrDirection — mesh/miss: incident ray direction (view dir),
-//                         gaussian: precomputed hit position
-//   attribute0 — mesh: baryU, gaussian: density alpha (unused by Shade)
+//   direction           — incident ray direction for every hit type
+//   gaussianData        — inference: Gaussian hit position,
+//                         training: incident ray origin
+//   attribute0 — mesh: baryU, gaussian: unused
 //   attribute1 — mesh: baryV, gaussian: unused
 //   instanceIndex — mesh: instance id, gaussian: meshInstanceCount + gaussianId
 //   primitiveIndex — mesh: triangle index, gaussian: unused
 // The gaussian vs mesh discriminator is: instanceIndex >= meshInstanceCount.
 struct alignas(16) HitWorkItem
 {
-    glm::vec3 positionOrDirection;
+    glm::vec3 direction;
     uint32_t sampleIndex;
-    glm::vec3 rayOrigin;
-    uint32_t _rayPadding{};
-    glm::vec3 rayDirection;
-    uint32_t _rayDirectionPadding{};
+    glm::vec3 gaussianData;
     float attribute0;
     float attribute1;
     uint32_t instanceIndex;
     uint32_t primitiveIndex;
 };
+
+static_assert(sizeof(HitWorkItem) == 48);
 
 struct alignas(16) ShadowWorkItem
 {

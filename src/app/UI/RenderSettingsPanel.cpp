@@ -72,6 +72,12 @@ void RenderSettingsPanel::renderUi()
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("OptiX Denoiser");
+        ImGui::TableSetColumnIndex(1);
+        changed |= ImGui::Checkbox("##OptixDenoiser", &settings.optixDenoiserEnabled);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Max Bounces");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);

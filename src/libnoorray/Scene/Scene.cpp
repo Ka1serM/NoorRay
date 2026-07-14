@@ -9,6 +9,8 @@
 #include "Light/RectLight.h"
 #include "Light/SpotLight.h"
 #include "Light/DirectionalLight.h"
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include "Scene/SceneObject.h"
 #include "Scene/SceneImporter.h"
 #include "Scene/SceneReader.h"
@@ -69,10 +71,37 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
 
     if (auto light = std::dynamic_pointer_cast<LightInstance>(sharedObject))
         registerLight(*light);
+    const auto gaussianInstance = std::dynamic_pointer_cast<GaussianInstance>(sharedObject);
+    if (gaussianInstance)
+        setDirtyFlag(GaussianData);
 
     notifyGeometryChanged();
     sceneObjects.push_back(std::move(sharedObject));
+    if (gaussianInstance)
+    {
+        gaussianInstance->sceneInstanceIndex = static_cast<uint32_t>(gaussianInstances.size());
+        gaussianCount += gaussianInstance->getGaussianAsset().getGaussianCount();
+        gaussianInstances.push_back(gaussianInstance);
+        dirtyGaussianInstanceFlags.push_back(0);
+    }
     return static_cast<uint32_t>(sceneObjects.size() - 1);
+}
+
+void Scene::rebuildGaussianInstanceCache()
+{
+    gaussianInstances.clear();
+    gaussianCount = 0;
+    for (const auto& object : sceneObjects)
+    {
+        if (auto instance = std::dynamic_pointer_cast<GaussianInstance>(object))
+        {
+            instance->sceneInstanceIndex = static_cast<uint32_t>(gaussianInstances.size());
+            gaussianCount += instance->getGaussianAsset().getGaussianCount();
+            gaussianInstances.push_back(std::move(instance));
+        }
+    }
+    dirtyGaussianInstanceIndices.clear();
+    dirtyGaussianInstanceFlags.assign(gaussianInstances.size(), 0);
 }
 
 // ── Public lifetime API ───────────────────────────────────────────────────────
@@ -82,6 +111,8 @@ void Scene::clear() {
     // cameras are destroyed.
     activeCamera.reset();
     sceneObjects.clear();
+    gaussianInstances.clear();
+    gaussianCount = 0;
     meshAssets.clear();
     gaussianAssets.clear();
     textures.clear();
@@ -91,6 +122,9 @@ void Scene::clear() {
     rectLights.clear();
     directionalLights.clear();
     gpuInstances.clear();
+    dirtyMeshInstanceIndices.clear();
+    dirtyGaussianInstanceIndices.clear();
+    dirtyGaussianInstanceFlags.clear();
     gaussianOpacities.clear();
     gaussianShCoeffs.clear();
     cudaTextures.clear();
@@ -107,7 +141,7 @@ void Scene::clear() {
     environment->lightingExposure = 1.0f;
     environment->updateDerivedSettings();
     dirtyFlags = TLAS | Meshes | Textures | EnvironmentCdf | Lights
-        | CameraState | Accumulation;
+        | CameraState | Accumulation | GaussianData;
 }
 
 uint64_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
@@ -127,6 +161,7 @@ uint32_t Scene::add(GaussianAsset gaussianAsset) {
     const uint32_t index = static_cast<uint32_t>(gaussianAssets.size());
     gaussianAssets.push_back(std::move(gaussianAsset));
     setDirtyFlag(TLAS);
+    setDirtyFlag(GaussianData);
     return index;
 }
 
@@ -154,6 +189,8 @@ bool Scene::remove(SceneObject* objToRemove) {
 
     if (auto* light = dynamic_cast<LightInstance*>(objToRemove))
         unregisterLight(*light);
+    if (dynamic_cast<GaussianInstance*>(objToRemove))
+        setDirtyFlag(GaussianData);
 
     const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) {
         return ptr.get() == objToRemove;
@@ -178,6 +215,7 @@ bool Scene::remove(SceneObject* objToRemove) {
     }
 
     sceneObjects.erase(it);
+    rebuildGaussianInstanceCache();
     notifyGeometryChanged();
     return true;
 }
@@ -199,6 +237,8 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
     const bool wasActiveCamera = oldObject == getActiveCamera();
     const bool replacedCamera = dynamic_cast<CameraInstance*>(oldObject) != nullptr;
+    const bool replacedGaussian = dynamic_cast<GaussianInstance*>(oldObject) != nullptr;
+    const bool replacementGaussian = dynamic_cast<GaussianInstance*>(newObject.get()) != nullptr;
     SceneObject* parent = oldObject->getParent();
     const auto parentPtr = findObjectPtr(parent);
 
@@ -216,9 +256,12 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
         activeCamera.reset();
 
     *it = std::move(newShared);
+    rebuildGaussianInstanceCache();
 
     if (replacedCamera || dynamic_cast<CameraInstance*>(sceneObjects[index].get()))
         setDirtyFlag(CameraState);
+    if (replacedGaussian || replacementGaussian)
+        setDirtyFlag(GaussianData);
 
     if (parentPtr)
         parentPtr->addChild(sceneObjects[index]);
@@ -432,50 +475,64 @@ uint32_t Scene::getMeshInstanceIndex(const SceneObject* object) const {
     return ~0u;
 }
 
-std::vector<std::shared_ptr<GaussianInstance>> Scene::getGaussianInstances() const {
-    std::vector<std::shared_ptr<GaussianInstance>> result;
-    for (const auto& obj : sceneObjects)
-        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
-            result.push_back(gi);
-    return result;
-}
-
-uint32_t Scene::getGaussianCount() const {
-    uint32_t total = 0;
-    for (const auto& obj : sceneObjects)
-        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
-            total += gi->getGaussianAsset().getGaussianCount();
-    return total;
+void Scene::markGaussianInstanceTransformDirty(const uint32_t instanceIndex)
+{
+    if (instanceIndex >= dirtyGaussianInstanceFlags.size()
+        || dirtyGaussianInstanceFlags[instanceIndex])
+        return;
+    dirtyGaussianInstanceFlags[instanceIndex] = 1;
+    dirtyGaussianInstanceIndices.push_back(instanceIndex);
 }
 
 void Scene::buildGaussianRenderData()
 {
+    struct GaussianSpan
+    {
+        const Gaussian* gaussians;
+        uint32_t offset;
+    };
+
+    std::vector<GaussianSpan> spans;
     uint32_t total = 0;
-    for (const auto& obj : sceneObjects)
-        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
-            total += gi->getGaussianAsset().getGaussianCount();
+    for (const auto& instance : getGaussianInstances())
+    {
+        const auto& gaussians = instance->getGaussianAsset().getGaussians();
+        spans.push_back({gaussians.data(), total});
+        total += static_cast<uint32_t>(gaussians.size());
+    }
+
     gaussianOpacities.resize(total);
     constexpr uint32_t coefficientsPerGaussian = 16;
     gaussianShCoeffs.resize(static_cast<size_t>(total) * coefficientsPerGaussian);
-    std::fill(gaussianShCoeffs.begin(), gaussianShCoeffs.end(), glm::vec3(0.0f));
-    uint32_t offset = 0;
-    for (const auto& obj : sceneObjects)
+    if (total == 0)
+        return;
+
+    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, total, 1024),
+        [&](const tbb::blocked_range<uint32_t>& range)
     {
-        if (auto gi = std::dynamic_pointer_cast<GaussianInstance>(obj))
+        for (uint32_t globalIndex = range.begin(); globalIndex != range.end(); ++globalIndex)
         {
-            const GaussianAsset& asset = gi->getGaussianAsset();
-            for (uint32_t i = 0; i < asset.getGaussianCount(); ++i)
+            const GaussianSpan* span = &spans.front();
+            if (spans.size() > 1)
             {
-                gaussianOpacities[offset] = asset.getGaussians()[i].opacity;
-                const auto& gaussian = asset.getGaussians()[i];
-                const uint32_t count = std::min(gaussian.shCoeffCount, coefficientsPerGaussian);
-                for (uint32_t coefficient = 0; coefficient < count; ++coefficient)
-                    gaussianShCoeffs[offset * coefficientsPerGaussian + coefficient] =
-                        gaussian.shCoeffs[coefficient];
-                ++offset;
+                auto found = std::upper_bound(spans.begin(), spans.end(), globalIndex,
+                    [](const uint32_t value, const GaussianSpan& candidate) {
+                        return value < candidate.offset;
+                    });
+                span = &*--found;
             }
+            const Gaussian& gaussian = span->gaussians[globalIndex - span->offset];
+
+            gaussianOpacities[globalIndex] = gaussian.opacity;
+            glm::vec3* coefficients = gaussianShCoeffs.data()
+                + static_cast<size_t>(globalIndex) * coefficientsPerGaussian;
+            for (uint32_t coefficient = 0; coefficient < coefficientsPerGaussian; ++coefficient)
+                coefficients[coefficient] = glm::vec3(0.0f);
+            const uint32_t count = std::min(gaussian.shCoeffCount, coefficientsPerGaussian);
+            for (uint32_t coefficient = 0; coefficient < count; ++coefficient)
+                coefficients[coefficient] = gaussian.shCoeffs[coefficient];
         }
-    }
+    });
 }
 
 uint32_t Scene::getActiveMeshInstanceIndex() const

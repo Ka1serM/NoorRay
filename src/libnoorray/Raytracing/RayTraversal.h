@@ -17,7 +17,6 @@ struct RayHit
     float v = 0.0f;
     uint32_t instanceIndex = InvalidIndex;
     uint32_t primitiveIndex = InvalidIndex;
-    float gaussianAlpha = 0.0f;
 };
 
 // Payload layout for optixTraverse (gaussian-enabled path):
@@ -25,7 +24,6 @@ struct RayHit
 //   1: before acceptance, maximum allowed world-space Gaussian hit distance
 //      (normally the nearest mesh hit); after acceptance, accepted Gaussian t
 //   2: accepted gaussianId (uint32, init to InvalidIndex, set by any-hit on accept)
-//   3: accepted gaussianAlpha (float as uint, init to 0)
 //
 // We trace meshes first and use that t as a hard visibility bound for Gaussian
 // sampling. This prevents a stochastic Gaussian hit behind an opaque mesh from
@@ -44,7 +42,7 @@ struct RayHit
 // confirmed by deliberately reproducing it. The mesh bound has to come from
 // an authoritative closest-hit query first.
 
-static constexpr uint32_t GaussianPayloadCount = 4;
+static constexpr uint32_t GaussianPayloadCount = 3;
 static constexpr uint32_t GaussianSbtIndex     = 1; // sbtOffset for Gaussian hitgroup
 
 NR_GPU inline RayHit intersectRay(
@@ -74,7 +72,7 @@ NR_GPU inline RayHit intersectRay(
                 tMin,
                 tMax,
                 0.0f,
-                0x01,
+                MeshVisibility,
                 OPTIX_RAY_FLAG_DISABLE_ANYHIT,
                 0,
                 1,
@@ -93,7 +91,6 @@ NR_GPU inline RayHit intersectRay(
         uint32_t payload0 = sampleIndex;
         uint32_t payload1 = __float_as_uint(gaussianTMax);
         uint32_t payload2 = InvalidIndex;
-        uint32_t payload3 = 0;
         optixTraverse(
             accel,
             make_float3(origin.x, origin.y, origin.z),
@@ -101,19 +98,18 @@ NR_GPU inline RayHit intersectRay(
             tMin,
             gaussianTMax,
             0.0f,
-            0x02,
+            GaussianVisibility,
             OPTIX_RAY_FLAG_NONE,
             0,
             1,
             0,
-            payload0, payload1, payload2, payload3);
+            payload0, payload1, payload2);
 
         const uint32_t gaussianId = payload2;
         if (gaussianId != InvalidIndex)
         {
             // Gaussian accepted via Russian roulette.
             hit.instanceIndex = gaussianId;
-            hit.gaussianAlpha = __uint_as_float(payload3);
             hit.t = __uint_as_float(payload1);
         }
         else if (meshHit.instanceIndex != InvalidIndex)
@@ -133,7 +129,7 @@ NR_GPU inline RayHit intersectRay(
             tMin,
             tMax,
             0.0f,
-            0x01,
+            MeshVisibility,
             OPTIX_RAY_FLAG_DISABLE_ANYHIT,
             0,
             1,
@@ -166,7 +162,7 @@ NR_GPU inline bool testOcclusion(
         tMin,
         tMax,
         0.0f,
-        0x01,
+        MeshVisibility,
         OPTIX_RAY_FLAG_DISABLE_ANYHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
         0,
         1,

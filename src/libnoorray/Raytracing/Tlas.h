@@ -14,16 +14,21 @@
 #include "CUDA/rstd/Vector.h"
 #include "Mesh/GaussianCutoff.h"
 #include "Raytracing/GaussianProxyBlas.h"
+#include "Raytracing/Types.h"
 
 #include "Scene/GpuInstance.h"
 
 class Scene;
+class MeshInstance;
+class GaussianInstance;
 
 struct AccelInstanceInput
 {
     std::array<float, 12> transform{};
     OptixTraversableHandle blasHandle{};
     uint32_t instanceId{};
+    uint32_t sbtOffset{};
+    uint8_t visibilityMask{FullVisibility};
 };
 
 class Tlas
@@ -56,7 +61,11 @@ private:
 
     void updateMeshInstanceInPlace(
         const Scene& scene,
+        const std::vector<std::shared_ptr<MeshInstance>>& meshInstances,
         nr::rstd::vector<GpuInstance>& instancesOut,
+        uint32_t index);
+    void updateGaussianInstanceInPlace(
+        const std::vector<std::shared_ptr<GaussianInstance>>& gaussianInstances,
         uint32_t index);
 
     OptixInstance* instancePtr() const { return reinterpret_cast<OptixInstance*>(instanceBuffer.devicePtr()); }
@@ -77,6 +86,23 @@ private:
         const Scene& scene,
         std::vector<AccelInstanceInput>& inputs);
 
+    struct GaussianInstanceAccel
+    {
+        uint64_t objectId{};
+        uint32_t gaussianCount{};
+        uint32_t globalOffset{};
+        nr::cuda::UniqueManagedBuffer instanceBuffer;
+        nr::cuda::UniqueAsyncDeviceBuffer accelBuffer;
+        OptixTraversableHandle handle{};
+    };
+
+    void buildGaussianInstanceAccel(
+        OptixDeviceContext context,
+        cudaStream_t stream,
+        GaussianInstanceAccel& destination,
+        const GaussianInstance& instance,
+        uint32_t globalOffset);
+
     nr::cuda::UniqueManagedBuffer instanceBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer tlasBuffer;
     size_t tlasBufferSize{};
@@ -87,4 +113,6 @@ private:
     GaussianProxyType lastProxyType{GaussianProxyType::TriangularBipyramid};
     float lastCutoffSigma{GaussianCutoffSigma};
     uint32_t meshInstanceCount{};
+    uint32_t gaussianInstanceCount{};
+    std::vector<GaussianInstanceAccel> gaussianInstanceAccels;
 };

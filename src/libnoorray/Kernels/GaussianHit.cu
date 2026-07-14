@@ -3,6 +3,7 @@
 #include <optix_device.h>
 
 #include "Raytracing/SceneData.h"
+#include "Samplers/RandomSampler.h"
 
 extern "C"
 {
@@ -14,9 +15,7 @@ extern "C" __global__ void __anyhit__gaussian()
     const uint32_t instanceId = optixGetInstanceId();
     const uint32_t globalGaussianId = instanceId;
 
-    const float opacity = params.train.enabled
-        ? 1.0f / (1.0f + __expf(-params.train.opacityLogit[globalGaussianId]))
-        : params.scene.gaussianOpacities[globalGaussianId];
+    const float opacity = params.scene.gaussianOpacities[globalGaussianId];
     if (opacity <= 0.0f)
     {
         optixIgnoreIntersection();
@@ -54,46 +53,41 @@ extern "C" __global__ void __anyhit__gaussian()
     }
 
     // Eq. 2: α_i = opacity * exp(-0.5 * distance²)
-    // opacity > 0 (checked above) and distanceSq < cutoffSq guarantee alpha > 0.
-    const float alpha = opacity * __expf(-0.5f * distanceSq);
-
     // ── Russian roulette ────────────────────────────────────────────────
     // Accept with probability alpha so that expected value matches 3DGS
     // over operator compositing:
     //   E[C] = Σᵢ αᵢ·cᵢ·Πⱼ<ᵢ(1-αⱼ)
-    // Fully opaque gaussians (alpha ~ 1) always accept.
-    if (alpha >= 1.0f)
-    {
-        optixSetPayload_1(__float_as_uint(hitT));
-        optixSetPayload_2(globalGaussianId);
-        optixSetPayload_3(__float_as_uint(1.0f));
-        return; // traversal terminates here (no optixIgnoreIntersection)
-    }
-
     // Payload layout:
     //   0: sampleIndex (set before traversal, preserved)
     //   1: world-space hit distance (float as uint) of the accepted gaussian's
     //      closest-approach point, set only on acceptance (init to tMax)
     //   2: accepted gaussianId (init to InvalidIndex)
-    //   3: accepted gaussianAlpha (float as uint, init to 0)
     const uint32_t sampleIndex = optixGetPayload_0();
 
-    // Stateless hash-based RNG key: decorrelates across pixels, accumulated
-    // frames (sub-samples), and gaussians along the same ray.
-    uint32_t key = sampleIndex
-        ^ (params.frame.totalAccumulated << 8)
-        ^ (globalGaussianId << 16);
-    key ^= key >> 16;
-    key *= 0x85ebca6bu;
-    key ^= key >> 16;
-    const float xi = (static_cast<float>(key & 0x00ffffffu) + 0.5f) / 16777216.0f;
+    // Counter-based PCG hashing keeps every decision deterministic while
+    // decorrelating Gaussian ID, path, accumulated sample, and bounce. The
+    // previous shifted-XOR key discarded much of the Gaussian and frame IDs.
+    const uint32_t sampleCounter = hashCombine32(
+        params.frame.totalAccumulated, params.depth);
+    const uint32_t pathKey = hashCombine32(sampleIndex, sampleCounter);
+    const uint32_t bits = hashCombine32(globalGaussianId, pathKey);
+    const float xi = (static_cast<float>(bits >> 8u) + 0.5f)
+        * (1.0f / 16777216.0f);
+
+    // alpha <= opacity, so low-opacity rejections avoid evaluating the
+    // exponential.
+    if (xi >= opacity)
+    {
+        optixIgnoreIntersection();
+        return;
+    }
+    const float alpha = opacity * __expf(-0.5f * distanceSq);
 
     if (xi < alpha)
     {
         // Accept: record gaussian as closest hit, traversal terminates here.
         optixSetPayload_1(__float_as_uint(hitT));
         optixSetPayload_2(globalGaussianId);
-        optixSetPayload_3(__float_as_uint(alpha));
     }
     else
     {

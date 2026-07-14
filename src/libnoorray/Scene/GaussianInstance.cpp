@@ -17,6 +17,7 @@ void GaussianInstance::onTransformUpdated()
 {
     SceneObject::onTransformUpdated();
     scene->setDirtyFlag(TLAS);
+    scene->markGaussianInstanceTransformDirty(sceneInstanceIndex);
 }
 
 bool GaussianInstance::renderUi()

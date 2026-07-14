@@ -19,6 +19,7 @@ struct CliOptions
     int width{};
     int height{};
     bool statsEnabled{};
+    bool denoiserEnabled{};
     bool showHelp{};
 };
 
@@ -31,6 +32,7 @@ void printUsage()
         << "  --output <path>      Output image path (default: output.exr)\n"
         << "  --width  <int>       Output width (default: from camera sensor or 1280)\n"
         << "  --height <int>       Output height (default: from camera sensor or 720)\n"
+        << "  --denoise            Apply the OptiX HDR beauty denoiser\n"
         << "  --stats              Print a per-kernel GPU timing breakdown after rendering\n";
 }
 
@@ -62,6 +64,8 @@ CliOptions parseOptions(const int argc, char* argv[])
             options.height = std::stoi(requireValue(argc, argv, i));
         else if (arg == "--stats")
             options.statsEnabled = true;
+        else if (arg == "--denoise")
+            options.denoiserEnabled = true;
         else if (arg.starts_with("--"))
             throw std::invalid_argument("Unknown flag: " + arg);
         else
@@ -99,9 +103,11 @@ void runCli(const CliOptions& options)
     }
 
     Raytracer& raytracer = *session.raytracer;
+    raytracer.setAovEnabled(false);
     raytracer.setStatsEnabled(options.statsEnabled);
     raytracer.setTimingEnabled(options.statsEnabled);
     session.scene.getRenderSettings().samples = options.samplesPerPixel;
+    session.scene.getRenderSettings().optixDenoiserEnabled = options.denoiserEnabled;
     LOG_INFO("Rendering @ " << options.samplesPerPixel << " spp");
     raytracer.renderFrame(PushData{.frame = 0});
     raytracer.getOutputColor().save(options.outputPath);

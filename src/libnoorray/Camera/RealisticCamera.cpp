@@ -76,7 +76,11 @@ void RealisticCamera::setApertureDiameterMm(const float requestedApertureDiamete
 
 void RealisticCamera::setOpticalFocusDistanceCm(const float requestedFocusDistanceCm)
 {
-    const float clampedFocusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
+    const float minimumFocusDistanceCm = sourceRossLens
+        ? std::max(0.1f, sourceRossLens->metadata.closestFocalDistance)
+        : 0.1f;
+    const float clampedFocusDistanceCm =
+        std::max(minimumFocusDistanceCm, requestedFocusDistanceCm);
     if (focusDistanceCm == clampedFocusDistanceCm)
         return;
     focusDistanceCm = clampedFocusDistanceCm;
@@ -201,12 +205,15 @@ void RealisticCamera::loadLensAndSensor(const bool resetLensSettings)
             catalogs.loadCatalogsFromCommaSeperatedString(catalogList);
 
         ross::CameraLens loaded =
-            ross::CameraLensSystemReader::readCameraLens(lensPath, catalogs);
+            ross::CameraLensSystemReader::readCameraLens(
+                lensPath, catalogs, ross::ReadOptions{1.0f, false});
         nr::rstd::allocator<ross::CameraLens> lensAlloc;
         sourceRossLens.reset(lensAlloc.allocate(1));
         lensAlloc.construct(sourceRossLens.get(), loaded);
         if (resetLensSettings)
             focusDistanceCm = 500.0f;
+        focusDistanceCm = std::max(
+            focusDistanceCm, loaded.metadata.closestFocalDistance);
         if (resetLensSettings || apertureDiameterMm <= 0.0f) {
             apertureDiameterMm = std::max(0.0f, loaded.getApertureRadius() * 20.0f);
         } else {

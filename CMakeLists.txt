@@ -262,6 +262,7 @@ static constexpr size_t noorRayImGuiLayoutLength = sizeof(noorRayImGuiLayout);\n
 # NR_OPTIX_PTX defined here early so it can be used in the embed header and
 # also referenced by the custom command further below
 set(NR_OPTIX_PTX "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.ptx")
+set(NR_TRAINING_OPTIX_PTX "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayTrainingOptix.ptx")
 
 file(CONFIGURE OUTPUT "${NR_GEN}/NoorRayOptixIr.h" CONTENT
 "#pragma once
@@ -269,6 +270,13 @@ static constexpr unsigned char noorRayOptixIr[] = {
     #embed \"${NR_OPTIX_PTX}\"
 };
 static constexpr size_t noorRayOptixIrLength = sizeof(noorRayOptixIr);\n" @ONLY)
+
+file(CONFIGURE OUTPUT "${NR_GEN}/NoorRayTrainingOptixIr.h" CONTENT
+"#pragma once
+static constexpr unsigned char noorRayTrainingOptixIr[] = {
+    #embed \"${NR_TRAINING_OPTIX_PTX}\"
+};
+static constexpr size_t noorRayTrainingOptixIrLength = sizeof(noorRayTrainingOptixIr);\n" @ONLY)
 
 # MoltenVK dynamic library (macOS)
 if(APPLE AND DEFINED ENV{VULKAN_SDK})
@@ -344,6 +352,32 @@ add_custom_command(
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 
+set(NR_TRAINING_OPTIX_DEPFILE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayTrainingOptix.d")
+add_custom_command(
+        OUTPUT "${NR_TRAINING_OPTIX_PTX}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        COMMAND "${CMAKE_CUDA_COMPILER}"
+                -ccbin "${CMAKE_CXX_COMPILER}"
+                --ptx --gpu-architecture=compute_${NR_OPTIX_CUDA_ARCH} --std=c++20
+                --generate-line-info --expt-relaxed-constexpr
+                "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
+                --generate-nonsystem-dependencies-with-compile
+                --dependency-output "${NR_TRAINING_OPTIX_DEPFILE}"
+                -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
+                "-I${NR_CORE_DIR}"
+                "-I${NR_APP_DIR}"
+                "-I${PROJECT_SOURCE_DIR}/external/glm"
+                "-I${OPTIX_INCLUDE_DIR}"
+                -o "${NR_TRAINING_OPTIX_PTX}"
+                "${NR_CORE_DIR}/Training/Kernels/Extend.cu"
+        DEPENDS
+                src/libnoorray/Training/Kernels/Extend.cu
+                src/libnoorray/Training/Kernels/GaussianHit.cu
+        DEPFILE "${NR_TRAINING_OPTIX_DEPFILE}"
+        VERBATIM)
+add_custom_target(NoorRayTrainingOptixIr DEPENDS "${NR_TRAINING_OPTIX_PTX}")
+
 add_library(NoorRayCuda STATIC
         src/libnoorray/Raytracing/Blas.cpp
         src/libnoorray/Raytracing/GaussianProxyBlas.cpp
@@ -354,15 +388,19 @@ add_library(NoorRayCuda STATIC
         src/libnoorray/Mesh/OpenPbrEnergy.cpp
         src/libnoorray/Kernels/Generate.cu
         src/libnoorray/Kernels/Shade.cu
+        src/libnoorray/Kernels/ShadeGaussianDirect.cu
         src/libnoorray/Kernels/Finalize.cu
+        src/libnoorray/Kernels/Denoise.cu
         src/libnoorray/Kernels/GenerateAov.cu
         src/libnoorray/Kernels/ShadeAov.cu
         src/libnoorray/Raytracing/Tlas.cpp
         src/libnoorray/Raytracing/RgbSpectrumTableData.cpp
         src/libnoorray/Raytracing/Raytracer.cpp
+        src/libnoorray/Training/Kernels/Forward.cu
+        src/libnoorray/Training/Kernels/Backward.cu
         src/libnoorray/Training/GaussianTrainRenderer.cpp
         src/libnoorray/Training/GaussianTrainer.cu)
-add_dependencies(NoorRayCuda NoorRayOptixIr)
+add_dependencies(NoorRayCuda NoorRayOptixIr NoorRayTrainingOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 set_target_properties(NoorRayCuda PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON

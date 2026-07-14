@@ -25,6 +25,7 @@ public:
     int maxSamples{3000};
     bool noiseLimitEnabled{false};
     float noiseLevel{0.0001f};
+    bool optixDenoiserEnabled{false};
     int maxBounces{10};
     int russianRouletteStartBounce{3};
     float exposure{};

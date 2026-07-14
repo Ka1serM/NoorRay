@@ -1,7 +1,6 @@
 #include <cuda_fp16.h>
 
 #include "Raytracing/SceneData.h"
-#include "Samplers/RandomSampler.h"
 
 // Deterministic, single-ray-per-pixel primary ray for the AOV pass: pixel-center
 // (no AA jitter), no depth-of-field (centered lens/pupil sample). Densely indexed by
@@ -21,10 +20,10 @@ NR_GPU_KERNEL void generateAovKernel(const KernelParams params)
     glm::vec3 origin{};
     glm::vec3 direction{};
     float cameraWeight = 1.0f;
-    RandomState rng = seedRandom(static_cast<uint64_t>(pixel));
     SampledWavelengths wl = SampledWavelengths::sampleVisible(0.5f);
     const bool active = params.scene.camera->Dispatch([&](const auto* camera) {
-        return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
+        return camera->generateRay(origin, direction, cameraWeight, nx, ny,
+            glm::vec2(0.5f),
             pixel, wl, true);
     });
 

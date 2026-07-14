@@ -1,9 +1,10 @@
 #include "Raytracing/Tlas.h"
 
 #include <algorithm>
-#include <cstring>
 
 #include <optix_stubs.h>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 
 #include "CUDA/Checks.h"
 #include "Mesh/GaussianCutoff.h"
@@ -39,25 +40,29 @@ std::vector<AccelInstanceInput> Tlas::buildInstanceInputs(
 {
     std::vector<AccelInstanceInput> result;
     const auto instances = scene.getMeshInstances();
-    result.reserve(instances.size());
-    instancesOut.clear();
-    instancesOut.reserve(instances.size());
-    for (uint32_t index = 0; index < instances.size(); ++index)
+    result.resize(instances.size());
+    instancesOut.resize(instances.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, instances.size(), 256),
+        [&](const tbb::blocked_range<size_t>& range)
     {
-        const MeshInstance& instance = *instances[index];
-        const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
-        const mat4 worldToObject = inverse(objectToWorld);
-        const uint32_t meshIndex = instance.getMeshIndex();
-        const auto& asset = scene.getMeshAsset(meshIndex);
-        result.push_back({
-            toOptixTransform(objectToWorld), asset.getBlas().getTraversable(), index});
+        for (size_t index = range.begin(); index != range.end(); ++index)
+        {
+            const MeshInstance& instance = *instances[index];
+            const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
+            const mat4 worldToObject = inverse(objectToWorld);
+            const uint32_t meshIndex = instance.getMeshIndex();
+            const auto& asset = scene.getMeshAsset(meshIndex);
+            result[index] = {toOptixTransform(objectToWorld),
+                asset.getBlas().getTraversable(), static_cast<uint32_t>(index), 0,
+                MeshVisibility};
 
-        GpuInstance gpuInstance{};
-        gpuInstance.objectToWorld = objectToWorld;
-        gpuInstance.normalToWorld = glm::mat3(transpose(worldToObject));
-        gpuInstance.meshIndex = meshIndex;
-        instancesOut.push_back(gpuInstance);
-    }
+            GpuInstance gpuInstance{};
+            gpuInstance.objectToWorld = objectToWorld;
+            gpuInstance.normalToWorld = glm::mat3(transpose(worldToObject));
+            gpuInstance.meshIndex = meshIndex;
+            instancesOut[index] = gpuInstance;
+        }
+    });
     return result;
 }
 
@@ -74,7 +79,9 @@ void Tlas::buildGaussianInstances(
     const RenderSettings& rs = scene.getRenderSettings();
     const GaussianProxyType proxyType = rs.gaussianProxyType;
     const float cutoffSigma = rs.gaussianCutoffSigma;
-    if (proxyBlas == nullptr || lastProxyType != proxyType || lastCutoffSigma != cutoffSigma)
+    const bool proxyChanged = proxyBlas == nullptr
+        || lastProxyType != proxyType || lastCutoffSigma != cutoffSigma;
+    if (proxyChanged)
     {
         if (proxyBlas == nullptr)
             proxyBlas = std::make_unique<GaussianProxyBlas>();
@@ -83,36 +90,96 @@ void Tlas::buildGaussianInstances(
         lastCutoffSigma = cutoffSigma;
     }
 
-    const uint32_t instanceStart = static_cast<uint32_t>(inputs.size());
-    inputs.reserve(instanceStart + gaussianCount);
-
     const auto instances = scene.getGaussianInstances();
-    uint32_t gaussianGlobalId = 0;
-    for (const auto& instance : instances)
+    if (gaussianInstanceAccels.size() != instances.size())
+        gaussianInstanceAccels.resize(instances.size());
+
+    uint32_t globalOffset = 0;
+    for (size_t index = 0; index < instances.size(); ++index)
     {
-        const mat4 instanceToWorld = instance->getWorldTransform().getMatrix();
-        const GaussianAsset& asset = instance->getGaussianAsset();
-        const auto& gaussians = asset.getGaussians();
-        for (uint32_t i = 0; i < asset.getGaussianCount(); ++i)
+        const uint32_t count = instances[index]->getGaussianAsset().getGaussianCount();
+        GaussianInstanceAccel& accel = gaussianInstanceAccels[index];
+        if (proxyChanged || accel.objectId != instances[index]->getId()
+            || accel.gaussianCount != count || accel.globalOffset != globalOffset)
         {
-            // Bake the complete scene-instance TRS and the Gaussian asset's
-            // translation/rotation/sigma scale into one OptiX instance matrix.
-            // The shared proxy BLAS carries the maximum cutoff scaling. Keep
-            // the TLAS transform in true Gaussian Mahalanobis space.
-            const mat4 gaussToInstance = toMat4(gaussians[i].transform);
-            const mat4 worldTransform = instanceToWorld * gaussToInstance;
-            inputs.push_back({toOptixTransform(worldTransform), proxyBlas->getTraversable(), gaussianGlobalId});
-            ++gaussianGlobalId;
+            buildGaussianInstanceAccel(
+                context, stream, accel, *instances[index], globalOffset);
         }
+        globalOffset += count;
     }
+
+    const uint32_t instanceStart = static_cast<uint32_t>(inputs.size());
+    inputs.resize(instanceStart + instances.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, instances.size(), 64),
+        [&](const tbb::blocked_range<size_t>& range)
+    {
+        for (size_t index = range.begin(); index != range.end(); ++index)
+        {
+            inputs[instanceStart + index] = {
+                toOptixTransform(instances[index]->getWorldTransform().getMatrix()),
+                gaussianInstanceAccels[index].handle,
+                static_cast<uint32_t>(index), 0, GaussianVisibility};
+        }
+    });
+    gaussianInstanceCount = static_cast<uint32_t>(instances.size());
+}
+
+void Tlas::buildGaussianInstanceAccel(
+    const OptixDeviceContext context,
+    const cudaStream_t stream,
+    GaussianInstanceAccel& destination,
+    const GaussianInstance& instance,
+    const uint32_t globalOffset)
+{
+    const auto& gaussians = instance.getGaussianAsset().getGaussians();
+    const size_t instanceBytes = gaussians.size() * sizeof(OptixInstance);
+    destination.instanceBuffer.allocate(instanceBytes);
+    auto* optixInstances = reinterpret_cast<OptixInstance*>(
+        destination.instanceBuffer.devicePtr());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, gaussians.size(), 1024),
+        [&](const tbb::blocked_range<size_t>& range)
+    {
+        for (size_t index = range.begin(); index != range.end(); ++index)
+        {
+            OptixInstance& child = optixInstances[index];
+            child = {};
+            const auto transform = toOptixTransform(toMat4(gaussians[index].transform));
+            std::copy(transform.begin(), transform.end(), child.transform);
+            child.instanceId = globalOffset + static_cast<uint32_t>(index);
+            child.sbtOffset = 1;
+            child.visibilityMask = GaussianVisibility;
+            child.flags = OPTIX_INSTANCE_FLAG_NONE;
+            child.traversableHandle = proxyBlas->getTraversable();
+        }
+    });
+
+    OptixBuildInput buildInput{};
+    buildInput.type = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
+    buildInput.instanceArray.instances = destination.instanceBuffer.devicePtr();
+    buildInput.instanceArray.numInstances = static_cast<unsigned int>(gaussians.size());
+    OptixAccelBuildOptions options{};
+    options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
+    options.operation = OPTIX_BUILD_OPERATION_BUILD;
+    OptixAccelBufferSizes sizes{};
+    NR_OPTIX_CHECK(optixAccelComputeMemoryUsage(context, &options, &buildInput, 1, &sizes));
+    destination.accelBuffer.allocate(sizes.outputSizeInBytes, stream);
+    nr::cuda::UniqueAsyncDeviceBuffer scratch(sizes.tempSizeInBytes, stream);
+    NR_OPTIX_CHECK(optixAccelBuild(
+        context, stream, &options, &buildInput, 1,
+        scratch.devicePtr(), sizes.tempSizeInBytes,
+        destination.accelBuffer.devicePtr(), sizes.outputSizeInBytes,
+        &destination.handle, nullptr, 0));
+    destination.objectId = instance.getId();
+    destination.gaussianCount = static_cast<uint32_t>(gaussians.size());
+    destination.globalOffset = globalOffset;
 }
 
 void Tlas::updateMeshInstanceInPlace(
     const Scene& scene,
+    const std::vector<std::shared_ptr<MeshInstance>>& meshInstances,
     nr::rstd::vector<GpuInstance>& instancesOut,
     const uint32_t index)
 {
-    const auto meshInstances = scene.getMeshInstances();
     const MeshInstance& instance = *meshInstances[index];
     const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
     const mat4 worldToObject = inverse(objectToWorld);
@@ -133,9 +200,25 @@ void Tlas::updateMeshInstanceInPlace(
     std::copy(transform.begin(), transform.end(), destination.transform);
     destination.instanceId = index;
     destination.sbtOffset = 0;
-    destination.visibilityMask = 0x01;
+    destination.visibilityMask = MeshVisibility;
     destination.flags = OPTIX_INSTANCE_FLAG_NONE;
     destination.traversableHandle = asset.getBlas().getTraversable();
+}
+
+void Tlas::updateGaussianInstanceInPlace(
+    const std::vector<std::shared_ptr<GaussianInstance>>& gaussianInstances,
+    const uint32_t index)
+{
+    OptixInstance& destination = instancePtr()[meshInstanceCount + index];
+    destination = {};
+    const auto transform = toOptixTransform(
+        gaussianInstances[index]->getWorldTransform().getMatrix());
+    std::copy(transform.begin(), transform.end(), destination.transform);
+    destination.instanceId = index;
+    destination.sbtOffset = 0;
+    destination.visibilityMask = GaussianVisibility;
+    destination.flags = OPTIX_INSTANCE_FLAG_NONE;
+    destination.traversableHandle = gaussianInstanceAccels[index].handle;
 }
 
 bool Tlas::tryPartialUpdate(
@@ -145,21 +228,41 @@ bool Tlas::tryPartialUpdate(
     nr::rstd::vector<GpuInstance>& instancesOut)
 {
     const auto& dirtyIndices = scene.getDirtyMeshInstanceIndices();
-    if (tlasHandle == 0 || !instanceBuffer || dirtyIndices.empty())
+    const auto& dirtyGaussianIndices = scene.getDirtyGaussianInstanceIndices();
+    if (tlasHandle == 0 || !instanceBuffer
+        || (dirtyIndices.empty() && dirtyGaussianIndices.empty()))
         return false;
 
     const auto meshInstances = scene.getMeshInstances();
+    const auto gaussianInstances = scene.getGaussianInstances();
     if (meshInstances.size() != meshInstanceCount
         || static_cast<uint32_t>(instancesOut.size()) != meshInstanceCount
-        || scene.getGaussianCount() != instanceCount - meshInstanceCount)
+        || gaussianInstances.size() != gaussianInstanceCount
+        || instanceCount != meshInstanceCount + gaussianInstanceCount)
         return false;
 
     for (const uint32_t index : dirtyIndices)
         if (index >= meshInstanceCount)
             return false;
+    for (const uint32_t index : dirtyGaussianIndices)
+        if (index >= gaussianInstanceCount
+            || gaussianInstanceAccels[index].objectId != gaussianInstances[index]->getId())
+            return false;
 
-    for (const uint32_t index : dirtyIndices)
-        updateMeshInstanceInPlace(scene, instancesOut, index);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, dirtyIndices.size(), 64),
+        [&](const tbb::blocked_range<size_t>& range)
+    {
+        for (size_t dirty = range.begin(); dirty != range.end(); ++dirty)
+            updateMeshInstanceInPlace(
+                scene, meshInstances, instancesOut, dirtyIndices[dirty]);
+    });
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, dirtyGaussianIndices.size(), 64),
+        [&](const tbb::blocked_range<size_t>& range)
+    {
+        for (size_t dirty = range.begin(); dirty != range.end(); ++dirty)
+            updateGaussianInstanceInPlace(
+                gaussianInstances, dirtyGaussianIndices[dirty]);
+    });
 
     OptixBuildInput buildInput{};
     buildInput.type = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
@@ -223,29 +326,29 @@ void Tlas::buildInternal(
         return;
     }
 
-    std::vector<OptixInstance> optixInstances(instances.size());
-    for (size_t index = 0; index < instances.size(); ++index)
-    {
-        const AccelInstanceInput& source = instances[index];
-        OptixInstance& destination = optixInstances[index];
-        std::copy(source.transform.begin(), source.transform.end(), destination.transform);
-        destination.instanceId = source.instanceId;
-        destination.sbtOffset = index < meshInstanceCount ? 0 : 1;
-        destination.visibilityMask = index < meshInstanceCount ? 0x01 : 0x02;
-        // Backface culling forced on for every instance (mesh and Gaussian
-        // proxy alike) via the ray-flag-driven culling in RayTraversal.h.
-        destination.flags = OPTIX_INSTANCE_FLAG_NONE;
-        destination.traversableHandle = source.blasHandle;
-    }
-
     // instanceBuffer is managed (UMA) memory so the instance array can be
     // updated in place by tryPartialUpdate() without any host->device copy.
-    const size_t instanceBytes = optixInstances.size() * sizeof(OptixInstance);
+    const size_t instanceBytes = instances.size() * sizeof(OptixInstance);
     if (!instanceBuffer || instanceCount != instances.size())
-    {
         instanceBuffer.allocate(instanceBytes);
-    }
-    std::memcpy(reinterpret_cast<void*>(instanceBuffer.devicePtr()), optixInstances.data(), instanceBytes);
+
+    OptixInstance* optixInstances = instancePtr();
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, instances.size(), 1024),
+        [&](const tbb::blocked_range<size_t>& range)
+    {
+        for (size_t index = range.begin(); index != range.end(); ++index)
+        {
+            const AccelInstanceInput& source = instances[index];
+            OptixInstance& destination = optixInstances[index];
+            destination = {};
+            std::copy(source.transform.begin(), source.transform.end(), destination.transform);
+            destination.instanceId = source.instanceId;
+            destination.sbtOffset = source.sbtOffset;
+            destination.visibilityMask = source.visibilityMask;
+            destination.flags = OPTIX_INSTANCE_FLAG_NONE;
+            destination.traversableHandle = source.blasHandle;
+        }
+    });
 
     OptixBuildInput buildInput{};
     buildInput.type = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
@@ -285,10 +388,13 @@ void Tlas::buildInternal(
 
 void Tlas::reset() noexcept
 {
+    gaussianInstanceAccels.clear();
     proxyBlas.reset();
     instanceBuffer.reset();
     tlasBuffer.reset();
     tlasBufferSize = 0;
     instanceCount = 0;
+    meshInstanceCount = 0;
+    gaussianInstanceCount = 0;
     tlasHandle = 0;
 }

@@ -7,7 +7,6 @@
 #include "Camera/Camera.h"
 #include "CUDA/Unique/Texture.h"
 #include "Raytracing/Output.h"
-#include "Raytracing/GaussianTrainData.h"
 #include "Raytracing/Types.h"
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
@@ -60,7 +59,7 @@ struct GpuFrameSettings
     uint32_t width{};
     uint32_t height{};
     uint32_t totalAccumulated{};   // total samples accumulated so far (blend weight)
-    uint32_t visibilityMask{0x03}; // 0x01 = mesh, 0x02 = gaussian, 0x03 = both
+    uint32_t visibilityMask{SceneVisibility};
     float cutoffDistanceSq{};      // cutoff sigma squared, precomputed on host
     int frameIndex{};              // pushData.frame; 0 while resetAccumulation keeps retriggering (camera in motion)
 };
@@ -70,11 +69,11 @@ struct KernelParams
     GpuSceneData scene;
     WavefrontQueues queues;
     OutputSurfaces output;
+    OutputSurfaces alternateAovOutput;
     GpuFrameSettings frame;
     glm::vec4* accumulation{};
     glm::vec2* noiseMoments{}; // Per-pixel luminance mean and Welford M2.
     PsfGatherBucketSample* psfGatherBuckets{};
     uint32_t psfBinCount{};
     uint32_t depth{};
-    GaussianTrainParams train{};
 };

@@ -103,11 +103,6 @@ bool SceneObject::renderUi() {
         setScale(v); anyChanged = true;
     });
 
-    if (anyChanged)
-    {
-        onTransformUpdated();
-       if (scene) scene->setDirtyFlag(Accumulation);
-    }
     return anyChanged;
 }
 

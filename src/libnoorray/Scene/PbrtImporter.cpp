@@ -126,7 +126,8 @@ OpticalSettings opticalSettings(const Command& command, const std::string& lensP
     std::string catalogList = catalogPaths;
     std::ranges::replace(catalogList, ';', ',');
     if (!catalogList.empty()) catalogs.loadCatalogsFromCommaSeperatedString(catalogList);
-    ross::CameraLens lens = ross::CameraLensSystemReader::readCameraLens(lensPath, catalogs);
+    ross::CameraLens lens = ross::CameraLensSystemReader::readCameraLens(
+        lensPath, catalogs, ross::ReadOptions{1.0f, false});
     if (result.apertureDiameterMm > 0.f)
         lens.changeAperture_mm(result.apertureDiameterMm);
     else
@@ -549,7 +550,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                 realistic->loadLensAndSensor(false);
             } else if (auto* hybridPsf = dynamic_cast<HybridPsfCamera*>(camera.get())) {
                 hybridPsf->setOpticsPaths(lens, catalogs);
-                hybridPsf->rayLutStepSize = std::max(1, static_cast<int>(scalar(source, "raylutstepsize", 1.f)));
+                hybridPsf->rayLutStepSize = std::max(1, static_cast<int>(scalar(source, "raylutstepsize", 32.f)));
                 hybridPsf->samplesPerDimension = std::max(1, static_cast<int>(scalar(source, "samplesperdimension", 8.f)));
                 hybridPsf->setApertureDiameterMm(settings.apertureDiameterMm);
                 hybridPsf->setOpticalFocusDistanceCm(settings.focusDistanceCm);

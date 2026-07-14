@@ -171,7 +171,11 @@ void HybridPsfCamera::setApertureDiameterMm(const float requestedApertureDiamete
 
 void HybridPsfCamera::setOpticalFocusDistanceCm(const float requestedFocusDistanceCm)
 {
-    const float clampedFocusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
+    const float minimumFocusDistanceCm = sourceRossLens
+        ? std::max(0.1f, sourceRossLens->metadata.closestFocalDistance)
+        : 0.1f;
+    const float clampedFocusDistanceCm =
+        std::max(minimumFocusDistanceCm, requestedFocusDistanceCm);
     if (focusDistanceCm == clampedFocusDistanceCm)
         return;
     focusDistanceCm = clampedFocusDistanceCm;
@@ -253,12 +257,15 @@ void HybridPsfCamera::loadLensSensorAndPsf(
             catalogs.loadCatalogsFromCommaSeperatedString(catalogList);
 
         ross::CameraLens loadedLens =
-            ross::CameraLensSystemReader::readCameraLens(lensPath, catalogs);
+            ross::CameraLensSystemReader::readCameraLens(
+                lensPath, catalogs, ross::ReadOptions{1.0f, false});
         nr::rstd::allocator<ross::CameraLens> lensAllocator;
         sourceRossLens.reset(lensAllocator.allocate(1));
         lensAllocator.construct(sourceRossLens.get(), loadedLens);
         if (resetLensSettings)
             focusDistanceCm = 500.0f;
+        focusDistanceCm = std::max(
+            focusDistanceCm, loadedLens.metadata.closestFocalDistance);
         if (resetLensSettings || apertureDiameterMm <= 0.0f) {
             apertureDiameterMm = std::max(0.0f, loadedLens.getApertureRadius() * 20.0f);
         } else {

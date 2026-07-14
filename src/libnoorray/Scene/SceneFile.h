@@ -33,10 +33,10 @@ struct CameraFile {
     Vec3 position{};
     Vec3 rotation_euler{};
     Vec3 scale{1.0f, 1.0f, 1.0f};
-    float focal_length{50.0f};
-    float focus_distance{2.0f};
+    float focal_length_mm{50.0f};
+    float focus_distance_cm{200.0f};
     float bokeh_bias{1.0f};
-    float aperture_diameter{};
+    float aperture_diameter_mm{};
     Resolution resolution{1280, 720};
     std::string lens;
     std::string sensor;

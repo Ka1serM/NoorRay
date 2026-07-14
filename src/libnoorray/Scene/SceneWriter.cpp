@@ -84,13 +84,18 @@ nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
     file.position = fromVec3(cameraInstance.getPosition());
     file.rotation_euler = fromVec3(cameraInstance.getRotationEuler());
     file.scale = fromVec3(cameraInstance.getScale());
-    file.focal_length = camera->getFocalLength();
-    file.focus_distance = camera->getFocusDistance();
+    file.focal_length_mm = camera->getFocalLengthMm();
+    file.focus_distance_cm = camera->getFocusDistanceCm();
     if (const auto* thinLens = camera->CastOrNullptr<ThinLensCamera>()) {
-        file.aperture_diameter = thinLens->fStop;
+        file.aperture_diameter_mm = thinLens->apertureDiameterMm;
         file.bokeh_bias = thinLens->bokehBias;
     } else if (const auto* fisheye = camera->CastOrNullptr<FisheyeCamera>()) {
+        file.aperture_diameter_mm = fisheye->apertureDiameterMm;
         file.bokeh_bias = fisheye->bokehBias;
+    } else if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
+        file.aperture_diameter_mm = realistic->apertureDiameterMm;
+    } else if (const auto* hybridPsf = camera->CastOrNullptr<HybridPsfCamera>()) {
+        file.aperture_diameter_mm = hybridPsf->apertureDiameterMm;
     }
     const glm::uvec2 resolution = camera->getSensor().resolution();
     file.resolution = {resolution.x, resolution.y};
@@ -104,10 +109,10 @@ nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
     if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
         file.lens = realistic->getLensPath();
         file.glass_catalogs = realistic->getGlassCatalogPaths();
-    } else if (const auto* rossPsf = camera->CastOrNullptr<RossPsfCamera>()) {
-        file.lens = rossPsf->getLensPath();
-        file.glass_catalogs = rossPsf->getGlassCatalogPaths();
-        file.ray_lut = rossPsf->getRayLutPath();
+    } else if (const auto* hybridPsf = camera->CastOrNullptr<HybridPsfCamera>()) {
+        file.lens = hybridPsf->getLensPath();
+        file.glass_catalogs = hybridPsf->getGlassCatalogPaths();
+        file.ray_lut = hybridPsf->getRayLutPath();
     }
     return file;
 }

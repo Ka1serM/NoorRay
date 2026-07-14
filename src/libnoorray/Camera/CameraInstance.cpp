@@ -7,7 +7,7 @@
 #include <utility>
 #include <imgui.h>
 #include "Camera/RealisticCamera.h"
-#include "Camera/RossPsfCamera.h"
+#include "Camera/HybridPsfCamera.h"
 #include "CUDA/ManagedMemory.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/quaternion.hpp"
@@ -27,17 +27,32 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
     if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
         sharedLensPath = realistic->getLensPath();
         sharedGlassCatalogPaths = realistic->getGlassCatalogPaths();
-    } else if (const auto* hybrid = camera->CastOrNullptr<RossPsfCamera>()) {
+    } else if (const auto* hybrid = camera->CastOrNullptr<HybridPsfCamera>()) {
         sharedLensPath = hybrid->getLensPath();
         sharedGlassCatalogPaths = hybrid->getGlassCatalogPaths();
     }
-    camera.reset(Camera::create(type, std::move(transferredSensor)).release());
+    std::unique_ptr<Camera> replacement;
+    switch (type) {
+    case CameraProjectionType::ThinLens:
+        replacement = std::make_unique<ThinLensCamera>(std::move(transferredSensor)); break;
+    case CameraProjectionType::Orthographic:
+        replacement = std::make_unique<OrthographicCamera>(std::move(transferredSensor)); break;
+    case CameraProjectionType::Fisheye:
+        replacement = std::make_unique<FisheyeCamera>(std::move(transferredSensor)); break;
+    case CameraProjectionType::Realistic:
+        replacement = std::make_unique<RealisticCamera>(std::move(transferredSensor)); break;
+    case CameraProjectionType::HybridPsf:
+        replacement = std::make_unique<HybridPsfCamera>(std::move(transferredSensor)); break;
+    case CameraProjectionType::Perspective:
+        replacement = std::make_unique<PerspectiveCamera>(std::move(transferredSensor)); break;
+    }
+    camera.reset(replacement.release());
     static_cast<Camera&>(*camera) = state;
     tagCamera();
 
     if (auto* realistic = camera->CastOrNullptr<RealisticCamera>())
         realistic->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
-    else if (auto* hybrid = camera->CastOrNullptr<RossPsfCamera>())
+    else if (auto* hybrid = camera->CastOrNullptr<HybridPsfCamera>())
         hybrid->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
 
 }
@@ -56,7 +71,7 @@ void CameraInstance::tagCamera()
         static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
     else if (auto* concrete = dynamic_cast<RealisticCamera*>(camera.get()))
         static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
-    else if (auto* concrete = dynamic_cast<RossPsfCamera*>(camera.get()))
+    else if (auto* concrete = dynamic_cast<HybridPsfCamera*>(camera.get()))
         static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
     else
         throw std::invalid_argument("CameraInstance requires a concrete Camera type");
@@ -146,7 +161,7 @@ CameraProjectionType CameraInstance::getProjectionType() const
     if (camera->Is<OrthographicCamera>()) return CameraProjectionType::Orthographic;
     if (camera->Is<FisheyeCamera>())     return CameraProjectionType::Fisheye;
     if (camera->Is<RealisticCamera>())   return CameraProjectionType::Realistic;
-    if (camera->Is<RossPsfCamera>())     return CameraProjectionType::HybridPsf;
+    if (camera->Is<HybridPsfCamera>())   return CameraProjectionType::HybridPsf;
     return CameraProjectionType::Perspective;
 }
 
@@ -156,7 +171,7 @@ const char* CameraInstance::getProjectionName() const
     if (camera->Is<OrthographicCamera>()) return "Orthographic";
     if (camera->Is<FisheyeCamera>())     return "Fisheye";
     if (camera->Is<RealisticCamera>())   return "Realistic";
-    if (camera->Is<RossPsfCamera>())     return "Hybrid PSF";
+    if (camera->Is<HybridPsfCamera>())   return "Hybrid PSF";
     return "Perspective";
 }
 
@@ -171,8 +186,8 @@ mat4 CameraInstance::getProjectionMatrix() const
 {
     const Sensor& sensor = camera->getSensor();
     const float aspect = sensor.aspectRatio();
-    const float focalLength = camera->getFocalLength();
-    const float fovY = 2.f * std::atan(sensor.height() / (2.f * focalLength));
+    const float focalLengthMm = camera->getFocalLengthMm();
+    const float fovY = 2.f * std::atan(sensor.height() / (2.f * focalLengthMm));
     return perspective(fovY, aspect, 0.01f, 10000.f);
 }
 
@@ -181,8 +196,6 @@ mat4 CameraInstance::getProjectionMatrix() const
 void CameraInstance::setArcballPivot(const vec3& pivot)
 {
     arcballPivot = pivot;
-    const float distance = std::max(0.001f, glm::distance(getPosition(), pivot));
-    camera->setFocusDistance(distance);
 }
 
 // ── update (input) ───────────────────────────────────────────────────────────

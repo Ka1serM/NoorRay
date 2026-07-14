@@ -83,7 +83,7 @@ void runCli(const CliOptions& options)
     session.scene.load(options.scenePath);
     if (!session.scene.getActiveCamera())
     {
-        auto camera = Camera::create(CameraProjectionType::Perspective);
+        auto camera = std::make_unique<PerspectiveCamera>();
         auto instance = std::make_unique<CameraInstance>(std::move(camera), "Camera",
             Transform{glm::vec3(0.0f, 2.0f, 5.0f)});
         session.scene.add(std::move(instance));

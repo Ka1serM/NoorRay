@@ -59,6 +59,29 @@ glm::vec3 LightInstance::getColor() const
     return std::visit([](const auto& l) { return l.color; }, light);
 }
 
+void LightInstance::setPhotometry(const glm::vec3& color, const float intensity)
+{
+    std::visit([&](auto& value) { value.color = color; value.intensity = intensity; }, light);
+}
+
+void LightInstance::setPointRadius(const float radius)
+{
+    if (auto* value = std::get_if<PointLight>(&light)) value->softRadius = radius;
+}
+
+void LightInstance::setSpotAngles(const float innerDegrees, const float outerDegrees)
+{
+    if (auto* value = std::get_if<SpotLight>(&light)) {
+        value->innerConeAngle = innerDegrees;
+        value->outerConeAngle = outerDegrees;
+    }
+}
+
+void LightInstance::setDirectionalSoftAngle(const float degrees)
+{
+    if (auto* value = std::get_if<DirectionalLight>(&light)) value->softAngle = degrees;
+}
+
 std::unique_ptr<SceneObject> LightInstance::clone() const
 {
     auto c = std::make_unique<LightInstance>(*scene, getName() + " (copy)",

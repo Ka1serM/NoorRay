@@ -18,7 +18,7 @@ Scene::Scene(Context& context)
       pointLights(context), spotLights(context),
       rectLights(context), directionalLights(context)
 {
-    auto camera = Camera::create(CameraProjectionType::Perspective);
+    auto camera = std::make_unique<PerspectiveCamera>();
     viewportCamera = std::make_shared<CameraInstance>(
         std::move(camera), "Viewport Camera", Transform(vec3(0.f, 0.f, 5.f)));
     viewportCamera->scene = this;

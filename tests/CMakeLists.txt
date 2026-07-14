@@ -18,6 +18,10 @@ endfunction()
 add_noorray_test(sampler_sequence_test SamplerSequenceTest.cpp sampler)
 add_noorray_test(sampler_distribution_test SamplerDistributionTest.cpp sampler)
 
+add_noorray_test(pbrt_parser_test
+    "PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/PbrtParser.cpp" pbrt)
+target_include_directories(pbrt_parser_test PRIVATE "${CMAKE_SOURCE_DIR}/src/libnoorray")
+
 add_noorray_test(opaque_bsdf_test OpaqueBsdfTest.cpp bsdf)
 target_link_libraries(opaque_bsdf_test PRIVATE glm CUDA::cudart)
 

@@ -70,7 +70,7 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         {
             PathState state{};
             state.wl = wl;
-            if (params.scene.camera->Is<RealisticCamera>() || params.scene.camera->Is<RossPsfCamera>())
+            if (params.scene.camera->Is<RealisticCamera>() || params.scene.camera->Is<HybridPsfCamera>())
                 state.packedCounters |= 1u << CounterHitShift;
             state.rngState = rng;
             params.queues.pathStates[pixel] = state;

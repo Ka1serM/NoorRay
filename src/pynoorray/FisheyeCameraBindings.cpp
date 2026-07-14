@@ -13,6 +13,6 @@ void bindFisheyeCamera(nb::module_& module)
         .def(nb::new_([](std::unique_ptr<Sensor> sensor) {
             return new FisheyeCamera(std::move(sensor));
         }))
-        .def_rw("f_stop", &FisheyeCamera::fStop)
+        .def_rw("aperture_diameter_mm", &FisheyeCamera::apertureDiameterMm)
         .def_rw("bokeh_bias", &FisheyeCamera::bokehBias);
 }

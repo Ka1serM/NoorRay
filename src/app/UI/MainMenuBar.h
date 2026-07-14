@@ -18,7 +18,7 @@ private:
     void renderFileMenu();
     void renderViewMenu() const;
     void renderAddMenu() const;
-    void handleFileImport(const std::string& filePath) const;
+    void handleFileImport(const std::string& filePath);
     void openScene(const std::string& filePath);
     void saveScene(const std::string& filePath);
 

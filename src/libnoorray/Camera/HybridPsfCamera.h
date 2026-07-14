@@ -24,7 +24,7 @@ class RayLUT;
 #include "portable-file-dialogs.h"
 #endif
 
-class RossPsfCamera : public Camera {
+class HybridPsfCamera : public Camera {
 public:
     nr::rstd::unique_ptr<ross::CameraLens> rossLens;
     nr::rstd::unique_ptr<ross::CameraLens> sourceRossLens;
@@ -33,7 +33,7 @@ public:
     nr::rstd::unique_ptr<ross::RayLUT> rayLut;
 
     float apertureDiameterMm{};
-    int rayLutStepSize{32};
+    int rayLutStepSize{1};
     int samplesPerDimension{8};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
@@ -43,8 +43,7 @@ public:
 #if defined(NR_OPTIX_PTX_BUILD)
         return false;
 #else
-        if (!rayLut || !rossLens || !exitPupil
-            || exitPupil->pupilBounds.empty())
+        if (!rayLut)
             return false;
 
         wavelengths.terminateSecondary();
@@ -58,26 +57,8 @@ public:
         if (!traced)
             return false;
 
-        // Match RealisticCamera's complete importance weight. The Hybrid path
-        // uses its chief ray for direction, while the centered exit-pupil sample
-        // supplies the projected pupil area and corresponding film-ray angle.
-        const float sensorWidthCm = sensor.width() * 0.1f;
-        const float sensorHeightCm = sensor.height() * 0.1f;
-        const float filmDiagonalCm = sqrtf(
-            sensorWidthCm * sensorWidthCm + sensorHeightCm * sensorHeightCm);
-        const ross::Vector2f filmPos(
-            -nx * sensorWidthCm * 0.5f, -ny * sensorHeightCm * 0.5f);
-        const auto pupil = exitPupil->samplePupil(
-            filmPos, filmDiagonalCm, ross::Vector2f(0.5f, 0.5f));
-        const ross::Ray filmRay = ross::Ray::betweenPoints(
-            ross::Vector3f(filmPos.x, filmPos.y, 0.0f),
-            ross::Vector3f(pupil.point.x, pupil.point.y,
-                rossLens->getLastSurface().center));
-        const float cosTheta = filmRay.direction.z;
-        const float cosTheta2 = cosTheta * cosTheta;
-        const float pupilPlaneDistance = rossLens->getLastSurface().center;
-        weight = (cosTheta2 * cosTheta2) * pupil.sampleBoundsArea
-            / (pupilPlaneDistance * pupilPlaneDistance);
+        // ROSS's hybrid PSF camera uses a unit camera weight.
+        weight = 1.0f;
         origin = glm::vec3(traced->startPoint.x * 0.01f, traced->startPoint.y * 0.01f,
             -traced->startPoint.z * 0.01f);
         direction = glm::normalize(glm::vec3(
@@ -88,16 +69,16 @@ public:
     }
 
 #ifndef NR_GPU_CODE
-    RossPsfCamera();
-    explicit RossPsfCamera(std::unique_ptr<Sensor> sensor);
-    RossPsfCamera(const RossPsfCamera& other);
-    ~RossPsfCamera();
+    HybridPsfCamera();
+    explicit HybridPsfCamera(std::unique_ptr<Sensor> sensor);
+    HybridPsfCamera(const HybridPsfCamera& other);
+    ~HybridPsfCamera();
     bool renderUi();
     void load(std::string lensPath, std::string glassCatalogPaths, std::string rayLutPath);
     void load(std::string lensPath, const std::vector<std::string>& glassCatalogPaths,
         std::string rayLutPath = {});
-    void setApertureDiameter(float millimeters);
-    void setOpticalFocusDistance(float meters);
+    void setApertureDiameterMm(float apertureDiameterMm);
+    void setOpticalFocusDistanceCm(float focusDistanceCm);
     void prepareOptics();
     void setOpticsPaths(std::string lensPath, std::string glassCatalogPaths);
     void loadLensSensorAndPsf(bool buildRayLut = true, bool resetLensSettings = false);

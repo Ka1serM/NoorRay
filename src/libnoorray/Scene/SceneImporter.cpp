@@ -640,6 +640,8 @@ void SceneImporter::ImportFile(Scene& scene, const std::string& filepath)
 
     if (path.ends_with(".gltf") || path.ends_with(".glb")) {
         ImportGltfScene(scene, filepath);
+    } else if (path.ends_with(".pbrt")) {
+        ImportPbrtScene(scene, filepath);
     } else if (path.ends_with(".obj")) {
         ImportObjScene(scene, filepath);
     } else if (IsGaussianFile(filepath)) {

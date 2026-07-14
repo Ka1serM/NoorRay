@@ -12,7 +12,7 @@
 #include "Camera/OrthographicCamera.h"
 #include "Camera/PerspectiveCamera.h"
 #include "Camera/RealisticCamera.h"
-#include "Camera/RossPsfCamera.h"
+#include "Camera/HybridPsfCamera.h"
 #include "Camera/ThinLensCamera.h"
 #include "Mesh/MeshAsset.h"
 #include "Mesh/Transform.h"
@@ -68,14 +68,6 @@ Material toMaterial(const nr::sceneio::MaterialFile& file)
 
 std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
 {
-    CameraProjectionType projection = CameraProjectionType::Perspective;
-    if (file.type == "realistic") projection = CameraProjectionType::Realistic;
-    else if (file.type == "rosspsf" || file.type == "hybridpsf")
-        projection = CameraProjectionType::HybridPsf;
-    else if (file.type == "thinlens") projection = CameraProjectionType::ThinLens;
-    else if (file.type == "fisheye") projection = CameraProjectionType::Fisheye;
-    else if (file.type == "orthographic") projection = CameraProjectionType::Orthographic;
-
     std::unique_ptr<Sensor> sensor;
     const SensorType type = sensorType(file.sensor_type);
     if (type == SensorType::ScatterPsf)
@@ -84,21 +76,33 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
         sensor = std::make_unique<GatherPsfSensor>();
     else
         sensor = std::make_unique<RectangularSensor>();
-    std::unique_ptr<Camera> camera = Camera::create(projection, std::move(sensor));
+    std::unique_ptr<Camera> camera;
+    if (file.type == "realistic")
+        camera = std::make_unique<RealisticCamera>(std::move(sensor));
+    else if (file.type == "rosspsf" || file.type == "hybridpsf")
+        camera = std::make_unique<HybridPsfCamera>(std::move(sensor));
+    else if (file.type == "thinlens")
+        camera = std::make_unique<ThinLensCamera>(std::move(sensor));
+    else if (file.type == "fisheye")
+        camera = std::make_unique<FisheyeCamera>(std::move(sensor));
+    else if (file.type == "orthographic")
+        camera = std::make_unique<OrthographicCamera>(std::move(sensor));
+    else
+        camera = std::make_unique<PerspectiveCamera>(std::move(sensor));
     if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get()))
-        realistic->apertureDiameterMm = file.aperture_diameter;
-    else if (auto* hybrid = dynamic_cast<RossPsfCamera*>(camera.get()))
-        hybrid->apertureDiameterMm = file.aperture_diameter;
+        realistic->apertureDiameterMm = file.aperture_diameter_mm;
+    else if (auto* hybrid = dynamic_cast<HybridPsfCamera*>(camera.get()))
+        hybrid->apertureDiameterMm = file.aperture_diameter_mm;
     else if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get())) {
-        thinLens->fStop = file.aperture_diameter;
+        thinLens->apertureDiameterMm = file.aperture_diameter_mm;
         thinLens->bokehBias = std::max(0.001f, file.bokeh_bias);
     } else if (auto* fisheye = dynamic_cast<FisheyeCamera*>(camera.get())) {
-        fisheye->fStop = file.aperture_diameter;
+        fisheye->apertureDiameterMm = file.aperture_diameter_mm;
         fisheye->bokehBias = std::max(0.001f, file.bokeh_bias);
     }
 
-    camera->setFocalLength(file.focal_length);
-    camera->setFocusDistance(file.focus_distance);
+    camera->setFocalLengthMm(file.focal_length_mm);
+    camera->setFocusDistanceCm(file.focus_distance_cm);
     camera->getSensor().setImageSensorPath(file.sensor);
     camera->getSensor().setResolution(
         std::max(file.resolution[0], 1u),
@@ -117,7 +121,7 @@ void addCamera(Scene& scene, const nr::sceneio::CameraFile& file)
         Sensor& sensor = camera->getSensor();
         if (!file.psf.empty())
             sensor.setPsfGridPath(file.psf);
-        dynamic_cast<RossPsfCamera&>(*camera).load(
+        dynamic_cast<HybridPsfCamera&>(*camera).load(
             file.lens, splitPaths(file.glass_catalogs), file.ray_lut);
     }
     Transform transform{toVec3(file.position), toVec3(file.rotation_euler), toVec3(file.scale)};

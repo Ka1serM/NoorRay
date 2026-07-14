@@ -8,12 +8,12 @@
 bool FisheyeCamera::renderUi()
 {
     bool changed = Camera::renderUi();
-    ImGuiManager::dragFloatRow("F-Stop", fStop, 0.1f, 0.f, 32.f, [&](float value) {
-        fStop = std::max(0.f, value);
+    ImGuiManager::dragFloatRow("Aperture Diameter (mm)", apertureDiameterMm, 0.1f, 0.f, 1000.f, [&](float value) {
+        apertureDiameterMm = std::max(0.f, value);
         changed = true;
     });
-    ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 1000.f, [&](float value) {
-        focusDistance = std::max(0.001f, value);
+    ImGuiManager::dragFloatRow("Focus Distance (cm)", focusDistanceCm, 10.0f, 0.1f, 100000.f, [&](float value) {
+        focusDistanceCm = std::max(0.1f, value);
         changed = true;
     });
     ImGuiManager::dragFloatRow("Bokeh Bias", bokehBias, 0.01f, 0.001f, 10.f, [&](float value) {

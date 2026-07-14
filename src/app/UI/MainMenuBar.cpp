@@ -72,7 +72,7 @@ void MainMenuBar::renderAddMenu() const {
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem("Camera")) {
-            auto camera = Camera::create(CameraProjectionType::ThinLens);
+            auto camera = std::make_unique<ThinLensCamera>();
             auto instance = std::make_unique<CameraInstance>(
                 std::move(camera), "Camera", Transform(vec3(0.f, 0.f, 5.f)));
             scene.setActiveObjectId(scene.add(std::move(instance)));
@@ -81,10 +81,15 @@ void MainMenuBar::renderAddMenu() const {
     }
 }
 
-void MainMenuBar::handleFileImport(const std::string& filePath) const
+void MainMenuBar::handleFileImport(const std::string& filePath)
 {
     if (filePath.empty())
         return;
+
+    if (std::filesystem::path(filePath).extension() == ".pbrt") {
+        openScene(filePath);
+        return;
+    }
 
     try {
         SceneImporter::ImportFile(scene, filePath);
@@ -99,8 +104,9 @@ void MainMenuBar::openScene(const std::string& filePath)
         return;
 
     try {
-        SceneReader::Read(scene, filePath);
-        currentScenePath = filePath;
+        scene.load(filePath);
+        currentScenePath = std::filesystem::path(filePath).extension() == ".nrscene"
+            ? filePath : std::string{};
     } catch (const std::exception& e) {
         LOG_ERROR("Open scene failed: " << e.what());
     }
@@ -158,7 +164,7 @@ void MainMenuBar::renderFileMenu() {
             sceneOpenDialog = std::make_unique<pfd::open_file>(
                 "Open Scene",
                 ".",
-                std::vector<std::string>{"NoorRay Scene", "*.nrscene", "All Files", "*"});
+                std::vector<std::string>{"Supported Scenes", "*.nrscene *.pbrt", "PBRT Scene", "*.pbrt", "All Files", "*"});
         }
 
         if (ImGui::MenuItem("Save", nullptr, false, !currentScenePath.empty()))

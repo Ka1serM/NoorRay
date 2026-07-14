@@ -13,6 +13,6 @@ void bindThinLensCamera(nb::module_& module)
         .def(nb::new_([](std::unique_ptr<Sensor> sensor) {
             return new ThinLensCamera(std::move(sensor));
         }))
-        .def_rw("f_stop", &ThinLensCamera::fStop)
+        .def_rw("aperture_diameter_mm", &ThinLensCamera::apertureDiameterMm)
         .def_rw("bokeh_bias", &ThinLensCamera::bokehBias);
 }

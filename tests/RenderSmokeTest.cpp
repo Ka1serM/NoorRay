@@ -14,3 +14,12 @@ TEST_CASE_METHOD(RenderSmokeTest, "NoorRay renders a simple sphere to EXR", "[e2
     CHECK(bitmap.height() == 64);
     CHECK(bitmap.pixels().size() == 64 * 64);
 }
+
+TEST_CASE_METHOD(RenderSmokeTest, "NoorRay renders a PBRT scene to EXR", "[e2e][pbrt]")
+{
+    const std::string output = render("simple_sphere.pbrt", 1, "simple_sphere_pbrt.exr");
+    const Bitmap bitmap = BitmapReader::read(output);
+    CHECK(bitmap.width() == 64);
+    CHECK(bitmap.height() == 64);
+    CHECK(bitmap.pixels().size() == 64 * 64);
+}

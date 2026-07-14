@@ -35,7 +35,9 @@ void Environment::updateDerivedSettings()
     rotationSin = std::sin(rotationRadians);
     rotationCos = std::cos(rotationRadians);
     lightingExposureScale = lightingExposure;
-    visibleExposureScale = std::pow(2.f, visibleExposure);
+    // Intensity is the base multiplier for both illumination and the visible
+    // background. Visible Exposure is an additional camera-only stop offset.
+    visibleExposureScale = lightingExposure * std::pow(2.f, visibleExposure);
     const float luminance = std::max(
         0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b, 0.0f);
     importanceWeight = 4.0f * kPi * luminance * std::max(lightingExposureScale, 0.0f);

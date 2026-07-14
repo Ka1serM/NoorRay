@@ -11,6 +11,7 @@ class SceneImporter {
 public:
     static void ImportGltfScene(Scene& scene, const std::string& filepath);
     static void ImportObjScene(Scene& scene, const std::string& filepath, const Material* materialOverride = nullptr);
+    static void ImportPbrtScene(Scene& scene, const std::string& filepath);
     static void ImportJsonScene(Scene& scene, const std::string& filepath);
     static void ImportFile(Scene& scene, const std::string& filepath);
     static void ImportGaussianScene(Scene& scene, const std::string& filepath);

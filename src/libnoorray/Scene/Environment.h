@@ -139,8 +139,8 @@ public:
         return sample;
     }
 
-    // Spectral radiance of the environment along `direction`. `cameraRay`
-    // selects between the visible-background and lighting exposure scales.
+    // Spectral radiance of the environment along `direction`. Intensity applies
+    // to every ray; camera rays additionally receive the visible-exposure offset.
     NR_GPU SampledSpectrum radiance(
         const nr::cuda::UniqueTexture* textures, const uint32_t textureCount,
         const glm::vec3 direction, const bool cameraRay,

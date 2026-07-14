@@ -1,0 +1,25 @@
+Film "rgb"
+    "integer xresolution" 64
+    "integer yresolution" 64
+PixelFilter "gaussian"
+Sampler "sobol" "integer pixelsamples" 1
+
+LookAt 0 1 -4  0 0 0  0 1 0
+Camera "perspective" "float fov" 45
+
+WorldBegin
+
+LightSource "infinite" "rgb L" [0.15 0.2 0.3]
+
+Texture "chart" "spectrum" "imagemap"
+    "string filename" "../../external/ROSS/resources/testcharts/sfr_chart_10deg_2x.exr"
+Material "diffuse" "texture reflectance" "chart"
+Shape "sphere" "float radius" 1
+
+AttributeBegin
+    Translate 0 -1 0
+    Material "diffuse" "rgb reflectance" [0.6 0.6 0.6]
+    Shape "disk" "float radius" 4
+AttributeEnd
+
+WorldEnd

@@ -65,21 +65,21 @@ void RealisticCamera::load(
     load(std::move(lensPath_), joinWithSemicolons(glassCatalogPaths_));
 }
 
-void RealisticCamera::setApertureDiameter(const float millimeters)
+void RealisticCamera::setApertureDiameterMm(const float requestedApertureDiameterMm)
 {
-    const float requestedDiameter = std::max(0.0f, millimeters);
-    if (apertureDiameterMm == requestedDiameter)
+    const float clampedApertureDiameterMm = std::max(0.0f, requestedApertureDiameterMm);
+    if (apertureDiameterMm == clampedApertureDiameterMm)
         return;
-    apertureDiameterMm = requestedDiameter;
+    apertureDiameterMm = clampedApertureDiameterMm;
     opticsUpdatePending = static_cast<bool>(sourceRossLens);
 }
 
-void RealisticCamera::setOpticalFocusDistance(const float meters)
+void RealisticCamera::setOpticalFocusDistanceCm(const float requestedFocusDistanceCm)
 {
-    const float requestedDistance = std::max(0.001f, meters);
-    if (focusDistance == requestedDistance)
+    const float clampedFocusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
+    if (focusDistanceCm == clampedFocusDistanceCm)
         return;
-    focusDistance = requestedDistance;
+    focusDistanceCm = clampedFocusDistanceCm;
     opticsUpdatePending = static_cast<bool>(sourceRossLens);
 }
 
@@ -94,7 +94,6 @@ RealisticCamera::RealisticCamera(const RealisticCamera& other)
 {
     lensPath = other.lensPath;
     glassCatalogPaths = other.glassCatalogPaths;
-    effectiveFocalLengthM = other.effectiveFocalLengthM;
     loadStatus = other.loadStatus;
     opticsDirty = other.opticsDirty;
     opticsUpdatePending = other.opticsUpdatePending;
@@ -154,7 +153,7 @@ void RealisticCamera::updateLensSettings()
         ross::CameraLens updatedLens(*sourceRossLens);
         if (apertureDiameterMm > 0.0f)
             updatedLens.changeAperture_mm(apertureDiameterMm);
-        updatedLens.focusLens(focusDistance * 100.0f);
+        updatedLens.focusLens(focusDistanceCm);
 
         ross::ExitPupilCalculator::CalculationSettings settings;
         ross::TaskReporter reporter;
@@ -206,15 +205,14 @@ void RealisticCamera::loadLensAndSensor(const bool resetLensSettings)
         nr::rstd::allocator<ross::CameraLens> lensAlloc;
         sourceRossLens.reset(lensAlloc.allocate(1));
         lensAlloc.construct(sourceRossLens.get(), loaded);
-        if (resetLensSettings) {
+        if (resetLensSettings)
+            focusDistanceCm = 500.0f;
+        if (resetLensSettings || apertureDiameterMm <= 0.0f) {
             apertureDiameterMm = std::max(0.0f, loaded.getApertureRadius() * 20.0f);
-            focusDistance = 5.0f;
-        } else if (apertureDiameterMm > 0.0f) {
-            loaded.changeAperture_mm(apertureDiameterMm);
         } else {
-            apertureDiameterMm = std::max(0.0f, loaded.getApertureRadius() * 20.0f);
+            loaded.changeAperture_mm(apertureDiameterMm);
         }
-        loaded.focusLens(focusDistance * 100.0f);
+        loaded.focusLens(focusDistanceCm);
 
         rossLens.reset(lensAlloc.allocate(1));
         lensAlloc.construct(rossLens.get(), loaded);
@@ -238,9 +236,8 @@ void RealisticCamera::loadLensAndSensor(const bool resetLensSettings)
         exitPupil.reset(pupilAlloc.allocate(1));
         pupilAlloc.construct(exitPupil.get(), computedPupil);
 
-        effectiveFocalLengthM = rossLens->metadata.focalLength * 0.01f;
-        focalLengthMm = effectiveFocalLengthM * 1000.0f;
-        fieldOfView = fovForFocalLength(focalLengthMm);
+        focalLengthMm = rossLens->metadata.focalLength * 10.0f;
+        fieldOfViewDegrees = fovDegreesForFocalLengthMm(focalLengthMm);
 
         loadStatus = std::to_string(rossLens->surfaces.size()) + " surfaces"
             ", pupil bounds: " + std::to_string(exitPupil->pupilBounds.size())
@@ -319,12 +316,12 @@ bool RealisticCamera::renderUi()
     ImGui::TextUnformatted(loadStatus.c_str());
 
     ImGuiManager::dragFloatRow("Aperture Diameter (mm)", apertureDiameterMm, 0.1f, 0.f, 64.f, [&](float value) {
-        setApertureDiameter(value);
+        setApertureDiameterMm(value);
         changed = true;
     });
 
-    ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
-        setOpticalFocusDistance(value);
+    ImGuiManager::dragFloatRow("Focus Distance (cm)", focusDistanceCm, 10.0f, 0.1f, 1000000.f, [&](float value) {
+        setOpticalFocusDistanceCm(value);
         changed = true;
     });
 

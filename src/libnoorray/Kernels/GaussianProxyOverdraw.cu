@@ -58,7 +58,7 @@ extern "C" __global__ void __raygen__gaussianProxyOverdraw()
             make_float3(ray.origin.x, ray.origin.y, ray.origin.z),
             make_float3(ray.direction.x, ray.direction.y, ray.direction.z),
             0.001f, 1000.0f, 0.0f,
-            0x02,
+            GaussianVisibility,
             OPTIX_RAY_FLAG_NONE,
             0, 1, 0,
             count);

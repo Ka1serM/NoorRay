@@ -17,6 +17,54 @@ struct SurfaceData
     const Material* material{};
 };
 
+struct SurfaceMaterialData
+{
+    glm::vec2 uv{};
+    const Material* material{};
+};
+
+// Shadow transparency only needs UVs and the material. Avoid reconstructing
+// and transforming the full shading frame for every transparent blocker.
+NR_GPU inline SurfaceMaterialData loadSurfaceMaterial(
+    const GpuSceneData scene,
+    const uint32_t instanceIndex,
+    const uint32_t primitiveIndex,
+    const float u,
+    const float v)
+{
+    SurfaceMaterialData surface{};
+    const GpuInstance instance = scene.instances[instanceIndex];
+    const MeshAsset& mesh = scene.meshes[instance.meshIndex];
+    const auto& indices = mesh.getIndices();
+    const auto& vertices = mesh.getVertices();
+    const uint32_t i0 = indices[primitiveIndex * 3];
+    const uint32_t i1 = indices[primitiveIndex * 3 + 1];
+    const uint32_t i2 = indices[primitiveIndex * 3 + 2];
+    const float w = 1.0f - u - v;
+    surface.uv = vertices[i0].uv * w + vertices[i1].uv * u + vertices[i2].uv * v;
+    const int materialIndex = mesh.getFaces()[primitiveIndex].materialIndex;
+    surface.material = &mesh.getMaterials()[materialIndex];
+    return surface;
+}
+
+NR_GPU inline glm::vec3 loadSurfacePosition(
+    const GpuSceneData scene,
+    const uint32_t instanceIndex,
+    const uint32_t primitiveIndex,
+    const float u,
+    const float v)
+{
+    const GpuInstance instance = scene.instances[instanceIndex];
+    const MeshAsset& mesh = scene.meshes[instance.meshIndex];
+    const auto& indices = mesh.getIndices();
+    const auto& vertices = mesh.getVertices();
+    const glm::vec3 a = vertices[indices[primitiveIndex * 3]].position;
+    const glm::vec3 b = vertices[indices[primitiveIndex * 3 + 1]].position;
+    const glm::vec3 c = vertices[indices[primitiveIndex * 3 + 2]].position;
+    const glm::vec3 objectPosition = a * (1.0f - u - v) + b * u + c * v;
+    return glm::vec3(instance.objectToWorld * glm::vec4(objectPosition, 1.0f));
+}
+
 NR_GPU inline SurfaceData loadSurface(
     const GpuSceneData scene,
     const uint32_t instanceIndex,

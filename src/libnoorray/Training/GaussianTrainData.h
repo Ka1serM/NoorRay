@@ -8,11 +8,7 @@
 
 #include <optix.h>
 
-enum class RenderMode : uint32_t
-{
-    Forward,
-    Backward,
-};
+#include "Raytracing/SceneData.h"
 
 struct RayAdjoint
 {
@@ -29,12 +25,9 @@ struct GaussianRayTape
     uint32_t sampleKey{};
 };
 
-// Optional training payload carried by the normal wavefront launch parameters.
-// The interactive path leaves this zeroed and never reads it.
+// Training payload carried only by the dedicated training launches.
 struct GaussianTrainParams
 {
-    uint32_t enabled{};
-    RenderMode mode{RenderMode::Forward};
     OptixTraversableHandle tlas{};
 
     // Per-Gaussian leaf parameters. Raw pointers into caller-owned (PyTorch)
@@ -70,4 +63,13 @@ struct GaussianTrainParams
     // Cutoff sigma^2 for the proxy geometry (see GaussianProxyBlas), matching
     // whatever cutoff the proxy was built with.
     float cutoffDistanceSq{9.0f};
+};
+
+struct GaussianTrainingKernelParams
+{
+    GpuSceneData scene;
+    WavefrontQueues queues;
+    GpuFrameSettings frame;
+    GaussianTrainParams train;
+    uint32_t depth{};
 };

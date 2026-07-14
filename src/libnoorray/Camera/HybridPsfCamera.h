@@ -33,11 +33,11 @@ public:
     nr::rstd::unique_ptr<ross::RayLUT> rayLut;
 
     float apertureDiameterMm{};
-    int rayLutStepSize{1};
+    int rayLutStepSize{32};
     int samplesPerDimension{8};
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState&, uint32_t, SampledWavelengths& wavelengths,
+        float nx, float ny, const glm::vec2&, uint32_t, SampledWavelengths& wavelengths,
         bool = false) const
     {
 #if defined(NR_OPTIX_PTX_BUILD)

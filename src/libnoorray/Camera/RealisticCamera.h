@@ -53,7 +53,8 @@ public:
 #endif
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState& rng, uint32_t, SampledWavelengths& wavelengths,
+        float nx, float ny, const glm::vec2 lensSample, uint32_t,
+        SampledWavelengths& wavelengths,
         bool centered = false) const
     {
 #if defined(NR_OPTIX_PTX_BUILD)
@@ -62,8 +63,8 @@ public:
         wavelengths.terminateSecondary();
         weight = 0.0f;
         const ross::Vector2f sample(
-            centered ? 0.5f : randomFloat(rng),
-            centered ? 0.5f : randomFloat(rng));
+            centered ? 0.5f : lensSample.x,
+            centered ? 0.5f : lensSample.y);
         ross::Ray filmRay;
         float sampleBoundsArea;
         if (!makeFilmRay(filmRay, nx, ny, sample, &sampleBoundsArea))

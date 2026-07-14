@@ -12,7 +12,8 @@ public:
     ~PerspectiveCamera();
 #endif
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
-        float nx, float ny, RandomState&, uint32_t, SampledWavelengths&, bool = false) const
+        float nx, float ny, const glm::vec2&, uint32_t, SampledWavelengths&,
+        bool = false) const
     {
         weight = 1.0f;
         const Sensor& sensor = getSensor();

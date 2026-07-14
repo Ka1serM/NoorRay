@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -61,6 +62,7 @@ enum DirtyFlag : uint8_t {
     EnvironmentCdf = 1 << 4,
     Lights       = 1 << 5,
     CameraState  = 1 << 6,
+    GaussianData = 1 << 7,
 };
 
 class Scene {
@@ -89,6 +91,8 @@ class Scene {
     nr::rstd::vector<nr::cuda::UniqueTexture> cudaTextures;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
+    std::vector<std::shared_ptr<GaussianInstance>> gaussianInstances;
+    uint32_t gaussianCount{};
 
     std::shared_ptr<CameraInstance> viewportCamera;
     std::weak_ptr<CameraInstance> activeCamera;
@@ -96,6 +100,8 @@ class Scene {
     uint64_t nextObjectId = 1;
     uint8_t dirtyFlags = 0;
     std::vector<uint32_t> dirtyMeshInstanceIndices;
+    std::vector<uint32_t> dirtyGaussianInstanceIndices;
+    std::vector<uint8_t> dirtyGaussianInstanceFlags;
 
     std::weak_ptr<SceneObject> copiedObject;
 
@@ -103,6 +109,7 @@ class Scene {
     std::shared_ptr<SceneObject> findObjectPtr(uint64_t objectId) const;
 
     uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
+    void rebuildGaussianInstanceCache();
     bool remove(SceneObject* objToRemove);
     void reparent(SceneObject* objectToMove, SceneObject* newParent);
     std::shared_ptr<SceneObject> cloneHierarchy(const SceneObject* source);
@@ -151,8 +158,10 @@ public:
     const GaussianAsset& getGaussianAsset(uint32_t index) const { return gaussianAssets[index]; }
     const nr::rstd::vector<GaussianAsset>& getGaussianAssets() const { return gaussianAssets; }
     nr::rstd::vector<GaussianAsset>& getGaussianAssets() { return gaussianAssets; }
-    std::vector<std::shared_ptr<GaussianInstance>> getGaussianInstances() const;
-    uint32_t getGaussianCount() const;
+    const std::vector<std::shared_ptr<GaussianInstance>>& getGaussianInstances() const {
+        return gaussianInstances;
+    }
+    uint32_t getGaussianCount() const { return gaussianCount; }
     void buildGaussianRenderData();
     const float* getGaussianOpacities() const { return gaussianOpacities.data(); }
     const glm::vec3* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
@@ -229,4 +238,12 @@ public:
     const std::vector<uint32_t>& getDirtyMeshInstanceIndices() const { return dirtyMeshInstanceIndices; }
     void clearDirtyMeshInstanceIndices() { dirtyMeshInstanceIndices.clear(); }
     uint32_t getMeshInstanceIndex(const SceneObject* object) const;
+    void markGaussianInstanceTransformDirty(uint32_t instanceIndex);
+    const std::vector<uint32_t>& getDirtyGaussianInstanceIndices() const {
+        return dirtyGaussianInstanceIndices;
+    }
+    void clearDirtyGaussianInstanceIndices() {
+        dirtyGaussianInstanceIndices.clear();
+        std::fill(dirtyGaussianInstanceFlags.begin(), dirtyGaussianInstanceFlags.end(), uint8_t{0});
+    }
 };

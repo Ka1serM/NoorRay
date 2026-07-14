@@ -2,8 +2,8 @@
 
 #include "Raytracing/Queues.h"
 #include "Raytracing/SceneData.h"
+#include "Samplers/OwenSobolSampler.h"
 #include "Samplers/RandomSampler.h"
-#include "Samplers/R2Sampler.h"
 
 NR_GPU_KERNEL void generateKernel(const KernelParams params)
 {
@@ -20,15 +20,13 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     SampledWavelengths wl{};
     if (active)
     {
-        uint32_t wavelengthRng = pcgHash(pixel ^ 0x68bc21ebu);
-        float wavelengthSample = randomFloat(wavelengthRng)
-            + 0.61803398875f * static_cast<float>(params.frame.totalAccumulated);
-        wavelengthSample -= floorf(wavelengthSample);
+        const OwenSobolSampler sampler({params.frame.totalAccumulated, pixel});
+        const float wavelengthSample = sampler.sample1D(SampleDimension::Wavelength);
         wl = SampledWavelengths::sampleVisible(wavelengthSample);
         const uint32_t x = pixel % params.frame.width;
         const uint32_t y = pixel / params.frame.width;
-        // A fixed random rotation decorrelates neighboring pixels while each
-        // pixel retains the low-discrepancy R2 sequence over accumulated samples.
+        // Per-pixel Owen scrambling decorrelates neighboring pixels while each
+        // pixel retains a low-discrepancy sequence over accumulated samples.
         // While the camera is being moved, freeze the sample at the pixel
         // center instead: a jittered live-preview reads as shimmer/noise
         // during motion, and there's no accumulation to converge it anyway.
@@ -38,31 +36,15 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
         glm::vec2 jitter(0.5f, 0.5f);
         if (!cameraMoving)
         {
-            uint32_t jitterRng = pcgHash(pixel ^ 0x9e3779b9u);
-            const glm::vec2 rotation(randomFloat(jitterRng), randomFloat(jitterRng));
-            jitter = R2Sampler::sample(params.frame.totalAccumulated) + rotation;
-            jitter.x -= floorf(jitter.x);
-            jitter.y -= floorf(jitter.y);
+            jitter = sampler.sample2D(PixelSampleDimensions);
         }
+        const glm::vec2 lensSample = sampler.sample2D(LensSampleDimensions);
         const float nx = (static_cast<float>(x) + jitter.x) / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y) / static_cast<float>(params.frame.height) * 2.0f;
-        if (params.train.enabled)
-        {
-            origin = glm::vec3(params.train.cameraToWorld[3]);
-            const glm::vec3 cameraDirection(
-                (static_cast<float>(x) + jitter.x - params.train.cx) / params.train.fx,
-                -(static_cast<float>(y) + jitter.y - params.train.cy) / params.train.fy,
-                -1.0f);
-            direction = glm::normalize(glm::vec3(params.train.cameraToWorld * glm::vec4(cameraDirection, 0.0f)));
-            cameraWeight = 1.0f;
-        }
-        else
-        {
-            active = params.scene.camera->Dispatch([&](const auto* camera) {
-                return camera->generateRay(origin, direction, cameraWeight, nx, ny, rng,
-                    pixel, wl);
-            });
-        }
+        active = params.scene.camera->Dispatch([&](const auto* camera) {
+            return camera->generateRay(origin, direction, cameraWeight, nx, ny, lensSample,
+                pixel, wl);
+        });
 
         // Camera samples rejected by the lens still represent a black sample.
         // Initialize their state so finalization does not reuse the previous path.

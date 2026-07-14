@@ -38,7 +38,7 @@ NR_GPU inline bool shadowOccluded(
         if (hit.primitiveIndex == InvalidIndex)
             return true;
 
-        const SurfaceData surface = loadSurface(params.scene, hit.instanceIndex,
+        const SurfaceMaterialData surface = loadSurfaceMaterial(params.scene, hit.instanceIndex,
             hit.primitiveIndex, hit.u, hit.v);
 
         float opacity = surface.material->opacity;
@@ -77,6 +77,8 @@ extern "C" __global__ void __raygen__connect()
     if (index >= activeCount)
         return;
 
+    if (params.queues.shadowQueue[index].tMax <= 0.0f)
+        return;
     const ShadowWorkItem shadow = params.queues.shadowQueue[index];
     if (shadow.tMax <= shadow.tMin)
         return;

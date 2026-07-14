@@ -17,7 +17,7 @@
 
 #include "CUDA/Checks.h"
 #include "Mesh/GaussianAsset.h"
-#include "Raytracing/GaussianTrainData.h"
+#include "Training/GaussianTrainData.h"
 #include "Raytracing/Raytracer.h"
 #include "Scene/CoordinateSystem.h"
 #include "Scene/GaussianInstance.h"
@@ -125,8 +125,6 @@ void GaussianTrainRenderer::renderForward(
     bakeTransformsAndUpdateTlas(positionDevice, logScaleDevice, rotationDevice, gaussianCount);
 
     GaussianTrainParams trainParams{};
-    trainParams.enabled = 1;
-    trainParams.mode = RenderMode::Forward;
     trainParams.tlas = raytracer.getGaussianTlasHandle();
     trainParams.position = reinterpret_cast<const glm::vec3*>(positionDevice);
     trainParams.logScale = reinterpret_cast<const glm::vec3*>(logScaleDevice);
@@ -166,8 +164,6 @@ void GaussianTrainRenderer::renderBackward(
     NR_GPU_CHECK(cudaMemsetAsync(dColorRgbDevice, 0, sizeof(float) * 3 * gaussianCount, stream));
 
     GaussianTrainParams trainParams{};
-    trainParams.enabled = 1;
-    trainParams.mode = RenderMode::Backward;
     trainParams.tlas = raytracer.getGaussianTlasHandle();
     trainParams.position = reinterpret_cast<const glm::vec3*>(positionDevice);
     trainParams.logScale = reinterpret_cast<const glm::vec3*>(logScaleDevice);

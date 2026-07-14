@@ -10,16 +10,6 @@ NR_GPU_KERNEL void finalizeKernel(const KernelParams params)
         return;
 
     const PathState state = params.queues.pathStates[pixel];
-    if (params.train.enabled)
-    {
-        atomicAdd(&params.train.outputColor[pixel].x,
-            state.trainColor.x / static_cast<float>(params.train.samplesPerPixel));
-        atomicAdd(&params.train.outputColor[pixel].y,
-            state.trainColor.y / static_cast<float>(params.train.samplesPerPixel));
-        atomicAdd(&params.train.outputColor[pixel].z,
-            state.trainColor.z / static_cast<float>(params.train.samplesPerPixel));
-        return;
-    }
     const float alpha = static_cast<float>((state.packedCounters >> CounterHitShift) & 1u);
 
     SensorSampleContext ctx{};

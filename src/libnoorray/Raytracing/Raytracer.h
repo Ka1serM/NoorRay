@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "CUDA/KernelStats.h"
+#include "Training/GaussianTrainData.h"
 #include "CUDA/Unique/Texture.h"
 #include "CUDA/Unique/SharedImage.h"
 #include "CUDA/Unique/DeviceBuffer.h"
@@ -53,7 +54,11 @@ public:
     void resize(uint32_t width, uint32_t height);
     void renderFrame(const PushData& pushData);
 
-    void setAovEnabled(bool enabled) { aovEnabled = enabled; }
+    void setAovEnabled(bool enabled) {
+        if (enabled && !aovEnabled)
+            aovStale = true;
+        aovEnabled = enabled;
+    }
     bool getAovEnabled() const { return aovEnabled; }
     void setStatsEnabled(bool enabled) { kernelStats.setEnabled(enabled); }
     void setTimingEnabled(bool enabled) { m_timingEnabled = enabled; }
@@ -127,6 +132,10 @@ private:
     nr::cuda::UniqueAsyncDeviceBuffer accumulationBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer noiseMomentsBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer noiseVarianceSumBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer denoiserStateBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer denoiserScratchBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer denoiserOutputBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer denoiserIntensityBuffer;
     nr::cuda::UniqueDeviceBuffer spectrumTableScaleDevice;
     nr::cuda::UniqueDeviceBuffer spectrumTableCoeffsDevice;
     nr::cuda::UniqueDeviceBuffer d65Device;
@@ -137,7 +146,7 @@ private:
     GpuSceneData gpuScene{};
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
-    uint32_t aovStaleBuffers{2};
+    bool aovStale{true};
     uint64_t lastReadyValue{};
     uint64_t submittedFrame{};
     std::array<uint64_t, 2> lastUseValue{};
@@ -149,6 +158,11 @@ private:
     float* m_noiseVarianceSumHost{};
     uint32_t m_noiseResultSampleCount{};
     KernelStats kernelStats;
+    OptixDenoiser optixDenoiser{};
+    uint32_t denoiserWidth{};
+    uint32_t denoiserHeight{};
+    size_t denoiserStateSize{};
+    size_t denoiserScratchSize{};
     nr::cuda::UniqueDeviceBuffer optixLaunchParamsDevice;
 
     // OptiX state
@@ -163,15 +177,22 @@ private:
     nr::cuda::UniqueOptixProgramGroup optixMissGroup;
     nr::cuda::UniqueOptixPipeline optixPipeline;
     nr::cuda::UniqueOptixPipeline optixProxyOverdrawPipeline;
+    nr::cuda::UniqueOptixModule optixTrainingModule;
+    nr::cuda::UniqueOptixProgramGroup optixTrainingExtendGroup;
+    nr::cuda::UniqueOptixProgramGroup optixTrainingGaussianHitGroup;
+    nr::cuda::UniqueOptixPipeline optixTrainingPipeline;
     nr::cuda::UniqueDeviceBuffer optixExtendRecord;
     nr::cuda::UniqueDeviceBuffer optixConnectRecord;
     nr::cuda::UniqueDeviceBuffer optixProxyOverdrawRecord;
     nr::cuda::UniqueDeviceBuffer optixHitgroupRecord;
     nr::cuda::UniqueDeviceBuffer optixProxyOverdrawHitgroupRecord;
     nr::cuda::UniqueDeviceBuffer optixMissRecord;
+    nr::cuda::UniqueDeviceBuffer optixTrainingExtendRecord;
+    nr::cuda::UniqueDeviceBuffer optixTrainingHitgroupRecord;
     OptixShaderBindingTable optixExtendSbt{};
     OptixShaderBindingTable optixConnectSbt{};
     OptixShaderBindingTable optixProxyOverdrawSbt{};
+    OptixShaderBindingTable optixTrainingExtendSbt{};
 
     void allocateQueues();
     void freeQueues() noexcept;
@@ -179,6 +200,8 @@ private:
     void launchGenerate(const KernelParams& params, cudaStream_t stream) const;
     void launchFinalize(const KernelParams& params, cudaStream_t stream) const;
     void launchNoiseReduction(const KernelParams& params, cudaStream_t stream) const;
+    void launchDenoiser(const KernelParams& params, cudaStream_t stream);
+    void ensureDenoiser();
     void launchResolveScatterPsf(const KernelParams& params, cudaStream_t stream) const;
     void launchApplyGatherPsf(const KernelParams& params, cudaStream_t stream) const;
     void prepareSensorFrame(Sensor& sensor, KernelParams& params, bool resetAccumulation);
@@ -186,6 +209,21 @@ private:
     void applySensorAfterFrame(const Sensor& sensor, const KernelParams& params, cudaStream_t stream,
         bool finalSample);
     void launchShade(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
+    void launchShadeGaussianDirect(
+        const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
+    void launchGenerateGaussianTrain(
+        const GaussianTrainingKernelParams& params, cudaStream_t stream) const;
+    void launchShadeGaussianTrainForward(
+        const GaussianTrainingKernelParams& params,
+        uint32_t launchCount, cudaStream_t stream) const;
+    void launchFinalizeGaussianTrainForward(
+        const GaussianTrainingKernelParams& params, cudaStream_t stream) const;
+    void launchShadeGaussianTrainBackward(
+        const GaussianTrainingKernelParams& params,
+        uint32_t launchCount, cudaStream_t stream) const;
+    void launchExtendGaussianTrain(
+        const GaussianTrainingKernelParams& params,
+        uint32_t launchCount, cudaStream_t stream) const;
     void launchExtend(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
     void launchConnect(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
     void launchProxyOverdraw(const KernelParams& params, cudaStream_t stream) const;

@@ -6,7 +6,9 @@
 
 class GaussianInstance : public SceneObject
 {
+    friend class Scene;
     uint32_t gaussianAssetIndex;
+    uint32_t sceneInstanceIndex{~0u};
 public:
     GaussianInstance(Scene& scene, const std::string& name, uint32_t gaussianAssetIndex, const Transform& transf);
     GaussianInstance(const GaussianInstance& other);

@@ -8,7 +8,8 @@
 #if defined(NR_GPU_CODE)
 NR_GPU inline uint32_t reserveWarpRange(uint32_t* count, const bool active)
 {
-    const unsigned int mask = __ballot_sync(0xffffffffu, active);
+    constexpr unsigned int FullWarpMask = ~0u;
+    const unsigned int mask = __ballot_sync(FullWarpMask, active);
     const uint32_t lane = threadIdx.x & 31u;
     if (!active)
         return 0;

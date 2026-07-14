@@ -3,14 +3,14 @@
 #include <optix_device.h>
 
 #include "Raytracing/RayTraversal.h"
-#include "Raytracing/SceneData.h"
+#include "Training/GaussianTrainData.h"
 
 extern "C"
 {
-__constant__ KernelParams params;
+__constant__ GaussianTrainingKernelParams params;
 }
 
-extern "C" __global__ void __raygen__extend()
+extern "C" __global__ void __raygen__trainingExtend()
 {
     const uint32_t index = NR_GPU_OPTIX_LAUNCH_ID;
     const uint32_t activeCount = params.queues.rayCounts[params.depth];
@@ -18,39 +18,31 @@ extern "C" __global__ void __raygen__extend()
         return;
 
     const PathRayWorkItem ray = params.queues.rayQueues[params.depth & 1u][index];
-    const bool gaussianEnabled =
-        (params.frame.visibilityMask & GaussianVisibility) != 0;
-    const bool meshVisibilityBoundEnabled = gaussianEnabled && params.scene.meshInstanceCount > 0;
     const RayHit hit = intersectRay(params.scene.tlasHandle, ray.origin, ray.direction,
-        0.001f, 1000.0f, ray.sampleIndex, gaussianEnabled, meshVisibilityBoundEnabled);
+        0.001f, 1000.0f, ray.sampleIndex, true, params.scene.meshInstanceCount > 0);
 
     HitWorkItem item{};
     item.sampleIndex = ray.sampleIndex;
     item.direction = ray.direction;
+    item.gaussianData = ray.origin;
     if (hit.instanceIndex == InvalidIndex)
     {
-        // Miss
         item.instanceIndex = InvalidIndex;
     }
     else if (hit.primitiveIndex == InvalidIndex)
     {
-        item.gaussianData = ray.origin + hit.t * ray.direction;
         item.instanceIndex = params.scene.meshInstanceCount + hit.instanceIndex;
     }
     else
     {
-        // Mesh hit
-        item.attribute0    = hit.u;               // baryU
-        item.attribute1    = hit.v;               // baryV
+        item.attribute0 = hit.u;
+        item.attribute1 = hit.v;
         item.instanceIndex = hit.instanceIndex;
     }
-
     item.primitiveIndex = hit.primitiveIndex;
     params.queues.hitQueue[index] = item;
 }
 
-#include "Kernels/GaussianHit.cu"
-#include "Kernels/GaussianProxyOverdraw.cu"
-#include "Kernels/Connect.cu"
+#include "Training/Kernels/GaussianHit.cu"
 
 #endif

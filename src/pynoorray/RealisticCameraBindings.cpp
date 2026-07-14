@@ -20,7 +20,7 @@ void bindRealisticCamera(nb::module_& module)
             nb::overload_cast<std::string, const std::vector<std::string>&>(
                 &RealisticCamera::load),
             "lens_path"_a, "glass_catalog_paths"_a)
-        .def_prop_rw("aperture_diameter",
+        .def_prop_rw("aperture_diameter_mm",
             [](const RealisticCamera& camera) { return camera.apertureDiameterMm; },
-            &RealisticCamera::setApertureDiameter);
+            &RealisticCamera::setApertureDiameterMm);
 }

@@ -24,8 +24,8 @@ Camera::Camera(std::unique_ptr<Sensor> ownedSensor)
 
 Camera::Camera(const Camera& other)
     : TaggedCamera(other), cameraToWorld(other.cameraToWorld)
-    , fieldOfView(other.fieldOfView), focalLengthMm(other.focalLengthMm)
-    , focusDistance(other.focusDistance)
+    , fieldOfViewDegrees(other.fieldOfViewDegrees), focalLengthMm(other.focalLengthMm)
+    , focusDistanceCm(other.focusDistanceCm)
 {
     const Sensor& source = other.getSensor();
     source.DispatchCPU([this, &source](const auto* concrete) {
@@ -42,9 +42,9 @@ Camera& Camera::operator=(const Camera& other)
     if (this == &other)
         return *this;
     cameraToWorld = other.cameraToWorld;
-    fieldOfView = other.fieldOfView;
+    fieldOfViewDegrees = other.fieldOfViewDegrees;
     focalLengthMm = other.focalLengthMm;
-    focusDistance = other.focusDistance;
+    focusDistanceCm = other.focusDistanceCm;
     std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
         other.retainedPsfGridPath);
     return *this;
@@ -89,27 +89,6 @@ void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
         sensor->loadPsfGrid(retainedPsfGridPath);
 }
 
-std::unique_ptr<Camera> Camera::create(
-    const CameraProjectionType projectionType, std::unique_ptr<Sensor> ownedSensor)
-{
-    const auto create = [&]<typename CameraType>() -> std::unique_ptr<Camera> {
-        auto camera = ownedSensor
-            ? std::make_unique<CameraType>(std::move(ownedSensor))
-            : std::make_unique<CameraType>();
-        static_cast<TaggedCamera&>(*camera) = TaggedCamera(camera.get());
-        return camera;
-    };
-    switch (projectionType) {
-    case CameraProjectionType::ThinLens: return create.template operator()<ThinLensCamera>();
-    case CameraProjectionType::Orthographic: return create.template operator()<OrthographicCamera>();
-    case CameraProjectionType::Fisheye: return create.template operator()<FisheyeCamera>();
-    case CameraProjectionType::Realistic: return create.template operator()<RealisticCamera>();
-    case CameraProjectionType::HybridPsf: return create.template operator()<RossPsfCamera>();
-    case CameraProjectionType::Perspective:
-    default: return create.template operator()<PerspectiveCamera>();
-    }
-}
-
 PerspectiveCamera::PerspectiveCamera()
     : PerspectiveCamera(std::make_unique<RectangularSensor>()) {}
 PerspectiveCamera::PerspectiveCamera(std::unique_ptr<Sensor> ownedSensor)
@@ -132,7 +111,7 @@ PerspectiveCamera::PerspectiveCamera(const PerspectiveCamera& other)
 
 
 ThinLensCamera::ThinLensCamera(const ThinLensCamera& other)
-    : Camera(other), fStop(other.fStop), bokehBias(other.bokehBias) {}
+    : Camera(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
 
 
 OrthographicCamera::OrthographicCamera(const OrthographicCamera& other)
@@ -140,7 +119,7 @@ OrthographicCamera::OrthographicCamera(const OrthographicCamera& other)
 
 
 FisheyeCamera::FisheyeCamera(const FisheyeCamera& other)
-    : Camera(other), fStop(other.fStop), bokehBias(other.bokehBias) {}
+    : Camera(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
 
 
 PerspectiveCamera::~PerspectiveCamera() = default;
@@ -148,55 +127,56 @@ ThinLensCamera::~ThinLensCamera() = default;
 OrthographicCamera::~OrthographicCamera() = default;
 FisheyeCamera::~FisheyeCamera() = default;
 
-float Camera::focalLengthForFov(const float fovDegrees) const
+float Camera::focalLengthMmForFovDegrees(const float fovDegrees) const
 {
     const float halfAngle = glm::radians(std::clamp(fovDegrees, 1.f, 179.f)) * 0.5f;
     return getSensor().width() / (2.f * std::tan(halfAngle));
 }
 
-float Camera::fovForFocalLength(const float focalLength) const
+float Camera::fovDegreesForFocalLengthMm(const float requestedFocalLengthMm) const
 {
-    const float fov = 2.f * std::atan(getSensor().width() / (2.f * std::max(0.001f, focalLength)))
+    const float fovDegrees = 2.f * std::atan(
+        getSensor().width() / (2.f * std::max(0.001f, requestedFocalLengthMm)))
         * (180.f / std::numbers::pi_v<float>);
-    return std::clamp(fov, 1.f, 179.f);
+    return std::clamp(fovDegrees, 1.f, 179.f);
 }
 
-void Camera::setFocalLength(const float focalLength)
+void Camera::setFocalLengthMm(const float requestedFocalLengthMm)
 {
     nr::synchronizeBeforeManagedMutation("Camera focal length");
     if (ptr()) {
-        DispatchCPU([focalLength](auto* cam) {
-            cam->focalLengthMm = std::max(0.001f, focalLength);
-            cam->fieldOfView = cam->fovForFocalLength(cam->focalLengthMm);
+        DispatchCPU([requestedFocalLengthMm](auto* cam) {
+            cam->focalLengthMm = std::max(0.001f, requestedFocalLengthMm);
+            cam->fieldOfViewDegrees = cam->fovDegreesForFocalLengthMm(cam->focalLengthMm);
         });
     } else {
-        focalLengthMm = std::max(0.001f, focalLength);
-        fieldOfView = fovForFocalLength(focalLengthMm);
+        focalLengthMm = std::max(0.001f, requestedFocalLengthMm);
+        fieldOfViewDegrees = fovDegreesForFocalLengthMm(focalLengthMm);
     }
 }
 
-void Camera::setFocusDistance(const float v)
+void Camera::setFocusDistanceCm(const float requestedFocusDistanceCm)
 {
     nr::synchronizeBeforeManagedMutation("Camera focus distance");
     if (ptr()) {
-        DispatchCPU([v](auto* cam) {
+        DispatchCPU([requestedFocusDistanceCm](auto* cam) {
             using CameraType = std::remove_cvref_t<decltype(*cam)>;
             if constexpr (std::is_same_v<CameraType, RealisticCamera>
-                || std::is_same_v<CameraType, RossPsfCamera>)
-                cam->setOpticalFocusDistance(v);
+                || std::is_same_v<CameraType, HybridPsfCamera>)
+                cam->setOpticalFocusDistanceCm(requestedFocusDistanceCm);
             else
-                cam->focusDistance = std::max(0.001f, v);
+                cam->focusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
         });
     } else {
-        focusDistance = std::max(0.001f, v);
+        focusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
     }
 }
 
-float Camera::getFocusDistance() const
+float Camera::getFocusDistanceCm() const
 {
     if (ptr())
-        return DispatchCPU([](const auto* cam) { return cam->focusDistance; });
-    return focusDistance;
+        return DispatchCPU([](const auto* cam) { return cam->focusDistanceCm; });
+    return focusDistanceCm;
 }
 
 void Camera::prepareForRender()
@@ -206,12 +186,12 @@ void Camera::prepareForRender()
     DispatchCPU([](auto* camera) {
         using CameraType = std::remove_cvref_t<decltype(*camera)>;
         if constexpr (std::is_same_v<CameraType, RealisticCamera>
-            || std::is_same_v<CameraType, RossPsfCamera>)
+            || std::is_same_v<CameraType, HybridPsfCamera>)
             camera->prepareOptics();
     });
 }
 
-float Camera::getFocalLength() const
+float Camera::getFocalLengthMm() const
 {
     if (ptr())
         return DispatchCPU([](const auto* cam) { return cam->focalLengthMm; });
@@ -235,9 +215,9 @@ Camera Camera::cloneBaseState() const
 
     Camera state;
     state.cameraToWorld = source->cameraToWorld;
-    state.fieldOfView = source->fieldOfView;
+    state.fieldOfViewDegrees = source->fieldOfViewDegrees;
     state.focalLengthMm = source->focalLengthMm;
-    state.focusDistance = source->focusDistance;
+    state.focusDistanceCm = source->focusDistanceCm;
     std::snprintf(state.retainedPsfGridPath, sizeof(state.retainedPsfGridPath), "%s",
         source->retainedPsfGridPath);
     return state;
@@ -247,14 +227,14 @@ Camera Camera::cloneBaseState() const
 bool Camera::renderUi()
 {
     bool changed = false;
-    ImGuiManager::dragFloatRow("Field of View", fieldOfView, 0.1f, 1.f, 179.f, [&](float value) {
+    ImGuiManager::dragFloatRow("Field of View (degrees)", fieldOfViewDegrees, 0.1f, 1.f, 179.f, [&](float value) {
         nr::synchronizeBeforeManagedMutation("Camera field of view");
-        fieldOfView = std::clamp(value, 1.f, 179.f);
-        focalLengthMm = focalLengthForFov(fieldOfView);
+        fieldOfViewDegrees = std::clamp(value, 1.f, 179.f);
+        focalLengthMm = focalLengthMmForFovDegrees(fieldOfViewDegrees);
         changed = true;
     });
-    ImGuiManager::dragFloatRow("Focal Length", focalLengthMm, 0.1f, 0.001f, 500.f, [&](float value) {
-        setFocalLength(value);
+    ImGuiManager::dragFloatRow("Focal Length (mm)", focalLengthMm, 0.1f, 0.001f, 500.f, [&](float value) {
+        setFocalLengthMm(value);
         changed = true;
     });
     return changed;

@@ -24,7 +24,7 @@ class ThinLensCamera;
 class OrthographicCamera;
 class FisheyeCamera;
 class RealisticCamera;
-class RossPsfCamera;
+class HybridPsfCamera;
 class Camera;
 
 enum class CameraProjectionType : int {
@@ -42,7 +42,7 @@ using TaggedCamera = nr::TaggedObject<Camera,
     OrthographicCamera,
     FisheyeCamera,
     RealisticCamera,
-    RossPsfCamera>;
+    HybridPsfCamera>;
 
 class Camera : public nr::UnifiedMemoryObject, public TaggedCamera {
 public:
@@ -55,16 +55,14 @@ public:
     Camera& operator=(const Camera& other);
     virtual ~Camera();
 #ifndef NR_GPU_CODE
-    static std::unique_ptr<Camera> create(CameraProjectionType projectionType,
-        std::unique_ptr<Sensor> sensor = {});
     std::unique_ptr<Sensor> releaseSensor();
     void setSensor(std::unique_ptr<Sensor> sensor);
 #endif
 
     glm::mat4 cameraToWorld{1.f};
-    float fieldOfView{90.f};
+    float fieldOfViewDegrees{90.f};
     float focalLengthMm{2.892f};
-    float focusDistance{5.f};
+    float focusDistanceCm{500.f};
 
 private:
     nr::rstd::unique_ptr<Sensor> sensor;
@@ -82,16 +80,16 @@ public:
 
     NR_CPU_GPU Sensor& getSensor() { return *sensor; }
     NR_CPU_GPU const Sensor& getSensor() const { return *sensor; }
-    void setFocalLength(float focalLength);
-    void setFocusDistance(float v);
-    float getFocusDistance() const;
-    float getFocalLength() const;
+    void setFocalLengthMm(float focalLengthMm);
+    void setFocusDistanceCm(float focusDistanceCm);
+    float getFocusDistanceCm() const;
+    float getFocalLengthMm() const;
     void setCameraToWorld(const glm::mat4& m);
     void prepareForRender();
     Camera cloneBaseState() const;
     bool renderUi();
-    float focalLengthForFov(float fovDegrees) const;
-    float fovForFocalLength(float focalLength) const;
+    float focalLengthMmForFovDegrees(float fovDegrees) const;
+    float fovDegreesForFocalLengthMm(float focalLengthMm) const;
 
 };
 
@@ -100,4 +98,4 @@ public:
 #include "Camera/OrthographicCamera.h"
 #include "Camera/FisheyeCamera.h"
 #include "Camera/RealisticCamera.h"
-#include "Camera/RossPsfCamera.h"
+#include "Camera/HybridPsfCamera.h"

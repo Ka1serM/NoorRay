@@ -1,10 +1,14 @@
 ﻿#include "Texture.h"
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <stb_image.h>
 #include <string>
 #include <cstring>
 
+#include "IO/BitmapReader.h"
 #include "Scene/SceneImporter.h"
 
 namespace
@@ -19,7 +23,18 @@ Texture::Texture(Context& context, const std::string& filepath, vk::Format forma
 {
     (void)context;
     int channels = 0;
-    if (stbi_is_hdr(filepath.c_str()))
+    std::string extension = std::filesystem::path(filepath).extension().string();
+    std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    if (extension == ".exr")
+    {
+        const Bitmap bitmap = BitmapReader::read(filepath);
+        width = static_cast<int>(bitmap.width());
+        height = static_cast<int>(bitmap.height());
+        pixels.assign(bitmap.rgba(), bitmap.rgba() + static_cast<size_t>(width) * height * 4);
+    }
+    else if (stbi_is_hdr(filepath.c_str()))
     {
         std::unique_ptr<float, StbiImageDeleter> rawPixels(
             stbi_loadf(filepath.c_str(), &width, &height, &channels, 4));

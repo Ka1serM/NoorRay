@@ -91,7 +91,7 @@
   },
   {
     "label": "run pynoorray Release",
-    "command": "cmake --build build/release --target _pynoorray -j$(nproc) && PYTHONPATH=$ZED_WORKTREE_ROOT/build/release/lib $ZED_WORKTREE_ROOT/.venv/bin/python $ZED_WORKTREE_ROOT/src/pynoorray/examples/pynoorray_render.py",
+    "command": "PYTHONPATH=$ZED_WORKTREE_ROOT/build/release/lib $ZED_WORKTREE_ROOT/.venv/bin/python $ZED_WORKTREE_ROOT/src/pynoorray/examples/pynoorray_render.py",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,

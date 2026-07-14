@@ -28,8 +28,8 @@ void bindCamera(nb::module_& module)
             [](Camera& camera, const std::pair<uint32_t, uint32_t>& resolution) {
                 camera.getSensor().setResolution(resolution.first, resolution.second);
             })
-        .def_prop_rw("focal_length", &Camera::getFocalLength, &Camera::setFocalLength)
-        .def_prop_rw("focus_distance", &Camera::getFocusDistance, &Camera::setFocusDistance)
+        .def_prop_rw("focal_length_mm", &Camera::getFocalLengthMm, &Camera::setFocalLengthMm)
+        .def_prop_rw("focus_distance_cm", &Camera::getFocusDistanceCm, &Camera::setFocusDistanceCm)
         .def_prop_ro("sensor", nb::overload_cast<>(&Camera::getSensor), nb::rv_policy::reference_internal)
         .def("set_sensor", &Camera::setSensor, "sensor"_a);
 }

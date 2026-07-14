@@ -10,7 +10,7 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 - **Path Tracing with MIS:** Uses **unidirectional path tracing** with **multiple importance sampling (MIS)**. Supports combined **Lambertian diffuse** and **GGX specular** materials.  
 
-- **Scene Loading:** Supports loading scenes from Wavefront `.obj` files and Khronos `.gltf` files.  
+- **Scene Loading:** Supports NoorRay `.nrscene`, PBRT v4 `.pbrt`, Wavefront `.obj`, and Khronos `.gltf`/`.glb` files.
 
 - **Material System:** Full **Disney PBR** support with **albedo, roughness, metallic, normal, transmission, opacity, and emission**.  
 

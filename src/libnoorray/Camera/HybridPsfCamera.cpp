@@ -1,4 +1,4 @@
-#include "RossPsfCamera.h"
+#include "HybridPsfCamera.h"
 
 #include <algorithm>
 #include <array>
@@ -64,27 +64,27 @@ std::string joinRossPsfPathsWithSemicolons(const std::vector<std::string>& paths
 }
 }
 
-RossPsfCamera::RossPsfCamera()
-    : RossPsfCamera(std::make_unique<GatherPsfSensor>())
+HybridPsfCamera::HybridPsfCamera()
+    : HybridPsfCamera(std::make_unique<GatherPsfSensor>())
 {
 }
 
-RossPsfCamera::RossPsfCamera(std::unique_ptr<Sensor> ownedSensor)
+HybridPsfCamera::HybridPsfCamera(std::unique_ptr<Sensor> ownedSensor)
     : Camera(std::move(ownedSensor))
 {
 }
 
-RossPsfCamera::~RossPsfCamera()
+HybridPsfCamera::~HybridPsfCamera()
 {
     freeRossObjects();
 }
 
-void RossPsfCamera::freeRossObjects()
+void HybridPsfCamera::freeRossObjects()
 {
     if (!rayLut && !exitPupil && !rossSensor && !rossLens && !sourceRossLens)
         return;
 
-    nr::synchronizeBeforeManagedMutation("RossPsfCamera optics free");
+    nr::synchronizeBeforeManagedMutation("HybridPsfCamera optics free");
 
     rayLut.reset();
     exitPupil.reset();
@@ -93,18 +93,18 @@ void RossPsfCamera::freeRossObjects()
     sourceRossLens.reset();
 }
 
-void RossPsfCamera::updateLensSettings()
+void HybridPsfCamera::updateLensSettings()
 {
     opticsUpdatePending = false;
     if (!sourceRossLens || !rossSensor)
         return;
 
-    nr::synchronizeBeforeManagedMutation("RossPsfCamera optics update");
+    nr::synchronizeBeforeManagedMutation("HybridPsfCamera optics update");
     try {
         ross::CameraLens updatedLens(*sourceRossLens);
         if (apertureDiameterMm > 0.0f)
             updatedLens.changeAperture_mm(apertureDiameterMm);
-        updatedLens.focusLens(focusDistance * 100.0f);
+        updatedLens.focusLens(focusDistanceCm);
 
         ross::ExitPupilCalculator::CalculationSettings pupilSettings;
         ross::TaskReporter pupilReporter;
@@ -141,11 +141,11 @@ void RossPsfCamera::updateLensSettings()
         opticsDirty = true;
     } catch (const std::exception& error) {
         loadStatus = error.what();
-        LOG_ERROR("RossPsfCamera: " << loadStatus);
+        LOG_ERROR("HybridPsfCamera: " << loadStatus);
     }
 }
 
-void RossPsfCamera::load(std::string lensPath_, std::string glassCatalogPaths_, std::string rayLutPath_)
+void HybridPsfCamera::load(std::string lensPath_, std::string glassCatalogPaths_, std::string rayLutPath_)
 {
     lensPath = std::move(lensPath_);
     glassCatalogPaths = std::move(glassCatalogPaths_);
@@ -153,38 +153,38 @@ void RossPsfCamera::load(std::string lensPath_, std::string glassCatalogPaths_, 
     loadLensSensorAndPsf();
 }
 
-void RossPsfCamera::load(std::string lensPath_,
+void HybridPsfCamera::load(std::string lensPath_,
     const std::vector<std::string>& glassCatalogPaths_, std::string rayLutPath_)
 {
     load(std::move(lensPath_), joinRossPsfPathsWithSemicolons(glassCatalogPaths_),
         std::move(rayLutPath_));
 }
 
-void RossPsfCamera::setApertureDiameter(const float millimeters)
+void HybridPsfCamera::setApertureDiameterMm(const float requestedApertureDiameterMm)
 {
-    const float requestedDiameter = std::max(0.0f, millimeters);
-    if (apertureDiameterMm == requestedDiameter)
+    const float clampedApertureDiameterMm = std::max(0.0f, requestedApertureDiameterMm);
+    if (apertureDiameterMm == clampedApertureDiameterMm)
         return;
-    apertureDiameterMm = requestedDiameter;
+    apertureDiameterMm = clampedApertureDiameterMm;
     opticsUpdatePending = static_cast<bool>(sourceRossLens);
 }
 
-void RossPsfCamera::setOpticalFocusDistance(const float meters)
+void HybridPsfCamera::setOpticalFocusDistanceCm(const float requestedFocusDistanceCm)
 {
-    const float requestedDistance = std::max(0.001f, meters);
-    if (focusDistance == requestedDistance)
+    const float clampedFocusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
+    if (focusDistanceCm == clampedFocusDistanceCm)
         return;
-    focusDistance = requestedDistance;
+    focusDistanceCm = clampedFocusDistanceCm;
     opticsUpdatePending = static_cast<bool>(sourceRossLens);
 }
 
-void RossPsfCamera::prepareOptics()
+void HybridPsfCamera::prepareOptics()
 {
     if (opticsUpdatePending)
         updateLensSettings();
 }
 
-RossPsfCamera::RossPsfCamera(const RossPsfCamera& other)
+HybridPsfCamera::HybridPsfCamera(const HybridPsfCamera& other)
     : Camera(other)
 {
     lensPath = other.lensPath;
@@ -224,13 +224,13 @@ RossPsfCamera::RossPsfCamera(const RossPsfCamera& other)
     }
 }
 
-void RossPsfCamera::setOpticsPaths(std::string lensPath_, std::string glassCatalogPaths_)
+void HybridPsfCamera::setOpticsPaths(std::string lensPath_, std::string glassCatalogPaths_)
 {
     lensPath = std::move(lensPath_);
     glassCatalogPaths = std::move(glassCatalogPaths_);
 }
 
-void RossPsfCamera::loadLensSensorAndPsf(
+void HybridPsfCamera::loadLensSensorAndPsf(
     const bool buildRayLut, const bool resetLensSettings)
 {
     opticsUpdatePending = false;
@@ -240,12 +240,12 @@ void RossPsfCamera::loadLensSensorAndPsf(
 
     if (lensPath.empty() || sensor.getImageSensorPath().empty()) {
         loadStatus = "Lens and sensor are required";
-        LOG_INFO("RossPsfCamera: " << loadStatus);
+        LOG_INFO("HybridPsfCamera: " << loadStatus);
         return;
     }
 
     try {
-        ScopedStopwatch loadTimer("RossPsfCamera load", &loadStatus);
+        ScopedStopwatch loadTimer("HybridPsfCamera load", &loadStatus);
         olio::GlassCatalogLibrary catalogs;
         std::string catalogList = glassCatalogPaths;
         std::ranges::replace(catalogList, ';', ',');
@@ -257,15 +257,14 @@ void RossPsfCamera::loadLensSensorAndPsf(
         nr::rstd::allocator<ross::CameraLens> lensAllocator;
         sourceRossLens.reset(lensAllocator.allocate(1));
         lensAllocator.construct(sourceRossLens.get(), loadedLens);
-        if (resetLensSettings) {
+        if (resetLensSettings)
+            focusDistanceCm = 500.0f;
+        if (resetLensSettings || apertureDiameterMm <= 0.0f) {
             apertureDiameterMm = std::max(0.0f, loadedLens.getApertureRadius() * 20.0f);
-            focusDistance = 5.0f;
-        } else if (apertureDiameterMm > 0.0f) {
-            loadedLens.changeAperture_mm(apertureDiameterMm);
         } else {
-            apertureDiameterMm = std::max(0.0f, loadedLens.getApertureRadius() * 20.0f);
+            loadedLens.changeAperture_mm(apertureDiameterMm);
         }
-        loadedLens.focusLens(focusDistance * 100.0f);
+        loadedLens.focusLens(focusDistanceCm);
 
         rossLens.reset(lensAllocator.allocate(1));
         lensAllocator.construct(rossLens.get(), loadedLens);
@@ -294,7 +293,7 @@ void RossPsfCamera::loadLensSensorAndPsf(
 
         const bool cacheHit = !rayLutPath.empty() && std::filesystem::exists(rayLutPath);
         if (buildRayLut) {
-            ScopedStopwatch rayLutTimer(cacheHit ? "RossPsfCamera Ray LUT read" : "RossPsfCamera Ray LUT build",
+            ScopedStopwatch rayLutTimer(cacheHit ? "HybridPsfCamera Ray LUT read" : "HybridPsfCamera Ray LUT build",
                 &loadStatus);
             const ross::Resolution resolution(sensor.resolutionX(), sensor.resolutionY());
             ross::RayLUT loadedLut;
@@ -317,20 +316,20 @@ void RossPsfCamera::loadLensSensorAndPsf(
         }
 
         focalLengthMm = rossLens->metadata.focalLength * 10.0f;
-        fieldOfView = fovForFocalLength(focalLengthMm);
+        fieldOfViewDegrees = fovDegreesForFocalLengthMm(focalLengthMm);
         loadStatus = "loaded, psf bins: " + std::to_string(psfBinCount)
             + ", raylut " + (buildRayLut
                 ? (cacheHit ? "cache hit" : (rayLutPath.empty() ? "built in memory" : "built and saved"))
                 : "disabled, tracing directly");
-        LOG_INFO("RossPsfCamera: " << loadStatus);
+        LOG_INFO("HybridPsfCamera: " << loadStatus);
     } catch (const std::exception& e) {
         freeRossObjects();
         loadStatus = e.what();
-        LOG_ERROR("RossPsfCamera: " << loadStatus);
+        LOG_ERROR("HybridPsfCamera: " << loadStatus);
     }
 }
 
-bool RossPsfCamera::renderUi()
+bool HybridPsfCamera::renderUi()
 {
     Sensor& sensor = getSensor();
     if (lensDialog && lensDialog->ready(0)) {
@@ -421,11 +420,11 @@ bool RossPsfCamera::renderUi()
     }
 
     ImGuiManager::dragFloatRow("Aperture Diameter (mm)", apertureDiameterMm, 0.1f, 0.f, 64.f, [&](float value) {
-        setApertureDiameter(value);
+        setApertureDiameterMm(value);
         changed = true;
     });
-    ImGuiManager::dragFloatRow("Focus Distance", focusDistance, 0.1f, 0.001f, 10000.f, [&](float value) {
-        setOpticalFocusDistance(value);
+    ImGuiManager::dragFloatRow("Focus Distance (cm)", focusDistanceCm, 10.0f, 0.1f, 1000000.f, [&](float value) {
+        setOpticalFocusDistanceCm(value);
         changed = true;
     });
 
@@ -436,7 +435,7 @@ bool RossPsfCamera::renderUi()
     changed |= ImGui::InputInt("##RossPsfSamplesPerDim", &samplesPerDimension);
     samplesPerDimension = std::max(1, samplesPerDimension);
 
-    if (ImGui::Button("Reload##RossPsfCamera")) {
+    if (ImGui::Button("Reload##HybridPsfCamera")) {
         loadLensSensorAndPsf(true, true);
         changed = true;
     }

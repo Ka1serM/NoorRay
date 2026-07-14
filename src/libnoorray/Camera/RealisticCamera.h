@@ -99,13 +99,13 @@ public:
     bool renderUi();
     void load(std::string lensPath, std::string glassCatalogPaths);
     void load(std::string lensPath, const std::vector<std::string>& glassCatalogPaths);
-    void setApertureDiameter(float millimeters);
-    void setOpticalFocusDistance(float meters);
+    void setApertureDiameterMm(float apertureDiameterMm);
+    void setOpticalFocusDistanceCm(float focusDistanceCm);
     void prepareOptics();
     void setOpticsPaths(std::string lensPath, std::string glassCatalogPaths);
     const std::string& getLensPath() const { return lensPath; }
     const std::string& getGlassCatalogPaths() const { return glassCatalogPaths; }
-    float derivedFocalLengthMm() const { return effectiveFocalLengthM * 1000.0f; }
+    float derivedFocalLengthMm() const { return focalLengthMm; }
     float apertureDiameterMm{0.f};
     void loadLensAndSensor(bool resetLensSettings = false);
     bool consumeOpticsDirty()
@@ -118,7 +118,6 @@ public:
 private:
     std::string lensPath;
     std::string glassCatalogPaths;
-    float effectiveFocalLengthM = 0.045f;
     std::string loadStatus;
     bool opticsDirty = true;
     bool opticsUpdatePending = false;

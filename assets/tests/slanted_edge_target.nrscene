@@ -2,8 +2,8 @@
   "camera": {
     "type": "realistic",
     "position": [0.0, 0.0, 12.0],
-    "aperture_diameter": 2.0,
-    "focus_distance": 12.0,
+    "aperture_diameter_mm": 2.0,
+    "focus_distance_cm": 1200.0,
     "lens": "/home/marcel/GitRepositories/ROSS/resources/lenses/laikin/Wide1.zmx",
     "sensor": "/home/marcel/GitRepositories/ROSS/resources/sensors/onsemi_AR0237.json",
     "glass_catalogs": "/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/ohara.AGF;/home/marcel/GitRepositories/ROSS/resources/glasscatalogs/schott.AGF"

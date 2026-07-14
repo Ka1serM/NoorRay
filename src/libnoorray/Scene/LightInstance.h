@@ -28,6 +28,10 @@ public:
     bool renderUi() override;
     void onTransformUpdated() override;
     glm::vec3 getColor() const;
+    void setPhotometry(const glm::vec3& color, float intensity);
+    void setPointRadius(float radius);
+    void setSpotAngles(float innerDegrees, float outerDegrees);
+    void setDirectionalSoftAngle(float degrees);
 
 private:
     friend class Scene;

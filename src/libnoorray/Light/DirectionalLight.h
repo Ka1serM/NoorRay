@@ -44,5 +44,4 @@ public:
         return sample;
     }
 
-    bool renderUi();
 };

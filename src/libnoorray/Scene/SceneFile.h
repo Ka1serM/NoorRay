@@ -34,6 +34,8 @@ struct CameraFile {
     float exposure{};
     float bokeh_bias{1.0f};
     float aperture_diameter_mm{};
+    float sensor_width_mm{5.784f};
+    float sensor_height_mm{3.264f};
     Resolution resolution{1280, 720};
     std::string lens;
     std::string sensor;

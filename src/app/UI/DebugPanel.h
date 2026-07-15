@@ -21,7 +21,6 @@ private:
     int m_maxSamples = 0;
 
     double m_accumMs = 0.0;
-    double m_accumFps = 0.0;
     int m_frameCount = 0;
     std::chrono::steady_clock::time_point m_lastResetTime = std::chrono::steady_clock::now();
 

@@ -108,6 +108,9 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
     camera->setFocusDistanceCm(file.focus_distance_cm);
     camera->exposure = file.exposure;
     camera->getSensor().setImageSensorPath(file.sensor);
+    camera->getSensor().setDimensionsMm(
+        std::max(file.sensor_width_mm, 0.001f),
+        std::max(file.sensor_height_mm, 0.001f));
     camera->getSensor().setResolution(
         std::max(file.resolution[0], 1u),
         std::max(file.resolution[1], 1u));
@@ -121,8 +124,8 @@ CameraInstance* addCamera(Scene& scene, const nr::sceneio::ObjectFile& object)
     const nr::sceneio::CameraFile& file = *object.camera;
     std::unique_ptr<Camera> camera = makeCamera(file);
     if (file.projection == "realistic") {
-        if (file.lens.empty() || file.sensor.empty())
-            throw std::runtime_error("Realistic camera requires lens and sensor paths");
+        if (file.lens.empty())
+            throw std::runtime_error("Realistic camera requires a lens path");
         dynamic_cast<RealisticCamera&>(*camera).load(
             file.lens, splitPaths(file.glass_catalogs));
     } else if (file.projection == "hybridpsf") {

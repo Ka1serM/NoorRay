@@ -18,5 +18,5 @@ void bindSceneObject(nb::module_& module)
         .def_prop_rw("scale", &SceneObject::getScale, &SceneObject::setScale)
         .def_prop_rw("transform", &SceneObject::getTransform, &SceneObject::setLocalTransform)
         .def_prop_ro("children", &SceneObject::getChildren)
-        .def_prop_ro("parent", &SceneObject::getParent, nb::rv_policy::reference_internal);
+        .def_prop_ro("parent", &SceneObject::getParentPtr);
 }

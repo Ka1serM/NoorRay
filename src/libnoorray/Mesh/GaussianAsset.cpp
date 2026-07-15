@@ -29,10 +29,8 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include <imgui.h>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
-#include "UI/ImGuiManager.h"
 #include "Log.h"
 #include "Scene/CoordinateSystem.h"
 #include "Scene/SphericalHarmonicsOrder.h"
@@ -274,18 +272,3 @@ GaussianAsset GaussianAsset::CreateFromFile(
 
 GaussianAsset::GaussianAsset(Scene& scene, std::string name, nr::rstd::vector<Gaussian> gaussians)
     : scene(scene), name(std::move(name)), gaussians(std::move(gaussians)) {}
-
-bool GaussianAsset::renderUi()
-{
-    ImGuiManager::tableRowLabel("Count");
-    ImGui::Text("%zu", gaussians.size());
-
-    ImGuiManager::tableRowLabel("Source");
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-    ImGui::PushItemWidth(-1);
-    ImGui::InputText("##gaussianPath", const_cast<char*>(path.c_str()), path.size() + 1, ImGuiInputTextFlags_ReadOnly);
-    ImGui::PopItemWidth();
-    ImGui::PopStyleColor();
-
-    return false;
-}

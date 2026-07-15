@@ -31,9 +31,9 @@ void bindScene(nb::module_& module)
             const uint64_t id = scene.add(std::move(instance));
             if (pythonCamera.is_valid())
                 nb::inst_set_state(pythonCamera, true, false);
-            return static_cast<CameraInstance*>(scene.getObject(id));
+            return std::dynamic_pointer_cast<CameraInstance>(scene.getObjectPtr(id));
         }, "camera"_a, "name"_a = "Camera", "transform"_a = Transform{},
-           nb::rv_policy::reference_internal)
+           nb::rv_policy::move)
         .def("add", [](Scene& scene, std::unique_ptr<MeshAsset> asset) {
             return scene.add(std::move(*asset));
         }, "asset"_a)
@@ -42,9 +42,9 @@ void bindScene(nb::module_& module)
         }, "texture"_a, nb::rv_policy::reference_internal)
         .def("remove", &Scene::removeObject, "object_id"_a)
         .def("reparent", &Scene::reparentObject, "object_id"_a, "new_parent_id"_a = 0)
-        .def("get_object", &Scene::getObject, "object_id"_a, nb::rv_policy::reference_internal)
+        .def("get_object", &Scene::getObjectPtr, "object_id"_a)
         .def_prop_ro("objects", &Scene::getSceneObjects)
-        .def_prop_ro("active_camera", &Scene::getActiveCamera, nb::rv_policy::reference_internal)
+        .def_prop_ro("active_camera", &Scene::getActiveCameraPtr)
         .def_prop_rw("active_object_id", &Scene::getActiveObjectId, &Scene::setActiveObjectId)
         .def_prop_ro("environment", nb::overload_cast<>(&Scene::getEnvironment), nb::rv_policy::reference_internal)
         .def_prop_ro("render_settings", nb::overload_cast<>(&Scene::getRenderSettings), nb::rv_policy::reference_internal)

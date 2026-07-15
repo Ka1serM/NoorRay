@@ -22,7 +22,8 @@ public:
     void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
     void setAovImages(Image& crypto, Image& position);
     void resize(uint32_t width, uint32_t height, vk::Format imageFormat);
-    void processEvent(const SDL_Event& event);
+    // Returns true when the viewport owns this event and it must not be sent to ImGui.
+    bool processEvent(const SDL_Event& event);
     ~ViewportPanel() override;
 
     bool showOverlays() const { return m_showOverlays; }
@@ -56,6 +57,7 @@ private:
     void* positionStagingBufferMappedPtr = nullptr;
     
     bool isCapturingMouse = false;
+    bool imguiMouseWasDisabled = false;
     bool rightButtonDown = false;
     bool rightButtonPressPending = false;
     float rightButtonPressX = 0.f;

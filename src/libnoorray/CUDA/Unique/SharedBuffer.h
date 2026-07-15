@@ -1,21 +1,17 @@
 #pragma once
 
-#include <utility>
-
 #include <cuda_runtime_api.h>
-
-#include "Vulkan/Buffer.h"
+#include <vulkan/vulkan.hpp>
+#include <vk_mem_alloc.h>
 
 class Context;
 
 namespace nr::cuda
 {
 
-// A host-visible Vulkan buffer imported into CUDA via an opaque-fd external memory
-// handle. The same physical memory is reachable from three places at once: CPU
-// (Buffer's persistently-mapped pointer), CUDA/OptiX (getDevicePointer), and Vulkan
-// shaders (getBuffer() for descriptor binding). Writes from any side are visible to
-// the others without an explicit copy, since the memory is host-coherent.
+// One VMA allocation with distinct CPU, CUDA, and Vulkan views. CUDA external
+// memory does not preserve the CPU virtual address, so callers must use the
+// appropriate accessor for the processor that consumes the data.
 class UniqueSharedBuffer
 {
 public:
@@ -24,43 +20,27 @@ public:
 
     UniqueSharedBuffer(const UniqueSharedBuffer&) = delete;
     UniqueSharedBuffer& operator=(const UniqueSharedBuffer&) = delete;
-
-    UniqueSharedBuffer(UniqueSharedBuffer&& other) noexcept
-        : buffer(std::move(other.buffer)),
-          cudaMemory(other.cudaMemory),
-          cudaPointer(other.cudaPointer)
-    {
-        other.cudaMemory = nullptr;
-        other.cudaPointer = nullptr;
-    }
-
-    UniqueSharedBuffer& operator=(UniqueSharedBuffer&& other) noexcept
-    {
-        if (this != &other)
-        {
-            reset();
-            buffer = std::move(other.buffer);
-            cudaMemory = other.cudaMemory;
-            cudaPointer = other.cudaPointer;
-            other.cudaMemory = nullptr;
-            other.cudaPointer = nullptr;
-        }
-        return *this;
-    }
+    UniqueSharedBuffer(UniqueSharedBuffer&& other) noexcept;
+    UniqueSharedBuffer& operator=(UniqueSharedBuffer&& other) noexcept;
 
     void create(Context& context, vk::DeviceSize bytes, vk::BufferUsageFlags usage);
     void reset() noexcept;
 
-    Buffer& getBuffer() { return buffer; }
-    const Buffer& getBuffer() const { return buffer; }
-    void* getHostPointer() const { return buffer.getMappedData(); }
-    void* getDevicePointer() const { return cudaPointer; }
-    vk::DeviceSize getSize() const { return buffer.getSize(); }
+    void* hostPointer() const { return hostPointer_; }
+    void* cudaPointer() const { return cudaPointer_; }
+    vk::Buffer vulkanBuffer() const { return buffer_; }
+    const vk::DescriptorBufferInfo& descriptorInfo() const { return descriptorInfo_; }
+    vk::DeviceSize size() const { return descriptorInfo_.range; }
 
 private:
-    Buffer buffer;
-    cudaExternalMemory_t cudaMemory{};
-    void* cudaPointer{};
+    VmaAllocator allocator_{};
+    VmaPool pool_{};
+    VkBuffer buffer_{};
+    VmaAllocation allocation_{};
+    void* hostPointer_{};
+    cudaExternalMemory_t cudaMemory_{};
+    void* cudaPointer_{};
+    vk::DescriptorBufferInfo descriptorInfo_{};
 };
 
 }

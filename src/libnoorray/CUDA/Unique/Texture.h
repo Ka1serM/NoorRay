@@ -66,6 +66,12 @@ public:
         int height,
         int depth,
         cudaStream_t stream);
+    static UniqueTexture uploadFloat4Lut3D(
+        const float4* data,
+        int width,
+        int height,
+        int depth,
+        cudaStream_t stream);
 
     void reset() noexcept
     {

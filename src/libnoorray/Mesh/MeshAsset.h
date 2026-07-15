@@ -48,8 +48,6 @@ public:
 
     const std::string& getName() const override { return path; }
     std::string getType() const override { return "Mesh Asset"; }
-    bool renderUi() override;
-    void updateMaterials();
 
     // Getters & Setters-
     const std::string& getPath() const { return path; }
@@ -60,17 +58,14 @@ public:
     NR_CPU_GPU const nr::rstd::vector<uint32_t>& getIndices() const { return indices; }
     NR_CPU_GPU const nr::rstd::vector<Face>& getFaces() const { return faces; }
     NR_CPU_GPU const nr::rstd::vector<Material>& getMaterials() const { return materials; }
-
-    // Dirty Flag
-    bool isDirty() const { return dirty; }
-    void clearDirtyFlag() { dirty = false; }
+    nr::rstd::vector<Material>& getMaterials() { return materials; }
+    Scene& getScene() const { return scene; }
+    void notifyMaterialsChanged();
 
 private:
     Scene& scene;
     std::string path;
     uint32_t index = ~0u;
-    bool dirty = false;
-
     // CPU-side data
     nr::rstd::vector<Vertex> vertices;
     nr::rstd::vector<uint32_t> indices;

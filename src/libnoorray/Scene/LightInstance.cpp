@@ -3,6 +3,13 @@
 #include <variant>
 
 #include "Scene.h"
+#include "Scene/SceneObjectVisitor.h"
+
+void LightInstance::accept(SceneObjectVisitor& visitor)
+{
+    visitor.visit(static_cast<SceneObject&>(*this));
+    visitor.visit(*this);
+}
 
 LightInstance::LightInstance(Scene& scene, const std::string& name,
                              const Transform& transform, int type)
@@ -33,7 +40,7 @@ void LightInstance::onTransformUpdated()
     case TypeDirectional: std::get<DirectionalLight>(light).direction = dir; break;
     }
 
-    if (lightIndex == ~0u) return;
+    if (!scene || lightIndex == ~0u) return;
 
     switch (lightType) {
     case TypePoint:
@@ -52,6 +59,7 @@ void LightInstance::onTransformUpdated()
         scene->directionalLights[lightIndex].direction = dir;
         break;
     }
+    scene->setDirtyFlag(Lights);
 }
 
 glm::vec3 LightInstance::getColor() const
@@ -82,6 +90,25 @@ void LightInstance::setDirectionalSoftAngle(const float degrees)
     if (auto* value = std::get_if<DirectionalLight>(&light)) value->softAngle = degrees;
 }
 
+void LightInstance::commitLightChanges()
+{
+    if (!scene || lightIndex == ~0u)
+        return;
+
+    scene->synchronizeBeforeMutation();
+
+    switch (lightType) {
+    case TypePoint: scene->pointLights[lightIndex] = std::get<PointLight>(light); break;
+    case TypeSpot: scene->spotLights[lightIndex] = std::get<SpotLight>(light); break;
+    case TypeRect: scene->rectLights[lightIndex] = std::get<RectLight>(light); break;
+    case TypeDirectional:
+        scene->directionalLights[lightIndex] = std::get<DirectionalLight>(light);
+        break;
+    }
+    scene->setDirtyFlag(Lights);
+    scene->setDirtyFlag(Accumulation);
+}
+
 std::unique_ptr<SceneObject> LightInstance::clone() const
 {
     auto c = std::make_unique<LightInstance>(*scene, getName() + " (copy)",
@@ -99,32 +126,4 @@ std::string LightInstance::getType() const
     case TypeDirectional: return "Directional Light";
     }
     return "Light";
-}
-
-bool LightInstance::renderUi()
-{
-    bool changed = SceneObject::renderUi();
-    switch (lightType) {
-    case TypePoint:
-        changed |= scene->pointLights[lightIndex].renderUi();
-        light = scene->pointLights[lightIndex];
-        break;
-    case TypeSpot:
-        changed |= scene->spotLights[lightIndex].renderUi();
-        light = scene->spotLights[lightIndex];
-        break;
-    case TypeRect:
-        changed |= scene->rectLights[lightIndex].renderUi();
-        light = scene->rectLights[lightIndex];
-        break;
-    case TypeDirectional:
-        changed |= scene->directionalLights[lightIndex].renderUi();
-        light = scene->directionalLights[lightIndex];
-        break;
-    }
-    if (changed) {
-        scene->setDirtyFlag(Lights);
-        scene->setDirtyFlag(Accumulation);
-    }
-    return changed;
 }

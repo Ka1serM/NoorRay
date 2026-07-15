@@ -433,6 +433,9 @@ public:
         {
             sample.event = BsdfEvent::Specular;
             sample.direction = glm::reflect(-view, halfVector);
+            if (glm::dot(geometricNormal, view)
+                    * glm::dot(geometricNormal, sample.direction) <= 0.0f)
+                return {};
             const float ndl = fabsf(glm::dot(orientedShadingNormal, sample.direction));
             sample.pdf = wmPdf * fresnel / fmaxf(4.0f * vdh, BsdfEpsilon);
             // weight = f*ndl/pdf. f and pdf both carry a 1/(4*vdh*ndv-ish) VNDF
@@ -450,6 +453,9 @@ public:
         {
             sample.event = BsdfEvent::Transmission;
             sample.direction = glm::normalize(refracted);
+            if (glm::dot(geometricNormal, view)
+                    * glm::dot(geometricNormal, sample.direction) >= 0.0f)
+                return {};
             const float etaPath = etaT / etaI;
             sample.eta = etaPath;
             const float wiDotM = glm::dot(sample.direction, halfVector);

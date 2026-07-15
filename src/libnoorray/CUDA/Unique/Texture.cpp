@@ -102,3 +102,39 @@ nr::cuda::UniqueTexture nr::cuda::UniqueTexture::uploadNormalizedUInt16Lut3D(
     NR_GPU_CHECK(cudaCreateTextureObject(&result.object_, &resource, &description, nullptr));
     return result;
 }
+
+nr::cuda::UniqueTexture nr::cuda::UniqueTexture::uploadFloat4Lut3D(
+    const float4* data,
+    const int width,
+    const int height,
+    const int depth,
+    const cudaStream_t stream)
+{
+    UniqueTexture result;
+    const cudaChannelFormatDesc format = cudaCreateChannelDesc<float4>();
+    const cudaExtent extent = make_cudaExtent(width, height, depth);
+    NR_GPU_CHECK(cudaMalloc3DArray(&result.array_, &format, extent));
+
+    cudaMemcpy3DParms copy{};
+    copy.srcPtr = make_cudaPitchedPtr(
+        const_cast<float4*>(data), width * sizeof(float4), width, height);
+    copy.dstArray = result.array_;
+    copy.extent = extent;
+    copy.kind = cudaMemcpyHostToDevice;
+    NR_GPU_CHECK(cudaMemcpy3DAsync(&copy, stream));
+
+    cudaResourceDesc resource{};
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = result.array_;
+
+    cudaTextureDesc description{};
+    description.addressMode[0] = cudaAddressModeClamp;
+    description.addressMode[1] = cudaAddressModeClamp;
+    description.addressMode[2] = cudaAddressModeClamp;
+    description.filterMode = cudaFilterModeLinear;
+    description.readMode = cudaReadModeElementType;
+    description.normalizedCoords = 0;
+
+    NR_GPU_CHECK(cudaCreateTextureObject(&result.object_, &resource, &description, nullptr));
+    return result;
+}

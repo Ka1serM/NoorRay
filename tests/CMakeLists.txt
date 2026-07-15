@@ -6,6 +6,7 @@ function(add_noorray_test target source prefix)
     add_executable(${target} ${source})
     target_include_directories(${target} PRIVATE
         "${CMAKE_SOURCE_DIR}/src"
+        "${CMAKE_SOURCE_DIR}/src/libnoorray"
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain)
@@ -17,15 +18,14 @@ endfunction()
 
 add_noorray_test(sampler_sequence_test SamplerSequenceTest.cpp sampler)
 add_noorray_test(sampler_distribution_test SamplerDistributionTest.cpp sampler)
+add_noorray_test(cuda_unique_handle_test CudaUniqueHandleTest.cpp cuda)
 
 add_noorray_test(pbrt_parser_test
     "PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/PbrtParser.cpp" pbrt)
-target_include_directories(pbrt_parser_test PRIVATE "${CMAKE_SOURCE_DIR}/src/libnoorray")
 
 add_noorray_test(ply_mesh_loader_test
     "PlyMeshLoaderTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Mesh/PlyMeshLoader.cpp" ply)
 target_include_directories(ply_mesh_loader_test PRIVATE
-    "${CMAKE_SOURCE_DIR}/src/libnoorray"
     "${OPTIX_INCLUDE_DIR}")
 target_compile_definitions(ply_mesh_loader_test PRIVATE
     NR_BACKEND_CUDA=1
@@ -41,6 +41,11 @@ target_link_libraries(ggx_bsdf_test PRIVATE glm CUDA::cudart)
 
 add_noorray_test(dielectric_bsdf_test DielectricBsdfTest.cpp bsdf)
 target_link_libraries(dielectric_bsdf_test PRIVATE glm CUDA::cudart)
+
+add_noorray_test(scene_lifetime_test SceneLifetimeTest.cpp scene)
+target_link_libraries(scene_lifetime_test PRIVATE
+    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
+    CUDA::cudart_static)
 
 function(add_noorray_render_test target source)
     add_noorray_test(${target} ${source} e2e)

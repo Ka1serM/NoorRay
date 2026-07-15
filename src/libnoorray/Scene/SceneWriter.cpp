@@ -96,6 +96,8 @@ nr::sceneio::CameraFile makeCameraFile(
     } else if (const auto* hybridPsf = camera->CastOrNullptr<HybridPsfCamera>()) {
         file.aperture_diameter_mm = hybridPsf->apertureDiameterMm;
     }
+    file.sensor_width_mm = camera->getSensor().width();
+    file.sensor_height_mm = camera->getSensor().height();
     const glm::uvec2 resolution = camera->getSensor().resolution();
     file.resolution = {resolution.x, resolution.y};
     file.sensor = std::string(camera->getSensor().getImageSensorPath());

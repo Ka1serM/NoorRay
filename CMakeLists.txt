@@ -11,6 +11,9 @@ set(CMAKE_CUDA_COMPILER "${NR_CUDA_ROOT}/bin/nvcc" CACHE FILEPATH "CUDA compiler
 set(CUDAToolkit_ROOT "${NR_CUDA_ROOT}" CACHE PATH "CUDA Toolkit root" FORCE)
 
 project(NoorRay VERSION 0.1.0 LANGUAGES C CXX CUDA)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "NoorRay currently supports Linux with an NVIDIA CUDA/OptiX GPU")
+endif()
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 20)
@@ -24,9 +27,7 @@ option(NR_ENABLE_PCH "Precompile common NoorRay C++ headers" ON)
 option(NR_BUILD_PYTHON "Build the pynoorray Python bindings" OFF)
 set(NR_UNITY_BUILD_BATCH_SIZE "8" CACHE STRING "Maximum sources per NoorRay unity batch")
 set(NR_CUDA_SPLIT_COMPILE_JOBS "0" CACHE STRING "NVCC optimization threads per CUDA translation unit (0 = all cores)")
-if(UNIX AND NOT APPLE)
-    set(CMAKE_SKIP_BUILD_RPATH ON)
-endif()
+set(CMAKE_SKIP_BUILD_RPATH ON)
 set(NR_CUDA_ARCH "89" CACHE STRING "CUDA architecture (e.g. 89 for sm_89)")
 set(CMAKE_CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 # A single PTX file is generated below, so select the first architecture when
@@ -285,20 +286,6 @@ static constexpr unsigned char noorRayTrainingOptixIr[] = {
 };
 static constexpr size_t noorRayTrainingOptixIrLength = sizeof(noorRayTrainingOptixIr);\n" @ONLY)
 
-# MoltenVK dynamic library (macOS)
-if(APPLE AND DEFINED ENV{VULKAN_SDK})
-    set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
-    if(EXISTS "${MOLTENVK_DYLIB}")
-        message(STATUS "Using dynamic MoltenVK library at ${MOLTENVK_DYLIB}")
-        add_library(MoltenVK SHARED IMPORTED)
-        set_target_properties(MoltenVK PROPERTIES
-                IMPORTED_LOCATION "${MOLTENVK_DYLIB}"
-                INTERFACE_INCLUDE_DIRECTORIES "$ENV{VULKAN_SDK}/include"
-        )
-    else()
-        message(FATAL_ERROR "MoltenVK dylib not found at expected path: ${MOLTENVK_DYLIB}")
-    endif()
-endif()
 
 # Dear ImGui (core + Vulkan + SDL3 backend) + ImGuizmo
 add_library(imgui STATIC
@@ -388,6 +375,7 @@ add_custom_target(NoorRayTrainingOptixIr DEPENDS "${NR_TRAINING_OPTIX_PTX}")
 add_library(NoorRayCuda STATIC
         src/libnoorray/Raytracing/Blas.cpp
         src/libnoorray/Raytracing/GaussianProxyBlas.cpp
+        src/libnoorray/Raytracing/OptixDenoiserState.cpp
         src/libnoorray/CUDA/Unique/Texture.cpp
         src/libnoorray/CUDA/Unique/SharedImage.cpp
         src/libnoorray/CUDA/Unique/SharedBuffer.cpp
@@ -449,6 +437,7 @@ list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/RgbSpectrumTableData\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Blas\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/GaussianProxyBlas\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/OptixDenoiserState\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Tlas\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Mesh/OpenPbrEnergy\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapReader\\.cpp$")
@@ -465,9 +454,7 @@ target_compile_features(libnoorray PUBLIC cxx_std_23)
 target_include_directories(libnoorray
         PUBLIC
         "${NR_CORE_DIR}"
-        "${CMAKE_CURRENT_BINARY_DIR}/generated"
-        PRIVATE
-        "${NR_APP_DIR}")
+        "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(libnoorray PUBLIC
         NR_BACKEND_CUDA=1
         VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
@@ -488,9 +475,7 @@ target_link_libraries(libnoorray
         gauss_forge_readers
         GPUOpen::VulkanMemoryAllocator
         glaze
-        TBB::tbb
-        PRIVATE
-        imgui)
+        TBB::tbb)
 
 file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS
         "${NR_APP_DIR}/*.cpp"
@@ -542,23 +527,7 @@ if(NR_BUILD_PYTHON)
             COMMENT "Copying pynoorray package")
 endif()
 
-# Resource handling on Windows
-if(WIN32)
-    set(RESOURCE_RC_PATH "${CMAKE_BINARY_DIR}/resource.rc")
-    file(WRITE "${RESOURCE_RC_PATH}"
-            "MAINICON ICON \"${PROJECT_SOURCE_DIR}/assets/icons/icon.ico\"\n"
-    )
-    message(STATUS "Generated resource.rc at ${RESOURCE_RC_PATH}")
-    list(APPEND NR_APP_FILES "${RESOURCE_RC_PATH}")
-endif()
-
-# Executable target — WIN32 only applies on Windows (suppresses the console window
-# for GUI mode), but CLI mode still works because SDL_MAIN_HANDLED is set.
-if(WIN32)
-    add_executable(NoorRay WIN32 ${NR_APP_FILES})
-else()
-    add_executable(NoorRay ${NR_APP_FILES})
-endif()
+add_executable(NoorRay ${NR_APP_FILES})
 set_target_properties(NoorRay PROPERTIES PREFIX "")
 set_target_properties(NoorRay PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
@@ -627,123 +596,10 @@ if(NR_ENABLE_PCH)
             <vulkan/vulkan.hpp>)
 endif()
 
-if(MSVC)
-    set_property(TARGET NoorRay PROPERTY
-            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-elseif(UNIX AND NOT APPLE)
-    target_link_options(NoorRay PRIVATE -static-libgcc -static-libstdc++)
-endif()
+target_link_options(NoorRay PRIVATE -static-libgcc -static-libstdc++)
 
-# Platform specific linking and settings
-if(APPLE)
-    target_link_libraries(NoorRay PRIVATE MoltenVK)
-
-    target_link_libraries(NoorRay PRIVATE
-            "-framework Metal"
-            "-framework CoreVideo"
-            "-framework Cocoa"
-            "-framework QuartzCore"
-            "-framework CoreGraphics"
-            "-framework IOSurface"
-    )
-
-    set_target_properties(NoorRay PROPERTIES
-            MACOSX_BUNDLE TRUE
-            MACOSX_BUNDLE_IDENTIFIER "dev.marcelk.noorray"
-            MACOSX_BUNDLE_NAME "NoorRay"
-            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
-            MACOSX_BUNDLE_VERSION "${PROJECT_VERSION}"
-            MACOSX_BUNDLE_COPYRIGHT "Copyright © 2025 Marcel K. All rights reserved."
-            MACOSX_BUNDLE_ICON_FILE "icon.icns"
-    )
-
-    # MoltenVk and Vulkan loader bundling and @rpath fix
-    if(DEFINED ENV{VULKAN_SDK})
-        set(VULKAN_LOADER_DYLIB "$ENV{VULKAN_SDK}/lib/libvulkan.1.dylib")
-        set(MOLTENVK_DYLIB "$ENV{VULKAN_SDK}/lib/libMoltenVK.dylib")
-
-        if(EXISTS "${VULKAN_LOADER_DYLIB}" AND EXISTS "${MOLTENVK_DYLIB}")
-            add_custom_command(TARGET NoorRay POST_BUILD
-                    # Ensure Frameworks folder exists
-                    COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks"
-
-                    # Copy the Vulkan loader
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${VULKAN_LOADER_DYLIB}"
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
-
-                    # Copy MoltenVK dylib
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${MOLTENVK_DYLIB}"
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libMoltenVK.dylib"
-
-                    # Fix binary to use @rpath/libvulkan.1.dylib
-                    COMMAND /usr/bin/install_name_tool -change
-                    "${VULKAN_LOADER_DYLIB}"
-                    "@rpath/libvulkan.1.dylib"
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
-
-                    # Fix binary to use @rpath/libMoltenVK.dylib
-                    COMMAND /usr/bin/install_name_tool -change
-                    "${MOLTENVK_DYLIB}"
-                    "@rpath/libMoltenVK.dylib"
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
-
-                    # Add rpath to point to Frameworks folder
-                    COMMAND /usr/bin/install_name_tool -add_rpath
-                    "@executable_path/../Frameworks"
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/MacOS/NoorRay"
-
-                    # Fix the dylib IDs
-                    COMMAND /usr/bin/install_name_tool -id
-                    "@rpath/libvulkan.1.dylib"
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libvulkan.1.dylib"
-
-                    COMMAND /usr/bin/install_name_tool -id
-                    "@rpath/libMoltenVK.dylib"
-                    "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Frameworks/libMoltenVK.dylib"
-
-                    COMMENT "Bundling Vulkan loader and MoltenVK dylib, fixing @rpath for NoorRay"
-            )
-        else()
-            message(FATAL_ERROR "Vulkan loader or MoltenVK dylib not found at expected paths: ${VULKAN_LOADER_DYLIB}, ${MOLTENVK_DYLIB}")
-        endif()
-    endif()
-
-    # Resources handling
-    add_custom_command(TARGET NoorRay POST_BUILD
-            # Create Resource folder chain
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d"
-
-            # Copy app icon
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/assets/icons/icon.icns"
-            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/icon.icns"
-
-            # Copy MoltenVK_icd.json
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/assets/MoltenVK_icd.json"
-            "$<TARGET_BUNDLE_DIR:NoorRay>/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
-
-            COMMENT "Copying app icon and MoltenVK ICD JSON into Resources"
-    )
-
-
-endif()
-
-if (MINGW)
-    message(STATUS "Enabling Static Linking for Release build")
-    target_link_options(NoorRay PRIVATE
-            -static-libgcc
-            -static-libstdc++
-            -static
-    )
-endif()
-
-option(BUILD_TESTING "Build and register end-to-end tests" OFF)
-if(BUILD_TESTING)
+option(NR_BUILD_TESTS "Build and register NoorRay tests" ON)
+if(NR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

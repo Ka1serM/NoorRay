@@ -1,6 +1,4 @@
-#include "PerspectiveCamera.h"
-
-#include <cmath>
+#include "Camera/PerspectiveCamera.h"
 
 bool PerspectiveCamera::renderUi()
 {

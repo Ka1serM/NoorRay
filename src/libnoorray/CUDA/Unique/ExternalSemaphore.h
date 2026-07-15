@@ -1,8 +1,8 @@
 #pragma once
 
-#include <utility>
-
 #include <cuda_runtime_api.h>
+
+#include "CUDA/Unique/Handle.h"
 
 namespace nr::cuda
 {
@@ -15,43 +15,28 @@ public:
         : semaphore(semaphore)
     {
     }
-    ~UniqueExternalSemaphore() noexcept { reset(); }
+    ~UniqueExternalSemaphore() noexcept = default;
 
     UniqueExternalSemaphore(const UniqueExternalSemaphore&) = delete;
     UniqueExternalSemaphore& operator=(const UniqueExternalSemaphore&) = delete;
 
-    UniqueExternalSemaphore(UniqueExternalSemaphore&& other) noexcept
-        : semaphore(std::exchange(other.semaphore, nullptr))
-    {
-    }
-
-    UniqueExternalSemaphore& operator=(UniqueExternalSemaphore&& other) noexcept
-    {
-        if (this != &other)
-        {
-            reset();
-            semaphore = std::exchange(other.semaphore, nullptr);
-        }
-        return *this;
-    }
+    UniqueExternalSemaphore(UniqueExternalSemaphore&&) noexcept = default;
+    UniqueExternalSemaphore& operator=(UniqueExternalSemaphore&&) noexcept = default;
 
     void reset(cudaExternalSemaphore_t newSemaphore = nullptr) noexcept
     {
-        if (semaphore != nullptr)
-            cudaDestroyExternalSemaphore(semaphore);
-        semaphore = newSemaphore;
+        semaphore.reset(newSemaphore);
     }
 
-    cudaExternalSemaphore_t get() const noexcept { return semaphore; }
+    cudaExternalSemaphore_t get() const noexcept { return semaphore.get(); }
     cudaExternalSemaphore_t* put() noexcept
     {
-        reset();
-        return &semaphore;
+        return semaphore.put();
     }
-    explicit operator bool() const noexcept { return semaphore != nullptr; }
+    explicit operator bool() const noexcept { return static_cast<bool>(semaphore); }
 
 private:
-    cudaExternalSemaphore_t semaphore{};
+    UniqueHandle<cudaExternalSemaphore_t, cudaDestroyExternalSemaphore> semaphore;
 };
 
 }

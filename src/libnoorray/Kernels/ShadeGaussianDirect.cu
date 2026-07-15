@@ -25,10 +25,9 @@ NR_GPU_KERNEL void shadeGaussianDirectKernel(const KernelParams params)
         rgb.x = fminf(fmaxf(rgb.x, 0.0f), 1.0f);
         rgb.y = fminf(fmaxf(rgb.y, 0.0f), 1.0f);
         rgb.z = fminf(fmaxf(rgb.z, 0.0f), 1.0f);
-        const SampledSpectrum albedo = rgbAlbedoToSpectrum(
-            rgb, state.wl,
-            params.scene.spectrumTableScale,
-            params.scene.spectrumTableCoeffs);
+        const SampledSpectrum albedo = rgbAlbedoToSpectrumTexture(
+            rgb, state.wl, params.scene.spectrumTableScale,
+            params.scene.spectrumTableTexture);
         state.radiance += state.throughput * albedo;
         state.packedCounters |= 1u << CounterHitShift;
         state.packedCounters += 1u << CounterDiffuseShift;
@@ -41,15 +40,11 @@ NR_GPU_KERNEL void shadeGaussianDirectKernel(const KernelParams params)
     if (!backgroundVisible)
         return;
 
-    state.radiance += state.throughput * params.scene.environment->radiance(
-        params.scene.textures,
-        params.scene.textureCount,
-        hit.direction,
-        true,
-        state.wl,
-        params.scene.spectrumTableScale,
-        params.scene.spectrumTableCoeffs,
-        params.scene.d65);
+    const glm::vec3 rgb = params.scene.environment->rgbRadiance(
+        params.scene.textures, params.scene.textureCount, hit.direction, true);
+    state.radiance += state.throughput * rgbIlluminantToSpectrumTexture(
+        rgb, state.wl, params.scene.spectrumTableScale,
+        params.scene.spectrumTableTexture, params.scene.d65);
     state.packedCounters |= 1u << CounterHitShift;
     params.queues.pathStates[hit.sampleIndex] = state;
 }

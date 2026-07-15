@@ -11,20 +11,12 @@ Buffer::Buffer(): allocator(nullptr), allocation(nullptr), deviceAddress(0)
 
 Buffer::~Buffer() {
     if (allocator && buffer && allocation)
-        // Let VMA handle the destruction of the buffer and its memory
         vmaDestroyBuffer(allocator, buffer, allocation);
-    else if (device && buffer && memory) {
-        // Raw (non-VMA) allocation used for CUDA-exportable buffers
-        device.unmapMemory(memory);
-        device.destroyBuffer(buffer);
-        device.freeMemory(memory);
-    }
 }
 
 // --- Move Semantics Implementation ---
 Buffer::Buffer(Buffer&& other) noexcept
-    : device(other.device),
-      allocator(other.allocator),
+    : allocator(other.allocator),
       buffer(other.buffer),
       allocation(other.allocation),
       memory(other.memory),
@@ -33,7 +25,6 @@ Buffer::Buffer(Buffer&& other) noexcept
       mappedData(other.mappedData)
 {
     // Nullify the other object so its destructor does nothing
-    other.device = VK_NULL_HANDLE;
     other.allocator = VK_NULL_HANDLE;
     other.buffer = VK_NULL_HANDLE;
     other.allocation = VK_NULL_HANDLE;
@@ -46,14 +37,7 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
         // Destroy existing resources before moving
         if (allocator && buffer && allocation)
             vmaDestroyBuffer(allocator, buffer, allocation);
-        else if (device && buffer && memory) {
-            device.unmapMemory(memory);
-            device.destroyBuffer(buffer);
-            device.freeMemory(memory);
-        }
-
         // Pilfer resources from the other object
-        device = other.device;
         allocator = other.allocator;
         buffer = other.buffer;
         allocation = other.allocation;
@@ -63,7 +47,6 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
         mappedData = other.mappedData;
 
         // Nullify the other object
-        other.device = VK_NULL_HANDLE;
         other.allocator = VK_NULL_HANDLE;
         other.buffer = VK_NULL_HANDLE;
         other.allocation = VK_NULL_HANDLE;
@@ -141,45 +124,4 @@ Buffer::Buffer(const Context& context, const Type type, vk::DeviceSize size, con
         if (!(memoryProps & vk::MemoryPropertyFlagBits::eHostCoherent))
             vmaFlushAllocation(allocator, allocation, 0, size);
     }
-}
-
-Buffer::Buffer(const Context& context, const vk::DeviceSize size, vk::BufferUsageFlags usage,
-               const vk::ExternalMemoryHandleTypeFlagBits externalHandleType)
-    : device(context.getDevice()), allocator(nullptr), allocation(nullptr), deviceAddress(0)
-{
-    vk::ExternalMemoryBufferCreateInfo externalBufferInfo{};
-    externalBufferInfo.handleTypes = externalHandleType;
-
-    vk::BufferCreateInfo bufferInfo{};
-    bufferInfo.pNext = &externalBufferInfo;
-    bufferInfo.size = size;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = vk::SharingMode::eExclusive;
-    buffer = device.createBuffer(bufferInfo);
-
-    const vk::MemoryRequirements requirements = device.getBufferMemoryRequirements(buffer);
-
-    vk::MemoryDedicatedAllocateInfo dedicatedInfo{};
-    dedicatedInfo.buffer = buffer;
-    vk::ExportMemoryAllocateInfo exportInfo{};
-    exportInfo.pNext = &dedicatedInfo;
-    exportInfo.handleTypes = externalHandleType;
-    vk::MemoryAllocateInfo allocationInfo{};
-    allocationInfo.pNext = &exportInfo;
-    allocationInfo.allocationSize = requirements.size;
-    allocationInfo.memoryTypeIndex = context.findMemoryType(requirements.memoryTypeBits,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    memory = device.allocateMemory(allocationInfo);
-    device.bindBufferMemory(buffer, memory, 0);
-
-    mappedData = device.mapMemory(memory, 0, requirements.size);
-
-    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
-        vk::BufferDeviceAddressInfo addressInfo{buffer};
-        deviceAddress = device.getBufferAddressKHR(&addressInfo);
-    }
-
-    descBufferInfo.setBuffer(buffer);
-    descBufferInfo.setOffset(0);
-    descBufferInfo.setRange(size);
 }

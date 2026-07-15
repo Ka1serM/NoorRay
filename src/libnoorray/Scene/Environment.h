@@ -132,6 +132,20 @@ public:
     }
 
 #if defined(NR_GPU_CODE)
+    NR_GPU glm::vec3 rgbRadiance(
+        const nr::cuda::UniqueTexture* textures, const uint32_t textureCount,
+        const glm::vec3 direction, const bool cameraRay) const
+    {
+        glm::vec3 rgb = color;
+        if (textureIndex >= 0 && static_cast<uint32_t>(textureIndex) < textureCount)
+        {
+            const glm::vec2 texCoord = uv(direction);
+            const glm::vec4 textureColor = textures[textureIndex].sample(texCoord);
+            rgb *= glm::vec3(textureColor);
+        }
+        return rgb * (cameraRay ? visibleExposureScale : lightingExposureScale);
+    }
+
     // Solid-angle PDF of sampleDirection() returning `direction`.
     NR_GPU float pdf(const glm::vec3 direction) const
     {
@@ -227,14 +241,7 @@ public:
         const SampledWavelengths& wl,
         const float* spectrumScale, const float* spectrumCoeffs, const float* d65Table) const
     {
-        glm::vec3 rgb = color;
-        if (textureIndex >= 0 && static_cast<uint32_t>(textureIndex) < textureCount)
-        {
-            const glm::vec2 texCoord = uv(direction);
-            const glm::vec4 textureColor = textures[textureIndex].sample(texCoord);
-            rgb *= glm::vec3(textureColor);
-        }
-        rgb *= cameraRay ? visibleExposureScale : lightingExposureScale;
+        const glm::vec3 rgb = rgbRadiance(textures, textureCount, direction, cameraRay);
         return rgbIlluminantToSpectrum(rgb, wl, spectrumScale, spectrumCoeffs, d65Table);
     }
 

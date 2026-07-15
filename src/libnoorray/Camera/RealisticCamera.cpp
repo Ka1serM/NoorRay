@@ -11,6 +11,7 @@
 #include "libross/imaging/cameralens/lenssystemio/CameraLensSystemReader.h"
 #include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupilCalculator.h"
 #include "openlensfileio/glasscatalogs/glasscatalog/GlassCatalogLibrary.h"
+#include "portable-file-dialogs.h"
 
 namespace {
 std::string joinWithSemicolons(const std::vector<std::string>& paths)
@@ -32,7 +33,7 @@ RealisticCamera::RealisticCamera()
 }
 
 RealisticCamera::RealisticCamera(std::unique_ptr<Sensor> ownedSensor)
-    : Camera(std::move(ownedSensor))
+    : TaggedBase(std::move(ownedSensor))
 {
 }
 
@@ -80,7 +81,7 @@ void RealisticCamera::prepareOptics()
 }
 
 RealisticCamera::RealisticCamera(const RealisticCamera& other)
-    : Camera(other)
+    : TaggedBase(other)
 {
     lensPath = other.lensPath;
     glassCatalogPaths = other.glassCatalogPaths;

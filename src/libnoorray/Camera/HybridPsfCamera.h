@@ -4,27 +4,16 @@
 #include "CUDA/Annotations.h"
 #include "CUDA/rstd/UniquePtr.h"
 
-#if !defined(NR_OPTIX_PTX_BUILD)
 #include "libross/imaging/cameralens/CameraLens.h"
 #include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupil.h"
 #include "libross/imaging/cameralens/raylut/RayLUT.h"
 #include "libross/imaging/imagesensor/ImageSensor.h"
-#else
-namespace ross {
-struct CameraLens;
-struct ExitPupil;
-struct ImageSensor;
-class RayLUT;
-}
-#endif
 
-#ifndef NR_GPU_CODE
 #include <memory>
 #include <string>
-#include "portable-file-dialogs.h"
-#endif
+#include <vector>
 
-class HybridPsfCamera : public Camera {
+class HybridPsfCamera : public Camera::Type<HybridPsfCamera> {
 public:
     nr::rstd::unique_ptr<ross::CameraLens> rossLens;
     nr::rstd::unique_ptr<ross::CameraLens> sourceRossLens;
@@ -40,9 +29,6 @@ public:
         float nx, float ny, const glm::vec2&, uint32_t, SampledWavelengths& wavelengths,
         bool = false) const
     {
-#if defined(NR_OPTIX_PTX_BUILD)
-        return false;
-#else
         if (!rayLut)
             return false;
 
@@ -65,10 +51,8 @@ public:
             traced->direction.x, traced->direction.y, -traced->direction.z));
         transformRay(origin, direction);
         return true;
-#endif
     }
 
-#ifndef NR_GPU_CODE
     HybridPsfCamera();
     explicit HybridPsfCamera(std::unique_ptr<Sensor> sensor);
     HybridPsfCamera(const HybridPsfCamera& other);
@@ -107,5 +91,4 @@ private:
 
     void freeRossObjects();
     void updateLensSettings();
-#endif
 };

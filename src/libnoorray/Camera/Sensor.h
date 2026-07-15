@@ -2,11 +2,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <string_view>
-#ifndef NR_GPU_CODE
 #include <memory>
 #include <string>
-#endif
+#include <string_view>
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -14,7 +12,6 @@
 
 #include "CUDA/Annotations.h"
 #include "CUDA/TaggedPointer.h"
-#include "CUDA/UnifiedMemoryObject.h"
 #include "Raytracing/Spectrum.h"
 
 namespace ross {
@@ -23,6 +20,7 @@ class InterpolatedPsfGrid;
 
 namespace pfd {
 class open_file;
+class save_file;
 }
 
 class RectangularSensor;
@@ -73,7 +71,7 @@ NR_CPU_GPU inline void updateNoiseMoments(
 using TaggedSensor = nr::TaggedObject<Sensor,
     RectangularSensor, ScatterPsfSensor, GatherPsfSensor>;
 
-class Sensor : public nr::UnifiedMemoryObject, public TaggedSensor {
+class Sensor : public TaggedSensor {
 public:
     using TaggedSensor::TaggedSensor;
     Sensor() = default;
@@ -100,7 +98,6 @@ public:
     NR_CPU_GPU void copyPhysicalFrom(const Sensor& other);
     NR_CPU_GPU float aspectRatio() const;
 
-#ifndef NR_GPU_CODE
     std::string_view getImageSensorPath() const;
     void setImageSensorPath(std::string_view path);
     bool loadImageSensorDimensions();
@@ -118,7 +115,6 @@ public:
         requestedType = -1;
         return true;
     }
-#endif
 
     bool renderUi();
 

@@ -3,22 +3,16 @@
 #include "Camera/Sensor.h"
 #include "CUDA/rstd/UniquePtr.h"
 
-#if !defined(NR_OPTIX_PTX_BUILD)
 #include "libross/imaging/interpolatedpsfgrid/InterpolatedPsfGrid.h"
-#endif
 
-#ifndef NR_GPU_CODE
 #include <memory>
 #include <string>
-#include "portable-file-dialogs.h"
-#endif
 
-class ScatterPsfSensor : public RectangularSensor {
+class ScatterPsfSensor : public Sensor::Type<ScatterPsfSensor, RectangularSensor> {
 public:
     nr::rstd::unique_ptr<ross::InterpolatedPsfGrid> psfGrid;
 
-#ifndef NR_GPU_CODE
-    ScatterPsfSensor() = default;
+    ScatterPsfSensor();
     explicit ScatterPsfSensor(const Sensor& other);
     std::string psfGridPath;
     std::string psfLoadStatus;
@@ -29,7 +23,6 @@ public:
     void freePsfGrid();
     void loadPsfGrid();
     uint32_t psfBinCount() const;
-#endif
 
     NR_CPU_GPU glm::vec4 resolvePixel(uint32_t pixel, uint32_t width, const glm::vec4* accumulation) const
     {
@@ -50,9 +43,6 @@ public:
     NR_CPU_GPU void addSample(uint32_t pixel, const SampledSpectrum& L,
         const SampledWavelengths& wl, float sampleWeight, const SensorSampleContext& ctx) const
     {
-#if defined(NR_OPTIX_PTX_BUILD)
-        (void)pixel; (void)L; (void)wl; (void)sampleWeight; (void)ctx;
-#else
         if (!psfGrid || ctx.accumulation == nullptr)
             return;
         glm::vec3 rgb = sensorRGBFromSpectrum(L, wl, ctx.cieX, ctx.cieY, ctx.cieZ);
@@ -72,6 +62,5 @@ public:
         };
         psfGrid->splatPsfForPixel(ross::Vector2i(static_cast<int>(x), static_cast<int>(y)),
             wl[0] * 0.001f, addSplat);
-#endif
     }
 };

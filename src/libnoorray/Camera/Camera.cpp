@@ -16,7 +16,8 @@ Camera::Camera(std::unique_ptr<Sensor> ownedSensor)
 {
     if (!sensor)
         throw std::invalid_argument("Camera requires a Sensor");
-    tagSensor();
+    if (!*sensor)
+        throw std::invalid_argument("Camera requires a tagged concrete Sensor type");
     std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
         sensor->getPsfGridPath().c_str());
 }
@@ -31,7 +32,6 @@ Camera::Camera(const Camera& other)
         using SensorType = std::remove_cvref_t<decltype(*concrete)>;
         sensor.reset(new SensorType(source));
     });
-    tagSensor();
     std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
         other.retainedPsfGridPath);
 }
@@ -50,21 +50,6 @@ Camera& Camera::operator=(const Camera& other)
     return *this;
 }
 
-void Camera::tagSensor()
-{
-    TaggedSensor tagged;
-    if (auto* concrete = dynamic_cast<ScatterPsfSensor*>(sensor.get()))
-        tagged = TaggedSensor(concrete);
-    else if (auto* concrete = dynamic_cast<GatherPsfSensor*>(sensor.get()))
-        tagged = TaggedSensor(concrete);
-    else if (auto* concrete = dynamic_cast<RectangularSensor*>(sensor.get()))
-        tagged = TaggedSensor(concrete);
-    else
-        throw std::invalid_argument("Camera requires a concrete Sensor type");
-
-    static_cast<TaggedSensor&>(*sensor) = tagged;
-}
-
 std::unique_ptr<Sensor> Camera::releaseSensor()
 {
     return std::unique_ptr<Sensor>(sensor.release());
@@ -74,6 +59,8 @@ void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
 {
     if (!newSensor)
         throw std::invalid_argument("Camera requires a Sensor");
+    if (!*newSensor)
+        throw std::invalid_argument("Camera requires a tagged concrete Sensor type");
 
     nr::synchronizeBeforeManagedMutation("Camera sensor replacement");
 
@@ -82,7 +69,6 @@ void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
         std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s", psfPath.c_str());
 
     sensor.reset(newSensor.release());
-    tagSensor();
     if (sensor->getType() != SensorType::Rectangular
         && retainedPsfGridPath[0] != '\0'
         && sensor->getPsfGridPath().empty())
@@ -92,34 +78,34 @@ void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
 PerspectiveCamera::PerspectiveCamera()
     : PerspectiveCamera(std::make_unique<RectangularSensor>()) {}
 PerspectiveCamera::PerspectiveCamera(std::unique_ptr<Sensor> ownedSensor)
-    : Camera(std::move(ownedSensor)) {}
+    : TaggedBase(std::move(ownedSensor)) {}
 ThinLensCamera::ThinLensCamera()
     : ThinLensCamera(std::make_unique<RectangularSensor>()) {}
 ThinLensCamera::ThinLensCamera(std::unique_ptr<Sensor> ownedSensor)
-    : Camera(std::move(ownedSensor)) {}
+    : TaggedBase(std::move(ownedSensor)) {}
 OrthographicCamera::OrthographicCamera()
     : OrthographicCamera(std::make_unique<RectangularSensor>()) {}
 OrthographicCamera::OrthographicCamera(std::unique_ptr<Sensor> ownedSensor)
-    : Camera(std::move(ownedSensor)) {}
+    : TaggedBase(std::move(ownedSensor)) {}
 FisheyeCamera::FisheyeCamera()
     : FisheyeCamera(std::make_unique<RectangularSensor>()) {}
 FisheyeCamera::FisheyeCamera(std::unique_ptr<Sensor> ownedSensor)
-    : Camera(std::move(ownedSensor)) {}
+    : TaggedBase(std::move(ownedSensor)) {}
 
 PerspectiveCamera::PerspectiveCamera(const PerspectiveCamera& other)
-    : Camera(other) {}
+    : TaggedBase(other) {}
 
 
 ThinLensCamera::ThinLensCamera(const ThinLensCamera& other)
-    : Camera(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
+    : TaggedBase(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
 
 
 OrthographicCamera::OrthographicCamera(const OrthographicCamera& other)
-    : Camera(other) {}
+    : TaggedBase(other) {}
 
 
 FisheyeCamera::FisheyeCamera(const FisheyeCamera& other)
-    : Camera(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
+    : TaggedBase(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
 
 
 PerspectiveCamera::~PerspectiveCamera() = default;
@@ -223,4 +209,3 @@ Camera Camera::cloneBaseState() const
         source->retainedPsfGridPath);
     return state;
 }
-

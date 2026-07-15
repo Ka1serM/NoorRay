@@ -3,14 +3,12 @@
 #include "CUDA/Annotations.h"
 #include "Camera/Camera.h"
 
-class PerspectiveCamera : public Camera {
+class PerspectiveCamera : public Camera::Type<PerspectiveCamera> {
 public:
-#ifndef NR_GPU_CODE
     PerspectiveCamera();
     explicit PerspectiveCamera(std::unique_ptr<Sensor> sensor);
     PerspectiveCamera(const PerspectiveCamera& other);
     ~PerspectiveCamera();
-#endif
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, const glm::vec2&, uint32_t, SampledWavelengths&,
         bool = false) const

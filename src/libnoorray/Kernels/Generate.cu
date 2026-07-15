@@ -1,5 +1,6 @@
 #include <cuda_fp16.h>
 
+#include "Camera/Camera.h"
 #include "Raytracing/Queues.h"
 #include "Raytracing/SceneData.h"
 #include "Samplers/OwenSobolSampler.h"

@@ -7,7 +7,6 @@
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
 #include "Camera/Camera.h"
-#include "CUDA/rstd/UniquePtr.h"
 #include "Scene/SceneObject.h"
 
 class CameraInstance : public SceneObject {
@@ -62,10 +61,9 @@ public:
     void rebuildCamera();
 
 private:
-    nr::rstd::unique_ptr<Camera> camera;
+    std::unique_ptr<Camera> camera;
     vec3 arcballPivot{};
     bool arcballMode = false;
 
     void allocateCamera(CameraProjectionType type);
-    void tagCamera();
 };

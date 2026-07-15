@@ -10,6 +10,7 @@
 #include "CUDA/ManagedMemory.h"
 #include "Raytracing/Sellmeier.h"
 #include "UI/ImGuiManager.h"
+#include "portable-file-dialogs.h"
 
 namespace
 {

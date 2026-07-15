@@ -51,9 +51,8 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
     case CameraProjectionType::Perspective:
         replacement = std::make_unique<PerspectiveCamera>(std::move(transferredSensor)); break;
     }
-    camera.reset(replacement.release());
+    camera = std::move(replacement);
     static_cast<Camera&>(*camera) = state;
-    tagCamera();
 
     if (auto* realistic = camera->CastOrNullptr<RealisticCamera>())
         realistic->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
@@ -64,31 +63,14 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
 
 // ── constructor / destructor ──────────────────────────────────────────────────
 
-void CameraInstance::tagCamera()
-{
-    if (auto* concrete = dynamic_cast<PerspectiveCamera*>(camera.get()))
-        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
-    else if (auto* concrete = dynamic_cast<ThinLensCamera*>(camera.get()))
-        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
-    else if (auto* concrete = dynamic_cast<OrthographicCamera*>(camera.get()))
-        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
-    else if (auto* concrete = dynamic_cast<FisheyeCamera*>(camera.get()))
-        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
-    else if (auto* concrete = dynamic_cast<RealisticCamera*>(camera.get()))
-        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
-    else if (auto* concrete = dynamic_cast<HybridPsfCamera*>(camera.get()))
-        static_cast<TaggedCamera&>(*camera) = TaggedCamera(concrete);
-    else
-        throw std::invalid_argument("CameraInstance requires a concrete Camera type");
-}
-
 CameraInstance::CameraInstance(
     std::unique_ptr<Camera> ownedCamera, const std::string& name, Transform transform)
-    : SceneObject(name, transform), camera(ownedCamera.release())
+    : SceneObject(name, transform), camera(std::move(ownedCamera))
 {
     if (!camera)
         throw std::invalid_argument("CameraInstance requires a Camera");
-    tagCamera();
+    if (!*camera)
+        throw std::invalid_argument("CameraInstance requires a tagged concrete Camera type");
     rebuildCamera();
 }
 
@@ -102,7 +84,6 @@ CameraInstance::CameraInstance(const CameraInstance& other)
         using CameraType = std::remove_cvref_t<decltype(*source)>;
         camera.reset(new CameraType(*source));
     });
-    tagCamera();
     rebuildCamera();
 }
 

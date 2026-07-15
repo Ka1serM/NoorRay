@@ -9,6 +9,7 @@
 
 #include "CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
+#include "portable-file-dialogs.h"
 
 namespace
 {

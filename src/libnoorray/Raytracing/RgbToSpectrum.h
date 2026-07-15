@@ -21,7 +21,7 @@ NR_CPU_GPU inline float rgbSigmoid(float x)
     // sigmoid is 1 (resp. 0) to machine precision.
     if (x > 1e10f) return 1.f;
     if (x < -1e10f) return 0.f;
-#if defined(NR_GPU_CODE)
+#if defined(NR_GPU_DEVICE_COMPILE)
     if (__isinf(x)) return x > 0.f ? 1.f : 0.f;
     return 0.5f + x * rsqrtf(4.f + 4.f * x * x);
 #else

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "CUDA/Annotations.h"
+#include "CUDA/UnifiedMemoryObject.h"
 
 #include <cassert>
 #include <cstdint>
@@ -25,6 +26,9 @@ template <typename T, typename U, typename... Ts>
 struct IndexOf<T, TypePack<U, Ts...>> { static constexpr int count = 1 + IndexOf<T, TypePack<Ts...>>::count; };
 
 namespace detail {
+
+template <typename Concrete, typename Parent>
+class TaggedObjectType;
 
 // Single recursive template instead of N hardcoded overloads.
 // if constexpr terminates the chain at compile time; the compiler
@@ -127,9 +131,12 @@ R DispatchObjectCPU(F&& f, const Base* p, int i) {
 // Type discriminator for polymorphic objects whose address is already owned
 // elsewhere. Unlike TaggedPointer, this stores no self-referential pointer.
 template <typename Base, typename... Ts>
-class TaggedObject {
+class TaggedObject : public UnifiedMemoryObject {
 public:
     using Types = TypePack<Ts...>;
+
+    template <typename Concrete, typename Parent = Base>
+    using Type = detail::TaggedObjectType<Concrete, Parent>;
 
     TaggedObject() = default;
 
@@ -208,9 +215,62 @@ public:
             std::forward<F>(f), ptr(), Tag() - 1);
     }
 
+protected:
+    template <typename T>
+    NR_CPU_GPU void SetType() {
+        tag_ = TypeIndex<T>();
+    }
+
 private:
     unsigned int tag_{};
 };
+
+namespace detail {
+
+// Internal construction adapter exposed as TaggedObject::Type<Concrete>.
+template <typename Concrete, typename Parent>
+class TaggedObjectType : public Parent {
+protected:
+    using TaggedBase = TaggedObjectType;
+
+    NR_CPU_GPU TaggedObjectType() : Parent()
+    {
+        InitializeType();
+    }
+
+    template <typename... Args>
+        requires (sizeof...(Args) > 0)
+    NR_CPU_GPU explicit TaggedObjectType(Args&&... args)
+        : Parent(std::forward<Args>(args)...)
+    {
+        InitializeType();
+    }
+
+    NR_CPU_GPU TaggedObjectType(const TaggedObjectType& other)
+        : Parent(static_cast<const Parent&>(other))
+    {
+        InitializeType();
+    }
+
+    NR_CPU_GPU TaggedObjectType(TaggedObjectType&& other) noexcept(std::is_nothrow_move_constructible_v<Parent>)
+        : Parent(static_cast<Parent&&>(other))
+    {
+        InitializeType();
+    }
+
+    TaggedObjectType& operator=(const TaggedObjectType&) = default;
+    TaggedObjectType& operator=(TaggedObjectType&&) = default;
+
+private:
+    NR_CPU_GPU void InitializeType()
+    {
+        static_assert(std::has_virtual_destructor_v<Parent>,
+            "A tagged base owned through std::unique_ptr<Base> needs a virtual destructor");
+        this->template SetType<Concrete>();
+    }
+};
+
+} // namespace detail
 
 // TaggedPointer — pointer + type tag packed into one uint64_t.
 // Upper 7 bits = 1-based type index into Ts; lower 57 bits = address.

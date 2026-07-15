@@ -20,6 +20,12 @@ add_noorray_test(sampler_sequence_test SamplerSequenceTest.cpp sampler)
 add_noorray_test(sampler_distribution_test SamplerDistributionTest.cpp sampler)
 add_noorray_test(cuda_unique_handle_test CudaUniqueHandleTest.cpp cuda)
 
+add_noorray_test(tagged_object_test
+    "TaggedObjectTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/CUDA/rstd/Memory.cpp" tagged)
+target_compile_definitions(tagged_object_test PRIVATE NR_BACKEND_CUDA=1)
+target_include_directories(tagged_object_test PRIVATE "${OPTIX_INCLUDE_DIR}")
+target_link_libraries(tagged_object_test PRIVATE CUDA::cudart)
+
 add_noorray_test(pbrt_parser_test
     "PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/PbrtParser.cpp" pbrt)
 

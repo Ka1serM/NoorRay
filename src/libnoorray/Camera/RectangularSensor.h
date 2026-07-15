@@ -4,14 +4,12 @@
 
 #include "Camera/Sensor.h"
 
-class RectangularSensor : public Sensor {
+class RectangularSensor : public Sensor::Type<RectangularSensor> {
 public:
-#ifndef NR_GPU_CODE
     RectangularSensor() = default;
     explicit RectangularSensor(const Sensor& other);
     ~RectangularSensor() override = default;
     bool renderUi(Sensor& owner);
-#endif
 
     // Blends the sample into the running accumulation. The finalize kernel,
     // which owns the frame output surface, writes resolved pixels afterward.

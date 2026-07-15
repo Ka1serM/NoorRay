@@ -4,7 +4,6 @@
 
 #include <cuda_runtime_api.h>
 
-#include "Camera/Camera.h"
 #include "CUDA/Unique/Texture.h"
 #include "Raytracing/Output.h"
 #include "Raytracing/Types.h"
@@ -19,6 +18,8 @@
 #include "Light/RectLight.h"
 
 struct AnalyticLightAliasEntry;
+class Camera;
+struct PsfGatherBucketSample;
 
 struct GpuSceneData
 {

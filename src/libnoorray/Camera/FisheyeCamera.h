@@ -4,14 +4,12 @@
 #include "Camera/Camera.h"
 #include "Samplers/RandomSampler.h"
 
-class FisheyeCamera : public Camera {
+class FisheyeCamera : public Camera::Type<FisheyeCamera> {
 public:
-#ifndef NR_GPU_CODE
     FisheyeCamera();
     explicit FisheyeCamera(std::unique_ptr<Sensor> sensor);
     FisheyeCamera(const FisheyeCamera& other);
     ~FisheyeCamera();
-#endif
     float apertureDiameterMm{};
     float bokehBias{1.f};
 

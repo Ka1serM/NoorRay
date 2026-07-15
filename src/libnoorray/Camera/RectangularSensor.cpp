@@ -48,19 +48,23 @@ Sensor& Sensor::operator=(const Sensor& other)
 }
 
 RectangularSensor::RectangularSensor(const Sensor& other)
-    : Sensor(other)
+    : TaggedBase(other)
 {
 }
 
+ScatterPsfSensor::ScatterPsfSensor() = default;
+
 ScatterPsfSensor::ScatterPsfSensor(const Sensor& other)
-    : RectangularSensor(other), psfGridPath(other.getPsfGridPath())
+    : TaggedBase(other), psfGridPath(other.getPsfGridPath())
 {
     if (!psfGridPath.empty())
         loadPsfGrid();
 }
 
+GatherPsfSensor::GatherPsfSensor() = default;
+
 GatherPsfSensor::GatherPsfSensor(const Sensor& other)
-    : RectangularSensor(other), psfGridPath(other.getPsfGridPath())
+    : TaggedBase(other), psfGridPath(other.getPsfGridPath())
 {
     if (!psfGridPath.empty())
         loadPsfGrid();
@@ -104,7 +108,6 @@ void loadPsfGrid(PsfSensor& sensor, const char* sensorName)
 
 }
 
-#ifndef NR_GPU_CODE
 std::string_view Sensor::getImageSensorPath() const
 {
     return imageSensorPath;
@@ -192,7 +195,6 @@ uint32_t Sensor::reloadPsfGrid()
     }
     return 0;
 }
-#endif
 
 
 ScatterPsfSensor::~ScatterPsfSensor()

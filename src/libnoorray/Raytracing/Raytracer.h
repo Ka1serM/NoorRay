@@ -136,6 +136,7 @@ private:
     nr::cuda::UniqueDeviceBuffer cieXDevice;
     nr::cuda::UniqueDeviceBuffer cieYDevice;
     nr::cuda::UniqueDeviceBuffer cieZDevice;
+    nr::cuda::UniqueDeviceBuffer analyticLightAliasDevice;
     nr::openpbr::EnergyLutStorage openPbrLutStorage;
     GpuSceneCache gpuCache;
     uint32_t nextBuffer{};

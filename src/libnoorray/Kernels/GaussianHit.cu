@@ -3,6 +3,7 @@
 #include <optix_device.h>
 
 #include "Raytracing/SceneData.h"
+#include "Samplers/OwenSobolSampler.h"
 #include "Samplers/RandomSampler.h"
 
 extern "C"
@@ -64,16 +65,11 @@ extern "C" __global__ void __anyhit__gaussian()
     //   2: accepted gaussianId (init to InvalidIndex)
     const uint32_t sampleIndex = optixGetPayload_0();
 
-    // Counter-based PCG hashing keeps every decision deterministic while
-    // decorrelating Gaussian ID, path, accumulated sample, and bounce. The
-    // previous shifted-XOR key discarded much of the Gaussian and frame IDs.
-    const uint32_t sampleCounter = hashCombine32(
-        params.frame.totalAccumulated, params.depth);
-    const uint32_t pathKey = hashCombine32(sampleIndex, sampleCounter);
-    const uint32_t bits = hashCombine32(globalGaussianId, pathKey);
-    const float xi = (static_cast<float>(bits >> 8u) + 0.5f)
-        * (1.0f / 16777216.0f);
-
+    const uint32_t pathSeed = hashCombine32(sampleIndex, params.depth);
+    const uint32_t gaussianSeed = hashCombine32(globalGaussianId, 0u);
+    const OwenSobolSampler sampler({
+        params.frame.totalAccumulated, hashCombine32(pathSeed, gaussianSeed)});
+    const float xi = sampler.sample1D(SampleDimension::Opacity);
     // alpha <= opacity, so low-opacity rejections avoid evaluating the
     // exponential.
     if (xi >= opacity)

@@ -31,6 +31,7 @@
 extern const float sRGBToSpectrumTable_Scale[64];
 extern const float sRGBToSpectrumTable_Data[3][64][64][64][3];
 #include "Raytracing/Spectrum.h"
+#include "Raytracing/LightSampling.h"
 
 namespace
 {
@@ -544,6 +545,7 @@ void Raytracer::freeSceneData() noexcept
     cieXDevice.reset();
     cieYDevice.reset();
     cieZDevice.reset();
+    analyticLightAliasDevice.reset();
     openPbrLutStorage.reset();
     gpuCache.clearSceneResources();
 }
@@ -660,16 +662,66 @@ void Raytracer::updateLights()
     const RectLight* rectLights = scene.getRectLights();
     const DirectionalLight* directionalLights = scene.getDirectionalLights();
 
-    float analyticWeight = 0.0f;
+    std::vector<float> weights;
+    weights.reserve(static_cast<size_t>(gpuCache.data.pointLightCount)
+        + gpuCache.data.spotLightCount + gpuCache.data.rectLightCount
+        + gpuCache.data.directionalLightCount);
     for (uint32_t i = 0; i < gpuCache.data.pointLightCount; ++i)
-        analyticWeight += pointLights[i].selectionWeight();
+        weights.push_back(fmaxf(pointLights[i].selectionWeight(), 0.0f));
     for (uint32_t i = 0; i < gpuCache.data.spotLightCount; ++i)
-        analyticWeight += spotLights[i].selectionWeight();
+        weights.push_back(fmaxf(spotLights[i].selectionWeight(), 0.0f));
     for (uint32_t i = 0; i < gpuCache.data.rectLightCount; ++i)
-        analyticWeight += rectLights[i].selectionWeight();
+        weights.push_back(fmaxf(rectLights[i].selectionWeight(), 0.0f));
     for (uint32_t i = 0; i < gpuCache.data.directionalLightCount; ++i)
-        analyticWeight += directionalLights[i].selectionWeight();
+        weights.push_back(fmaxf(directionalLights[i].selectionWeight(), 0.0f));
+
+    float analyticWeight = 0.0f;
+    for (const float weight : weights)
+        analyticWeight += weight;
     gpuCache.data.analyticLightSelectionWeight = analyticWeight;
+
+    analyticLightAliasDevice.reset();
+    gpuCache.data.analyticLightAliases = nullptr;
+    gpuCache.data.analyticLightAliasCount = 0;
+    if (weights.empty() || analyticWeight <= 0.0f)
+        return;
+
+    const uint32_t count = static_cast<uint32_t>(weights.size());
+    std::vector<AnalyticLightAliasEntry> aliases(count);
+    std::vector<float> scaled(count);
+    std::vector<uint32_t> small;
+    std::vector<uint32_t> large;
+    small.reserve(count);
+    large.reserve(count);
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        aliases[i].alias = i;
+        aliases[i].selectionPdf = weights[i] / analyticWeight;
+        scaled[i] = aliases[i].selectionPdf * static_cast<float>(count);
+        (scaled[i] < 1.0f ? small : large).push_back(i);
+    }
+    while (!small.empty() && !large.empty())
+    {
+        const uint32_t low = small.back();
+        small.pop_back();
+        const uint32_t high = large.back();
+        large.pop_back();
+        aliases[low].threshold = scaled[low];
+        aliases[low].alias = high;
+        scaled[high] = scaled[high] + scaled[low] - 1.0f;
+        (scaled[high] < 1.0f ? small : large).push_back(high);
+    }
+    for (const uint32_t index : large)
+        aliases[index].threshold = 1.0f;
+    for (const uint32_t index : small)
+        aliases[index].threshold = 1.0f;
+
+    analyticLightAliasDevice.allocate(sizeof(AnalyticLightAliasEntry) * aliases.size());
+    NR_GPU_CHECK(cudaMemcpy(analyticLightAliasDevice.get(), aliases.data(),
+        sizeof(AnalyticLightAliasEntry) * aliases.size(), cudaMemcpyHostToDevice));
+    gpuCache.data.analyticLightAliases =
+        static_cast<const AnalyticLightAliasEntry*>(analyticLightAliasDevice.get());
+    gpuCache.data.analyticLightAliasCount = count;
 }
 
 void Raytracer::launchGenerate(const KernelParams& params, const cudaStream_t stream) const
@@ -1138,8 +1190,8 @@ void Raytracer::renderFrame(
     // queue, so skip it entirely in that case.
     const bool mayGenerateShadowRays = gpuCache.data.meshInstanceCount > 0 ||
         (!gaussianDirectColor &&
-            (gpuCache.data.pointLightCount > 0 || gpuCache.data.spotLightCount > 0 ||
-             gpuCache.data.rectLightCount > 0 || gpuCache.data.directionalLightCount > 0));
+            (gpuCache.data.analyticLightAliasCount > 0
+                || scene.getEnvironment().importanceWeight > 0.0f));
 
     if (frameIndex == 0)
         aovStale = true;

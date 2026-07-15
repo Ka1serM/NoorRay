@@ -2,6 +2,7 @@
 
 #include "Raytracing/Geometry.h"
 #include "Raytracing/GaussianShading.h"
+#include "Raytracing/LightSampling.h"
 #include "Raytracing/MisHeuristic.h"
 #include "Raytracing/Queues.h"
 #include "Raytracing/RgbToSpectrum.h"
@@ -50,66 +51,31 @@ NR_GPU inline glm::vec3 shadeBsdfLobe(
         state.packedCounters += 1u << CounterDiffuseShift;
     }
     state.throughput *= bsdfSample.weight;
-    state.lastBsdfPdfBits = __float_as_uint(bsdfSample.pdf);
+    state.lastBsdfPdfBits = __float_as_uint(
+        bsdf.transmission <= 0.0f ? bsdfSample.pdf : 0.0f);
 
     // Direct light sampling.
     {
         LightSample lightSample{};
-        const uint32_t pl    = params.scene.pointLightCount;
-        const uint32_t sl    = params.scene.spotLightCount;
-        const uint32_t rl    = params.scene.rectLightCount;
-        const uint32_t dl    = params.scene.directionalLightCount;
         const float analyticWeight = analyticLightSelectionWeight(params.scene);
         const float environmentWeight = bsdf.transmission <= 0.0f
             ? fmaxf(params.scene.environment->importanceWeight, 0.0f) : 0.0f;
         const float totalWeight = analyticWeight + environmentWeight;
         if (totalWeight > 0.0f)
         {
-            float target = randomFloat(lightRng) * totalWeight;
+            const float target = randomFloat(lightRng) * totalWeight;
             float selectedWeight = 0.0f;
             bool environmentSelected = false;
             float sampledEnvironmentPdf = 0.0f;
-            for (uint32_t i = 0; i < pl && selectedWeight == 0.0f; ++i) {
-                const float w = params.scene.pointLights[i].selectionWeight();
-                if (target < w) {
-                    selectedWeight = w;
-                    lightSample = params.scene.pointLights[i].sampleLi(
-                        position, lightRng, wl,
-                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65);
-                } else target -= w;
+            if (target < analyticWeight && analyticWeight > 0.0f)
+            {
+                const AnalyticLightSample analytic = sampleAnalyticLight(
+                    params.scene, position, lightRng, wl);
+                selectedWeight = analytic.selectionPdf * analyticWeight;
+                lightSample = analytic.light;
             }
-            for (uint32_t i = 0; i < sl && selectedWeight == 0.0f; ++i) {
-                const float w = params.scene.spotLights[i].selectionWeight();
-                if (target < w) {
-                    selectedWeight = w;
-                    lightSample = params.scene.spotLights[i].sampleLi(
-                        position, lightRng, wl,
-                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65);
-                } else target -= w;
-            }
-            for (uint32_t i = 0; i < rl && selectedWeight == 0.0f; ++i) {
-                const float w = params.scene.rectLights[i].selectionWeight();
-                if (target < w) {
-                    selectedWeight = w;
-                    lightSample = params.scene.rectLights[i].sampleLi(
-                        position, lightRng, wl,
-                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65);
-                } else target -= w;
-            }
-            for (uint32_t i = 0; i < dl && selectedWeight == 0.0f; ++i) {
-                const float w = params.scene.directionalLights[i].selectionWeight();
-                if (target < w) {
-                    selectedWeight = w;
-                    lightSample = params.scene.directionalLights[i].sampleLi(
-                        position, lightRng, wl,
-                        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                        params.scene.d65);
-                } else target -= w;
-            }
-            if (selectedWeight == 0.0f && environmentWeight > 0.0f) {
+            else if (environmentWeight > 0.0f)
+            {
                 const EnvironmentSample environmentSample =
                     params.scene.environment->sampleDirection(lightRng);
                 if (environmentSample.pdf > 0.0f) {
@@ -166,8 +132,8 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         params.scene.renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor;
     const bool mayWriteShadowQueue = params.scene.meshInstanceCount > 0 ||
         (!gaussianDirectColor &&
-            (params.scene.pointLightCount > 0 || params.scene.spotLightCount > 0 ||
-             params.scene.rectLightCount > 0 || params.scene.directionalLightCount > 0));
+            (params.scene.analyticLightAliasCount > 0
+                || params.scene.environment->importanceWeight > 0.0f));
     bool continuePath = false;
     PathRayWorkItem continuation{};
     if (inRange)
@@ -246,63 +212,61 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             // ── NEE: sample analytic lights ────────────────────────
             {
                 LightSample lightSample{};
-                const uint32_t pl = params.scene.pointLightCount;
-                const uint32_t sl = params.scene.spotLightCount;
-                const uint32_t rl = params.scene.rectLightCount;
-                const uint32_t dl = params.scene.directionalLightCount;
                 const float analyticWeight = analyticLightSelectionWeight(params.scene);
-                const float environmentWeight = 0.0f; // env sampled by scattered ray
+                const float environmentWeight = fmaxf(
+                    params.scene.environment->importanceWeight, 0.0f);
                 const float totalWeight = analyticWeight + environmentWeight;
                 if (totalWeight > 0.0f)
                 {
-                    float target = randomFloat(lightRng) * totalWeight;
+                    const float target = randomFloat(lightRng) * totalWeight;
                     float selectedWeight = 0.0f;
-                    for (uint32_t i = 0; i < pl && selectedWeight == 0.0f; ++i) {
-                        const float w = params.scene.pointLights[i].selectionWeight();
-                        if (target < w) { selectedWeight = w;
-                            lightSample = params.scene.pointLights[i].sampleLi(
-                                gaussianPos, lightRng, wl,
-                                params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                                params.scene.d65); } else target -= w;
+                    bool environmentSelected = false;
+                    float sampledEnvironmentPdf = 0.0f;
+                    if (target < analyticWeight && analyticWeight > 0.0f)
+                    {
+                        const AnalyticLightSample analytic = sampleAnalyticLight(
+                            params.scene, gaussianPos, lightRng, wl);
+                        selectedWeight = analytic.selectionPdf * analyticWeight;
+                        lightSample = analytic.light;
                     }
-                    for (uint32_t i = 0; i < sl && selectedWeight == 0.0f; ++i) {
-                        const float w = params.scene.spotLights[i].selectionWeight();
-                        if (target < w) { selectedWeight = w;
-                            lightSample = params.scene.spotLights[i].sampleLi(
-                                gaussianPos, lightRng, wl,
-                                params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                                params.scene.d65); } else target -= w;
-                    }
-                    for (uint32_t i = 0; i < rl && selectedWeight == 0.0f; ++i) {
-                        const float w = params.scene.rectLights[i].selectionWeight();
-                        if (target < w) { selectedWeight = w;
-                            lightSample = params.scene.rectLights[i].sampleLi(
-                                gaussianPos, lightRng, wl,
-                                params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                                params.scene.d65); } else target -= w;
-                    }
-                    for (uint32_t i = 0; i < dl && selectedWeight == 0.0f; ++i) {
-                        const float w = params.scene.directionalLights[i].selectionWeight();
-                        if (target < w) { selectedWeight = w;
-                            lightSample = params.scene.directionalLights[i].sampleLi(
-                                gaussianPos, lightRng, wl,
-                                params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-                                params.scene.d65); } else target -= w;
+                    else if (environmentWeight > 0.0f)
+                    {
+                        const EnvironmentSample environmentSample =
+                            params.scene.environment->sampleDirection(lightRng);
+                        if (environmentSample.pdf > 0.0f)
+                        {
+                            selectedWeight = environmentWeight;
+                            environmentSelected = true;
+                            sampledEnvironmentPdf = environmentSample.pdf;
+                            lightSample.direction = environmentSample.direction;
+                            lightSample.distance = 1e16f;
+                            lightSample.radiance = params.scene.environment->radiance(
+                                params.scene.textures, params.scene.textureCount,
+                                environmentSample.direction, false, wl,
+                                params.scene.spectrumTableScale,
+                                params.scene.spectrumTableCoeffs, params.scene.d65);
+                        }
                     }
                     if (selectedWeight > 0.0f && lightSample.radiance.maxComponent() > 0.0f)
                     {
                         const float selectionPdf = selectedWeight / totalWeight;
                         const SampledSpectrum brdf = albedo * inv4Pi;
+                        if (environmentSelected)
+                        {
+                            const float lightPdf = selectionPdf * sampledEnvironmentPdf;
+                            lightSample.radiance *= powerHeuristic(lightPdf, inv4Pi)
+                                / fmaxf(lightPdf, 1e-20f);
+                        }
+                        else
+                        {
+                            lightSample.radiance *= 1.0f / selectionPdf;
+                        }
                         shadow.origin    = gaussianPos + lightSample.direction * 0.001f;
                         shadow.direction = lightSample.direction;
                         shadow.tMin      = 0.001f;
                         shadow.tMax      = lightSample.distance - 0.002f;
-                        // Analytic lights are only reachable through NEE: they are
-                        // not emissive geometry that the scattered ray can hit.
-                        // Therefore there is no competing sampling technique and
-                        // no MIS term. Compensate only for selecting one light.
-                        shadow.contribution = state.throughput * brdf * lightSample.radiance
-                            / fmaxf(selectionPdf, 1e-20f);
+                        shadow.contribution =
+                            state.throughput * brdf * lightSample.radiance;
                         shadow.rngState     = shadowRng;
                         shadow.sampleIndex  = hit.sampleIndex;
                         params.queues.shadowQueue[index] = shadow;
@@ -311,9 +275,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
             }
 
             state.throughput *= albedo;
-            // Gaussian scattering does not perform environment NEE. A zero PDF
-            // tells the miss path not to MIS-downweight its environment sample.
-            state.lastBsdfPdfBits = __float_as_uint(0.0f);
+            state.lastBsdfPdfBits = __float_as_uint(inv4Pi);
 
             state.depth++;
             continuePath = true;

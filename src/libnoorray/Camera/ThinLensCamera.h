@@ -4,14 +4,12 @@
 #include "Camera/Camera.h"
 #include "Samplers/RandomSampler.h"
 
-class ThinLensCamera : public Camera {
+class ThinLensCamera : public Camera::Type<ThinLensCamera> {
 public:
-#ifndef NR_GPU_CODE
     ThinLensCamera();
     explicit ThinLensCamera(std::unique_ptr<Sensor> sensor);
     ThinLensCamera(const ThinLensCamera& other);
     ~ThinLensCamera();
-#endif
     float apertureDiameterMm{};
     float bokehBias{1.f};
 

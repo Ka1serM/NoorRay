@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CUDA/Annotations.h"
+#include "CUDA/UnifiedMemoryObject.h"
 #include "CUDA/rstd/Allocator.h"
 
 #include <cstddef>
@@ -59,8 +60,12 @@ public:
     NR_CPU_GPU void reset(T* p = nullptr) noexcept
     {
         if (ptr_) {
-            alloc_.destroy(ptr_);
-            alloc_.deallocate(ptr_, 1);
+            if constexpr (std::is_base_of_v<UnifiedMemoryObject, T>) {
+                delete ptr_;
+            } else {
+                alloc_.destroy(ptr_);
+                alloc_.deallocate(ptr_, 1);
+            }
         }
         ptr_ = p;
     }

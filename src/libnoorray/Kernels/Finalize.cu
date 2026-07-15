@@ -1,5 +1,6 @@
 #include <cuda_fp16.h>
 
+#include "Camera/Camera.h"
 #include "Raytracing/SceneData.h"
 
 NR_GPU_KERNEL void finalizeKernel(const KernelParams params)

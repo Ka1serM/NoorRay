@@ -24,6 +24,7 @@
 #include "libross/imaging/imagesensor/ImageSensorReader.h"
 #include "libross/imaging/imagesensor/ImageSensorSampler.h"
 #include "openlensfileio/glasscatalogs/glasscatalog/GlassCatalogLibrary.h"
+#include "portable-file-dialogs.h"
 
 namespace {
 class ScopedStopwatch {
@@ -67,7 +68,7 @@ HybridPsfCamera::HybridPsfCamera()
 }
 
 HybridPsfCamera::HybridPsfCamera(std::unique_ptr<Sensor> ownedSensor)
-    : Camera(std::move(ownedSensor))
+    : TaggedBase(std::move(ownedSensor))
 {
 }
 
@@ -188,7 +189,7 @@ void HybridPsfCamera::prepareOptics()
 }
 
 HybridPsfCamera::HybridPsfCamera(const HybridPsfCamera& other)
-    : Camera(other)
+    : TaggedBase(other)
 {
     lensPath = other.lensPath;
     glassCatalogPaths = other.glassCatalogPaths;

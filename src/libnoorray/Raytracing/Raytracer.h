@@ -29,6 +29,7 @@ class CameraInstance;
 class Context;
 class Image;
 class Scene;
+class Sensor;
 
 struct InteropFrame
 {

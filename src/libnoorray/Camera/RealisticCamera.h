@@ -3,26 +3,17 @@
 #include "CUDA/Annotations.h"
 #include "CUDA/rstd/UniquePtr.h"
 #include "Camera/Camera.h"
-#if !defined(NR_OPTIX_PTX_BUILD)
 #include "libross/imaging/cameralens/CameraLens.h"
 #include "libross/imaging/cameralens/raytracing/sequential/FromFilmToWorldRaytracer.h"
 #include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupil.h"
 #include "libross/imaging/imagesensor/ImageSensor.h"
-#else
-namespace ross {
-struct CameraLens;
-struct ImageSensor;
-struct ExitPupil;
-}
-#endif
 #include <glm/vec2.hpp>
-#ifndef NR_GPU_CODE
 #include <memory>
-#include "portable-file-dialogs.h"
-#endif
+#include <string>
+#include <vector>
 using glm::vec2;
 
-class RealisticCamera : public Camera {
+class RealisticCamera : public Camera::Type<RealisticCamera> {
 public:
     nr::rstd::unique_ptr<ross::CameraLens> rossLens;
     nr::rstd::unique_ptr<ross::CameraLens> sourceRossLens;
@@ -31,7 +22,6 @@ public:
     float sensorHeightCm{};
     float filmDiagonalCm{};
 
-#if !defined(NR_OPTIX_PTX_BUILD)
     // Construct the libross film ray used by generateRay. Keeping this public lets diagnostic
     // views exercise exactly the same film mapping and exit-pupil sampling as rendered rays.
     NR_CPU_GPU bool makeFilmRay(ross::Ray& filmRay, float nx, float ny,
@@ -50,16 +40,12 @@ public:
                 rossLens->getLastSurface().center));
         return true;
     }
-#endif
 
     NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
         float nx, float ny, const glm::vec2 lensSample, uint32_t,
         SampledWavelengths& wavelengths,
         bool centered = false) const
     {
-#if defined(NR_OPTIX_PTX_BUILD)
-        return false;
-#else
         wavelengths.terminateSecondary();
         weight = 0.0f;
         const ross::Vector2f sample(
@@ -89,10 +75,8 @@ public:
             traced->direction.x, traced->direction.y, -traced->direction.z));
         transformRay(origin, direction);
         return true;
-#endif
     }
 
-#ifndef NR_GPU_CODE
     RealisticCamera();
     explicit RealisticCamera(std::unique_ptr<Sensor> sensor);
     RealisticCamera(const RealisticCamera& other);
@@ -128,5 +112,4 @@ private:
 
     void freeRossLens();
     void updateLensSettings();
-#endif
 };

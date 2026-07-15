@@ -3,24 +3,18 @@
 #include "Camera/Sensor.h"
 #include "CUDA/rstd/UniquePtr.h"
 
-#if !defined(NR_OPTIX_PTX_BUILD)
 #include "libross/imaging/interpolatedpsfgrid/InterpolatedPsfGrid.h"
-#endif
 
-#ifndef NR_GPU_CODE
 #include <memory>
 #include <string>
 #include <cuda_runtime_api.h>
 #include "CUDA/Unique/AsyncDeviceBuffer.h"
-#include "portable-file-dialogs.h"
-#endif
 
-class GatherPsfSensor : public RectangularSensor {
+class GatherPsfSensor : public Sensor::Type<GatherPsfSensor, RectangularSensor> {
 public:
     nr::rstd::unique_ptr<ross::InterpolatedPsfGrid> psfGrid;
 
-#ifndef NR_GPU_CODE
-    GatherPsfSensor() = default;
+    GatherPsfSensor();
     explicit GatherPsfSensor(const Sensor& other);
     std::string psfGridPath;
     std::string psfLoadStatus;
@@ -36,15 +30,10 @@ public:
     void freeScratch(cudaStream_t stream) noexcept;
     void prepareFrame(uint32_t width, uint32_t height, bool resetAccumulation,
         cudaStream_t stream, PsfGatherBucketSample*& buckets, uint32_t& binCount);
-#endif
 
     NR_CPU_GPU glm::vec4 resolvePixel(uint32_t pixel, uint32_t width, uint32_t height,
         uint32_t psfBinCount, const PsfGatherBucketSample* psfBuckets) const
     {
-#if defined(NR_OPTIX_PTX_BUILD)
-        (void)pixel; (void)width; (void)height; (void)psfBinCount; (void)psfBuckets;
-        return glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-#else
         if (!psfGrid || psfBuckets == nullptr || psfBinCount == 0)
             return glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
 
@@ -92,15 +81,11 @@ public:
             rgb.z = static_cast<float>(rgbSum[2] / weightSum);
         }
         return glm::vec4(rgb, 1.0f);
-#endif
     }
 
     NR_CPU_GPU void addSample(uint32_t pixel, const SampledSpectrum& L,
         const SampledWavelengths& wl, float sampleWeight, const SensorSampleContext& ctx) const
     {
-#if defined(NR_OPTIX_PTX_BUILD)
-        (void)pixel; (void)L; (void)wl; (void)ctx;
-#else
         RectangularSensor::addSample(pixel, L, wl, sampleWeight, ctx);
 
         if (!psfGrid || ctx.psfBuckets == nullptr)
@@ -113,6 +98,5 @@ public:
         sensorAtomicAdd(&bucket.rgbSum[1], static_cast<double>(rgb.y));
         sensorAtomicAdd(&bucket.rgbSum[2], static_cast<double>(rgb.z));
         sensorAtomicAdd(&bucket.count, 1.0);
-#endif
     }
 };

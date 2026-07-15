@@ -2,7 +2,6 @@
 
 #include "CUDA/Annotations.h"
 #include "CUDA/TaggedPointer.h"
-#include "CUDA/UnifiedMemoryObject.h"
 #include "CUDA/rstd/UniquePtr.h"
 
 #include <glm/glm.hpp>
@@ -10,11 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#ifndef NR_GPU_CODE
 #include <memory>
 #include <string>
 #include <vector>
-#endif
 
 #include "Camera/Sensor.h"
 #include "Samplers/RandomSampler.h"
@@ -44,20 +41,16 @@ using TaggedCamera = nr::TaggedObject<Camera,
     RealisticCamera,
     HybridPsfCamera>;
 
-class Camera : public nr::UnifiedMemoryObject, public TaggedCamera {
+class Camera : public TaggedCamera {
 public:
     using TaggedCamera::TaggedCamera;
     Camera() = default;
-#ifndef NR_GPU_CODE
     explicit Camera(std::unique_ptr<Sensor> sensor);
-#endif
     Camera(const Camera& other);
     Camera& operator=(const Camera& other);
     virtual ~Camera();
-#ifndef NR_GPU_CODE
     std::unique_ptr<Sensor> releaseSensor();
     void setSensor(std::unique_ptr<Sensor> sensor);
-#endif
 
     glm::mat4 cameraToWorld{1.f};
     float fieldOfViewDegrees{90.f};
@@ -68,9 +61,6 @@ public:
 private:
     nr::rstd::unique_ptr<Sensor> sensor;
     char retainedPsfGridPath[512]{};
-#ifndef NR_GPU_CODE
-    void tagSensor();
-#endif
 public:
 
     NR_CPU_GPU void transformRay(glm::vec3& origin, glm::vec3& direction) const

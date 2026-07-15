@@ -51,6 +51,8 @@ void Transform::setFromMatrix(const glm::mat4& mat) {
 vk::TransformMatrixKHR Transform::getVkTransformMatrix() const {
     glm::mat4 mat = getMatrix();
     vk::TransformMatrixKHR vkTransform{};
+    // VkTransformMatrixKHR is a row-major 3x4 matrix. Keep this explicit
+    // conversion independent of GLM's internal column-major representation.
     vkTransform.matrix[0][0] = mat[0][0]; vkTransform.matrix[0][1] = mat[1][0]; vkTransform.matrix[0][2] = mat[2][0]; vkTransform.matrix[0][3] = mat[3][0];
     vkTransform.matrix[1][0] = mat[0][1]; vkTransform.matrix[1][1] = mat[1][1]; vkTransform.matrix[1][2] = mat[2][1]; vkTransform.matrix[1][3] = mat[3][1];
     vkTransform.matrix[2][0] = mat[0][2]; vkTransform.matrix[2][1] = mat[1][2]; vkTransform.matrix[2][2] = mat[2][2]; vkTransform.matrix[2][3] = mat[3][2];

@@ -11,7 +11,8 @@ class Context;
 
 class MainMenuBar : public ImGuiComponent {
 public:
-    MainMenuBar(std::string name, Context& context, Scene& scene, ImGuiManager& manager);
+    MainMenuBar(std::string name, Context& context, Scene& scene,
+        ImGuiManager& manager, std::string currentScenePath = {});
     void renderUi() override;
 
 private:

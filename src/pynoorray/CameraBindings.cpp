@@ -30,6 +30,7 @@ void bindCamera(nb::module_& module)
             })
         .def_prop_rw("focal_length_mm", &Camera::getFocalLengthMm, &Camera::setFocalLengthMm)
         .def_prop_rw("focus_distance_cm", &Camera::getFocusDistanceCm, &Camera::setFocusDistanceCm)
+        .def_rw("exposure", &Camera::exposure)
         .def_prop_ro("sensor", nb::overload_cast<>(&Camera::getSensor), nb::rv_policy::reference_internal)
         .def("set_sensor", &Camera::setSensor, "sensor"_a);
 }

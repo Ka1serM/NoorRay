@@ -11,7 +11,7 @@ protected:
     static std::string render(const char* scene, const int spp, const char* output)
     {
         const std::string path = output;
-        const std::string command = std::string("\"") + NOORRAY_EXECUTABLE + "\" --scene \""
+        const std::string command = std::string("\"") + NOORRAY_EXECUTABLE + "\" --cli --scene \""
             + TEST_SCENE_DIR "/" + scene + "\" --spp " + std::to_string(spp)
             + " --output \"" + path + "\"";
         INFO("Command: " << command);

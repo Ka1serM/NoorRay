@@ -63,6 +63,7 @@ public:
     float fieldOfViewDegrees{90.f};
     float focalLengthMm{2.892f};
     float focusDistanceCm{500.f};
+    float exposure{};
 
 private:
     nr::rstd::unique_ptr<Sensor> sensor;

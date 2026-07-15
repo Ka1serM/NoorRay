@@ -378,6 +378,11 @@ bool HybridPsfCamera::renderUi()
     bool changed = false;
     const float browseButtonWidth = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
+    ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](float value) {
+        exposure = value;
+        changed = true;
+    });
+
     auto pathRow = [&](const char* label, const char* id, auto& buffer, std::string& target,
                        auto openDialog) {
         ImGuiManager::tableRowLabel(label);

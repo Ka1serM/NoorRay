@@ -8,6 +8,7 @@
 #include "ImGuizmo.h"
 #include "Scene/Scene.h"
 #include "Vulkan/Buffer.h"
+#include <SDL3/SDL_events.h>
 
 class Window;
 
@@ -21,6 +22,7 @@ public:
     void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
     void setAovImages(Image& crypto, Image& position);
     void resize(uint32_t width, uint32_t height, vk::Format imageFormat);
+    void processEvent(const SDL_Event& event);
     ~ViewportPanel() override;
 
     bool showOverlays() const { return m_showOverlays; }
@@ -54,6 +56,13 @@ private:
     void* positionStagingBufferMappedPtr = nullptr;
     
     bool isCapturingMouse = false;
+    bool rightButtonDown = false;
+    bool rightButtonPressPending = false;
+    float rightButtonPressX = 0.f;
+    float rightButtonPressY = 0.f;
+    float pendingMouseDeltaX = 0.f;
+    float pendingMouseDeltaY = 0.f;
+    uint64_t observedCameraRevision = 0;
     float oldX = 0.f, oldY = 0.f;
 
     ImVec2 viewportPos{};   // Top-left corner of the viewport image on the screen
@@ -77,6 +86,7 @@ private:
 
     void beginMouseCapture();
     void endMouseCapture();
+    void synchronizeCameraTransition();
     
     ImGuizmo::OPERATION currentOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE currentMode = ImGuizmo::LOCAL;

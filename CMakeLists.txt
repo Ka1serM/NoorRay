@@ -86,6 +86,13 @@ target_include_directories(stb INTERFACE
         ${PROJECT_SOURCE_DIR}/external/stb
 )
 
+# tinyply
+add_library(tinyply STATIC external/tinyply/source/tinyply.cpp)
+set_target_properties(tinyply PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(tinyply PUBLIC
+        ${PROJECT_SOURCE_DIR}/external/tinyply/source
+)
+
 # TinyEXR + miniz (32-bit floating-point OpenEXR output)
 add_library(tinyexr STATIC
         external/tinyexr/tinyexr.cc
@@ -203,7 +210,7 @@ set(SLANGC_BASE
         -target spirv
         -profile spirv_1_5
         -emit-spirv-directly
-        -matrix-layout-column-major
+        -matrix-layout-row-major
         -fvk-use-entrypoint-name
         -Wno-30081
 )
@@ -475,6 +482,7 @@ target_link_libraries(libnoorray
         Vulkan::Vulkan
         tinygltf
         tinyobjloader
+        tinyply
         tinyexr
         stb
         gauss_forge_readers

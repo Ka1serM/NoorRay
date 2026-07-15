@@ -28,7 +28,6 @@ public:
     bool optixDenoiserEnabled{false};
     int maxBounces{10};
     int russianRouletteStartBounce{3};
-    float exposure{};
     bool tonemappingEnabled{false};
     bool transparentBackground{false};
     float gaussianCutoffSigma{3.0f};

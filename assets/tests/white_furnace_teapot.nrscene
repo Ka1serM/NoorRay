@@ -5,15 +5,19 @@
     "visible_exposure": 0.0,
     "visible": true
   },
-  "camera": {
-    "type": "perspective",
-    "position": [0.0, 50.0, 50.0],
-    "rotation_euler": [-44.3, 0.0, 0.0],
-    "focal_length_mm": 50.0,
-    "disable_anti_aliasing": false,
-    "resolution": [1920, 1080]
-  },
   "objects": [
+    {
+      "type": "camera",
+      "name": "Camera",
+      "position": [0.0, 50.0, 50.0],
+      "rotation_euler": [-44.3, 0.0, 0.0],
+      "camera": {
+        "projection": "perspective",
+        "active": true,
+        "focal_length_mm": 50.0,
+        "resolution": [1920, 1080]
+      }
+    },
     {
       "type": "obj",
       "name": "White furnace teapot",

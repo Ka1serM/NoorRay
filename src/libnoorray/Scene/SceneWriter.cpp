@@ -68,24 +68,23 @@ nr::sceneio::RenderSettingsFile makeRenderSettingsFile(const RenderSettings& set
     };
 }
 
-nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
+nr::sceneio::CameraFile makeCameraFile(
+    const CameraInstance& cameraInstance, const bool active)
 {
     const Camera* camera = cameraInstance.getCamera();
     nr::sceneio::CameraFile file{};
     switch (cameraInstance.getProjectionType()) {
-    case CameraProjectionType::Orthographic: file.type = "orthographic"; break;
-    case CameraProjectionType::Fisheye: file.type = "fisheye"; break;
-    case CameraProjectionType::ThinLens: file.type = "thinlens"; break;
-    case CameraProjectionType::Realistic: file.type = "realistic"; break;
-    case CameraProjectionType::HybridPsf: file.type = "hybridpsf"; break;
-    case CameraProjectionType::Perspective: file.type = "perspective"; break;
+    case CameraProjectionType::Orthographic: file.projection = "orthographic"; break;
+    case CameraProjectionType::Fisheye: file.projection = "fisheye"; break;
+    case CameraProjectionType::ThinLens: file.projection = "thinlens"; break;
+    case CameraProjectionType::Realistic: file.projection = "realistic"; break;
+    case CameraProjectionType::HybridPsf: file.projection = "hybridpsf"; break;
+    case CameraProjectionType::Perspective: file.projection = "perspective"; break;
     }
-
-    file.position = fromVec3(cameraInstance.getPosition());
-    file.rotation_euler = fromVec3(cameraInstance.getRotationEuler());
-    file.scale = fromVec3(cameraInstance.getScale());
+    file.active = active;
     file.focal_length_mm = camera->getFocalLengthMm();
     file.focus_distance_cm = camera->getFocusDistanceCm();
+    file.exposure = camera->exposure;
     if (const auto* thinLens = camera->CastOrNullptr<ThinLensCamera>()) {
         file.aperture_diameter_mm = thinLens->apertureDiameterMm;
         file.bokeh_bias = thinLens->bokehBias;
@@ -117,9 +116,10 @@ nr::sceneio::CameraFile makeCameraFile(const CameraInstance& cameraInstance)
     return file;
 }
 
-std::optional<nr::sceneio::ObjectFile> makeObjectFile(const std::shared_ptr<SceneObject>& object)
+std::optional<nr::sceneio::ObjectFile> makeObjectFile(
+    const std::shared_ptr<SceneObject>& object, const CameraInstance* activeCamera)
 {
-    if (!object || dynamic_cast<CameraInstance*>(object.get()))
+    if (!object)
         return std::nullopt;
 
     nr::sceneio::ObjectFile file{};
@@ -127,7 +127,10 @@ std::optional<nr::sceneio::ObjectFile> makeObjectFile(const std::shared_ptr<Scen
     file.name = object->getName();
     file.path = object->getSourcePath();
 
-    if (const auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object)) {
+    if (const auto camera = std::dynamic_pointer_cast<CameraInstance>(object)) {
+        file.type = "camera";
+        file.camera = makeCameraFile(*camera, camera.get() == activeCamera);
+    } else if (const auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object)) {
         if (file.path.empty())
             file.path = gaussian->getGaussianAsset().getPath();
         if (file.type.empty())
@@ -155,10 +158,8 @@ nr::sceneio::SceneFile makeSceneFile(const Scene& scene)
     nr::sceneio::SceneFile file{};
     file.environment = makeEnvironmentFile(scene.getEnvironment());
     file.render_settings = makeRenderSettingsFile(scene.getRenderSettings());
-    if (const CameraInstance* camera = scene.getActiveCamera())
-        file.camera = makeCameraFile(*camera);
     for (const auto& object : scene.getRootObjects())
-        if (auto objectFile = makeObjectFile(object))
+        if (auto objectFile = makeObjectFile(object, scene.getActiveCamera()))
             file.objects.push_back(std::move(*objectFile));
     return file;
 }

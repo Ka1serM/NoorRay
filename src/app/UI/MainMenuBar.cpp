@@ -14,8 +14,10 @@
 
 #include "ImGuiManager.h"
 
-MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene, ImGuiManager& imGuiManager)
-    : ImGuiComponent(std::move(name)), scene(scene), context(context), imGuiManager(imGuiManager)
+MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene,
+    ImGuiManager& imGuiManager, std::string currentScenePath)
+    : ImGuiComponent(std::move(name)), scene(scene), context(context),
+      imGuiManager(imGuiManager), currentScenePath(std::move(currentScenePath))
 {}
 
 void MainMenuBar::renderUi() {

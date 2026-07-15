@@ -20,6 +20,7 @@ struct CliOptions
     int height{};
     bool statsEnabled{};
     bool denoiserEnabled{};
+    bool cliMode{};
     bool showHelp{};
 };
 
@@ -27,8 +28,10 @@ void printUsage()
 {
     std::cerr << "Usage:\n"
         << "  NoorRay                                                     # GUI mode\n"
-        << "  NoorRay --scene <file> --spp <N> [options]                  # Render scene, mesh, or Gaussian splat\n"
+        << "  NoorRay --scene <file>                                      # Open a scene in the GUI\n"
+        << "  NoorRay --cli --scene <file> --spp <N> [options]            # Render headlessly\n"
         << "\nOptions:\n"
+        << "  --cli                Render headlessly instead of opening the GUI\n"
         << "  --output <path>      Output image path (default: output.exr)\n"
         << "  --width  <int>       Output width (default: from camera sensor or 1280)\n"
         << "  --height <int>       Output height (default: from camera sensor or 720)\n"
@@ -52,6 +55,8 @@ CliOptions parseOptions(const int argc, char* argv[])
         const std::string arg = argv[i];
         if (arg == "--help" || arg == "-h")
             options.showHelp = true;
+        else if (arg == "--cli")
+            options.cliMode = true;
         else if (arg == "--scene" || arg == "--import" || arg == "--ply")
             options.scenePath = requireValue(argc, argv, i);
         else if (arg == "--spp")
@@ -123,20 +128,19 @@ int main(const int argc, char* argv[])
 {
     try
     {
-        if (argc == 1)
-        {
-            NoorRayUi ui;
-            ui.run();
-            return 0;
-        }
-
-        const CliOptions options = parseOptions(argc, argv);
+        const CliOptions options = argc == 1 ? CliOptions{} : parseOptions(argc, argv);
         if (options.showHelp)
         {
             printUsage();
             return 0;
         }
-        runCli(options);
+        if (options.cliMode)
+            runCli(options);
+        else
+        {
+            NoorRayUi ui(options.scenePath);
+            ui.run();
+        }
         return 0;
     }
     catch (const std::exception& e)

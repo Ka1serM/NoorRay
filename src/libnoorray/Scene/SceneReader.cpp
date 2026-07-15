@@ -47,7 +47,8 @@ SensorType sensorType(const std::string& type)
 {
     if (type == "scatter_psf") return SensorType::ScatterPsf;
     if (type == "gather_psf") return SensorType::GatherPsf;
-    return SensorType::Rectangular;
+    if (type == "rectangular") return SensorType::Rectangular;
+    throw std::runtime_error("Unknown camera sensor type: " + type);
 }
 
 Material toMaterial(const nr::sceneio::MaterialFile& file)
@@ -77,18 +78,20 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
     else
         sensor = std::make_unique<RectangularSensor>();
     std::unique_ptr<Camera> camera;
-    if (file.type == "realistic")
+    if (file.projection == "realistic")
         camera = std::make_unique<RealisticCamera>(std::move(sensor));
-    else if (file.type == "rosspsf" || file.type == "hybridpsf")
+    else if (file.projection == "hybridpsf")
         camera = std::make_unique<HybridPsfCamera>(std::move(sensor));
-    else if (file.type == "thinlens")
+    else if (file.projection == "thinlens")
         camera = std::make_unique<ThinLensCamera>(std::move(sensor));
-    else if (file.type == "fisheye")
+    else if (file.projection == "fisheye")
         camera = std::make_unique<FisheyeCamera>(std::move(sensor));
-    else if (file.type == "orthographic")
+    else if (file.projection == "orthographic")
         camera = std::make_unique<OrthographicCamera>(std::move(sensor));
-    else
+    else if (file.projection == "perspective")
         camera = std::make_unique<PerspectiveCamera>(std::move(sensor));
+    else
+        throw std::runtime_error("Unknown camera projection: " + file.projection);
     if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get()))
         realistic->apertureDiameterMm = file.aperture_diameter_mm;
     else if (auto* hybrid = dynamic_cast<HybridPsfCamera*>(camera.get()))
@@ -103,6 +106,7 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
 
     camera->setFocalLengthMm(file.focal_length_mm);
     camera->setFocusDistanceCm(file.focus_distance_cm);
+    camera->exposure = file.exposure;
     camera->getSensor().setImageSensorPath(file.sensor);
     camera->getSensor().setResolution(
         std::max(file.resolution[0], 1u),
@@ -110,35 +114,49 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
     return camera;
 }
 
-void addCamera(Scene& scene, const nr::sceneio::CameraFile& file)
+CameraInstance* addCamera(Scene& scene, const nr::sceneio::ObjectFile& object)
 {
+    if (!object.camera)
+        throw std::runtime_error("Camera object is missing its camera properties");
+    const nr::sceneio::CameraFile& file = *object.camera;
     std::unique_ptr<Camera> camera = makeCamera(file);
-    if (file.type == "realistic" && !file.lens.empty() && !file.sensor.empty())
+    if (file.projection == "realistic") {
+        if (file.lens.empty() || file.sensor.empty())
+            throw std::runtime_error("Realistic camera requires lens and sensor paths");
         dynamic_cast<RealisticCamera&>(*camera).load(
             file.lens, splitPaths(file.glass_catalogs));
-    else if ((file.type == "rosspsf" || file.type == "hybridpsf")
-        && !file.lens.empty() && !file.sensor.empty()) {
+    } else if (file.projection == "hybridpsf") {
+        if (file.lens.empty() || file.sensor.empty())
+            throw std::runtime_error("Hybrid PSF camera requires lens and sensor paths");
         Sensor& sensor = camera->getSensor();
         if (!file.psf.empty())
             sensor.setPsfGridPath(file.psf);
         dynamic_cast<HybridPsfCamera&>(*camera).load(
             file.lens, splitPaths(file.glass_catalogs), file.ray_lut);
     }
-    Transform transform{toVec3(file.position), toVec3(file.rotation_euler), toVec3(file.scale)};
+    const Transform transform = toTransform(object);
     auto cameraInstance = std::make_unique<CameraInstance>(
-        std::move(camera), "Camera", transform);
+        std::move(camera), object.name, transform);
+    CameraInstance* result = cameraInstance.get();
     scene.add(std::move(cameraInstance));
+    if (file.active)
+        scene.setActiveCamera(result);
+    return result;
 }
 
 void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
 {
     const Transform transform = toTransform(object);
-    if (object.type == "gltf" || object.type == "glb") {
+    if (object.type == "camera") {
+        addCamera(scene, object);
+    } else if (object.camera) {
+        throw std::runtime_error("Only camera objects may contain camera properties");
+    } else if (object.type == "gltf" || object.type == "glb") {
         SceneImporter::ImportGltfScene(scene, object.path);
         if (SceneObject* root = scene.getActiveObject())
             root->setLocalTransform(transform);
-    } else if (object.type == "ply" || object.type == "gaussian" || object.type == "3dgs" ||
-               object.type == "splat" || object.type == "ksplat" || object.type == "spz" || object.type == "sog") {
+    } else if (object.type == "ply" || object.type == "splat" || object.type == "ksplat"
+        || object.type == "spz" || object.type == "sog") {
         SceneImporter::ImportGaussianScene(scene, object.path);
         if (SceneObject* root = scene.getActiveObject())
             root->setLocalTransform(transform);
@@ -161,8 +179,10 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
             meshIndex = scene.add(MeshAsset::CreatePlane(scene, object.name, material));
         else if (object.type == "disk")
             meshIndex = scene.add(MeshAsset::CreateDisk(scene, object.name, material));
-        else
+        else if (object.type == "sphere")
             meshIndex = scene.add(MeshAsset::CreateSphere(scene, object.name, material));
+        else
+            throw std::runtime_error("Unknown scene object type: " + object.type);
         scene.add(std::make_unique<MeshInstance>(scene, object.name, meshIndex, transform));
     }
 }
@@ -182,7 +202,7 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
 {
     nr::sceneio::SceneFile file{};
     std::string json = readTextFile(filepath);
-    constexpr glz::opts readOptions{.error_on_unknown_keys = false};
+    constexpr glz::opts readOptions{.error_on_unknown_keys = true};
     if (const auto error = glz::read<readOptions>(file, json))
         throw std::runtime_error("Failed to parse scene JSON: " + glz::format_error(error, json));
 
@@ -209,9 +229,16 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
             clampSphericalHarmonicsOrder(file.render_settings->gaussian_render_sh_degree);
     }
 
-    if (file.camera)
-        addCamera(scene, *file.camera);
+    const size_t activeCameraCount = std::ranges::count_if(file.objects,
+        [](const nr::sceneio::ObjectFile& object) {
+            return object.type == "camera" && object.camera && object.camera->active;
+        });
+    if (activeCameraCount > 1)
+        throw std::runtime_error("Scene contains more than one active camera");
 
     for (const nr::sceneio::ObjectFile& object : file.objects)
         addObject(scene, object);
+
+    if (activeCameraCount == 0)
+        scene.setActiveCamera(nullptr);
 }

@@ -188,54 +188,111 @@ void ViewportPanel::drawImageAndUpdateState() {
     isViewportHovered = ImGui::IsItemHovered();
 }
 
+void ViewportPanel::processEvent(const SDL_Event& event)
+{
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+        event.button.button == SDL_BUTTON_RIGHT) {
+        rightButtonDown = true;
+        rightButtonPressPending = true;
+        rightButtonPressX = event.button.x;
+        rightButtonPressY = event.button.y;
+        pendingMouseDeltaX = 0.f;
+        pendingMouseDeltaY = 0.f;
+    } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+               event.button.button == SDL_BUTTON_RIGHT) {
+        rightButtonDown = false;
+    } else if (event.type == SDL_EVENT_MOUSE_MOTION && rightButtonDown) {
+        pendingMouseDeltaX += event.motion.xrel;
+        pendingMouseDeltaY += event.motion.yrel;
+    } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+        rightButtonDown = false;
+        rightButtonPressPending = false;
+        pendingMouseDeltaX = 0.f;
+        pendingMouseDeltaY = 0.f;
+    }
+}
+
 void ViewportPanel::beginMouseCapture() {
     if (isCapturingMouse)
         return;
-    isCapturingMouse = true;
     SDL_GetMouseState(&oldX, &oldY);
-    window.setRelativeMouseMode(true);
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
-    // Clear any initial delta movement
-    (void)SDL_GetRelativeMouseState(nullptr, nullptr); 
+    if (!window.setRelativeMouseMode(true)) {
+        LOG_ERROR("Failed to enable relative mouse mode: " << SDL_GetError());
+        return;
+    }
+    isCapturingMouse = true;
 }
 
 void ViewportPanel::endMouseCapture() {
     if (!isCapturingMouse)
         return;
     isCapturingMouse = false;
-    window.setRelativeMouseMode(false);
-    ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    if (!window.setRelativeMouseMode(false))
+        LOG_ERROR("Failed to disable relative mouse mode: " << SDL_GetError());
     window.warpMouse(oldX, oldY);
 
     auto* camera = scene.getRenderCamera();
     if (camera && camera->getArcballActive())
         camera->setArcballActive(false);
+    pendingMouseDeltaX = 0.f;
+    pendingMouseDeltaY = 0.f;
+}
+
+void ViewportPanel::synchronizeCameraTransition()
+{
+    const uint64_t revision = scene.getActiveCameraRevision();
+    if (revision == observedCameraRevision)
+        return;
+
+    if (isCapturingMouse)
+        endMouseCapture();
+    if (auto* camera = scene.getRenderCamera())
+        camera->setArcballActive(false);
+    observedCameraRevision = revision;
+    // Discard motion accumulated for the previous camera.
+    pendingMouseDeltaX = 0.f;
+    pendingMouseDeltaY = 0.f;
+    rightButtonPressPending = false;
 }
 
 void ViewportPanel::handleInput() {
     if (!scene.getRenderCamera()) {
         if (isCapturingMouse)
             endMouseCapture();
+        rightButtonPressPending = false;
         return;
     }
 
     // Stop capturing mouse
-    if (isCapturingMouse && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+    if (isCapturingMouse &&
+        (!rightButtonDown || !window.hasInputFocus() ||
+         !window.isRelativeMouseMode())) {
+        if (auto* camera = scene.getRenderCamera(); camera &&
+            (pendingMouseDeltaX != 0.f || pendingMouseDeltaY != 0.f))
+            camera->update(pendingMouseDeltaX, pendingMouseDeltaY);
         endMouseCapture();
+        rightButtonPressPending = false;
         return; // Consume the event, don't start a new action
     }
 
-    if (!isViewportHovered)
+    if (!isViewportHovered && !rightButtonPressPending)
         return;
 
-    handleScrollZoom();
+    if (isViewportHovered)
+        handleScrollZoom();
 
-    // Start camera movement
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    // Use SDL's ordered button edge rather than ImGui's frame-delayed click edge.
+    const bool pressIsInViewport =
+        rightButtonPressX >= viewportPos.x &&
+        rightButtonPressY >= viewportPos.y &&
+        rightButtonPressX < viewportPos.x + viewportSize.x &&
+        rightButtonPressY < viewportPos.y + viewportSize.y;
+    if (rightButtonPressPending && rightButtonDown && pressIsInViewport) {
         beginMouseCapture();
         if (ImGui::IsKeyDown(ImGuiKey_LeftAlt)) // Start Arcball
             handlePositionPicking();
     }
+    rightButtonPressPending = false;
 
     // Toggle overlays
     if (ImGui::IsKeyPressed(ImGuiKey_H))
@@ -385,6 +442,8 @@ void ViewportPanel::renderToolbar() {
 void ViewportPanel::renderUi() {
     ImGui::Begin(name.c_str());
 
+    synchronizeCameraTransition();
+
     updateLayout();
 
     drawBackground();
@@ -399,11 +458,10 @@ void ViewportPanel::renderUi() {
     
     if (isCapturingMouse) {
         if (auto* camera = scene.getRenderCamera())
-        {
-            const auto [deltaX, deltaY] = window.getRelativeMouseDelta();
-            camera->update(deltaX, deltaY);
-        }
+            camera->update(pendingMouseDeltaX, pendingMouseDeltaY);
     }
+    pendingMouseDeltaX = 0.f;
+    pendingMouseDeltaY = 0.f;
     
     ImGui::End();
 }
@@ -537,6 +595,8 @@ void ViewportPanel::onComputeFinished(const vk::CommandBuffer cmd, Image& srcIma
 
 
 ViewportPanel::~ViewportPanel() {
+    if (isCapturingMouse)
+        endMouseCapture();
     if (cryptoStagingBufferMappedPtr)
         context.getDevice().unmapMemory(cryptoStagingBuffer.getMemory());
     

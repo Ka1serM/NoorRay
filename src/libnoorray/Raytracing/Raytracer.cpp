@@ -579,22 +579,25 @@ void Raytracer::updateEnvironmentCdf()
     double integral = 0.0;
     const auto& pixels = texture.getPixels();
     for (int y = 0; y < env.cdfHeight; ++y) {
-        const double sinTheta = std::sin((static_cast<double>(y) + 0.5)
-            / static_cast<double>(env.cdfHeight) * 3.14159265358979323846);
+        const double solidAngleWeight = env.mapping == EnvironmentMapping::EqualArea
+            ? 1.0 : std::sin((static_cast<double>(y) + 0.5)
+                / static_cast<double>(env.cdfHeight) * 3.14159265358979323846);
         for (int x = 0; x < env.cdfWidth; ++x) {
             const size_t offset = static_cast<size_t>(y * env.cdfWidth + x) * 4;
             integral += (0.2126 * pixels[offset] + 0.7152 * pixels[offset + 1]
-                + 0.0722 * pixels[offset + 2]) * sinTheta;
+                + 0.0722 * pixels[offset + 2]) * solidAngleWeight;
         }
     }
-    integral *= 2.0 * 3.14159265358979323846 * 3.14159265358979323846
-        / static_cast<double>(env.cdfWidth * env.cdfHeight);
+    integral *= (env.mapping == EnvironmentMapping::EqualArea
+        ? 4.0 * 3.14159265358979323846
+        : 2.0 * 3.14159265358979323846 * 3.14159265358979323846)
+            / static_cast<double>(env.cdfWidth * env.cdfHeight);
     const float colorLuminance = std::max(
         0.2126f * env.color.r + 0.7152f * env.color.g + 0.0722f * env.color.b, 0.0f);
     env.importanceWeight = static_cast<float>(integral) * colorLuminance
         * std::max(env.lightingExposureScale, 0.0f);
     const std::vector<float> cdf = Environment::computeCdf(
-        texture.getPixels().data(), texture.getWidth(), texture.getHeight());
+        texture.getPixels().data(), texture.getWidth(), texture.getHeight(), env.mapping);
     env.cdfTexture = nr::cuda::UniqueTexture::uploadFloat4(
         cdf.data(),
         texture.getWidth(),

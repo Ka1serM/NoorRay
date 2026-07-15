@@ -1,9 +1,12 @@
 ﻿#include "SceneObject.h"
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui.h>
-#include "MeshInstance.h"
 #include "Scene.h"
-#include "UI/ImGuiManager.h"
+#include "Scene/SceneObjectVisitor.h"
+
+void SceneObject::accept(SceneObjectVisitor& visitor)
+{
+    visitor.visit(*this);
+}
 
 SceneObject::SceneObject(const std::string& name, const Transform& transform)
     : name(name), transform(transform), visible(true)
@@ -44,31 +47,37 @@ void SceneObject::removeChild(const SceneObject* child) {
 }
 
 void SceneObject::setPosition(const vec3& position) {
+    if (scene) scene->synchronizeBeforeMutation();
     transform.setPosition(position);
     onTransformUpdated();
 }
 
 void SceneObject::setRotation(const quat& rotation) {
+    if (scene) scene->synchronizeBeforeMutation();
     transform.setRotation(rotation);
     onTransformUpdated();
 }
 
 void SceneObject::setRotationEuler(const vec3& rotation) {
+    if (scene) scene->synchronizeBeforeMutation();
     transform.setRotationEuler(rotation);
     onTransformUpdated();
 }
 
 void SceneObject::setScale(const vec3& scale) {
+    if (scene) scene->synchronizeBeforeMutation();
     transform.setScale(scale);
     onTransformUpdated();
 }
 
 void SceneObject::setLocalTransform(const Transform& transf) {
+    if (scene) scene->synchronizeBeforeMutation();
     transform = transf;
     onTransformUpdated();
 }
 
 void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
+    if (scene) scene->synchronizeBeforeMutation();
     if (const auto parentPtr = parent.lock()) {
         const mat4 parentWorld = parentPtr->getWorldTransform().getMatrix();
         const mat4 localMatrix = inverse(parentWorld) * worldMatrix;
@@ -79,32 +88,6 @@ void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
     onTransformUpdated();
 }
 
-
-bool SceneObject::renderUi() {
-    bool anyChanged = false;
-
-    // Name
-    ImGuiManager::tableRowLabel("Name");
-    ImGui::TextUnformatted(name.c_str());
-    
-    // Position
-    ImGuiManager::dragFloat3Row("Position", transform.getPosition(), 0.01f, [&](const vec3 v) {
-        setPosition(v); anyChanged = true;
-    });
-
-    // Rotation
-    ImGuiManager::dragFloat3Row("Rotation", transform.getRotationEuler(), 0.1f, [&](const vec3 v) {
-          setRotationEuler(v);
-        anyChanged = true;
-    });
-
-    // Scale
-    ImGuiManager::dragFloat3Row("Scale", transform.getScale(), 0.01f, [&](const vec3 v) {
-        setScale(v); anyChanged = true;
-    });
-
-    return anyChanged;
-}
 
 Transform SceneObject::getWorldTransform() const {
     mat4 worldMatrix = transform.getMatrix();

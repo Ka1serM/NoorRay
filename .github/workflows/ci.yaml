@@ -1,0 +1,37 @@
+name: CUDA CI
+
+on:
+  pull_request:
+  push:
+    branches: [gaussians, main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    # OptiX headers are distributed under NVIDIA's SDK license and GitHub's
+    # hosted runners have no NVIDIA GPU. The project runner provides both.
+    runs-on: [self-hosted, linux, x64, nvidia-gpu]
+    env:
+      NR_CUDA_ROOT: /usr/local/cuda
+      OPTIX_ROOT: ${{ vars.OPTIX_ROOT }}
+      VULKAN_SDK: ${{ vars.VULKAN_SDK }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/ci -G Ninja \
+            -DNR_CUDA_ROOT="$NR_CUDA_ROOT" \
+            -DOPTIX_ROOT="$OPTIX_ROOT" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNR_CUDA_ARCH="${{ vars.NR_CUDA_ARCH || '89' }}" \
+            -DNR_BUILD_PYTHON=OFF \
+            -DNR_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build/ci -j"$(nproc)"
+
+      - name: Test
+        run: ctest --test-dir build/ci --output-on-failure

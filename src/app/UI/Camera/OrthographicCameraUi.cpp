@@ -1,7 +1,4 @@
-#include "OrthographicCamera.h"
-
-#include <algorithm>
-#include <cmath>
+#include "Camera/OrthographicCamera.h"
 
 bool OrthographicCamera::renderUi()
 {

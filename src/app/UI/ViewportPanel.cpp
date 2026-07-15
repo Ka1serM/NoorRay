@@ -16,6 +16,24 @@
 #include "Vulkan/Viewport.h"
 #include "UI/Window.h"
 
+namespace
+{
+CameraInstance::InputState cameraInputState()
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    return {
+        .deltaTime = io.DeltaTime,
+        .accelerate = ImGui::IsKeyDown(ImGuiKey_LeftShift),
+        .forward = ImGui::IsKeyDown(ImGuiKey_W),
+        .backward = ImGui::IsKeyDown(ImGuiKey_S),
+        .left = ImGui::IsKeyDown(ImGuiKey_A),
+        .right = ImGui::IsKeyDown(ImGuiKey_D),
+        .up = ImGui::IsKeyDown(ImGuiKey_E),
+        .down = ImGui::IsKeyDown(ImGuiKey_Q),
+    };
+}
+}
+
 ViewportPanel::ViewportPanel(const std::string& name, Window& window, Context& context,
     Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition,
     const uint32_t width, const uint32_t height)
@@ -163,24 +181,9 @@ ivec2 ViewportPanel::screenToPixel() const {
 
 void ViewportPanel::drawBackground() const {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    constexpr float tileSize = 20.0f;
-    constexpr ImU32 col1 = IM_COL32(50, 50, 50, 255);
     const float x0 = viewportPos.x, y0 = viewportPos.y;
     const float x1 = viewportPos.x + viewportSize.x, y1 = viewportPos.y + viewportSize.y;
-    const int numX = static_cast<int>(viewportSize.x / tileSize) + 1;
-    const int numY = static_cast<int>(viewportSize.y / tileSize) + 1;
-
-    for (int y = 0; y < numY; y++) {
-        for (int x = 0; x < numX; x++) {
-            if ((x + y) % 2 != 0)
-                continue;
-            ImVec2 topLeft{x0 + x * tileSize, y0 + y * tileSize};
-            ImVec2 bottomRight{topLeft.x + tileSize, topLeft.y + tileSize};
-            if (bottomRight.x > x1) bottomRight.x = x1;
-            if (bottomRight.y > y1) bottomRight.y = y1;
-            drawList->AddRectFilled(topLeft, bottomRight, col1);
-        }
-    }
+    drawList->AddRectFilled({x0, y0}, {x1, y1}, IM_COL32(42, 42, 44, 255));
 }
 
 void ViewportPanel::drawImageAndUpdateState() {
@@ -188,14 +191,20 @@ void ViewportPanel::drawImageAndUpdateState() {
     isViewportHovered = ImGui::IsItemHovered();
 }
 
-void ViewportPanel::processEvent(const SDL_Event& event)
+bool ViewportPanel::processEvent(const SDL_Event& event)
 {
+    const bool wasCapturing = isCapturingMouse;
+    bool viewportPress = false;
     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
         event.button.button == SDL_BUTTON_RIGHT) {
         rightButtonDown = true;
         rightButtonPressPending = true;
         rightButtonPressX = event.button.x;
         rightButtonPressY = event.button.y;
+        viewportPress = rightButtonPressX >= viewportPos.x &&
+            rightButtonPressY >= viewportPos.y &&
+            rightButtonPressX < viewportPos.x + viewportSize.x &&
+            rightButtonPressY < viewportPos.y + viewportSize.y;
         pendingMouseDeltaX = 0.f;
         pendingMouseDeltaY = 0.f;
     } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
@@ -210,6 +219,12 @@ void ViewportPanel::processEvent(const SDL_Event& event)
         pendingMouseDeltaX = 0.f;
         pendingMouseDeltaY = 0.f;
     }
+
+    const bool mouseEvent = event.type == SDL_EVENT_MOUSE_MOTION ||
+        event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+        event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
+        event.type == SDL_EVENT_MOUSE_WHEEL;
+    return (wasCapturing && mouseEvent) || viewportPress;
 }
 
 void ViewportPanel::beginMouseCapture() {
@@ -220,6 +235,9 @@ void ViewportPanel::beginMouseCapture() {
         LOG_ERROR("Failed to enable relative mouse mode: " << SDL_GetError());
         return;
     }
+    ImGuiIO& io = ImGui::GetIO();
+    imguiMouseWasDisabled = (io.ConfigFlags & ImGuiConfigFlags_NoMouse) != 0;
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
     isCapturingMouse = true;
 }
 
@@ -230,6 +248,9 @@ void ViewportPanel::endMouseCapture() {
     if (!window.setRelativeMouseMode(false))
         LOG_ERROR("Failed to disable relative mouse mode: " << SDL_GetError());
     window.warpMouse(oldX, oldY);
+    if (!imguiMouseWasDisabled)
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    imguiMouseWasDisabled = false;
 
     auto* camera = scene.getRenderCamera();
     if (camera && camera->getArcballActive())
@@ -269,7 +290,7 @@ void ViewportPanel::handleInput() {
          !window.isRelativeMouseMode())) {
         if (auto* camera = scene.getRenderCamera(); camera &&
             (pendingMouseDeltaX != 0.f || pendingMouseDeltaY != 0.f))
-            camera->update(pendingMouseDeltaX, pendingMouseDeltaY);
+            camera->update(pendingMouseDeltaX, pendingMouseDeltaY, cameraInputState());
         endMouseCapture();
         rightButtonPressPending = false;
         return; // Consume the event, don't start a new action
@@ -458,7 +479,7 @@ void ViewportPanel::renderUi() {
     
     if (isCapturingMouse) {
         if (auto* camera = scene.getRenderCamera())
-            camera->update(pendingMouseDeltaX, pendingMouseDeltaY);
+            camera->update(pendingMouseDeltaX, pendingMouseDeltaY, cameraInputState());
     }
     pendingMouseDeltaX = 0.f;
     pendingMouseDeltaY = 0.f;

@@ -78,3 +78,48 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     }
     appendRayWarp(params.queues, 0, active, ray);
 }
+
+NR_GPU_KERNEL void generateGaussianDirectKernel(const KernelParams params)
+{
+    const uint32_t pixel = NR_GPU_LAUNCH_IDX;
+    const uint32_t total = params.frame.width * params.frame.height;
+    if (pixel >= total)
+        return;
+
+    const OwenSobolSampler sampler({params.frame.totalAccumulated, pixel});
+    const float wavelengthSample = sampler.sample1D(SampleDimension::Wavelength);
+    SampledWavelengths wl = params.scene.camera->Is<RealisticCamera>()
+        ? SampledWavelengths::sampleVisibleSingle(wavelengthSample)
+        : SampledWavelengths::sampleVisible(wavelengthSample);
+    const uint32_t x = pixel % params.frame.width;
+    const uint32_t y = pixel / params.frame.width;
+    glm::vec2 jitter(0.5f);
+    if (params.frame.frameIndex != 0)
+        jitter = sampler.sample2D(PixelSampleDimensions);
+
+    glm::vec3 origin{};
+    glm::vec3 direction{};
+    float cameraWeight = 1.0f;
+    const float nx = (static_cast<float>(x) + jitter.x)
+        / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
+    const float ny = 1.0f - (static_cast<float>(y) + jitter.y)
+        / static_cast<float>(params.frame.height) * 2.0f;
+    const bool active = params.scene.camera->Dispatch([&](const auto* camera) {
+        return camera->generateRay(origin, direction, cameraWeight, nx, ny,
+            sampler.sample2D(LensSampleDimensions), pixel, wl);
+    });
+
+    PathState state{};
+    state.wl = wl;
+    state.throughput = SampledSpectrum(cameraWeight);
+    state.cameraWeight = cameraWeight;
+    if (!active)
+        state.packedCounters |= 1u << CounterHitShift;
+    params.queues.pathStates[pixel] = state;
+
+    PathRayWorkItem ray{};
+    ray.origin = origin;
+    ray.direction = direction;
+    ray.sampleIndex = pixel;
+    appendRayWarp(params.queues, 0, active, ray);
+}

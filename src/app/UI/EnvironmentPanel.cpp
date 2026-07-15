@@ -13,52 +13,65 @@ void EnvironmentPanel::renderUi() {
 
     if (ImGui::BeginTable("Environment Table", 2, ImGuiTableFlags_SizingStretchProp))
     {
-        ImGuiManager::dragFloatRow("Intensity", environment.lightingExposure, 0.01f, 0.0f, 1000000.0f, [&](const float v) { environment.lightingExposure = v; anyChanged = true; });
+        ImGuiManager::dragFloatRow("Intensity", environment.lightingExposure, 0.01f, 0.0f, 1000000.0f, [&](const float v) {
+            scene.synchronizeBeforeMutation(); environment.lightingExposure = v; anyChanged = true;
+        });
         
         ImGuiManager::tableRowLabel("HDRI Texture");
         
         const auto& textures = scene.getTextures();
         const int oldHdriTexture = environment.textureIndex;
+        int selectedHdriTexture = oldHdriTexture;
 
-        if (environment.textureIndex >= static_cast<int>(textures.size()))
-            environment.textureIndex = -1;
+        if (selectedHdriTexture >= static_cast<int>(textures.size()))
+            selectedHdriTexture = -1;
 
         const char* comboPreview = "No Texture";
-        if (environment.textureIndex != -1)
-            comboPreview = textures[environment.textureIndex].getName().c_str();
+        if (selectedHdriTexture != -1)
+            comboPreview = textures[selectedHdriTexture].getName().c_str();
 
         if (ImGui::BeginCombo("##hdriTextureCombo", comboPreview)) {
             // Add a selectable for the "No Texture" option
-            bool isNoneSelected = (environment.textureIndex == -1);
+            bool isNoneSelected = (selectedHdriTexture == -1);
             if (ImGui::Selectable("No Texture", isNoneSelected))
-                environment.textureIndex = -1;
+                selectedHdriTexture = -1;
             if (isNoneSelected)
                 ImGui::SetItemDefaultFocus();
 
             // Add all available textures from the scene
             for (int i = 0; i < static_cast<int>(textures.size()); ++i) {
-                const bool isSelected = (environment.textureIndex == i);
+                const bool isSelected = (selectedHdriTexture == i);
                 if (ImGui::Selectable(textures[i].getName().c_str(), isSelected))
-                    environment.textureIndex = i;
+                    selectedHdriTexture = i;
                 if (isSelected)
                     ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
         }
         
-        if (oldHdriTexture != environment.textureIndex) {
+        if (oldHdriTexture != selectedHdriTexture) {
+            scene.synchronizeBeforeMutation();
+            environment.textureIndex = selectedHdriTexture;
             anyChanged = true;
             scene.setDirtyFlag(EnvironmentCdf);
         }
 
-        ImGuiManager::colorEdit3Row("HDRI Color", environment.color, [&](const vec3 v) { environment.color = v; anyChanged = true; });
+        ImGuiManager::colorEdit3Row("HDRI Color", environment.color, [&](const vec3 v) {
+            scene.synchronizeBeforeMutation(); environment.color = v; anyChanged = true;
+        });
         
         if (environment.textureIndex != -1) {
-            ImGuiManager::dragFloatRow("Visible Exposure", environment.visibleExposure, 0.01f, -100.f, 100.f, [&](const float v) { environment.visibleExposure = v; anyChanged = true; });
-            ImGuiManager::dragFloatRow("Rotation", environment.rotation, 0.1f, 0, 360, [&](const float v) { environment.rotation = v; anyChanged = true; });
+            ImGuiManager::dragFloatRow("Visible Exposure", environment.visibleExposure, 0.01f, -100.f, 100.f, [&](const float v) {
+                scene.synchronizeBeforeMutation(); environment.visibleExposure = v; anyChanged = true;
+            });
+            ImGuiManager::dragFloatRow("Rotation", environment.rotation, 0.1f, 0, 360, [&](const float v) {
+                scene.synchronizeBeforeMutation(); environment.rotation = v; anyChanged = true;
+            });
         }
 
-        ImGuiManager::checkboxRow("Visible", environment.visible, [&](const bool v) { environment.visible = v; anyChanged = true; });
+        ImGuiManager::checkboxRow("Visible", environment.visible, [&](const bool v) {
+            scene.synchronizeBeforeMutation(); environment.visible = v; anyChanged = true;
+        });
         ImGui::EndTable();
     }
     

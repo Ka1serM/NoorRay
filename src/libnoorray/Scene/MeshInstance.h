@@ -13,11 +13,12 @@ public:
     MeshInstance(Scene& scene, const std::string& name, uint32_t meshIndex, const Transform& transf);
     MeshInstance(const MeshInstance& other);
     
-    bool renderUi() override;
 
     std::unique_ptr<SceneObject> clone() const override;
+    void accept(SceneObjectVisitor& visitor) override;
 
     uint32_t getMeshIndex() const { return meshIndex; }
+    MeshAsset& getMeshAsset() { return scene->getMeshAsset(meshIndex); }
     const MeshAsset& getMeshAsset() const { return scene->getMeshAsset(meshIndex); }
     void onTransformUpdated() override;
 };

@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 #include <type_traits>
+#include <utility>
 
 #include "CUDA/Unique/SharedBuffer.h"
 
@@ -11,42 +13,34 @@ class Context;
 namespace nr::cuda
 {
 
-// A growable array of trivially-copyable elements backed by a single UniqueSharedBuffer.
-// CPU code indexes it like a normal vector (data() / operator[]); GPU kernels read the
-// same bytes through devicePointer(); Vulkan can bind getBuffer() as a descriptor.
-// All three views stay in sync without any copy, since the backing memory is
-// host-coherent and shared via an imported Vulkan allocation.
 template <typename T>
 class SharedVector
 {
-    static_assert(std::is_trivially_copyable_v<T>,
-        "SharedVector only supports trivially-copyable GPU-resident types");
+    static_assert(std::is_trivially_copyable_v<T>);
 
 public:
     SharedVector() = default;
-    explicit SharedVector(Context& context,
+    explicit SharedVector(
+        Context& context,
         vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorageBuffer)
-        : context(&context), usage(usage)
+        : context_(&context), usage_(usage)
     {
     }
 
-    T* data() { return static_cast<T*>(buffer.getHostPointer()); }
-    const T* data() const { return static_cast<const T*>(buffer.getHostPointer()); }
-    T* devicePointer() { return static_cast<T*>(buffer.getDevicePointer()); }
-    const T* devicePointer() const { return static_cast<const T*>(buffer.getDevicePointer()); }
+    T* data() { return static_cast<T*>(buffer_.hostPointer()); }
+    const T* data() const { return static_cast<const T*>(buffer_.hostPointer()); }
+    T* devicePointer() { return static_cast<T*>(buffer_.cudaPointer()); }
+    const T* devicePointer() const { return static_cast<const T*>(buffer_.cudaPointer()); }
 
-    T& operator[](std::size_t i) { return data()[i]; }
-    const T& operator[](std::size_t i) const { return data()[i]; }
-    T& front() { return data()[0]; }
+    T& operator[](std::size_t index) { return data()[index]; }
+    const T& operator[](std::size_t index) const { return data()[index]; }
     T& back() { return data()[size_ - 1]; }
     const T& back() const { return data()[size_ - 1]; }
 
     std::size_t size() const { return size_; }
     std::size_t capacity() const { return capacity_; }
     bool empty() const { return size_ == 0; }
-
-    Buffer& getBuffer() { return buffer.getBuffer(); }
-    const Buffer& getBuffer() const { return buffer.getBuffer(); }
+    const UniqueSharedBuffer& buffer() const { return buffer_; }
 
     void clear() { size_ = 0; }
 
@@ -54,11 +48,14 @@ public:
     {
         if (newCapacity <= capacity_)
             return;
+        if (!context_)
+            throw std::logic_error("SharedVector has no Context");
+
         UniqueSharedBuffer newBuffer;
-        newBuffer.create(*context, newCapacity * sizeof(T), usage);
-        if (size_ > 0)
-            std::memcpy(newBuffer.getHostPointer(), buffer.getHostPointer(), size_ * sizeof(T));
-        buffer = std::move(newBuffer);
+        newBuffer.create(*context_, newCapacity * sizeof(T), usage_);
+        if (size_ != 0)
+            std::memcpy(newBuffer.hostPointer(), buffer_.hostPointer(), size_ * sizeof(T));
+        buffer_ = std::move(newBuffer);
         capacity_ = newCapacity;
     }
 
@@ -66,18 +63,17 @@ public:
     {
         if (size_ == capacity_)
             reserve(capacity_ == 0 ? 4 : capacity_ * 2);
-        T& slot = data()[size_];
-        slot = value;
-        ++size_;
-        return slot;
+        T& result = data()[size_++];
+        result = value;
+        return result;
     }
 
     void pop_back() { --size_; }
 
 private:
-    Context* context{};
-    vk::BufferUsageFlags usage{vk::BufferUsageFlagBits::eStorageBuffer};
-    UniqueSharedBuffer buffer;
+    Context* context_{};
+    vk::BufferUsageFlags usage_{vk::BufferUsageFlagBits::eStorageBuffer};
+    UniqueSharedBuffer buffer_;
     std::size_t size_{};
     std::size_t capacity_{};
 };

@@ -1,10 +1,9 @@
 #pragma once
 
-#include <utility>
-
 #include <cuda_runtime_api.h>
 
 #include "CUDA/Unique/Check.h"
+#include "CUDA/Unique/Handle.h"
 
 namespace nr::cuda
 {
@@ -13,44 +12,30 @@ class UniqueStream
 {
 public:
     UniqueStream() = default;
-    ~UniqueStream() noexcept { reset(); }
+    ~UniqueStream() noexcept = default;
 
     UniqueStream(const UniqueStream&) = delete;
     UniqueStream& operator=(const UniqueStream&) = delete;
 
-    UniqueStream(UniqueStream&& other) noexcept
-        : stream(std::exchange(other.stream, nullptr))
-    {
-    }
-
-    UniqueStream& operator=(UniqueStream&& other) noexcept
-    {
-        if (this != &other)
-        {
-            reset();
-            stream = std::exchange(other.stream, nullptr);
-        }
-        return *this;
-    }
+    UniqueStream(UniqueStream&&) noexcept = default;
+    UniqueStream& operator=(UniqueStream&&) noexcept = default;
 
     void createWithPriority(unsigned int flags, int priority)
     {
         reset();
-        NR_CUDA_UNIQUE_CHECK(cudaStreamCreateWithPriority(&stream, flags, priority));
+        NR_CUDA_UNIQUE_CHECK(cudaStreamCreateWithPriority(stream.put(), flags, priority));
     }
 
     void reset() noexcept
     {
-        if (stream != nullptr)
-            cudaStreamDestroy(stream);
-        stream = nullptr;
+        stream.reset();
     }
 
-    cudaStream_t get() const noexcept { return stream; }
-    explicit operator bool() const noexcept { return stream != nullptr; }
+    cudaStream_t get() const noexcept { return stream.get(); }
+    explicit operator bool() const noexcept { return static_cast<bool>(stream); }
 
 private:
-    cudaStream_t stream{};
+    UniqueHandle<cudaStream_t, cudaStreamDestroy> stream;
 };
 
 }

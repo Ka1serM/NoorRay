@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include "Camera/CameraInstance.h"
 #include "CUDA/rstd/Allocator.h"
-#include "Vulkan/Texture.h"
+#include "Scene/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -110,22 +110,22 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                      static_cast<float>(ext.Get("ior").Get<double>()));
         }
 
-        auto addTexture = [&](int textureIndex, int& materialIndex, vk::Format fmt) {
+        auto addTexture = [&](int textureIndex, int& materialIndex, TextureEncoding encoding) {
             if (textureIndex < 0) return;
             const tinygltf::Texture& tex = model.textures[textureIndex];
             if (tex.source < 0) return;
             const tinygltf::Image& image = model.images[tex.source];
 
             // Images named *_linear contain already-linear data; skip sRGB decode.
-            if (fmt == vk::Format::eR8G8B8A8Srgb &&
+            if (encoding == TextureEncoding::Srgb8 &&
                 (image.name.find("_linear") != std::string::npos ||
                  image.uri.find("_linear")   != std::string::npos))
-                fmt = vk::Format::eR8G8B8A8Unorm;
+                encoding = TextureEncoding::Linear8;
 
             if (!image.uri.empty()) {
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
-                    scene.add(Texture(scene.getContext(), texturePath.string(), fmt));
+                    scene.add(Texture(texturePath.string(), encoding));
                     materialIndex = static_cast<int>(scene.getTextures().size() - 1);
                 } else {
                     LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
@@ -134,8 +134,8 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 const std::string texName = image.name.empty()
                     ? "texture_" + std::to_string(textureIndex)
                     : image.name;
-                scene.add(Texture(scene.getContext(), texName,
-                    image.image.data(), image.width, image.height, fmt));
+                scene.add(Texture(texName,
+                    image.image.data(), image.width, image.height, encoding));
                 materialIndex = static_cast<int>(scene.getTextures().size() - 1);
             } else {
                 LOG_ERROR("Warning: Embedded texture has no decoded data");
@@ -143,13 +143,13 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         };
 
         addTexture(pbr.baseColorTexture.index, material.albedoIndex,
-                   vk::Format::eR8G8B8A8Srgb);
+                   TextureEncoding::Srgb8);
         addTexture(pbr.metallicRoughnessTexture.index, material.roughnessIndex,
-                   vk::Format::eR8G8B8A8Unorm);
+                   TextureEncoding::Linear8);
         addTexture(mat.normalTexture.index, material.normalIndex,
-                   vk::Format::eR8G8B8A8Unorm);
+                   TextureEncoding::Linear8);
         addTexture(mat.emissiveTexture.index, material.emissionIndex,
-                   vk::Format::eR8G8B8A8Srgb);
+                   TextureEncoding::Srgb8);
 
         globalMaterials.push_back(material);
     }
@@ -411,15 +411,15 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
         material.emissionStrength = (length2(material.emission) > 1e-6f) ? 1.0f : 0.0f;
 
         // Lambda to safely find and load a texture
-        auto addTexture = [&](const std::string& texname, int& index, vk::Format fmt) {
+        auto addTexture = [&](const std::string& texname, int& index, TextureEncoding encoding) {
             if (!texname.empty()) {
                 // Images named *_linear contain already-linear data; skip sRGB decode.
-                if (fmt == vk::Format::eR8G8B8A8Srgb &&
+                if (encoding == TextureEncoding::Srgb8 &&
                     texname.find("_linear") != std::string::npos)
-                    fmt = vk::Format::eR8G8B8A8Unorm;
+                    encoding = TextureEncoding::Linear8;
                 const std::filesystem::path texturePath = objDir / texname;
                 if (std::filesystem::exists(texturePath)) {
-                    scene.add(Texture(scene.getContext(), texturePath.string(), fmt));
+                    scene.add(Texture(texturePath.string(), encoding));
                     index = static_cast<int>(scene.getTextures().size() - 1);
                 } else
                    LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
@@ -427,17 +427,17 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
         };
 
         addTexture(mat.diffuse_texname, material.albedoIndex,
-                   vk::Format::eR8G8B8A8Srgb);
+                   TextureEncoding::Srgb8);
         addTexture(mat.specular_texname, material.specularIndex,
-                   vk::Format::eR8G8B8A8Srgb);
+                   TextureEncoding::Srgb8);
         addTexture(mat.roughness_texname, material.roughnessIndex,
-                   vk::Format::eR8G8B8A8Unorm);
+                   TextureEncoding::Linear8);
         addTexture(mat.normal_texname, material.normalIndex,
-                   vk::Format::eR8G8B8A8Unorm);
+                   TextureEncoding::Linear8);
         addTexture(mat.alpha_texname, material.opacityIndex,
-                   vk::Format::eR8G8B8A8Unorm);
+                   TextureEncoding::Linear8);
         addTexture(mat.emissive_texname, material.emissionIndex,
-                   vk::Format::eR8G8B8A8Srgb);
+                   TextureEncoding::Srgb8);
 
         globalMaterials.push_back(material);
     }
@@ -649,7 +649,7 @@ void SceneImporter::ImportFile(Scene& scene, const std::string& filepath)
     } else if (path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".jpeg") ||
                path.ends_with(".bmp") || path.ends_with(".tga") || path.ends_with(".psd") ||
                path.ends_with(".gif") || path.ends_with(".hdr") || path.ends_with(".pic")) {
-        scene.add(Texture(scene.getContext(), filepath));
+        scene.add(Texture(filepath));
     } else {
         throw std::runtime_error("Unsupported import file type: " + filepath);
     }

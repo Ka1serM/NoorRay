@@ -9,6 +9,7 @@
 #include "Mesh/Transform.h"
 
 class Scene;
+class SceneObjectVisitor;
 
 class SceneObject : public Inspectable, public std::enable_shared_from_this<SceneObject> {
     friend class Scene;
@@ -31,11 +32,12 @@ public:
     SceneObject(Scene& scene, const std::string& name, const Transform& transform);
     SceneObject(const SceneObject& other);
     virtual std::unique_ptr<SceneObject> clone() const;
+    virtual void accept(SceneObjectVisitor& visitor);
 
     uint64_t getId() const { return id; }
+    Scene* getScene() const { return scene; }
     const std::string& getName() const override { return name; }
     std::string getType() const override { return "Scene Object"; }
-    bool renderUi() override;
 
     bool isVisible() const { return visible; }
     void setVisible(const bool v) { visible = v; }

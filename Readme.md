@@ -6,7 +6,7 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 ### Features
 
-- **Multiple Backends:** Implements path tracing with both **Vulkan hardware-accelerated ray tracing** (via the official Vulkan ray tracing extension) and a compute-shader fallback.  
+- **CUDA/OptiX Backend:** Implements wavefront path tracing with CUDA 13 and OptiX 9.1, with Vulkan/CUDA external-memory interop for the interactive viewport.
 
 - **Path Tracing with MIS:** Uses **unidirectional path tracing** with **multiple importance sampling (MIS)**. Supports combined **Lambertian diffuse** and **GGX specular** materials.  
 
@@ -16,7 +16,7 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 - **ImGui Interface:** Provides a user interface to edit scene parameters, including camera settings, scene graph, and material properties in real-time.  
 
-- **Cross-Platform:** Supports **Windows, MacOS, and Linux**.
+- **Platform:** The current backend targets Linux with an NVIDIA GPU. The former macOS and Windows release paths were removed when CUDA/OptiX became mandatory.
 
 ### Build Instructions
 
@@ -102,6 +102,19 @@ PYTHONPATH="$PWD/build/release/lib" \
 
 The extension is copied to `build/release/lib/pynoorray/` and its filename must
 contain the `cpython-312` ABI suffix when used with this environment.
+
+Build and run the test suite:
+
+```bash
+cmake -S . -B build/release \
+  -DNR_CUDA_ROOT=/usr/local/cuda \
+  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
+  -DNR_BUILD_TESTS=ON
+cmake --build build/release -j"$(nproc)"
+ctest --test-dir build/release --output-on-failure
+```
+
+Tests are enabled by default. Set `NR_BUILD_TESTS=OFF` for a production-only build.
 
 
 ### Shader Compilation

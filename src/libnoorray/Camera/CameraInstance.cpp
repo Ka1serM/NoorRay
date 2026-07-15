@@ -5,14 +5,19 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
-#include <imgui.h>
+#include "Scene/SceneObjectVisitor.h"
 #include "Camera/RealisticCamera.h"
+
+void CameraInstance::accept(SceneObjectVisitor& visitor)
+{
+    visitor.visit(static_cast<SceneObject&>(*this));
+    visitor.visit(*this);
+}
 #include "Camera/HybridPsfCamera.h"
 #include "CUDA/ManagedMemory.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/quaternion.hpp"
 #include "Scene/Scene.h"
-#include "UI/ImGuiManager.h"
 
 // ── unified-memory allocation ─────────────────────────────────────────────────
 
@@ -200,22 +205,20 @@ void CameraInstance::setArcballPivot(const vec3& pivot)
 
 // ── update (input) ───────────────────────────────────────────────────────────
 
-void CameraInstance::update(const float dx, const float dy)
+void CameraInstance::update(const float dx, const float dy, const InputState& input)
 {
     const vec3 oldPosition = getPosition();
     const quat oldRotation = getRotation();
 
-    ImGuiIO& io = ImGui::GetIO();
-
     if (arcballMode) {
         vec3 position    = getPosition();
         quat orientation = getRotation();
-        float moveSpeed  = io.DeltaTime * 5.f;
-        if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) moveSpeed *= 10.f;
+        float moveSpeed  = input.deltaTime * 5.f;
+        if (input.accelerate) moveSpeed *= 10.f;
 
         const vec3 dirToCamera = normalize(position - arcballPivot);
-        if (ImGui::IsKeyDown(ImGuiKey_W)) position -= dirToCamera * moveSpeed;
-        if (ImGui::IsKeyDown(ImGuiKey_S)) position += dirToCamera * moveSpeed;
+        if (input.forward) position -= dirToCamera * moveSpeed;
+        if (input.backward) position += dirToCamera * moveSpeed;
 
         constexpr float sensitivity = 0.004f;
         const quat yawQuat   = angleAxis(dx * sensitivity, WorldUp);
@@ -234,75 +237,23 @@ void CameraInstance::update(const float dx, const float dy)
         const quat newRot    = normalize(yawQuat * pitchQuat * rot);
         setRotation(newRot);
 
-        float speed = io.DeltaTime * 5.f;
-        if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) speed *= 10.f;
+        float speed = input.deltaTime * 5.f;
+        if (input.accelerate) speed *= 10.f;
 
         vec3 position   = getPosition();
         const vec3 fwd  = normalize(newRot * LocalForward);
         const vec3 up   = normalize(newRot * LocalUp);
         const vec3 rgt  = normalize(cross(fwd, up));
 
-        if (ImGui::IsKeyDown(ImGuiKey_W)) position += fwd * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_S)) position -= fwd * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_A)) position -= rgt * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_D)) position += rgt * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_E)) position += up  * speed;
-        if (ImGui::IsKeyDown(ImGuiKey_Q)) position -= up  * speed;
+        if (input.forward) position += fwd * speed;
+        if (input.backward) position -= fwd * speed;
+        if (input.left) position -= rgt * speed;
+        if (input.right) position += rgt * speed;
+        if (input.up) position += up  * speed;
+        if (input.down) position -= up  * speed;
         setPosition(position);
     }
 
     if (oldPosition != getPosition() || oldRotation != getRotation())
         markDirty();
-}
-
-// ── UI ────────────────────────────────────────────────────────────────────────
-
-bool CameraInstance::renderUi()
-{
-    const bool instanceChanged = SceneObject::renderUi();
-
-    ImGuiManager::tableRowLabel("Camera");
-    const std::string cameraLabel = std::string(getProjectionName()) + "###CameraProperties";
-    if (!ImGui::TreeNodeEx(cameraLabel.c_str(), ImGuiTreeNodeFlags_Framed))
-        return instanceChanged;
-
-    bool changed = false;
-    if (ImGui::BeginTable("CameraTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        ImGuiManager::tableRowLabel("Type");
-        static const CameraProjectionType projectionTypes[] = {
-            CameraProjectionType::Perspective, CameraProjectionType::ThinLens,
-            CameraProjectionType::Realistic,   CameraProjectionType::HybridPsf,
-            CameraProjectionType::Orthographic, CameraProjectionType::Fisheye,
-        };
-        static const char* projectionNames[] = {
-            "Perspective", "Thin Lens", "Realistic", "Hybrid PSF", "Orthographic", "Fisheye"};
-        constexpr int projectionCount = 6;
-        int projectionIndex = 0;
-        for (int i = 0; i < projectionCount; ++i)
-            if (projectionTypes[i] == getProjectionType()) { projectionIndex = i; break; }
-        if (ImGui::Combo("##CameraProjection", &projectionIndex, projectionNames, projectionCount)) {
-            switchTo(projectionTypes[projectionIndex]);
-            changed = true;
-        }
-
-        changed |= camera->DispatchCPU([](auto* cam) { return cam->renderUi(); });
-        SensorType requestedSensorType{};
-        if (camera->getSensor().consumeRequestedType(requestedSensorType)) {
-            const Sensor& currentSensor = camera->getSensor();
-            if (requestedSensorType == SensorType::ScatterPsf)
-                camera->setSensor(std::make_unique<ScatterPsfSensor>(currentSensor));
-            else if (requestedSensorType == SensorType::GatherPsf)
-                camera->setSensor(std::make_unique<GatherPsfSensor>(currentSensor));
-            else
-                camera->setSensor(std::make_unique<RectangularSensor>(currentSensor));
-            changed = true;
-        }
-        ImGui::EndTable();
-    }
-    ImGui::TreePop();
-
-    if (changed) {
-        if (scene) scene->setDirtyFlag(Accumulation);
-    }
-    return instanceChanged || changed;
 }

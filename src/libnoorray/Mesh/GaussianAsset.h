@@ -38,7 +38,6 @@ public:
 
     const std::string& getName() const override { return name; }
     std::string getType() const override { return "Gaussian Asset"; }
-    bool renderUi() override;
 
     const nr::rstd::vector<Gaussian>& getGaussians() const { return gaussians; }
     nr::rstd::vector<Gaussian>& getGaussians() { return gaussians; }

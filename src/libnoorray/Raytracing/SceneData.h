@@ -34,6 +34,7 @@ struct GpuSceneData
     // Jakob & Hanika sRGB→spectrum table (64^3, 9 MB on device).
     const float* spectrumTableScale{};   // 64 floats (z-nodes, non-uniform)
     const float* spectrumTableCoeffs{};  // float[3][64][64][64][3]
+    cudaTextureObject_t spectrumTableTexture{}; // hardware-filtered float4 coefficient LUT
     const float* d65{};                  // CIE D65, 300--830 nm at 5 nm
     // CIE 1931 2-degree CMFs (471 floats each, device pointers).
     const float* cieX{};
@@ -61,7 +62,7 @@ struct GpuFrameSettings
     uint32_t totalAccumulated{};   // total samples accumulated so far (blend weight)
     uint32_t visibilityMask{SceneVisibility};
     float cutoffDistanceSq{};      // cutoff sigma squared, precomputed on host
-    int frameIndex{};              // pushData.frame; 0 while resetAccumulation keeps retriggering (camera in motion)
+    uint32_t frameIndex{};         // 0 while accumulation is being reset (for example, camera motion)
 };
 
 struct KernelParams

@@ -21,6 +21,8 @@
 #include "CUDA/Unique/OptixPipeline.h"
 #include "CUDA/Unique/OptixProgramGroup.h"
 #include "Raytracing/SceneData.h"
+#include "Raytracing/GpuSceneCache.h"
+#include "Raytracing/OptixDenoiserState.h"
 #include "Raytracing/Tlas.h"
 
 class CameraInstance;
@@ -28,18 +30,12 @@ class Context;
 class Image;
 class Scene;
 
-struct FrameInfo
+struct InteropFrame
 {
     uint32_t bufferIndex{};
     uint64_t readyValue{};
     vk::Semaphore renderReadySemaphore{};
     vk::Semaphore bufferReleasedSemaphore{};
-};
-
-struct PushData
-{
-    int frame{};
-    uint32_t accumulatedSampleOffset{};
 };
 
 class Raytracer
@@ -52,7 +48,7 @@ public:
     Raytracer& operator=(const Raytracer&) = delete;
 
     void resize(uint32_t width, uint32_t height);
-    void renderFrame(const PushData& pushData);
+    void renderFrame(uint32_t frameIndex = 0, uint32_t accumulatedSamples = 0);
 
     void setAovEnabled(bool enabled) {
         if (enabled && !aovEnabled)
@@ -81,8 +77,9 @@ public:
     void renderGaussianTrainBackward(const GaussianTrainParams& params,
         uint32_t width, uint32_t height);
 
-    FrameInfo getFrameInfo() const;
+    InteropFrame getInteropFrame() const;
     bool isRenderInFlight() const;
+    void waitForRender() const;
     bool isFrameReady() const;
     float getGpuTimeMs();
     float getAverageNoiseVariance() const;
@@ -132,18 +129,15 @@ private:
     nr::cuda::UniqueAsyncDeviceBuffer accumulationBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer noiseMomentsBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer noiseVarianceSumBuffer;
-    nr::cuda::UniqueAsyncDeviceBuffer denoiserStateBuffer;
-    nr::cuda::UniqueAsyncDeviceBuffer denoiserScratchBuffer;
-    nr::cuda::UniqueAsyncDeviceBuffer denoiserOutputBuffer;
-    nr::cuda::UniqueAsyncDeviceBuffer denoiserIntensityBuffer;
     nr::cuda::UniqueDeviceBuffer spectrumTableScaleDevice;
     nr::cuda::UniqueDeviceBuffer spectrumTableCoeffsDevice;
+    nr::cuda::UniqueTexture spectrumTableTexture;
     nr::cuda::UniqueDeviceBuffer d65Device;
     nr::cuda::UniqueDeviceBuffer cieXDevice;
     nr::cuda::UniqueDeviceBuffer cieYDevice;
     nr::cuda::UniqueDeviceBuffer cieZDevice;
     nr::openpbr::EnergyLutStorage openPbrLutStorage;
-    GpuSceneData gpuScene{};
+    GpuSceneCache gpuCache;
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};
     bool aovStale{true};
@@ -158,11 +152,7 @@ private:
     float* m_noiseVarianceSumHost{};
     uint32_t m_noiseResultSampleCount{};
     KernelStats kernelStats;
-    OptixDenoiser optixDenoiser{};
-    uint32_t denoiserWidth{};
-    uint32_t denoiserHeight{};
-    size_t denoiserStateSize{};
-    size_t denoiserScratchSize{};
+    OptixDenoiserState denoiser;
     nr::cuda::UniqueDeviceBuffer optixLaunchParamsDevice;
 
     // OptiX state
@@ -198,10 +188,10 @@ private:
     void freeQueues() noexcept;
     void freeSceneData() noexcept;
     void launchGenerate(const KernelParams& params, cudaStream_t stream) const;
+    void launchGenerateGaussianDirect(const KernelParams& params, cudaStream_t stream) const;
     void launchFinalize(const KernelParams& params, cudaStream_t stream) const;
     void launchNoiseReduction(const KernelParams& params, cudaStream_t stream) const;
     void launchDenoiser(const KernelParams& params, cudaStream_t stream);
-    void ensureDenoiser();
     void launchResolveScatterPsf(const KernelParams& params, cudaStream_t stream) const;
     void launchApplyGatherPsf(const KernelParams& params, cudaStream_t stream) const;
     void prepareSensorFrame(Sensor& sensor, KernelParams& params, bool resetAccumulation);

@@ -122,6 +122,94 @@ NR_CPU_GPU inline void rgbLookupCoeffs(
                             lerp(dx, co(0,1,1,2), co(1,1,1,2))));
 }
 
+#if defined(NR_GPU_CODE)
+NR_GPU inline void rgbLookupCoeffsTexture(
+    glm::vec3 rgb,
+    const float* __restrict__ scale,
+    const cudaTextureObject_t texture,
+    float& c0, float& c1, float& c2)
+{
+    rgb.x = fminf(fmaxf(rgb.x, 0.f), 1.f);
+    rgb.y = fminf(fmaxf(rgb.y, 0.f), 1.f);
+    rgb.z = fminf(fmaxf(rgb.z, 0.f), 1.f);
+    if (rgb.x == rgb.y && rgb.y == rgb.z)
+    {
+        const float v = rgb.x;
+        const float denom = v * (1.f - v);
+        c0 = c1 = 0.f;
+        c2 = denom < 1e-10f
+            ? (v <= 0.5f ? -1e30f : 1e30f)
+            : (v - 0.5f) / sqrtf(denom);
+        return;
+    }
+
+    int maxc;
+    if (rgb.x > rgb.y) maxc = rgb.x > rgb.z ? 0 : 2;
+    else maxc = rgb.y > rgb.z ? 1 : 2;
+    const float z = maxc == 0 ? rgb.x : maxc == 1 ? rgb.y : rgb.z;
+    const float xComponent = maxc == 0 ? rgb.y : maxc == 1 ? rgb.z : rgb.x;
+    const float yComponent = maxc == 0 ? rgb.z : maxc == 1 ? rgb.x : rgb.y;
+    const float x = xComponent * (NrRgbSpecRes - 1) / z;
+    const float y = yComponent * (NrRgbSpecRes - 1) / z;
+    const int zi = rgbFindInterval(scale, z);
+    const float dz = (z - scale[zi]) / (scale[zi + 1] - scale[zi]);
+    const float4 coefficients = tex3D<float4>(texture,
+        x + 0.5f, y + 0.5f,
+        static_cast<float>(maxc * NrRgbSpecRes + zi) + dz + 0.5f);
+    c0 = coefficients.x;
+    c1 = coefficients.y;
+    c2 = coefficients.z;
+}
+
+NR_GPU inline SampledSpectrum rgbAlbedoToSpectrumTexture(
+    const glm::vec3 rgb,
+    const SampledWavelengths& wl,
+    const float* __restrict__ scale,
+    const cudaTextureObject_t texture)
+{
+    float c0, c1, c2;
+    rgbLookupCoeffsTexture(rgb, scale, texture, c0, c1, c2);
+    SampledSpectrum result;
+    if (wl.secondaryTerminated())
+    {
+        result.values[0] = rgbSigmoidEval(c0, c1, c2, wl.lambda[0]);
+        return result;
+    }
+    for (int i = 0; i < NrSpectrumSamples; ++i)
+        result.values[i] = rgbSigmoidEval(c0, c1, c2, wl.lambda[i]);
+    return result;
+}
+
+NR_GPU inline SampledSpectrum rgbIlluminantToSpectrumTexture(
+    const glm::vec3 rgb,
+    const SampledWavelengths& wl,
+    const float* __restrict__ scale,
+    const cudaTextureObject_t texture,
+    const float* __restrict__ d65)
+{
+    const float maxComp = fmaxf(rgb.x, fmaxf(rgb.y, rgb.z));
+    if (maxComp <= 0.f)
+        return SampledSpectrum(0.f);
+    const float multiplier = 2.f * maxComp;
+    float c0, c1, c2;
+    rgbLookupCoeffsTexture(rgb / multiplier, scale, texture, c0, c1, c2);
+    SampledSpectrum result;
+    const int sampleCount = wl.secondaryTerminated() ? 1 : NrSpectrumSamples;
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        const float offset = (wl.lambda[i] - 300.f) * 0.2f;
+        const int index = static_cast<int>(offset) < NrD65Samples - 2
+            ? static_cast<int>(offset) : NrD65Samples - 2;
+        const float t = offset - static_cast<float>(index);
+        const float illuminant = (d65[index] + t * (d65[index + 1] - d65[index]))
+            * NrD65Normalization;
+        result.values[i] = multiplier * rgbSigmoidEval(c0, c1, c2, wl.lambda[i])
+            * illuminant;
+    }
+    return result;
+}
+#endif
+
 // ── Public conversion functions ────────────────────────────────────────────
 
 // Reflectance spectrum for albedo (rgb in [0,1]).

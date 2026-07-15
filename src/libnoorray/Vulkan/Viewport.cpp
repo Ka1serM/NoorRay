@@ -1,5 +1,4 @@
 #include "Viewport.h"
-#include <cstring>
 #include <iostream>
 
 #include "Globals.h"
@@ -40,7 +39,8 @@ Viewport::Viewport(Context& context, const uint32_t width, const uint32_t height
   outputImage(context, width, height, outputImageFormat,
       vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
       vk::ImageUsageFlagBits::eColorAttachment |
-      vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst)
+      vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst),
+  billboards(context)
 {
     shaderModule = context.getDevice().createShaderModuleUnique(
         {{}, noorRayViewportSpvLength, reinterpret_cast<const uint32_t*>(noorRayViewportSpv)});
@@ -186,17 +186,16 @@ void Viewport::createBillboardPipeline()
 
 void Viewport::reserveBillboards(const uint32_t capacity)
 {
-    if (capacity <= billboardCapacity)
+    if (capacity <= billboards.capacity())
         return;
 
     // The descriptor set may still be referenced by an in-flight command buffer from
     // a previous frame; growth is rare (only when the light count exceeds the current
     // capacity), so a wait here is cheap insurance against rewriting a live binding.
-    if (billboardCapacity > 0)
+    if (billboards.capacity() > 0)
         context.getDevice().waitIdle();
 
-    billboardBuffer = Buffer(context, Buffer::Type::Storage, capacity * sizeof(ViewportBillboard));
-    billboardCapacity = capacity;
+    billboards.reserve(capacity);
     writeBillboardDescriptor();
 }
 
@@ -206,28 +205,33 @@ void Viewport::writeBillboardDescriptor()
         .setDstSet(billboardDescriptorSet.get())
         .setDstBinding(0)
         .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-        .setBufferInfo(billboardBuffer.getDescriptorInfo())
+        .setBufferInfo(billboards.buffer().descriptorInfo())
         .setDescriptorCount(1);
     context.getDevice().updateDescriptorSets(write, {});
 }
 
 void Viewport::updateBillboards(const Scene& scene)
 {
-    std::vector<ViewportBillboard> entries;
+    if (observedLightRevision == scene.getLightRevision())
+        return;
+
+    const uint32_t lightCount = scene.getPointLightCount()
+        + scene.getSpotLightCount()
+        + scene.getRectLightCount()
+        + scene.getDirectionalLightCount();
+    reserveBillboards(std::max(1u, lightCount));
+    billboards.clear();
     for (const auto& obj : scene.getSceneObjects())
     {
         if (const auto* light = dynamic_cast<LightInstance*>(obj.get()))
         {
-            entries.push_back(ViewportBillboard{
+            billboards.push_back(ViewportBillboard{
                 glm::vec4(light->getWorldTransform().getPosition(), static_cast<float>(light->lightType)),
                 glm::vec4(light->getColor(), 1.0f)});
         }
     }
-
-    reserveBillboards(entries.empty() ? 1 : static_cast<uint32_t>(entries.size()));
-    if (!entries.empty())
-        std::memcpy(billboardBuffer.getMappedData(), entries.data(), entries.size() * sizeof(ViewportBillboard));
-    billboardCount = static_cast<uint32_t>(entries.size());
+    billboardCount = static_cast<uint32_t>(billboards.size());
+    observedLightRevision = scene.getLightRevision();
 }
 
 Viewport::~Viewport()

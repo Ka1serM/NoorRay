@@ -26,7 +26,7 @@
 #include "Scene/MeshInstance.h"
 #include "Scene/PbrtParser.h"
 #include "Scene/Scene.h"
-#include "Vulkan/Texture.h"
+#include "Scene/Texture.h"
 #include "libross/imaging/cameralens/lenssystemio/CameraLensSystemReader.h"
 #include "libross/imaging/cameralens/raytracing/hyperfocaldistance/HyperFocalDistanceDeterminator.h"
 #include "libross/imaging/imagesensor/ImageSensorReader.h"
@@ -136,6 +136,9 @@ OpticalSettings opticalSettings(const Command& command, const std::string& lensP
     result.apertureDiameterMm = std::max(0.f, lens.getApertureRadius() * 20.f);
 
     if (focusAtHyperfocal) {
+        if (sensorPath.empty())
+            throw std::runtime_error(
+                "sensorFilePath is required when focusAtHyperfocal is enabled");
         ross::ImageSensor sensor = ross::ImageSensorReader::readFile(sensorPath);
         ross::HyperFocalDistanceDeterminator determiner(lens, sensor);
         result.focusDistanceCm = determiner.determine().centimeter();
@@ -442,8 +445,8 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                         LOG_WARN("PBRT texture not found; skipping: " << texturePath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
-                        Texture& texture = scene.add(Texture(scene.getContext(), texturePath.string(),
-                            vk::Format::eR8G8B8A8Srgb));
+                        Texture& texture = scene.add(Texture(
+                            texturePath.string(), TextureEncoding::Srgb8));
                         textures[command.arguments[0]] = texture.getSceneIndex();
                     }
                 }
@@ -515,7 +518,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                         LOG_WARN("PBRT HDRI not found; skipping: " << hdriPath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
-                        Texture& texture = scene.add(Texture(scene.getContext(), hdriPath.string()));
+                        Texture& texture = scene.add(Texture(hdriPath.string()));
                         environment.setHdriTexture(texture);
                         environment.setEqualAreaMapping(glm::mat3(glm::inverse(state.transform)));
                     }
@@ -574,9 +577,17 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
             const std::string lens = relativeAssetPath(source, "lensfile");
             const std::string sensor = relativeAssetPath(source, "sensorFilePath");
             const std::string catalogs = relativeAssetList(source, "glasscatalogpaths");
-            if (lens.empty() || sensor.empty())
-                throw std::runtime_error(cameraType + " requires lensfile and sensorFilePath");
-            camera->getSensor().setImageSensorPath(sensor);
+            const bool isRealistic = dynamic_cast<RealisticCamera*>(camera.get()) != nullptr;
+            if (lens.empty() || (!isRealistic && sensor.empty()))
+                throw std::runtime_error(isRealistic
+                    ? cameraType + " requires lensfile"
+                    : cameraType + " requires lensfile and sensorFilePath");
+            if (!sensor.empty())
+                camera->getSensor().setImageSensorPath(sensor);
+            else
+                camera->getSensor().setDimensionsMm(
+                    std::max(0.001f, scalar(source, "sensorwidthmm", camera->getSensor().width())),
+                    std::max(0.001f, scalar(source, "sensorheightmm", camera->getSensor().height())));
             const OpticalSettings settings = opticalSettings(source, lens, sensor, catalogs);
             if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get())) {
                 realistic->setOpticsPaths(lens, catalogs);

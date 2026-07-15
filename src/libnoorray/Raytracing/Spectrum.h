@@ -179,6 +179,14 @@ public:
         return wl;
     }
 
+    NR_CPU_GPU static SampledWavelengths sampleVisibleSingle(const float u)
+    {
+        SampledWavelengths wl{};
+        wl.lambda[0] = sampleVisibleWavelengths(u);
+        wl.pdf[0] = visibleWavelengthsPDF(wl.lambda[0]) / NrSpectrumSamples;
+        return wl;
+    }
+
     // Kill secondary wavelengths after dispersive refraction to avoid bias.
     // From pbrt-v4 SampledWavelengths::TerminateSecondary.
     NR_CPU_GPU void terminateSecondary()

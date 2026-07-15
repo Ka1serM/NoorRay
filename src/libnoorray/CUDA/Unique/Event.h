@@ -1,10 +1,9 @@
 #pragma once
 
-#include <utility>
-
 #include <cuda_runtime_api.h>
 
 #include "CUDA/Unique/Check.h"
+#include "CUDA/Unique/Handle.h"
 
 namespace nr::cuda
 {
@@ -13,44 +12,30 @@ class UniqueEvent
 {
 public:
     UniqueEvent() = default;
-    ~UniqueEvent() noexcept { reset(); }
+    ~UniqueEvent() noexcept = default;
 
     UniqueEvent(const UniqueEvent&) = delete;
     UniqueEvent& operator=(const UniqueEvent&) = delete;
 
-    UniqueEvent(UniqueEvent&& other) noexcept
-        : event(std::exchange(other.event, nullptr))
-    {
-    }
-
-    UniqueEvent& operator=(UniqueEvent&& other) noexcept
-    {
-        if (this != &other)
-        {
-            reset();
-            event = std::exchange(other.event, nullptr);
-        }
-        return *this;
-    }
+    UniqueEvent(UniqueEvent&&) noexcept = default;
+    UniqueEvent& operator=(UniqueEvent&&) noexcept = default;
 
     void create()
     {
         reset();
-        NR_CUDA_UNIQUE_CHECK(cudaEventCreate(&event));
+        NR_CUDA_UNIQUE_CHECK(cudaEventCreate(event.put()));
     }
 
     void reset() noexcept
     {
-        if (event != nullptr)
-            cudaEventDestroy(event);
-        event = nullptr;
+        event.reset();
     }
 
-    cudaEvent_t get() const noexcept { return event; }
-    explicit operator bool() const noexcept { return event != nullptr; }
+    cudaEvent_t get() const noexcept { return event.get(); }
+    explicit operator bool() const noexcept { return static_cast<bool>(event); }
 
 private:
-    cudaEvent_t event{};
+    UniqueHandle<cudaEvent_t, cudaEventDestroy> event;
 };
 
 }

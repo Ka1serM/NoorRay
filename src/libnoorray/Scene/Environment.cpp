@@ -8,7 +8,7 @@
 #include <tbb/blocked_range.h>
 #include <glm/gtc/matrix_inverse.hpp>
 
-#include "Vulkan/Texture.h"
+#include "Scene/Texture.h"
 
 static constexpr float kPi = 3.14159265f;
 

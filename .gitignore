@@ -17,3 +17,6 @@ CMakeUserPresets.json
 /build
 /.venv
 /.idea
+__pycache__/
+*.py[cod]
+/imgui.ini

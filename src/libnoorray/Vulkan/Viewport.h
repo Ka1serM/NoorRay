@@ -2,7 +2,7 @@
 
 #include "Vulkan/Context.h"
 #include "Vulkan/Image.h"
-#include "Vulkan/Buffer.h"
+#include "CUDA/Unique/SharedVector.h"
 #include <array>
 #include <cstdint>
 
@@ -46,9 +46,8 @@ public:
         int bufferVisualization,
         bool tonemappingEnabled,
         bool showBillboards = true);
-    // Rebuilds the billboard list from the scene's current objects (cheap: a
-    // handful of structs memcpy'd into a host-visible buffer). Call once per
-    // dispatched frame before dispatch().
+    // Refreshes the persistent overlay buffer only after a light mutation.
+    // Calling this each frame is an O(1) revision check in the common case.
     void updateBillboards(const Scene& scene);
     void resize(uint32_t width, uint32_t height,
                 const Image& color0,    const Image& color1,
@@ -77,9 +76,9 @@ private:
     vk::UniquePipelineLayout billboardPipelineLayout;
     vk::UniquePipeline billboardPipeline;
     vk::UniqueDescriptorSet billboardDescriptorSet;
-    Buffer billboardBuffer;
-    uint32_t billboardCapacity{};
+    nr::cuda::SharedVector<ViewportBillboard> billboards;
     uint32_t billboardCount{};
+    uint64_t observedLightRevision{};
 
     void writeDescriptors(uint32_t bufferIndex,
         const Image& color, const Image& albedo, const Image& normal,

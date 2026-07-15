@@ -446,10 +446,18 @@ void Context::oneTimeSubmit(const std::function<void(vk::CommandBuffer)>& func) 
 }
 
 vk::PresentModeKHR Context::chooseSwapPresentMode() const {
-    // FIFO is guaranteed by Vulkan and limits presentation to the monitor's
-    // refresh rate. CUDA rendering uses a separate queue and is not paced by
-    // the swapchain.
-    LOG_INFO("Present Mode: FIFO (V-Sync)");
+    const std::vector<vk::PresentModeKHR> modes =
+        physicalDevice.getSurfacePresentModesKHR(surface.get());
+    if (std::find(modes.begin(), modes.end(), vk::PresentModeKHR::eMailbox) != modes.end()) {
+        LOG_INFO("Present Mode: Mailbox");
+        return vk::PresentModeKHR::eMailbox;
+    }
+    if (std::find(modes.begin(), modes.end(), vk::PresentModeKHR::eImmediate) != modes.end()) {
+        LOG_INFO("Present Mode: Immediate");
+        return vk::PresentModeKHR::eImmediate;
+    }
+
+    LOG_INFO("Present Mode: FIFO (V-Sync fallback)");
     return vk::PresentModeKHR::eFifo;
 }
 

@@ -11,7 +11,7 @@ void bindRaytracer(nb::module_& module)
 {
     nb::class_<Raytracer>(module, "Raytracer")
         .def("render_frame", [](Raytracer& raytracer) {
-            raytracer.renderFrame(PushData{.frame = 0});
+            raytracer.renderFrame();
         })
         .def("resize", &Raytracer::resize, "width"_a, "height"_a)
         .def("set_aov_enabled", &Raytracer::setAovEnabled, "enabled"_a)

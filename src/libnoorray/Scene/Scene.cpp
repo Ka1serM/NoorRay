@@ -16,9 +16,12 @@
 #include "Scene/SceneReader.h"
 
 Scene::Scene(Context& context)
-    : context(context), environment(nr::rstd::make_unique<Environment>()),
-      pointLights(context), spotLights(context),
-      rectLights(context), directionalLights(context)
+    : context(context),
+      environment(nr::rstd::make_unique<Environment>()),
+      pointLights(context),
+      spotLights(context),
+      rectLights(context),
+      directionalLights(context)
 {
     auto camera = std::make_unique<PerspectiveCamera>();
     viewportCamera = std::make_shared<CameraInstance>(
@@ -27,6 +30,12 @@ Scene::Scene(Context& context)
 }
 
 Scene::~Scene() = default;
+
+void Scene::synchronizeBeforeMutation()
+{
+    if (mutationBarrier)
+        mutationBarrier();
+}
 
 void Scene::load(const std::string& path)
 {
@@ -41,11 +50,13 @@ void Scene::load(const std::string& path)
 
 void Scene::importFile(const std::string& path)
 {
+    synchronizeBeforeMutation();
     SceneImporter::ImportFile(*this, path);
 }
 
 void Scene::read(const std::string& path)
 {
+    synchronizeBeforeMutation();
     SceneReader::Read(*this, path);
 }
 
@@ -105,6 +116,7 @@ void Scene::rebuildGaussianInstanceCache()
 // ── Public lifetime API ───────────────────────────────────────────────────────
 
 void Scene::clear() {
+    synchronizeBeforeMutation();
     // Switch rendering to the persistent viewport camera before scene-owned
     // cameras are destroyed.
     activateCamera(nullptr);
@@ -119,13 +131,11 @@ void Scene::clear() {
     spotLights.clear();
     rectLights.clear();
     directionalLights.clear();
-    gpuInstances.clear();
     dirtyMeshInstanceIndices.clear();
     dirtyGaussianInstanceIndices.clear();
     dirtyGaussianInstanceFlags.clear();
     gaussianOpacities.clear();
     gaussianShCoeffs.clear();
-    cudaTextures.clear();
     copiedObject.reset();
     activeObjectId = 0;
     nextObjectId = 1;
@@ -141,14 +151,17 @@ void Scene::clear() {
     environment->updateDerivedSettings();
     dirtyFlags = TLAS | Meshes | Textures | EnvironmentCdf | Lights
         | CameraState | Accumulation | GaussianData;
+    ++lightRevision;
 }
 
 uint64_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
+    synchronizeBeforeMutation();
     const uint32_t index = registerObject(std::move(sceneObject));
     return sceneObjects[index]->getId();
 }
 
 uint32_t Scene::add(MeshAsset meshAsset) {
+    synchronizeBeforeMutation();
     const uint32_t index = static_cast<uint32_t>(meshAssets.size());
     meshAsset.setMeshIndex(index);
     meshAssets.push_back(std::move(meshAsset));
@@ -157,6 +170,7 @@ uint32_t Scene::add(MeshAsset meshAsset) {
 }
 
 uint32_t Scene::add(GaussianAsset gaussianAsset) {
+    synchronizeBeforeMutation();
     const uint32_t index = static_cast<uint32_t>(gaussianAssets.size());
     gaussianAssets.push_back(std::move(gaussianAsset));
     setDirtyFlag(TLAS);
@@ -165,6 +179,7 @@ uint32_t Scene::add(GaussianAsset gaussianAsset) {
 }
 
 Texture& Scene::add(Texture&& texture) {
+    synchronizeBeforeMutation();
     texture.sceneIndex = static_cast<int>(textures.size());
     textureNames.push_back(texture.getName());
     textures.push_back(std::move(texture));
@@ -209,6 +224,7 @@ bool Scene::remove(SceneObject* objToRemove) {
             ? std::static_pointer_cast<CameraInstance>(*replacement) : nullptr);
     }
 
+    objToRemove->scene = nullptr;
     sceneObjects.erase(it);
     rebuildGaussianInstanceCache();
     notifyGeometryChanged();
@@ -216,10 +232,12 @@ bool Scene::remove(SceneObject* objToRemove) {
 }
 
 bool Scene::removeObject(const uint64_t objectId) {
+    synchronizeBeforeMutation();
     return remove(findObjectPtr(objectId).get());
 }
 
 bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject) {
+    synchronizeBeforeMutation();
     if (!oldObject || !newObject)
         return false;
 
@@ -236,13 +254,23 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     const bool replacementGaussian = dynamic_cast<GaussianInstance*>(newObject.get()) != nullptr;
     SceneObject* parent = oldObject->getParent();
     const auto parentPtr = findObjectPtr(parent);
+    const auto children = oldObject->getChildren();
+    const bool wasCopied = copiedObject.lock().get() == oldObject;
 
     if (parent)
         parent->removeChild(oldObject);
+    if (auto* oldLight = dynamic_cast<LightInstance*>(oldObject))
+        unregisterLight(*oldLight);
+    oldObject->clearParent();
+    oldObject->children.clear();
+    oldObject->scene = nullptr;
 
     std::shared_ptr<SceneObject> newShared(std::move(newObject));
     newShared->scene = this;
     newShared->setId(oldObject->getId());
+
+    if (auto* newLight = dynamic_cast<LightInstance*>(newShared.get()))
+        registerLight(*newLight);
 
     if (wasActiveCamera || activeCamera.expired())
         activateCamera(std::dynamic_pointer_cast<CameraInstance>(newShared));
@@ -257,6 +285,10 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 
     if (parentPtr)
         parentPtr->addChild(sceneObjects[index]);
+    for (const auto& child : children)
+        sceneObjects[index]->addChild(child);
+    if (wasCopied)
+        copiedObject = sceneObjects[index];
 
     notifyGeometryChanged();
     return true;
@@ -322,7 +354,7 @@ uint32_t Scene::registerLight(LightInstance& light)
     return idx;
 }
 
-void Scene::unregisterLight(const LightInstance& light)
+void Scene::unregisterLight(LightInstance& light)
 {
     const uint32_t idx = light.lightIndex;
     switch (light.lightType) {
@@ -367,6 +399,7 @@ void Scene::unregisterLight(const LightInstance& light)
         }
         break;
     }
+    light.lightIndex = UINT32_MAX;
     setDirtyFlag(Lights);
     setDirtyFlag(Accumulation);
 }
@@ -402,6 +435,7 @@ void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {
 }
 
 bool Scene::reparentObject(const uint64_t objectId, const uint64_t newParentId) {
+    synchronizeBeforeMutation();
     const auto objectToMove = findObjectPtr(objectId);
     const auto newParent = newParentId != 0 ? findObjectPtr(newParentId) : nullptr;
     if (!objectToMove || (newParentId != 0 && !newParent))
@@ -427,6 +461,7 @@ std::shared_ptr<SceneObject> Scene::cloneHierarchy(const SceneObject* source) {
 }
 
 void Scene::paste() {
+    synchronizeBeforeMutation();
     const auto source = copiedObject.lock();
     if (!source)
         return;

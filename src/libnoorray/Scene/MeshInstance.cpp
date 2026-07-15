@@ -1,8 +1,12 @@
 ﻿#include "MeshInstance.h"
-#include <imgui.h>
 #include <utility>
+#include "Scene/SceneObjectVisitor.h"
 
-#include "UI/ImGuiManager.h"
+void MeshInstance::accept(SceneObjectVisitor& visitor)
+{
+    visitor.visit(static_cast<SceneObject&>(*this));
+    visitor.visit(*this);
+}
 
 MeshInstance::MeshInstance(Scene& scene, const std::string& name, const uint32_t meshIndex, const Transform& transf)
     : SceneObject(scene, name, transf), meshIndex(meshIndex)
@@ -19,21 +23,8 @@ std::unique_ptr<SceneObject> MeshInstance::clone() const {
 
 void MeshInstance::onTransformUpdated() {
     SceneObject::onTransformUpdated();
+    if (!scene)
+        return;
     scene->setDirtyFlag(TLAS);
     scene->markMeshInstanceTransformDirty(scene->getMeshInstanceIndex(this));
-}
-
-bool MeshInstance::renderUi() {
-    bool changed = SceneObject::renderUi();
-
-    ImGuiManager::tableRowLabel("Mesh");
-    if (!ImGui::TreeNodeEx("Mesh Asset###MeshProperties", ImGuiTreeNodeFlags_Framed))
-        return changed;
-
-    if (ImGui::BeginTable("MeshTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        changed |= scene->getMeshAsset(meshIndex).renderUi();
-        ImGui::EndTable();
-    }
-    ImGui::TreePop();
-    return changed;
 }

@@ -1,5 +1,6 @@
 ﻿#include "DetailsPanel.h"
 #include "Scene/SceneObject.h"
+#include "UI/ObjectUi.h"
 #include <imgui.h>
 
 DetailsPanel::DetailsPanel(std::string name, Scene& scene)
@@ -11,7 +12,7 @@ void DetailsPanel::renderUi() {
     if (ImGui::BeginTable("ObjectDetails", 2, ImGuiTableFlags_SizingStretchProp)) {
         
         if (const auto activeObject = scene.getActiveObjectPtr())
-            activeObject->renderUi(); 
+            domain_ui::render(*activeObject);
         else {
             ImGui::TableNextColumn();
             ImGui::TextUnformatted("No Object Selected");

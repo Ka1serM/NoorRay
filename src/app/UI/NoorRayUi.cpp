@@ -85,19 +85,21 @@ void NoorRayUi::run() {
 
     raytracer->setTimingEnabled(true);
 
-    int frame = 0;
+    uint32_t frameIndex = 0;
     int submittedSamples = 0;
     bool renderComplete = false;
     uint64_t displayedRenderValue = 0;
     uint32_t displayedBufferIndex = 0;
     uint32_t displayedSelectionIndex = ~0u;
+    InteropFrame pendingDisplayFrame{};
     bool isRunning = true, isFullscreen = false, firstFrame = true;
 
     while (isRunning) {
         SDL_Event event{};
         while (window.pollEvent(event)) {
-            imGuiManager->processEvent(event);
-            viewportPanel->processEvent(event);
+            const bool viewportConsumedEvent = viewportPanel->processEvent(event);
+            if (!viewportConsumedEvent)
+                imGuiManager->processEvent(event);
             if (event.type == SDL_EVENT_QUIT)
                 isRunning = false;
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F11) {
@@ -108,149 +110,146 @@ void NoorRayUi::run() {
                 renderer->notifyResize(event.window.data1, event.window.data2);
         }
 
+        // Build ImGui and apply scene edits before submitting CUDA work. Vulkan
+        // swapchain acquisition can block, so it happens only after the next
+        // OptiX frame has been queued and can run concurrently with that wait.
+        imGuiManager->updateUi();
+
+        CameraInstance* viewportCamera = scene.getRenderCamera();
+        if (viewportCamera) {
+            const glm::uvec2 resolution =
+                viewportCamera->getCamera()->getSensor().resolution();
+            if (resolution.x != raytracer->getWidth() || resolution.y != raytracer->getHeight()) {
+                context.getDevice().waitIdle();
+                raytracer->resize(resolution.x, resolution.y);
+                viewport->resize(
+                    raytracer->getWidth(), raytracer->getHeight(),
+                    raytracer->getOutputColor(0),    raytracer->getOutputColor(1),
+                    raytracer->getOutputAlbedo(0),   raytracer->getOutputAlbedo(1),
+                    raytracer->getOutputNormal(0),   raytracer->getOutputNormal(1),
+                    raytracer->getOutputCrypto(0),   raytracer->getOutputCrypto(1),
+                    raytracer->getOutputPosition(0), raytracer->getOutputPosition(1),
+                    renderer->getColorImageFormat());
+                viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(),
+                                      viewport->getOutputImage().getFormat());
+                frameIndex = 0;
+                firstFrame = true;
+            }
+        }
+
+        const bool displayHandoffPending = pendingDisplayFrame.readyValue != 0;
+        if (!viewportCamera) {
+            frameIndex = 0;
+            firstFrame = true;
+        } else if (renderPanel->isSaveRequested()) {
+            renderPanel->executeSave();
+        } else {
+            const InteropFrame completedFrame = raytracer->getInteropFrame();
+            if (!displayHandoffPending
+                && raytracer->isFrameReady()
+                && completedFrame.readyValue > displayedRenderValue)
+            {
+                debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
+                const RenderSettings& settings = scene.getRenderSettings();
+                constexpr int MinimumNoiseSamples = 16;
+                if (settings.noiseLimitEnabled
+                    && submittedSamples >= MinimumNoiseSamples
+                    && raytracer->getAverageNoiseVariance() <= settings.noiseLevel)
+                {
+                    renderComplete = true;
+                }
+                pendingDisplayFrame = completedFrame;
+            }
+
+            // Keep at most one CUDA render in flight. It is submitted before
+            // beginFrame(), so Vulkan presentation cannot pace OptiX startup.
+            // A newly completed buffer may overlap one more render using the
+            // other buffer. If Vulkan skipped the previous frame, wait until
+            // its pending handoff is submitted before queueing anything else.
+            if (!raytracer->isRenderInFlight() && !displayHandoffPending)
+            {
+                trainingPanel->tick();
+                const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
+                const RenderSettings& renderSettings = scene.getRenderSettings();
+                const bool proxyOverdraw =
+                    renderSettings.gaussianProxyOverdrawVisualization;
+                const int spp = std::max(1, renderSettings.samples);
+                const int maxSamples = std::max(1, renderSettings.maxSamples);
+
+                if (proxyOverdraw) {
+                    frameIndex = 0;
+                    submittedSamples = 0;
+                    renderComplete = false;
+                    firstFrame = false;
+                    raytracer->renderFrame();
+                    debugPanel->setSampleInfo(0, 0);
+                } else {
+                    if (resetAccumulation) {
+                        frameIndex = 0;
+                        submittedSamples = 0;
+                        renderComplete = false;
+                        debugPanel->resetRenderTimer();
+                    }
+
+                    if (renderComplete) {
+                        debugPanel->setSampleInfo(submittedSamples, maxSamples);
+                    } else {
+                        if (!resetAccumulation)
+                            ++frameIndex;
+
+                        firstFrame = false;
+                        raytracer->renderFrame(
+                            frameIndex, static_cast<uint32_t>(submittedSamples));
+
+                        submittedSamples = std::min(submittedSamples + spp, maxSamples);
+                        renderComplete = submittedSamples >= maxSamples;
+                        debugPanel->setSampleInfo(submittedSamples, maxSamples);
+                    }
+                }
+            }
+        }
+
         if (renderer->beginFrame()) {
             const vk::CommandBuffer cmd = renderer->getCurrentCommandBuffer();
-
-            // Run UI logic first. GPU-visible managed data is flushed below
-            // only when no CUDA render is in flight.
-            imGuiManager->updateUi();
-
+            const auto dispatchViewportOverlay = [&](const uint32_t bufferIndex)
             {
-                CameraInstance* viewportCamera = scene.getRenderCamera();
-                if (auto* cam = viewportCamera) {
-                    const glm::uvec2 resolution = cam->getCamera()->getSensor().resolution();
-                    if (resolution.x != raytracer->getWidth() || resolution.y != raytracer->getHeight()) {
-                        context.getDevice().waitIdle();
-                        raytracer->resize(resolution.x, resolution.y);
-                        viewport->resize(
-                            raytracer->getWidth(), raytracer->getHeight(),
-                            raytracer->getOutputColor(0),    raytracer->getOutputColor(1),
-                            raytracer->getOutputAlbedo(0),   raytracer->getOutputAlbedo(1),
-                            raytracer->getOutputNormal(0),   raytracer->getOutputNormal(1),
-                            raytracer->getOutputCrypto(0),   raytracer->getOutputCrypto(1),
-                            raytracer->getOutputPosition(0), raytracer->getOutputPosition(1),
-                            renderer->getColorImageFormat());
-                        viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(),
-                                              viewport->getOutputImage().getFormat());
-                        frame = 0; firstFrame = true;
-                    }
-                }
+                const RenderSettings& renderSettings = scene.getRenderSettings();
+                const float cameraExposure = viewportCamera
+                    ? viewportCamera->getCamera()->exposure : 0.0f;
+                const bool proxyOverdraw =
+                    renderSettings.gaussianProxyOverdrawVisualization;
+                const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
+                const glm::mat4 viewProjection = viewportCamera
+                    ? viewportCamera->getProjectionMatrix() * viewportCamera->getViewMatrix()
+                    : glm::mat4(1.0f);
+                if (viewportPanel->showOverlays())
+                    viewport->updateBillboards(scene);
+                viewport->dispatch(
+                    cmd, bufferIndex, selectedIndex, viewProjection,
+                    proxyOverdraw ? 0.0f : cameraExposure,
+                    proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
+                    proxyOverdraw ? 0 : renderSettings.tonemappingEnabled,
+                    viewportPanel->showOverlays());
+                viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
+                displayedSelectionIndex = selectedIndex;
+            };
 
-                if (!viewportCamera) {
-                    frame = 0;
-                    firstFrame = true;
-                } else if (renderPanel->isSaveRequested()) {
-                    renderPanel->executeSave();
-                } else {
-                    const FrameInfo completedFrame = raytracer->getFrameInfo();
-                    const auto dispatchViewportOverlay = [&](const uint32_t bufferIndex)
-                    {
-                        const RenderSettings& renderSettings = scene.getRenderSettings();
-                        const float cameraExposure = viewportCamera
-                            ? viewportCamera->getCamera()->exposure : 0.0f;
-                        const bool proxyOverdraw =
-                            renderSettings.gaussianProxyOverdrawVisualization;
-                        const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
-                        const glm::mat4 viewProjection = viewportCamera
-                            ? viewportCamera->getProjectionMatrix() * viewportCamera->getViewMatrix()
-                            : glm::mat4(1.0f);
-                        if (viewportPanel->showOverlays())
-                            viewport->updateBillboards(scene);
-                        viewport->dispatch(
-                            cmd, bufferIndex, selectedIndex, viewProjection,
-                            proxyOverdraw ? 0.0f : cameraExposure,
-                            proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
-                            proxyOverdraw ? 0 : renderSettings.tonemappingEnabled,
-                            viewportPanel->showOverlays());
-                        viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
-                        displayedSelectionIndex = selectedIndex;
-                    };
-
-                    if (raytracer->isFrameReady()
-                        && completedFrame.readyValue > displayedRenderValue)
-                    {
-                        debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
-                        const RenderSettings& settings = scene.getRenderSettings();
-                        constexpr int MinimumNoiseSamples = 16;
-                        if (settings.noiseLimitEnabled
-                            && submittedSamples >= MinimumNoiseSamples
-                            && raytracer->getAverageNoiseVariance() <= settings.noiseLevel)
-                        {
-                            renderComplete = true;
-                        }
-                        displayedRenderValue = completedFrame.readyValue;
-                        displayedBufferIndex = completedFrame.bufferIndex;
-                        dispatchViewportOverlay(displayedBufferIndex);
-                        viewportPanel->setAovImages(
-                            raytracer->getOutputCrypto(completedFrame.bufferIndex),
-                            raytracer->getOutputPosition(completedFrame.bufferIndex));
-                        renderer->setExternalFrameSync(
-                            completedFrame.renderReadySemaphore,
-                            completedFrame.bufferReleasedSemaphore,
-                            completedFrame.readyValue);
-                    }
-                    else if (displayedRenderValue != 0
-                        && scene.getActiveMeshInstanceIndex() != displayedSelectionIndex)
-                    {
-                        dispatchViewportOverlay(displayedBufferIndex);
-                    }
-
-                    // Keep at most one CUDA render in flight. ImGui continues to
-                    // present the last completed viewport image while it runs.
-                    if (!raytracer->isRenderInFlight())
-                    {
-                        trainingPanel->tick();
-                        if (scene.isDirty(Meshes))   raytracer->updateMeshes();
-                        if (scene.isDirty(Textures)) raytracer->updateTextures();
-                        else if (scene.isDirty(EnvironmentCdf)) raytracer->updateEnvironmentCdf();
-                        if (scene.isDirty(Lights))   raytracer->updateLights();
-                        if (scene.isDirty(TLAS))     raytracer->updateTLAS();
-                        if (scene.isDirty(CameraState))
-                            viewportCamera->rebuildCamera();
-
-                        const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
-                        const RenderSettings& renderSettings = scene.getRenderSettings();
-                        const bool proxyOverdraw =
-                            renderSettings.gaussianProxyOverdrawVisualization;
-                        const int spp = std::max(1, renderSettings.samples);
-                        const int maxSamples = std::max(1, renderSettings.maxSamples);
-
-                        if (proxyOverdraw) {
-                            frame = 0;
-                            submittedSamples = 0;
-                            renderComplete = false;
-                            scene.clearDirtyFlags();
-                            firstFrame = false;
-                            raytracer->renderFrame(PushData{.frame = 0});
-                            debugPanel->setSampleInfo(0, 0);
-                        } else {
-                            if (resetAccumulation) {
-                                frame = 0;
-                                submittedSamples = 0;
-                                renderComplete = false;
-                                debugPanel->resetRenderTimer();
-                            }
-
-                            if (renderComplete) {
-                                debugPanel->setSampleInfo(submittedSamples, maxSamples);
-                            } else {
-                                if (!resetAccumulation)
-                                    ++frame;
-
-                                scene.clearDirtyFlags();
-                                firstFrame = false;
-                                raytracer->renderFrame(PushData{
-                                    .frame = frame,
-                                    .accumulatedSampleOffset = static_cast<uint32_t>(submittedSamples)});
-
-                                submittedSamples = std::min(submittedSamples + spp, maxSamples);
-                                renderComplete = submittedSamples >= maxSamples;
-                                debugPanel->setSampleInfo(
-                                    submittedSamples, maxSamples);
-                            }
-                        }
-                    }
-                }
+            if (pendingDisplayFrame.readyValue != 0) {
+                displayedRenderValue = pendingDisplayFrame.readyValue;
+                displayedBufferIndex = pendingDisplayFrame.bufferIndex;
+                dispatchViewportOverlay(displayedBufferIndex);
+                viewportPanel->setAovImages(
+                    raytracer->getOutputCrypto(displayedBufferIndex),
+                    raytracer->getOutputPosition(displayedBufferIndex));
+                renderer->setExternalFrameSync(
+                    pendingDisplayFrame.renderReadySemaphore,
+                    pendingDisplayFrame.bufferReleasedSemaphore,
+                    pendingDisplayFrame.readyValue);
+                pendingDisplayFrame = {};
+            } else if (displayedRenderValue != 0
+                && scene.getActiveMeshInstanceIndex() != displayedSelectionIndex)
+            {
+                dispatchViewportOverlay(displayedBufferIndex);
             }
 
             imGuiManager->renderDrawData(cmd, renderer->getCurrentColorImageView(), renderer->getSwapchainExtent());

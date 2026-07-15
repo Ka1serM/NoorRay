@@ -1,0 +1,134 @@
+#include "Scene/MeshInstance.h"
+
+#include <string>
+
+#include <imgui.h>
+
+#include "Mesh/MeshAsset.h"
+#include "Raytracing/Sellmeier.h"
+#include "UI/ImGuiManager.h"
+#include "UI/ObjectUi.h"
+
+namespace
+{
+bool renderMeshAsset(MeshAsset& asset)
+{
+    ImGuiManager::tableRowLabel("Source");
+    ImGui::TextUnformatted(asset.getPath().c_str());
+    auto& materials = asset.getMaterials();
+    if (materials.empty())
+        return false;
+
+    ImGuiManager::tableRowLabel("Materials");
+    bool changed = false;
+    const auto textureNames = asset.getScene().getTextureNames();
+    auto textureCombo = [&](const char* label, int& textureIndex, const int materialIndex,
+                            bool& materialChanged) {
+        ImGuiManager::tableRowLabel(label);
+        const bool validIndex = textureIndex >= 0
+            && textureIndex < static_cast<int>(textureNames.size());
+        if (!validIndex)
+            textureIndex = -1;
+        const char* preview = validIndex ? textureNames[textureIndex].c_str() : "No Texture";
+        const std::string id = "##" + std::string(label) + std::to_string(materialIndex);
+        if (!ImGui::BeginCombo(id.c_str(), preview))
+            return;
+        if (ImGui::Selectable("No Texture", textureIndex < 0)) {
+            textureIndex = -1;
+            materialChanged = true;
+        }
+        for (int index = 0; index < static_cast<int>(textureNames.size()); ++index)
+            if (ImGui::Selectable(textureNames[index].c_str(), textureIndex == index)) {
+                textureIndex = index;
+                materialChanged = true;
+            }
+        ImGui::EndCombo();
+    };
+
+    for (size_t index = 0; index < materials.size(); ++index)
+    {
+        Material& storedMaterial = materials[index];
+        Material material = storedMaterial;
+        bool materialChanged = false;
+        const std::string label = "Material " + std::to_string(index);
+        if (!ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_Framed))
+            continue;
+        if (ImGui::BeginTable("MaterialTable", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            textureCombo("Albedo Texture", material.albedoIndex, static_cast<int>(index), materialChanged);
+            ImGuiManager::colorEdit3Row("Albedo Color", material.albedo,
+                [&](glm::vec3 value) { material.albedo = value; materialChanged = true; });
+            textureCombo("Specular Texture", material.specularIndex, static_cast<int>(index), materialChanged);
+            ImGuiManager::dragFloatRow("Specular", material.specular, 0.01f, 0.f, 1.f,
+                [&](float value) { material.specular = value; materialChanged = true; });
+            textureCombo("Metallic Texture", material.metallicIndex, static_cast<int>(index), materialChanged);
+            ImGuiManager::dragFloatRow("Metallic", material.metallic, 0.01f, 0.f, 1.f,
+                [&](float value) { material.metallic = value; materialChanged = true; });
+            textureCombo("Roughness Texture", material.roughnessIndex, static_cast<int>(index), materialChanged);
+            ImGuiManager::dragFloatRow("Roughness", material.roughness, 0.01f, 0.f, 1.f,
+                [&](float value) { material.roughness = value; materialChanged = true; });
+            textureCombo("Normal Texture", material.normalIndex, static_cast<int>(index), materialChanged);
+
+            glm::vec3 iors = sellmeierFraunhoferIors(material.sellmeier);
+            auto updateIor = [&](const int channel, const float value) {
+                iors[channel] = value;
+                material.sellmeier = fitSellmeierFromFraunhofer(iors);
+                materialChanged = true;
+            };
+            ImGuiManager::dragFloatRow("Red IOR (C 656.27 nm)", iors.x, 0.001f, 1.f, 3.f,
+                [&](float value) { updateIor(0, value); });
+            ImGuiManager::dragFloatRow("Green IOR (e 546.07 nm)", iors.y, 0.001f, 1.f, 3.f,
+                [&](float value) { updateIor(1, value); });
+            ImGuiManager::dragFloatRow("Blue IOR (F 486.13 nm)", iors.z, 0.001f, 1.f, 3.f,
+                [&](float value) { updateIor(2, value); });
+            ImGuiManager::dragFloatRow("Transmission Strength", material.transmission,
+                0.01f, 0.f, 1.f, [&](float value) { material.transmission = value; materialChanged = true; });
+            textureCombo("Transmission Texture", material.transmissionIndex, static_cast<int>(index), materialChanged);
+            ImGuiManager::colorEdit3Row("Transmission Color", material.transmissionColor,
+                [&](glm::vec3 value) { material.transmissionColor = value; materialChanged = true; });
+            ImGuiManager::dragFloatRow("Emission Strength", material.emissionStrength,
+                0.1f, 0.f, 100000.f, [&](float value) { material.emissionStrength = value; materialChanged = true; });
+            textureCombo("Emission Texture", material.emissionIndex, static_cast<int>(index), materialChanged);
+            ImGuiManager::colorEdit3Row("Emission Color", material.emission,
+                [&](glm::vec3 value) { material.emission = value; materialChanged = true; });
+            ImGuiManager::dragFloatRow("Opacity", material.opacity, 0.01f, 0.f, 1.f,
+                [&](float value) { material.opacity = value; materialChanged = true; });
+            textureCombo("Opacity Texture", material.opacityIndex, static_cast<int>(index), materialChanged);
+            ImGui::EndTable();
+        }
+        ImGui::TreePop();
+        if (materialChanged) {
+            asset.getScene().synchronizeBeforeMutation();
+            storedMaterial = material;
+            changed = true;
+        }
+    }
+    if (changed)
+        asset.notifyMaterialsChanged();
+    return changed;
+}
+}
+
+namespace
+{
+bool renderMeshInstance(MeshInstance& instance)
+{
+    ImGuiManager::tableRowLabel("Mesh");
+    if (!ImGui::TreeNodeEx("Mesh Asset###MeshProperties", ImGuiTreeNodeFlags_Framed))
+        return false;
+
+    bool changed = false;
+    if (ImGui::BeginTable("MeshTable", 2, ImGuiTableFlags_SizingStretchProp)) {
+        changed = renderMeshAsset(instance.getMeshAsset());
+        ImGui::EndTable();
+    }
+    ImGui::TreePop();
+    return changed;
+}
+
+}
+
+void ObjectUiVisitor::visit(MeshInstance& instance)
+{
+    changed |= renderMeshInstance(instance);
+}

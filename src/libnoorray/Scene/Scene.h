@@ -2,14 +2,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 #include <string>
-#include "CUDA/Unique/Texture.h"
-#include "CUDA/Unique/SharedVector.h"
 #include "CUDA/rstd/Vector.h"
 #include "CUDA/rstd/UniquePtr.h"
-#include "Scene/GpuInstance.h"
+#include "CUDA/Unique/SharedVector.h"
 #include "Scene/RenderSettings.h"
 #include "Mesh/MeshAsset.h"
 #include "Mesh/GaussianAsset.h"
@@ -18,8 +17,7 @@
 #include "Light/RectLight.h"
 #include "Light/DirectionalLight.h"
 #include "Vulkan/Context.h"
-#include "Vulkan/Texture.h"
-#include <vulkan/vulkan.hpp>
+#include "Scene/Texture.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -52,7 +50,6 @@ class MeshInstance;
 class GaussianInstance;
 class CameraInstance;
 class LightInstance;
-class Buffer;
 
 enum DirtyFlag : uint8_t {
     TLAS         = 1 << 0,
@@ -76,19 +73,16 @@ class Scene {
     nr::rstd::unique_ptr<Environment> environment;
     RenderSettings renderSettings{};
 
-    // Light arrays — Vulkan-allocated, imported into CUDA/OptiX via an external memory
-    // handle, so the same storage is directly usable from CPU, CUDA, and Vulkan
-    // (e.g. the viewport overlay) without a per-frame copy.
+    // VMA owns these allocations. Host code uses the persistent VMA mapping,
+    // while CUDA/OptiX uses the separately imported external-memory address.
     nr::cuda::SharedVector<PointLight> pointLights;
     nr::cuda::SharedVector<SpotLight> spotLights;
     nr::cuda::SharedVector<RectLight> rectLights;
     nr::cuda::SharedVector<DirectionalLight> directionalLights;
 
-    // GPU data — unified memory arrays
-    nr::rstd::vector<GpuInstance> gpuInstances;
+    // Render-ready Gaussian attributes shared with CUDA kernels.
     nr::rstd::vector<float> gaussianOpacities;
     nr::rstd::vector<glm::vec3> gaussianShCoeffs;
-    nr::rstd::vector<nr::cuda::UniqueTexture> cudaTextures;
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
     std::vector<std::shared_ptr<GaussianInstance>> gaussianInstances;
@@ -97,6 +91,7 @@ class Scene {
     std::shared_ptr<CameraInstance> viewportCamera;
     std::weak_ptr<CameraInstance> activeCamera;
     uint64_t activeCameraRevision{};
+    uint64_t lightRevision{1};
     uint64_t activeObjectId = 0;
     uint64_t nextObjectId = 1;
     uint8_t dirtyFlags = 0;
@@ -105,6 +100,7 @@ class Scene {
     std::vector<uint8_t> dirtyGaussianInstanceFlags;
 
     std::weak_ptr<SceneObject> copiedObject;
+    std::function<void()> mutationBarrier;
 
     std::shared_ptr<SceneObject> findObjectPtr(const SceneObject* object) const;
     std::shared_ptr<SceneObject> findObjectPtr(uint64_t objectId) const;
@@ -116,10 +112,14 @@ class Scene {
     void reparent(SceneObject* objectToMove, SceneObject* newParent);
     std::shared_ptr<SceneObject> cloneHierarchy(const SceneObject* source);
     void notifyGeometryChanged();
-
 public:
     Scene(Context& context);
     ~Scene();
+
+    void setMutationBarrier(std::function<void()> barrier) {
+        mutationBarrier = std::move(barrier);
+    }
+    void synchronizeBeforeMutation();
 
     void load(const std::string& path);
     void importFile(const std::string& path);
@@ -179,6 +179,7 @@ public:
 
     // Camera
     CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }
+    std::shared_ptr<CameraInstance> getActiveCameraPtr() const { return activeCamera.lock(); }
     uint64_t getActiveCameraRevision() const { return activeCameraRevision; }
     CameraInstance* getRenderCamera() const {
         if (auto camera = activeCamera.lock())
@@ -202,20 +203,11 @@ public:
     uint32_t getSpotLightCount() const { return static_cast<uint32_t>(spotLights.size()); }
     uint32_t getRectLightCount() const { return static_cast<uint32_t>(rectLights.size()); }
     uint32_t getDirectionalLightCount() const { return static_cast<uint32_t>(directionalLights.size()); }
-
-    // Gpu instances
-    const GpuInstance* getGpuInstances() const { return gpuInstances.data(); }
-    uint32_t getGpuInstanceCount() const { return static_cast<uint32_t>(gpuInstances.size()); }
-    nr::rstd::vector<GpuInstance>& getGpuInstancesRef() { return gpuInstances; }
-
-    // Cuda textures
-    const nr::cuda::UniqueTexture* getCudaTextures() const { return cudaTextures.data(); }
-    uint32_t getCudaTextureCount() const { return static_cast<uint32_t>(cudaTextures.size()); }
-    nr::rstd::vector<nr::cuda::UniqueTexture>& getCudaTexturesRef() { return cudaTextures; }
+    uint64_t getLightRevision() const { return lightRevision; }
 
     // Light registration (called by Scene internals)
     uint32_t registerLight(LightInstance& light);
-    void unregisterLight(const LightInstance& light);
+    void unregisterLight(LightInstance& light);
 
     // Context
     Context& getContext() const { return context; }
@@ -225,7 +217,11 @@ public:
     const RenderSettings& getRenderSettings() const { return renderSettings; }
 
     // Dirty flags
-    void setDirtyFlag(DirtyFlag flag) { dirtyFlags |= flag; }
+    void setDirtyFlag(DirtyFlag flag) {
+        dirtyFlags |= flag;
+        if (flag == Lights)
+            ++lightRevision;
+    }
     void clearDirtyFlag(DirtyFlag flag) { dirtyFlags &= ~flag; }
     bool isDirty(DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
     bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf | Lights | CameraState); }

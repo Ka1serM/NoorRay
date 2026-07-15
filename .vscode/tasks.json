@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run NoorRay",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/release/NoorRay",
+      "args": [
+        "--scene",
+        "/home/marcel/GitRepositories/NoorRay/assets/tests/hotel_old_mill_realistic.nrscene"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

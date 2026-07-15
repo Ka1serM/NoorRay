@@ -30,11 +30,13 @@
 
 using namespace noorray;
 
-NoorRayUi::NoorRayUi()
+NoorRayUi::NoorRayUi(std::string scenePath)
     : session(window)
 {
     Context& context = session.context;
     Scene& scene = session.scene;
+    if (!scenePath.empty())
+        scene.load(scenePath);
     Raytracer& raytracer = *session.raytracer;
     Renderer* renderer = session.renderer.get();
     viewport = std::make_unique<Viewport>(
@@ -48,7 +50,8 @@ NoorRayUi::NoorRayUi()
     Viewport* viewport = this->viewport.get();
     imGuiManager = std::make_unique<ImGuiManager>(
         window, context, renderer->getNumSwapchainImages(), renderer->getColorImageFormat());
-    imGuiManager->addComponent<MainMenuBar>("Menu", context, scene, *imGuiManager);
+    imGuiManager->addComponent<MainMenuBar>(
+        "Menu", context, scene, *imGuiManager, std::move(scenePath));
     imGuiManager->addComponent<DebugPanel>("Timings");
     imGuiManager->addComponent<EnvironmentPanel>("Environment", scene);
     imGuiManager->addComponent<SceneGraphPanel>("Scene Graph", scene);
@@ -94,6 +97,7 @@ void NoorRayUi::run() {
         SDL_Event event{};
         while (window.pollEvent(event)) {
             imGuiManager->processEvent(event);
+            viewportPanel->processEvent(event);
             if (event.type == SDL_EVENT_QUIT)
                 isRunning = false;
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F11) {
@@ -142,6 +146,8 @@ void NoorRayUi::run() {
                     const auto dispatchViewportOverlay = [&](const uint32_t bufferIndex)
                     {
                         const RenderSettings& renderSettings = scene.getRenderSettings();
+                        const float cameraExposure = viewportCamera
+                            ? viewportCamera->getCamera()->exposure : 0.0f;
                         const bool proxyOverdraw =
                             renderSettings.gaussianProxyOverdrawVisualization;
                         const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
@@ -152,7 +158,7 @@ void NoorRayUi::run() {
                             viewport->updateBillboards(scene);
                         viewport->dispatch(
                             cmd, bufferIndex, selectedIndex, viewProjection,
-                            proxyOverdraw ? 0.0f : renderSettings.exposure,
+                            proxyOverdraw ? 0.0f : cameraExposure,
                             proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
                             proxyOverdraw ? 0 : renderSettings.tonemappingEnabled,
                             viewportPanel->showOverlays());

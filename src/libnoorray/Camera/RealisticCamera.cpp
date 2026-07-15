@@ -315,6 +315,11 @@ bool RealisticCamera::renderUi()
 
     bool changed = false;
 
+    ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](float value) {
+        exposure = value;
+        changed = true;
+    });
+
     if (ImGui::Button("Reload##RealisticCamera")) {
         loadLensAndSensor(true);
         changed = true;

@@ -28,10 +28,6 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetupColumn("Label");
         ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthStretch);
 
-        ImGuiManager::dragFloatRow(
-            "Exposure", settings.exposure, 0.01f, -100.f, 100.f,
-            [&](const float value) { settings.exposure = value; changed = true; });
-
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Tonemapping");

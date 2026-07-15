@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "NoorRaySession.h"
 #include "UI/Window.h"
@@ -11,7 +12,7 @@ class Viewport;
 class NoorRayUi
 {
 public:
-    NoorRayUi();
+    explicit NoorRayUi(std::string scenePath = {});
     ~NoorRayUi();
 
     void run();

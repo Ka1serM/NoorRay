@@ -23,18 +23,15 @@ struct RenderSettingsFile {
     bool noise_limit_enabled{false};
     float noise_level{0.0001f};
     int gaussian_shading_mode{};
-    // Accepted for compatibility with older scene files; no longer applied or written.
-    std::optional<int> gaussian_import_sh_degree;
     int gaussian_render_sh_degree{3};
 };
 
 struct CameraFile {
-    std::string type{"perspective"};
-    Vec3 position{};
-    Vec3 rotation_euler{};
-    Vec3 scale{1.0f, 1.0f, 1.0f};
+    std::string projection{"perspective"};
+    bool active{};
     float focal_length_mm{50.0f};
     float focus_distance_cm{200.0f};
+    float exposure{};
     float bokeh_bias{1.0f};
     float aperture_diameter_mm{};
     Resolution resolution{1280, 720};
@@ -51,7 +48,6 @@ struct MaterialFile {
     float roughness{0.5f};
     float metallic{};
     float specular{1.0f};
-    float ior{1.5f};
     float ior_r{1.5f};
     float ior_g{1.5f};
     float ior_b{1.5f};
@@ -68,13 +64,13 @@ struct ObjectFile {
     Vec3 position{};
     Vec3 rotation_euler{};
     Vec3 scale{1.0f, 1.0f, 1.0f};
+    std::optional<CameraFile> camera;
     std::optional<MaterialFile> material;
 };
 
 struct SceneFile {
     std::optional<EnvironmentFile> environment;
     std::optional<RenderSettingsFile> render_settings;
-    std::optional<CameraFile> camera;
     std::vector<ObjectFile> objects;
 };
 

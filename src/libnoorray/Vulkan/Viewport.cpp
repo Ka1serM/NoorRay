@@ -262,7 +262,10 @@ void Viewport::drawBillboards(const vk::CommandBuffer commandBuffer, const glm::
                                      billboardDescriptorSet.get(), {});
 
     const BillboardPushConstants pushConstants{
-        viewProjection,
+        // Slang emits this push-constant matrix with row-major storage. GLM
+        // stores matrices column-major, so transpose once at the ABI boundary
+        // to preserve the same mathematical matrix in the shader.
+        glm::transpose(viewProjection),
         glm::vec2(static_cast<float>(outputImage.getWidth()), static_cast<float>(outputImage.getHeight())),
         ViewportBillboardPixelRadius};
     commandBuffer.pushConstants(

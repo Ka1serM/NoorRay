@@ -19,6 +19,7 @@
 #include "Camera/ThinLensCamera.h"
 #include "Log.h"
 #include "Mesh/MeshAsset.h"
+#include "Mesh/PlyMeshLoader.h"
 #include "Mesh/Transform.h"
 #include "Raytracing/Sellmeier.h"
 #include "Scene/LightInstance.h"
@@ -170,9 +171,15 @@ glm::vec3 point(const Command& command, const std::string_view name,
 glm::mat4 pbrtMatrix(const Command& command)
 {
     glm::mat4 result(1.f);
+    // PBRT serializes explicit transforms in its row-vector convention and
+    // transposes them when building the active transform (see PBRT's
+    // BasicSceneBuilder::Transform). GLM uses column vectors, so write the
+    // PBRT rows into GLM's columns to perform that same transpose. This is
+    // especially important for files such as VehicleRearview, whose
+    // translations are stored in input elements 12..14 (the fourth row).
     for (int row = 0; row < 4; ++row)
         for (int column = 0; column < 4; ++column)
-            result[column][row] = number(command.arguments[row * 4 + column], command);
+            result[row][column] = number(command.arguments[row * 4 + column], command);
     return result;
 }
 
@@ -272,6 +279,34 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
         transform *= glm::rotate(glm::mat4(1.f), glm::half_pi<float>(), glm::vec3(1, 0, 0));
         transform *= glm::scale(glm::mat4(1.f), glm::vec3(radius * 2.f));
         meshIndex = scene.add(MeshAsset::CreateDisk(scene, name, material));
+    } else if (type == "plymesh") {
+        const std::string filename = relativeAssetPath(shape.command, "filename");
+        if (filename.empty())
+            throw std::runtime_error("plymesh requires a filename at "
+                + shape.command.source.string() + ":" + std::to_string(shape.command.line));
+
+        PlyMeshData mesh;
+        try {
+            mesh = PlyMeshLoader::Load(filename);
+        } catch (const std::exception& error) {
+            throw std::runtime_error("failed to load PBRT plymesh at "
+                + shape.command.source.string() + ":" + std::to_string(shape.command.line)
+                + ": " + error.what());
+        }
+
+        if (shape.reverse) {
+            for (size_t i = 0; i < mesh.indices.size(); i += 3)
+                std::swap(mesh.indices[i + 1], mesh.indices[i + 2]);
+            for (Vertex& vertex : mesh.vertices)
+                vertex.normal = -vertex.normal;
+        }
+
+        const std::string meshName = std::filesystem::path(filename).stem().string();
+        meshIndex = scene.add(MeshAsset(scene,
+            meshName.empty() ? name : meshName,
+            mesh.vertices, mesh.indices,
+            std::vector<Face>(mesh.indices.size() / 3, Face{0}),
+            std::vector<Material>{material}));
     } else if (type == "trianglemesh") {
         const Parameter* positions = shape.command.find("P");
         const Parameter* indexParameter = shape.command.find("indices");
@@ -482,6 +517,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                     } else {
                         Texture& texture = scene.add(Texture(scene.getContext(), hdriPath.string()));
                         environment.setHdriTexture(texture);
+                        environment.setEqualAreaMapping(glm::mat3(glm::inverse(state.transform)));
                     }
                 }
                 environment.updateDerivedSettings();
@@ -528,7 +564,6 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
             camera = std::make_unique<HybridPsfCamera>();
         else
             throw std::runtime_error("PBRT camera '" + cameraType + "' is not supported by NoorRay");
-        camera->getSensor().setResolution(resolutionX, resolutionY);
         camera->setFocalLengthMm(camera->focalLengthMmForFovDegrees(cameraFov));
         camera->setFocusDistanceCm(focalDistance * 100.f);
         if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get()))
@@ -558,10 +593,15 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                 hybridPsf->load(lens, catalogs, rayLut);
             }
         }
+        // Loading a physical sensor restores its native resolution. PBRT's
+        // Film resolution is the requested render extent and must win.
+        camera->getSensor().setResolution(resolutionX, resolutionY);
         glm::mat4 worldFromCamera = glm::inverse(cameraFromWorld);
-        // PBRT cameras look along +Z. CameraInstance's local basis looks along
-        // -Z and derives right as cross(forward, up), so both X and Z flip.
-        worldFromCamera[0] *= -1.f;
+        // PBRT camera-space rays travel along +Z, while NoorRay camera-space
+        // rays travel along -Z. Preserve PBRT's film X axis and only convert
+        // the optical axis. In particular, PBRT scenes commonly use
+        // `Scale -1 1 1` before Camera; flipping X again here would leave an
+        // improper matrix that Transform's quaternion cannot represent.
         worldFromCamera[2] *= -1.f;
         auto cameraInstance = std::make_unique<CameraInstance>(std::move(camera), "PBRT Camera", Transform(worldFromCamera));
         scene.add(std::move(cameraInstance));

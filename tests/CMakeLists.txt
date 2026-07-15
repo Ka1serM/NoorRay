@@ -22,6 +22,17 @@ add_noorray_test(pbrt_parser_test
     "PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/PbrtParser.cpp" pbrt)
 target_include_directories(pbrt_parser_test PRIVATE "${CMAKE_SOURCE_DIR}/src/libnoorray")
 
+add_noorray_test(ply_mesh_loader_test
+    "PlyMeshLoaderTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Mesh/PlyMeshLoader.cpp" ply)
+target_include_directories(ply_mesh_loader_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/libnoorray"
+    "${OPTIX_INCLUDE_DIR}")
+target_compile_definitions(ply_mesh_loader_test PRIVATE
+    NR_BACKEND_CUDA=1
+    PLY_TEST_DIR="${CMAKE_SOURCE_DIR}/assets/tests")
+target_link_libraries(ply_mesh_loader_test PRIVATE
+    tinyply glm Vulkan::Vulkan CUDA::cudart)
+
 add_noorray_test(opaque_bsdf_test OpaqueBsdfTest.cpp bsdf)
 target_link_libraries(opaque_bsdf_test PRIVATE glm CUDA::cudart)
 

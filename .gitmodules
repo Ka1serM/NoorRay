@@ -2,10 +2,6 @@
 	path = external/glfw
 	url = https://github.com/glfw/glfw.git
 
-[submodule "external/glm"]
-	path = external/glm
-	url = https://github.com/g-truc/glm.git
-
 [submodule "external/tinyobjloader"]
 	path = external/tinyobjloader
 	url = https://github.com/tinyobjloader/tinyobjloader.git
@@ -61,3 +57,9 @@
 [submodule "external/nanobind"]
 	path = external/nanobind
 	url = https://github.com/wjakob/nanobind.git
+[submodule "external/tinyply"]
+	path = external/tinyply
+	url = https://github.com/ddiakopoulos/tinyply.git
+[submodule "external/glm"]
+	path = external/glm
+	url = https://github.com/g-truc/glm.git

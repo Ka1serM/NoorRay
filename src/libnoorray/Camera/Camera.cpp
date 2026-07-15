@@ -25,7 +25,7 @@ Camera::Camera(std::unique_ptr<Sensor> ownedSensor)
 Camera::Camera(const Camera& other)
     : TaggedCamera(other), cameraToWorld(other.cameraToWorld)
     , fieldOfViewDegrees(other.fieldOfViewDegrees), focalLengthMm(other.focalLengthMm)
-    , focusDistanceCm(other.focusDistanceCm)
+    , focusDistanceCm(other.focusDistanceCm), exposure(other.exposure)
 {
     const Sensor& source = other.getSensor();
     source.DispatchCPU([this, &source](const auto* concrete) {
@@ -45,6 +45,7 @@ Camera& Camera::operator=(const Camera& other)
     fieldOfViewDegrees = other.fieldOfViewDegrees;
     focalLengthMm = other.focalLengthMm;
     focusDistanceCm = other.focusDistanceCm;
+    exposure = other.exposure;
     std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
         other.retainedPsfGridPath);
     return *this;
@@ -218,6 +219,7 @@ Camera Camera::cloneBaseState() const
     state.fieldOfViewDegrees = source->fieldOfViewDegrees;
     state.focalLengthMm = source->focalLengthMm;
     state.focusDistanceCm = source->focusDistanceCm;
+    state.exposure = source->exposure;
     std::snprintf(state.retainedPsfGridPath, sizeof(state.retainedPsfGridPath), "%s",
         source->retainedPsfGridPath);
     return state;
@@ -227,6 +229,10 @@ Camera Camera::cloneBaseState() const
 bool Camera::renderUi()
 {
     bool changed = false;
+    ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](float value) {
+        exposure = value;
+        changed = true;
+    });
     ImGuiManager::dragFloatRow("Field of View (degrees)", fieldOfViewDegrees, 0.1f, 1.f, 179.f, [&](float value) {
         nr::synchronizeBeforeManagedMutation("Camera field of view");
         fieldOfViewDegrees = std::clamp(value, 1.f, 179.f);

@@ -28,8 +28,9 @@ public:
     float getDpiScale() const { return dpiScale; }
     bool pollEvent(SDL_Event& event) const;
     void setFullscreen(bool fullscreen) const;
-    void setRelativeMouseMode(bool enabled) const;
-    std::pair<float, float> getRelativeMouseDelta() const;
+    bool setRelativeMouseMode(bool enabled) const;
+    bool isRelativeMouseMode() const;
+    bool hasInputFocus() const;
     void warpMouse(float x, float y) const;
 
 private:

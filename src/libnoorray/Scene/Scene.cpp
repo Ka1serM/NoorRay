@@ -64,10 +64,8 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     // Adding another camera must not unexpectedly change the rendered view.
     // The first camera is selected as a useful default; later changes are explicit.
     if (auto camera = std::dynamic_pointer_cast<CameraInstance>(sharedObject);
-        camera && activeCamera.expired()) {
-        activeCamera = camera;
-        setDirtyFlag(CameraState);
-    }
+        camera && activeCamera.expired())
+        activateCamera(camera);
 
     if (auto light = std::dynamic_pointer_cast<LightInstance>(sharedObject))
         registerLight(*light);
@@ -109,7 +107,7 @@ void Scene::rebuildGaussianInstanceCache()
 void Scene::clear() {
     // Switch rendering to the persistent viewport camera before scene-owned
     // cameras are destroyed.
-    activeCamera.reset();
+    activateCamera(nullptr);
     sceneObjects.clear();
     gaussianInstances.clear();
     gaussianCount = 0;
@@ -139,6 +137,7 @@ void Scene::clear() {
     environment->visible = 1;
     environment->visibleExposure = 0.0f;
     environment->lightingExposure = 1.0f;
+    environment->setEquirectangularMapping();
     environment->updateDerivedSettings();
     dirtyFlags = TLAS | Meshes | Textures | EnvironmentCdf | Lights
         | CameraState | Accumulation | GaussianData;
@@ -206,12 +205,8 @@ bool Scene::remove(SceneObject* objToRemove) {
                 return object.get() != objToRemove
                     && dynamic_cast<CameraInstance*>(object.get()) != nullptr;
             });
-        if (replacement != sceneObjects.end())
-            activeCamera = std::static_pointer_cast<CameraInstance>(*replacement);
-        else
-            activeCamera.reset();
-        setDirtyFlag(CameraState);
-        setDirtyFlag(Accumulation);
+        activateCamera(replacement != sceneObjects.end()
+            ? std::static_pointer_cast<CameraInstance>(*replacement) : nullptr);
     }
 
     sceneObjects.erase(it);
@@ -249,11 +244,8 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     newShared->scene = this;
     newShared->setId(oldObject->getId());
 
-    if (auto camera = std::dynamic_pointer_cast<CameraInstance>(newShared);
-        camera && (wasActiveCamera || activeCamera.expired()))
-        activeCamera = camera;
-    else if (wasActiveCamera)
-        activeCamera.reset();
+    if (wasActiveCamera || activeCamera.expired())
+        activateCamera(std::dynamic_pointer_cast<CameraInstance>(newShared));
 
     *it = std::move(newShared);
     rebuildGaussianInstanceCache();
@@ -270,11 +262,25 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     return true;
 }
 
+void Scene::activateCamera(const std::shared_ptr<CameraInstance>& camera)
+{
+    const std::shared_ptr<CameraInstance> previous = activeCamera.lock();
+    if (previous == camera)
+        return;
+
+    if (previous)
+        previous->setArcballActive(false);
+    if (camera)
+        camera->setArcballActive(false);
+    activeCamera = camera;
+    ++activeCameraRevision;
+    setDirtyFlag(CameraState);
+    setDirtyFlag(Accumulation);
+}
+
 bool Scene::setActiveCamera(CameraInstance* camera) {
     if (!camera) {
-        activeCamera.reset();
-        setDirtyFlag(CameraState);
-        setDirtyFlag(Accumulation);
+        activateCamera(nullptr);
         return true;
     }
 
@@ -283,10 +289,7 @@ bool Scene::setActiveCamera(CameraInstance* camera) {
     if (!cameraPtr)
         return false;
 
-    if (cameraPtr.get() != getActiveCamera())
-        activeCamera = cameraPtr;
-    setDirtyFlag(CameraState);
-    setDirtyFlag(Accumulation);
+    activateCamera(cameraPtr);
     return true;
 }
 

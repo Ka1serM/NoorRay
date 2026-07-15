@@ -79,17 +79,19 @@ void Window::setFullscreen(const bool fullscreen) const
     SDL_SetWindowFullscreen(window, fullscreen);
 }
 
-void Window::setRelativeMouseMode(const bool enabled) const
+bool Window::setRelativeMouseMode(const bool enabled) const
 {
-    SDL_SetWindowRelativeMouseMode(window, enabled);
+    return SDL_SetWindowRelativeMouseMode(window, enabled);
 }
 
-std::pair<float, float> Window::getRelativeMouseDelta() const
+bool Window::isRelativeMouseMode() const
 {
-    float x{};
-    float y{};
-    SDL_GetRelativeMouseState(&x, &y);
-    return {x, y};
+    return SDL_GetWindowRelativeMouseMode(window);
+}
+
+bool Window::hasInputFocus() const
+{
+    return (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
 
 void Window::warpMouse(const float x, const float y) const

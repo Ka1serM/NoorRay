@@ -6,6 +6,7 @@
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
+#include <glm/gtc/matrix_inverse.hpp>
 
 #include "Vulkan/Texture.h"
 
@@ -58,7 +59,24 @@ void Environment::clearHdriTexture()
     cdfDirty = 1;
 }
 
-std::vector<float> Environment::computeCdf(const float* hdr, const int w, const int h)
+void Environment::setEquirectangularMapping()
+{
+    mapping = EnvironmentMapping::Equirectangular;
+    environmentFromWorld = glm::mat3(1.f);
+    worldFromEnvironment = glm::mat3(1.f);
+    cdfDirty = 1;
+}
+
+void Environment::setEqualAreaMapping(const glm::mat3& transform)
+{
+    mapping = EnvironmentMapping::EqualArea;
+    environmentFromWorld = transform;
+    worldFromEnvironment = glm::inverse(transform);
+    cdfDirty = 1;
+}
+
+std::vector<float> Environment::computeCdf(
+    const float* hdr, const int w, const int h, const EnvironmentMapping mapping)
 {
     std::vector<float> out(w * h * 4, 0.0f);
     std::vector<float> rowIntegrals(h, 0.0f);
@@ -69,14 +87,15 @@ std::vector<float> Environment::computeCdf(const float* hdr, const int w, const 
     tbb::parallel_for(tbb::blocked_range<int>(0, h),
         [&](const tbb::blocked_range<int>& r) {
             for (int y = r.begin(); y != r.end(); ++y) {
-                const float sinTheta = std::sin((y + 0.5f) / float(h) * kPi);
+                const float solidAngleWeight = mapping == EnvironmentMapping::EqualArea
+                    ? 1.0f : std::sin((y + 0.5f) / float(h) * kPi);
                 float integral = 0.0f;
                 for (int x = 0; x < w; ++x) {
                     const int src = (y * w + x) * 4;
                     const float lum = 0.2126f * hdr[src]
                                     + 0.7152f * hdr[src + 1]
                                     + 0.0722f * hdr[src + 2];
-                    const float weight = lum * sinTheta;
+                    const float weight = lum * solidAngleWeight;
                     rowWeights[y * w + x] = weight;
                     integral += weight;
                 }
@@ -97,9 +116,12 @@ std::vector<float> Environment::computeCdf(const float* hdr, const int w, const 
     tbb::parallel_for(tbb::blocked_range<int>(0, h),
         [&](const tbb::blocked_range<int>& r) {
             for (int y = r.begin(); y != r.end(); ++y) {
-                const float sinTheta = std::max(std::sin((y + 0.5f) / float(h) * kPi), 1e-6f);
+                const float sinTheta = mapping == EnvironmentMapping::EqualArea ? 1.0f
+                    : std::max(std::sin((y + 0.5f) / float(h) * kPi), 1e-6f);
                 const float rowNorm  = rowIntegrals[y] > 0.0f ? 1.0f / rowIntegrals[y] : 0.0f;
-                const float pdfScale = float(w) * float(h) / (2.0f * kPi * kPi * sinTheta);
+                const float pdfScale = mapping == EnvironmentMapping::EqualArea
+                    ? float(w) * float(h) / (4.0f * kPi)
+                    : float(w) * float(h) / (2.0f * kPi * kPi * sinTheta);
                 float condAcc = 0.0f;
                 for (int x = 0; x < w; ++x) {
                     const float weight = rowWeights[y * w + x];

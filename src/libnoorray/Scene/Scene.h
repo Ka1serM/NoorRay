@@ -96,6 +96,7 @@ class Scene {
 
     std::shared_ptr<CameraInstance> viewportCamera;
     std::weak_ptr<CameraInstance> activeCamera;
+    uint64_t activeCameraRevision{};
     uint64_t activeObjectId = 0;
     uint64_t nextObjectId = 1;
     uint8_t dirtyFlags = 0;
@@ -107,6 +108,7 @@ class Scene {
 
     std::shared_ptr<SceneObject> findObjectPtr(const SceneObject* object) const;
     std::shared_ptr<SceneObject> findObjectPtr(uint64_t objectId) const;
+    void activateCamera(const std::shared_ptr<CameraInstance>& camera);
 
     uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
     void rebuildGaussianInstanceCache();
@@ -177,6 +179,7 @@ public:
 
     // Camera
     CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }
+    uint64_t getActiveCameraRevision() const { return activeCameraRevision; }
     CameraInstance* getRenderCamera() const {
         if (auto camera = activeCamera.lock())
             return camera.get();

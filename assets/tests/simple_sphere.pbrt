@@ -17,6 +17,12 @@ Material "diffuse" "texture reflectance" "chart"
 Shape "sphere" "float radius" 1
 
 AttributeBegin
+    Transform [1 0 0 0  0 1 0 0  0 0 1 0  2 0 0 1]
+    Material "diffuse" "rgb reflectance" [0.2 0.8 0.3]
+    Shape "plymesh" "string filename" "quad_mesh.ply"
+AttributeEnd
+
+AttributeBegin
     Translate 0 -1 0
     Material "diffuse" "rgb reflectance" [0.6 0.6 0.6]
     Shape "disk" "float radius" 4

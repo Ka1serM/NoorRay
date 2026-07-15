@@ -2,7 +2,7 @@
   "objects": [
     {
       "type": "camera",
-      "name": "Canon Automotive Fisheye",
+      "name": "Samy & Gao 220deg",
       "position": [0.0, 2.0, 5.0],
       "rotation_euler": [0.0, 0.0, 0.0],
       "scale": [1.0, 1.0, 1.0],
@@ -10,9 +10,9 @@
         "projection": "realistic",
         "active": true,
         "focus_distance_cm": 500.0,
-        "exposure": 3.5,
+        "exposure": 4.0,
         "resolution": [1928, 1088],
-        "lens": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/lenses/canon_automotive_fisheye/canon_automotive_fisheye.zmx",
+        "lens": "/home/marcel/GitRepositories/ROSS/resources/lenses/samy_gao/Samy&Gao-1(220deg).zmx",
         "sensor": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/sensors/onsemi_AR0237.json",
         "glass_catalogs": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/glasscatalogs/ohara.AGF;/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/glasscatalogs/schott.AGF"
       }

@@ -142,6 +142,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         ShadowWorkItem shadow{};
         shadow.tMin = 1.0f;
         shadow.tMax = 0.0f;
+        shadow.excludedGaussianId = InvalidIndex;
         if (mayWriteShadowQueue)
             params.queues.shadowQueue[index].tMax = 0.0f;
         PathState state = params.queues.pathStates[hit.sampleIndex];
@@ -269,6 +270,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                             state.throughput * brdf * lightSample.radiance;
                         shadow.rngState     = shadowRng;
                         shadow.sampleIndex  = hit.sampleIndex;
+                        shadow.excludedGaussianId = gaussianId;
                         params.queues.shadowQueue[index] = shadow;
                     }
                 }

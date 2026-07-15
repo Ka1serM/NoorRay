@@ -85,6 +85,7 @@ struct alignas(16) ShadowWorkItem
     SampledSpectrum contribution;
     RandomState rngState;
     uint32_t sampleIndex;
+    uint32_t excludedGaussianId;
 };
 
 struct WavefrontQueues

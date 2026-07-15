@@ -53,7 +53,8 @@ NR_GPU inline RayHit intersectRay(
     const float tMax,
     const uint32_t sampleIndex = 0,
     const bool gaussianEnabled = true,
-    const bool meshVisibilityBoundEnabled = true)
+    const bool meshVisibilityBoundEnabled = true,
+    const uint32_t excludedGaussianId = InvalidIndex)
 {
     RayHit hit{};
 #if defined(NR_GPU_DEVICE_COMPILE)
@@ -90,7 +91,10 @@ NR_GPU inline RayHit intersectRay(
         const float gaussianTMax = meshHit.instanceIndex != InvalidIndex ? meshHit.t : tMax;
         uint32_t payload0 = sampleIndex;
         uint32_t payload1 = __float_as_uint(gaussianTMax);
-        uint32_t payload2 = InvalidIndex;
+        // Before acceptance payload 2 identifies a Gaussian that must not
+        // intersect this ray. Any-hit overwrites it only when another
+        // Gaussian is accepted.
+        uint32_t payload2 = excludedGaussianId;
         optixTraverse(
             accel,
             make_float3(origin.x, origin.y, origin.z),
@@ -105,12 +109,12 @@ NR_GPU inline RayHit intersectRay(
             0,
             payload0, payload1, payload2);
 
-        const uint32_t gaussianId = payload2;
-        if (gaussianId != InvalidIndex)
+        const float gaussianT = __uint_as_float(payload1);
+        if (gaussianT < gaussianTMax)
         {
             // Gaussian accepted via Russian roulette.
-            hit.instanceIndex = gaussianId;
-            hit.t = __uint_as_float(payload1);
+            hit.instanceIndex = payload2;
+            hit.t = gaussianT;
         }
         else if (meshHit.instanceIndex != InvalidIndex)
         {

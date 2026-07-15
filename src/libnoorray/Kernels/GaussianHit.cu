@@ -16,6 +16,15 @@ extern "C" __global__ void __anyhit__gaussian()
     const uint32_t instanceId = optixGetInstanceId();
     const uint32_t globalGaussianId = instanceId;
 
+    // Shadow rays start inside the Gaussian that produced the scattering
+    // event. Exclude that exact instance instead of relying on a world-space
+    // epsilon, which cannot cover differently scaled Gaussians robustly.
+    if (globalGaussianId == optixGetPayload_2())
+    {
+        optixIgnoreIntersection();
+        return;
+    }
+
     const float opacity = params.scene.gaussianOpacities[globalGaussianId];
     if (opacity <= 0.0f)
     {

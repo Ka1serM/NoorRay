@@ -18,6 +18,8 @@
 #include "Light/SpotLight.h"
 #include "Light/RectLight.h"
 
+struct AnalyticLightAliasEntry;
+
 struct GpuSceneData
 {
     const MeshAsset* meshes{};
@@ -26,6 +28,7 @@ struct GpuSceneData
     const SpotLight* spotLights{};
     const RectLight* rectLights{};
     const DirectionalLight* directionalLights{};
+    const AnalyticLightAliasEntry* analyticLightAliases{};
     const nr::cuda::UniqueTexture* textures{};
     TlasHandle tlasHandle{};
     RenderSettings renderSettings{};
@@ -47,6 +50,7 @@ struct GpuSceneData
     uint32_t rectLightCount{};
     uint32_t directionalLightCount{};
     float analyticLightSelectionWeight{};
+    uint32_t analyticLightAliasCount{};
     uint32_t textureCount{};
     // Gaussian splat data — flat GPU arrays.
     const float* gaussianOpacities{}; // sigmoid opacity, indexed by global id

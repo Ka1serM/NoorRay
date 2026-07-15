@@ -15,6 +15,7 @@ enum class SampleDimension : uint32_t
     PixelY,
     LensX,
     LensY,
+    Opacity,
 };
 
 struct SampleKey

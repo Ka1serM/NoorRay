@@ -114,7 +114,7 @@ void runCli(const CliOptions& options)
     session.scene.getRenderSettings().samples = options.samplesPerPixel;
     session.scene.getRenderSettings().optixDenoiserEnabled = options.denoiserEnabled;
     LOG_INFO("Rendering @ " << options.samplesPerPixel << " spp");
-    raytracer.renderFrame(PushData{.frame = 0});
+    raytracer.renderFrame(0, 0);
     raytracer.getOutputColor().save(options.outputPath);
     raytracer.harvestKernelStats();
     LOG_INFO("Saved: " << options.outputPath);

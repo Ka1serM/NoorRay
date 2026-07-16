@@ -72,6 +72,18 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetColumnIndex(1);
         changed |= ImGui::Checkbox("##OptixDenoiser", &settings.optixDenoiserEnabled);
 
+        if (settings.optixDenoiserEnabled)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Denoiser Min Samples");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            changed |= ImGui::DragInt(
+                "##OptixDenoiserMinSamples", &settings.optixDenoiserMinSamples,
+                1.0f, 1, 100000, "%d", ImGuiSliderFlags_AlwaysClamp);
+        }
+
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Max Bounces");

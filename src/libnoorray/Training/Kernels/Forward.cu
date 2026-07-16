@@ -11,11 +11,12 @@ NR_GPU_KERNEL void generateGaussianTrainKernel(const GaussianTrainingKernelParam
     PathRayWorkItem ray{};
     if (active)
     {
-        const OwenSobolSampler sampler({params.frame.totalAccumulated, pixel});
-        const SampledWavelengths wl = SampledWavelengths::sampleVisible(
-            sampler.sample1D(SampleDimension::Wavelength));
         const uint32_t x = pixel % params.frame.width;
         const uint32_t y = pixel / params.frame.width;
+        const OwenSobolSampler sampler({
+            params.frame.totalAccumulated, hashCombine32(x, y)});
+        const SampledWavelengths wl = SampledWavelengths::sampleVisible(
+            sampler.sample1D(SampleDimension::Wavelength));
         glm::vec2 jitter(0.5f, 0.5f);
         if (params.frame.frameIndex != 0)
             jitter = sampler.sample2D(PixelSampleDimensions);

@@ -63,6 +63,8 @@ nr::sceneio::RenderSettingsFile makeRenderSettingsFile(const RenderSettings& set
         .max_samples = settings.maxSamples,
         .noise_limit_enabled = settings.noiseLimitEnabled,
         .noise_level = settings.noiseLevel,
+        .optix_denoiser_enabled = settings.optixDenoiserEnabled,
+        .optix_denoiser_min_samples = settings.optixDenoiserMinSamples,
         .gaussian_shading_mode = static_cast<int>(settings.gaussianShadingMode),
         .gaussian_render_sh_degree = static_cast<int>(settings.gaussianRenderSphericalHarmonics),
     };

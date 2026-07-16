@@ -10,12 +10,13 @@
 
 enum class SampleDimension : uint32_t
 {
-    Wavelength,
     PixelX,
     PixelY,
+    Wavelength,
     LensX,
     LensY,
     Opacity,
+    Count,
 };
 
 struct SampleKey

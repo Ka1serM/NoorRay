@@ -18,6 +18,7 @@ endfunction()
 
 add_noorray_test(sampler_sequence_test SamplerSequenceTest.cpp sampler)
 add_noorray_test(sampler_distribution_test SamplerDistributionTest.cpp sampler)
+target_link_libraries(sampler_distribution_test PRIVATE glm)
 add_noorray_test(cuda_unique_handle_test CudaUniqueHandleTest.cpp cuda)
 
 add_noorray_test(tagged_object_test

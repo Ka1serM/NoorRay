@@ -1,5 +1,6 @@
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include "NoorRaySession.h"
@@ -16,8 +17,11 @@ struct CliOptions
     std::string scenePath;
     std::string outputPath{"output.exr"};
     int samplesPerPixel{64};
+    int maxBounces{-1};
     int width{};
     int height{};
+    std::optional<GaussianShadingMode> gaussianShadingMode;
+    std::optional<GaussianProxyType> gaussianProxyType;
     bool statsEnabled{};
     bool denoiserEnabled{};
     bool cliMode{};
@@ -35,6 +39,11 @@ void printUsage()
         << "  --output <path>      Output image path (default: output.exr)\n"
         << "  --width  <int>       Output width (default: from camera sensor or 1280)\n"
         << "  --height <int>       Output height (default: from camera sensor or 720)\n"
+        << "  --max-bounces <int>  Maximum path depth (default: from scene)\n"
+        << "  --gaussian-shading <direct|gi>\n"
+        << "                       Override the scene's Gaussian shading mode\n"
+        << "  --gaussian-proxy <icosphere|octahedron>\n"
+        << "                       Override the Gaussian tracing proxy geometry\n"
         << "  --denoise            Apply the OptiX HDR beauty denoiser\n"
         << "  --stats              Print a per-kernel GPU timing breakdown after rendering\n";
 }
@@ -67,6 +76,30 @@ CliOptions parseOptions(const int argc, char* argv[])
             options.width = std::stoi(requireValue(argc, argv, i));
         else if (arg == "--height")
             options.height = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--max-bounces")
+            options.maxBounces = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--gaussian-shading")
+        {
+            const std::string mode = requireValue(argc, argv, i);
+            if (mode == "direct")
+                options.gaussianShadingMode = GaussianShadingMode::DirectColor;
+            else if (mode == "gi")
+                options.gaussianShadingMode = GaussianShadingMode::GlobalIllumination;
+            else
+                throw std::invalid_argument(
+                    "--gaussian-shading must be either 'direct' or 'gi'");
+        }
+        else if (arg == "--gaussian-proxy")
+        {
+            const std::string type = requireValue(argc, argv, i);
+            if (type == "icosphere")
+                options.gaussianProxyType = GaussianProxyType::Icosphere;
+            else if (type == "octahedron")
+                options.gaussianProxyType = GaussianProxyType::Octahedron;
+            else
+                throw std::invalid_argument(
+                    "--gaussian-proxy must be either 'icosphere' or 'octahedron'");
+        }
         else if (arg == "--stats")
             options.statsEnabled = true;
         else if (arg == "--denoise")
@@ -83,6 +116,8 @@ CliOptions parseOptions(const int argc, char* argv[])
         throw std::invalid_argument("--spp must be greater than zero");
     if (options.width < 0 || options.height < 0)
         throw std::invalid_argument("--width and --height cannot be negative");
+    if (options.maxBounces == 0 || options.maxBounces < -1)
+        throw std::invalid_argument("--max-bounces must be greater than zero");
     return options;
 }
 
@@ -112,6 +147,12 @@ void runCli(const CliOptions& options)
     raytracer.setStatsEnabled(options.statsEnabled);
     raytracer.setTimingEnabled(options.statsEnabled);
     session.scene.getRenderSettings().samples = options.samplesPerPixel;
+    if (options.maxBounces > 0)
+        session.scene.getRenderSettings().maxBounces = options.maxBounces;
+    if (options.gaussianShadingMode)
+        session.scene.getRenderSettings().gaussianShadingMode = *options.gaussianShadingMode;
+    if (options.gaussianProxyType)
+        session.scene.getRenderSettings().gaussianProxyType = *options.gaussianProxyType;
     session.scene.getRenderSettings().optixDenoiserEnabled = options.denoiserEnabled;
     LOG_INFO("Rendering @ " << options.samplesPerPixel << " spp");
     raytracer.renderFrame(0, 0);

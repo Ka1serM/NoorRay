@@ -123,17 +123,21 @@ NR_GPU inline glm::vec3 shadeBsdfLobe(
     return bsdfSample.direction;
 }
 
-NR_GPU_KERNEL void shadeKernel(const KernelParams params)
+template<bool GaussianOnly>
+NR_GPU inline void shadeKernelImpl(const KernelParams params)
 {
     const uint32_t index = NR_GPU_LAUNCH_IDX;
     const uint32_t activeCount = params.queues.rayCounts[params.depth];
     const bool inRange = index < activeCount;
-    const bool gaussianDirectColor =
+    const bool gaussianDirectColor = !GaussianOnly &&
         params.scene.renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor;
-    const bool mayWriteShadowQueue = params.scene.meshInstanceCount > 0 ||
-        (!gaussianDirectColor &&
-            (params.scene.analyticLightAliasCount > 0
-                || params.scene.environment->importanceWeight > 0.0f));
+    const bool mayWriteShadowQueue = GaussianOnly
+        ? params.scene.analyticLightAliasCount > 0
+            || params.scene.environment->importanceWeight > 0.0f
+        : params.scene.meshInstanceCount > 0 ||
+            (!gaussianDirectColor &&
+                (params.scene.analyticLightAliasCount > 0
+                    || params.scene.environment->importanceWeight > 0.0f));
     bool continuePath = false;
     PathRayWorkItem continuation{};
     if (inRange)
@@ -154,7 +158,8 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         // is >= meshInstanceCount too — exclude it explicitly, or every missed
         // ray reads gaussianShCoeffs[] wildly out of bounds.
         const bool isMiss = hit.instanceIndex == InvalidIndex;
-        const bool isGaussianHit = !isMiss && hit.instanceIndex >= params.scene.meshInstanceCount;
+        const bool isGaussianHit = !isMiss &&
+            (GaussianOnly || hit.instanceIndex >= params.scene.meshInstanceCount);
 
         // Gaussian splat: isotropic scattering (no surface normal needed).
         // The Russian roulette any-hit already accepted this splat with
@@ -183,7 +188,8 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 albedo.values[i] = rgbSigmoidEval(spectralPolynomial.x,
                     spectralPolynomial.y, spectralPolynomial.z, wl.lambda[i]);
 
-            if (params.scene.renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor)
+            if (!GaussianOnly && params.scene.renderSettings.gaussianShadingMode
+                    == GaussianShadingMode::DirectColor)
             {
                 state.radiance += state.throughput * albedo;
                 params.queues.pathStates[hit.sampleIndex] = state;
@@ -329,7 +335,7 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
                 state.packedCounters |= 1u << CounterHitShift;
             params.queues.pathStates[hit.sampleIndex] = state;
         }
-        else
+        else if constexpr (!GaussianOnly)
         {
             SurfaceData surface = loadSurface(params.scene, hit.instanceIndex, hit.primitiveIndex, hit.attribute0, hit.attribute1);
             const Material& material = *surface.material;
@@ -402,4 +408,14 @@ NR_GPU_KERNEL void shadeKernel(const KernelParams params)
         }
     }
     appendRayWarp(params.queues, params.depth + 1, inRange && continuePath, continuation);
+}
+
+NR_GPU_KERNEL void shadeKernel(const KernelParams params)
+{
+    shadeKernelImpl<false>(params);
+}
+
+NR_GPU_KERNEL void shadeGaussianGiKernel(const KernelParams params)
+{
+    shadeKernelImpl<true>(params);
 }

@@ -32,7 +32,7 @@ NR_GPU inline bool shadowOccluded(
         const RayHit hit = intersectRay(params.scene.tlasHandle, shadow.origin,
             shadow.direction, rayMin, shadow.tMax, gaussianSampleIndex,
             gaussianEnabled, meshVisibilityBoundEnabled,
-            shadow.excludedGaussianId);
+            shadow.excludedGaussianId, true);
         if (hit.instanceIndex == InvalidIndex)
             return false;
 

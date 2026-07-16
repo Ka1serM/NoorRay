@@ -54,7 +54,8 @@ NR_GPU inline RayHit intersectRay(
     const uint32_t sampleIndex = 0,
     const bool gaussianEnabled = true,
     const bool meshVisibilityBoundEnabled = true,
-    const uint32_t excludedGaussianId = InvalidIndex)
+    const uint32_t excludedGaussianId = InvalidIndex,
+    const bool terminateOnFirstGaussianHit = false)
 {
     RayHit hit{};
 #if defined(NR_GPU_DEVICE_COMPILE)
@@ -103,7 +104,9 @@ NR_GPU inline RayHit intersectRay(
             gaussianTMax,
             0.0f,
             GaussianVisibility,
-            OPTIX_RAY_FLAG_NONE,
+            terminateOnFirstGaussianHit
+                ? OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT
+                : OPTIX_RAY_FLAG_NONE,
             0,
             1,
             0,

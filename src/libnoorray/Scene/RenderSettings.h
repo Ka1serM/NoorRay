@@ -32,7 +32,7 @@ public:
     bool tonemappingEnabled{false};
     bool transparentBackground{false};
     float gaussianCutoffSigma{3.0f};
-    GaussianProxyType gaussianProxyType{GaussianProxyType::Icosahedron};
+    GaussianProxyType gaussianProxyType{GaussianProxyType::Icosphere};
     GaussianShadingMode gaussianShadingMode{GaussianShadingMode::DirectColor};
     SphericalHarmonicsOrder gaussianRenderSphericalHarmonics{SphericalHarmonicsOrder::Degree3};
     bool gaussianProxyOverdrawVisualization{false};

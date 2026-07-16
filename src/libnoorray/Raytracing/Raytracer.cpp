@@ -81,6 +81,7 @@ extern NR_GPU_KERNEL void resolveScatterPsfKernel(KernelParams);
 extern NR_GPU_KERNEL void applyGatherPsfKernel(KernelParams);
 extern NR_GPU_KERNEL void shadeKernel(KernelParams);
 extern NR_GPU_KERNEL void shadeGaussianDirectKernel(KernelParams);
+extern NR_GPU_KERNEL void shadeGaussianGiKernel(KernelParams);
 extern NR_GPU_KERNEL void generateGaussianTrainKernel(GaussianTrainingKernelParams);
 extern NR_GPU_KERNEL void shadeGaussianTrainForwardKernel(GaussianTrainingKernelParams);
 extern NR_GPU_KERNEL void finalizeGaussianTrainForwardKernel(GaussianTrainingKernelParams);
@@ -269,7 +270,7 @@ Raytracer::Raytracer(
     optixProxyOverdrawRecord = uploadRecord(optixProxyOverdrawGroup.get());
     optixTrainingExtendRecord = uploadRecord(optixTrainingExtendGroup.get());
 
-    // Upload two hitgroup records contiguously: mesh (sbtOffset=0) and Gaussian (sbtOffset=1)
+    // Upload two hitgroup records contiguously: mesh and Gaussian proxy.
     {
         SbtRecord<> meshSbt{};
         NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
@@ -632,6 +633,24 @@ void Raytracer::updateTLAS()
         scene.buildGaussianRenderData();
         gpuCache.data.gaussianOpacities = scene.getGaussianOpacities();
         gpuCache.data.gaussianShCoeffs = scene.getGaussianShCoeffs();
+
+        int cudaDevice = 0;
+        NR_GPU_CHECK(cudaGetDevice(&cudaDevice));
+        const cudaMemLocation deviceLocation{
+            .type = cudaMemLocationTypeDevice,
+            .id = cudaDevice,
+        };
+        const auto prefetchReadOnly = [&](const void* pointer, const size_t bytes) {
+            if (pointer == nullptr || bytes == 0)
+                return;
+            NR_GPU_CHECK(cudaMemAdvise(
+                pointer, bytes, cudaMemAdviseSetReadMostly, deviceLocation));
+            NR_GPU_CHECK(cudaMemPrefetchAsync(pointer, bytes, deviceLocation, 0, stream));
+        };
+        prefetchReadOnly(gpuCache.data.gaussianOpacities,
+            sizeof(float) * static_cast<size_t>(gaussianCount));
+        prefetchReadOnly(gpuCache.data.gaussianShCoeffs,
+            sizeof(glm::vec3) * 16u * static_cast<size_t>(gaussianCount));
     }
     auto& gpuInstances = gpuCache.instances;
     tlas.build(optixCtx, stream, scene, gpuInstances);
@@ -871,6 +890,17 @@ void Raytracer::launchShadeGaussianDirect(
     void* args[] = {const_cast<KernelParams*>(&params)};
     NR_GPU_CHECK(cudaLaunchKernel(
         reinterpret_cast<const void*>(&shadeGaussianDirectKernel),
+        grid, blockSize, args, 0, stream));
+}
+
+void Raytracer::launchShadeGaussianGi(
+    const KernelParams& params, const uint32_t launchCount, const cudaStream_t stream) const
+{
+    constexpr uint32_t blockSize = 256;
+    const dim3 grid((launchCount + blockSize - 1) / blockSize, 1, 1);
+    void* args[] = {const_cast<KernelParams*>(&params)};
+    NR_GPU_CHECK(cudaLaunchKernel(
+        reinterpret_cast<const void*>(&shadeGaussianGiKernel),
         grid, blockSize, args, 0, stream));
 }
 
@@ -1164,6 +1194,8 @@ void Raytracer::renderFrame(
         renderSettings.gaussianShadingMode == GaussianShadingMode::DirectColor;
     const bool gaussianDirectOnly = gaussianDirectColor
         && gpuCache.data.meshInstanceCount == 0;
+    const bool gaussianGiOnly = !gaussianDirectColor
+        && gpuCache.data.meshInstanceCount == 0;
     const uint32_t configuredSamplesPerFrame =
         static_cast<uint32_t>(std::max(1, renderSettings.samples));
     const uint32_t maxSamples = context.isHeadless()
@@ -1244,6 +1276,9 @@ void Raytracer::renderFrame(
                 if (gaussianDirectOnly)
                     kernelStats.time("ShadeDirect", stream,
                         [&] { launchShadeGaussianDirect(params, queues.capacity, stream); });
+                else if (gaussianGiOnly)
+                    kernelStats.time("ShadeGi", stream,
+                        [&] { launchShadeGaussianGi(params, queues.capacity, stream); });
                 else
                     kernelStats.time("Shade", stream,
                         [&] { launchShade(params, queues.capacity, stream); });

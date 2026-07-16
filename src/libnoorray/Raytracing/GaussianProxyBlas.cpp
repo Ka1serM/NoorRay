@@ -81,7 +81,8 @@ void generateConvexHullFaces(ProxyMesh& mesh)
     }
 }
 
-void validateMesh(ProxyMesh& mesh, const size_t expectedVertices, const size_t expectedFaces)
+void validateMesh(ProxyMesh& mesh, const size_t expectedVertices,
+    const size_t expectedFaces, const bool requireRegularFaces = true)
 {
     constexpr float epsilon = 1e-4f;
     if (mesh.vertices.size() != expectedVertices || mesh.indices.size() != expectedFaces * 3)
@@ -117,7 +118,7 @@ void validateMesh(ProxyMesh& mesh, const size_t expectedVertices, const size_t e
 
     if (std::abs(radius - 1.0f) > epsilon)
         throw std::runtime_error("Generated Gaussian proxy is not unit normalized");
-    if (maxInradius - minInradius > epsilon)
+    if (requireRegularFaces && maxInradius - minInradius > epsilon)
         throw std::runtime_error("Generated Gaussian proxy faces are not uniformly tangent");
     for (const auto& [edge, uses] : edgeUse)
     {
@@ -128,76 +129,95 @@ void validateMesh(ProxyMesh& mesh, const size_t expectedVertices, const size_t e
         minEdgeLength = std::min(minEdgeLength, edgeLength);
         maxEdgeLength = std::max(maxEdgeLength, edgeLength);
     }
-    if (maxEdgeLength - minEdgeLength > epsilon)
+    if (requireRegularFaces && maxEdgeLength - minEdgeLength > epsilon)
         throw std::runtime_error("Generated Gaussian proxy does not have regular edges");
     mesh.inradius = minInradius;
 }
 
-ProxyMesh generateProxy(const GaussianProxyType type)
+ProxyMesh generateIcosphereProxy()
 {
     ProxyMesh mesh;
-    size_t expectedVertices = 0;
-    size_t expectedFaces = 0;
-    switch (type)
+    constexpr float phi = std::numbers::phi_v<float>;
+    for (const float a : {-1.0f, 1.0f})
+    for (const float b : {-phi, phi})
     {
-    case GaussianProxyType::Icosahedron:
-    {
-        constexpr float phi = std::numbers::phi_v<float>;
-        for (const float a : {-1.0f, 1.0f})
-        for (const float b : {-phi, phi})
-        {
-            mesh.vertices.emplace_back(0.0f, a, b);
-            mesh.vertices.emplace_back(a, b, 0.0f);
-            mesh.vertices.emplace_back(b, 0.0f, a);
-        }
-        expectedVertices = 12;
-        expectedFaces = 20;
-        break;
+        mesh.vertices.emplace_back(0.0f, a, b);
+        mesh.vertices.emplace_back(a, b, 0.0f);
+        mesh.vertices.emplace_back(b, 0.0f, a);
     }
-    case GaussianProxyType::Octahedron:
-        for (uint32_t axis = 0; axis < 3; ++axis)
-        for (const float sign : {-1.0f, 1.0f})
-        {
-            glm::vec3 vertex(0.0f);
-            vertex[axis] = sign;
-            mesh.vertices.push_back(vertex);
-        }
-        expectedVertices = 6;
-        expectedFaces = 8;
-        break;
-    case GaussianProxyType::TriangularBipyramid:
-    {
-        const float baseRadius = 1.0f / std::sqrt(2.0f);
-        for (uint32_t i = 0; i < 3; ++i)
-        {
-            const float angle = 2.0f * std::numbers::pi_v<float>
-                              * static_cast<float>(i) / 3.0f;
-            mesh.vertices.emplace_back(
-                baseRadius * std::cos(angle), baseRadius * std::sin(angle), 0.0f);
-        }
-        mesh.vertices.emplace_back(0.0f, 0.0f, 1.0f);
-        mesh.vertices.emplace_back(0.0f, 0.0f, -1.0f);
-        expectedVertices = 5;
-        expectedFaces = 6;
-        break;
-    }
-    }
+
     normalizeVertices(mesh);
     generateConvexHullFaces(mesh);
-    validateMesh(mesh, expectedVertices, expectedFaces);
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> midpoints;
+    const auto midpoint = [&](const uint32_t a, const uint32_t b) {
+        const auto edge = std::minmax(a, b);
+        if (const auto found = midpoints.find(edge); found != midpoints.end())
+            return found->second;
+        const uint32_t index = static_cast<uint32_t>(mesh.vertices.size());
+        mesh.vertices.push_back(glm::normalize(mesh.vertices[a] + mesh.vertices[b]));
+        midpoints.emplace(edge, index);
+        return index;
+    };
+
+    std::vector<uint32_t> refinedIndices;
+    refinedIndices.reserve(mesh.indices.size() * 4);
+    for (size_t index = 0; index < mesh.indices.size(); index += 3)
+    {
+        const uint32_t a = mesh.indices[index];
+        const uint32_t b = mesh.indices[index + 1];
+        const uint32_t c = mesh.indices[index + 2];
+        const uint32_t ab = midpoint(a, b);
+        const uint32_t bc = midpoint(b, c);
+        const uint32_t ca = midpoint(c, a);
+        refinedIndices.insert(refinedIndices.end(), {
+            a, ab, ca,
+            b, bc, ab,
+            c, ca, bc,
+            ab, bc, ca,
+        });
+    }
+    mesh.indices = std::move(refinedIndices);
+
+    // Minimax orientation for the frequency-2 vertex set. It reduces the
+    // object-space BLAS AABB half-extent from 1 to 0.94502682 on every axis.
+    for (glm::vec3& vertex : mesh.vertices)
+    {
+        vertex = {
+            0.74293414f * vertex.x - 0.32699283f * vertex.y
+                + 0.58405870f * vertex.z,
+           -0.25706586f * vertex.x - 0.94502682f * vertex.y
+                - 0.20209268f * vertex.z,
+            0.61803399f * vertex.x - 0.78615138f * vertex.z,
+        };
+    }
+    normalizeVertices(mesh);
+    validateMesh(mesh, 42, 80, false);
     return mesh;
 }
 
-const std::array<ProxyMesh, 3>& generatedProxies()
+ProxyMesh generateOctahedronProxy()
 {
-    // Constructing the table validates every supported shape, not only the
-    // currently selected one. Any bad topology fails before OptiX sees it.
-    static const std::array<ProxyMesh, 3> meshes = {
-        generateProxy(GaussianProxyType::Icosahedron),
-        generateProxy(GaussianProxyType::Octahedron),
-        generateProxy(GaussianProxyType::TriangularBipyramid),
+    ProxyMesh mesh;
+    for (uint32_t axis = 0; axis < 3; ++axis)
+    for (const float sign : {-1.0f, 1.0f})
+    {
+        glm::vec3 vertex(0.0f);
+        vertex[axis] = sign;
+        mesh.vertices.push_back(vertex);
+    }
+    normalizeVertices(mesh);
+    generateConvexHullFaces(mesh);
+    validateMesh(mesh, 6, 8);
+    return mesh;
+}
+
+const ProxyMesh& generatedProxy(const GaussianProxyType type)
+{
+    static const std::array meshes{
+        generateIcosphereProxy(),
+        generateOctahedronProxy(),
     };
-    return meshes;
+    return meshes.at(static_cast<size_t>(type));
 }
 }
 
@@ -235,7 +255,11 @@ void GaussianProxyBlas::build(
 {
     reset();
 
-    const ProxyMesh& proxy = generatedProxies().at(static_cast<size_t>(type));
+    OptixBuildInput buildInput{};
+    nr::cuda::UniqueAsyncDeviceBuffer vertexBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer indexBuffer;
+
+    const ProxyMesh& proxy = generatedProxy(type);
     const size_t vertexCount = proxy.vertices.size();
     const size_t indexCount = proxy.indices.size();
     const size_t triCount = indexCount / 3;
@@ -252,14 +276,13 @@ void GaussianProxyBlas::build(
     // Upload vertex + index data to device.
     const size_t vertexBytes = vertexCount * 3 * sizeof(float);
     const size_t indexBytes  = indexCount * sizeof(uint32_t);
-    nr::cuda::UniqueAsyncDeviceBuffer vertexBuffer(vertexBytes, stream);
-    nr::cuda::UniqueAsyncDeviceBuffer indexBuffer(indexBytes, stream);
+    vertexBuffer.allocate(vertexBytes, stream);
+    indexBuffer.allocate(indexBytes, stream);
     NR_GPU_CHECK(cudaMemcpyAsync(vertexBuffer.get(),
         scaledVertices.data(), vertexBytes, cudaMemcpyHostToDevice, stream));
     NR_GPU_CHECK(cudaMemcpyAsync(indexBuffer.get(),
         proxy.indices.data(), indexBytes, cudaMemcpyHostToDevice, stream));
 
-    OptixBuildInput buildInput{};
     buildInput.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
     buildInput.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
     buildInput.triangleArray.vertexStrideInBytes = 3 * sizeof(float);

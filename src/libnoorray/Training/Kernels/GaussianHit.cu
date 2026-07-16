@@ -28,7 +28,7 @@ extern "C" __global__ void __anyhit__trainingGaussian()
     const float tClosest = -(rayOrigin.x * rayDirection.x
         + rayOrigin.y * rayDirection.y + rayOrigin.z * rayDirection.z)
         / fmaxf(directionLengthSq, 1.0e-8f);
-    const float hitT = fmaxf(tClosest, 0.0f);
+    const float hitT = fmaxf(tClosest, optixGetRayTmin());
     if (hitT >= __uint_as_float(optixGetPayload_1()))
     {
         optixIgnoreIntersection();

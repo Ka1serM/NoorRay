@@ -42,7 +42,7 @@ extern "C" __global__ void __anyhit__gaussian()
     // OptiX does not normalize the object-space ray direction, so this t is
     // numerically identical to the world-space ray parameter — usable as the
     // shading hit distance without any extra transform.
-    const float hitT = fmaxf(tClosest, 0.0f);
+    const float hitT = fmaxf(tClosest, optixGetRayTmin());
     const float maxHitT = __uint_as_float(optixGetPayload_1());
     if (hitT >= maxHitT)
     {

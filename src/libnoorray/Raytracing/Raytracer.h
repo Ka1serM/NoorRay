@@ -203,6 +203,8 @@ private:
     void launchShade(const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
     void launchShadeGaussianDirect(
         const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
+    void launchShadeGaussianGi(
+        const KernelParams& params, uint32_t launchCount, cudaStream_t stream) const;
     void launchGenerateGaussianTrain(
         const GaussianTrainingKernelParams& params, cudaStream_t stream) const;
     void launchShadeGaussianTrainForward(

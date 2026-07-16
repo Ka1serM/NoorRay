@@ -58,13 +58,13 @@ ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numI
     init_info.DescriptorPool = context.getDescriptorPool();
     init_info.MinImageCount = 2;
     init_info.ImageCount = numImages;
-    init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     
     init_info.UseDynamicRendering = true;
-    init_info.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
-    init_info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
     const auto renderTargetFormat = static_cast<VkFormat>(targetFormat.format);
-    init_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &renderTargetFormat;
+    init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &renderTargetFormat;
     
     ImGui_ImplVulkan_Init(&init_info);
 }
@@ -81,6 +81,7 @@ void ImGuiManager::updateUi() {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+    ImGui::PushItemFlag(ImGuiItemFlags_LiveEditOnInputScalar, false);
 
     const auto* mainViewport = ImGui::GetMainViewport();
     const float menuBarSize = ImGui::GetFrameHeight();
@@ -105,6 +106,7 @@ void ImGuiManager::updateUi() {
         component->renderUi();
 
     ImGui::End();
+    ImGui::PopItemFlag();
 
     ImGui::Render();
 }

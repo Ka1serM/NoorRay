@@ -10,9 +10,8 @@
 
 enum class GaussianProxyType : int
 {
-    Icosahedron,
+    Icosphere,
     Octahedron,
-    TriangularBipyramid,
 };
 
 class GaussianProxyBlas
@@ -26,7 +25,8 @@ public:
     GaussianProxyBlas(GaussianProxyBlas&& other) noexcept;
     GaussianProxyBlas& operator=(GaussianProxyBlas&& other) noexcept;
 
-    void build(OptixDeviceContext context, cudaStream_t stream, GaussianProxyType type, float cutoffSigma);
+    void build(OptixDeviceContext context, cudaStream_t stream,
+        GaussianProxyType type, float cutoffSigma);
     void reset() noexcept;
 
     OptixTraversableHandle getTraversable() const { return handle; }

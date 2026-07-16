@@ -21,11 +21,12 @@ NR_GPU_KERNEL void generateKernel(const KernelParams params)
     SampledWavelengths wl{};
     if (active)
     {
-        const OwenSobolSampler sampler({params.frame.totalAccumulated, pixel});
-        const float wavelengthSample = sampler.sample1D(SampleDimension::Wavelength);
-        wl = SampledWavelengths::sampleVisible(wavelengthSample);
         const uint32_t x = pixel % params.frame.width;
         const uint32_t y = pixel / params.frame.width;
+        const OwenSobolSampler sampler({
+            params.frame.totalAccumulated, hashCombine32(x, y)});
+        const float wavelengthSample = sampler.sample1D(SampleDimension::Wavelength);
+        wl = SampledWavelengths::sampleVisible(wavelengthSample);
         // Per-pixel Owen scrambling decorrelates neighboring pixels while each
         // pixel retains a low-discrepancy sequence over accumulated samples.
         // While the camera is being moved, freeze the sample at the pixel
@@ -87,13 +88,14 @@ NR_GPU_KERNEL void generateGaussianDirectKernel(const KernelParams params)
     if (pixel >= total)
         return;
 
-    const OwenSobolSampler sampler({params.frame.totalAccumulated, pixel});
+    const uint32_t x = pixel % params.frame.width;
+    const uint32_t y = pixel / params.frame.width;
+    const OwenSobolSampler sampler({
+        params.frame.totalAccumulated, hashCombine32(x, y)});
     const float wavelengthSample = sampler.sample1D(SampleDimension::Wavelength);
     SampledWavelengths wl = params.scene.camera->Is<RealisticCamera>()
         ? SampledWavelengths::sampleVisibleSingle(wavelengthSample)
         : SampledWavelengths::sampleVisible(wavelengthSample);
-    const uint32_t x = pixel % params.frame.width;
-    const uint32_t y = pixel / params.frame.width;
     glm::vec2 jitter(0.5f);
     if (params.frame.frameIndex != 0)
         jitter = sampler.sample2D(PixelSampleDimensions);

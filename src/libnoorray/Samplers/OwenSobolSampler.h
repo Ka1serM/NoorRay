@@ -2,36 +2,37 @@
 
 #include <cstdint>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 #include <glm/vec2.hpp>
 
+#include "Samplers/OwenSobolDirectionNumbers.h"
 #include "Samplers/Sampler.h"
 
-// Table-free first two Sobol dimensions with Burley's fast Owen scrambling.
-// One raw point can be independently scrambled for padded 1D/2D dimensions.
+// Table-free Sobol dimensions with Burley's fast Owen scrambling.
 class OwenSobolSampler : public IndexedSampler<OwenSobolSampler>
 {
 public:
-    NR_CPU_GPU explicit OwenSobolSampler(const SampleKey key)
-        : IndexedSampler(key), bits(sampleBits(key.index))
-    {
-    }
+    NR_CPU_GPU explicit OwenSobolSampler(const SampleKey key) : IndexedSampler(key) {}
 
     NR_CPU_GPU float evaluate1D(
         const uint32_t seed, const SampleDimension dimension) const
     {
-        const uint32_t component = static_cast<uint32_t>(dimension) & 1u;
-        return scramble(component == 0 ? bits.x : bits.y, seed);
+        return scramble(sampleBits(key.index, static_cast<uint32_t>(dimension)), seed);
     }
 
     NR_CPU_GPU glm::vec2 evaluate2D(
-        const uint32_t seedX, const uint32_t seedY, SampleDimensionPair) const
+        const uint32_t seedX, const uint32_t seedY,
+        const SampleDimensionPair dimensions) const
     {
-        return {scramble(bits.x, seedX), scramble(bits.y, seedY)};
+        return {
+            scramble(sampleBits(key.index, static_cast<uint32_t>(dimensions.x)), seedX),
+            scramble(sampleBits(key.index, static_cast<uint32_t>(dimensions.y)), seedY)};
     }
 
 private:
-    glm::uvec2 bits;
-
     NR_CPU_GPU static uint32_t reverseBits(uint32_t value)
     {
 #if defined(__CUDA_ARCH__)
@@ -53,19 +54,44 @@ private:
 #endif
     }
 
-    NR_CPU_GPU static glm::uvec2 sampleBits(uint32_t index)
+    NR_CPU_GPU static uint32_t trailingZeroCount(const uint32_t value)
     {
-        const uint32_t x = reverseBits(index);
-        uint32_t y = 0;
-        uint32_t direction = uint32_t{1} << 31u;
+#if defined(__CUDA_ARCH__)
+        return static_cast<uint32_t>(__ffs(value) - 1);
+#elif defined(_MSC_VER)
+        unsigned long bit;
+        _BitScanForward(&bit, value);
+        return static_cast<uint32_t>(bit);
+#else
+        return static_cast<uint32_t>(__builtin_ctz(value));
+#endif
+    }
+
+    NR_CPU_GPU static uint32_t directionNumber(
+        const uint32_t dimension, const uint32_t bit)
+    {
+#if defined(__CUDA_ARCH__)
+        return owen_sobol_detail::DeviceDirectionNumbers[dimension - 1u][bit];
+#else
+        return owen_sobol_detail::DirectionNumbers[dimension - 1u][bit];
+#endif
+    }
+
+    NR_CPU_GPU static uint32_t sampleBits(
+        const uint32_t sampleIndex, const uint32_t dimension)
+    {
+        if (dimension == 0)
+            return reverseBits(sampleIndex);
+
+        uint32_t value = 0;
+        uint32_t index = sampleIndex;
         while (index != 0)
         {
-            if ((index & 1u) != 0)
-                y ^= direction;
-            index >>= 1u;
-            direction ^= direction >> 1u;
+            const uint32_t bit = trailingZeroCount(index);
+            value ^= directionNumber(dimension, bit);
+            index &= index - 1u;
         }
-        return {x, y};
+        return value;
     }
 
     NR_CPU_GPU static uint32_t fastOwenScramble(uint32_t value, const uint32_t seed)

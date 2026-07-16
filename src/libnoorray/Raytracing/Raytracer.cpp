@@ -1258,7 +1258,10 @@ void Raytracer::renderFrame(
         applySensorAfterFrame(activeSensor, params, stream, finalSample);
         const bool directSensor = !activeSensor.Is<ScatterPsfSensor>()
             && !activeSensor.Is<GatherPsfSensor>();
-        if (renderSettings.optixDenoiserEnabled && directSensor)
+        const uint32_t denoiserMinSamples = static_cast<uint32_t>(
+            std::max(1, renderSettings.optixDenoiserMinSamples));
+        if (renderSettings.optixDenoiserEnabled && directSensor
+            && accumulatedAfterFrame >= denoiserMinSamples)
             kernelStats.time("OptixDenoiser", stream,
                 [&] { launchDenoiser(params, stream); });
         if (renderSettings.noiseLimitEnabled)

@@ -92,7 +92,7 @@ public:
     const std::string& getGlassCatalogPaths() const { return glassCatalogPaths; }
     float derivedFocalLengthMm() const { return focalLengthMm; }
     float apertureDiameterMm{0.f};
-    void loadLensAndSensor(bool resetLensSettings = false);
+    bool loadLensAndSensor(bool resetLensSettings = false);
     bool consumeOpticsDirty()
     {
         const bool wasDirty = opticsDirty;

@@ -9,6 +9,8 @@
 #include <cuda_runtime.h>
 #include <optix.h>
 
+namespace nr::cuda::detail {
+
 inline void checkCuda(cudaError_t result, const char* expression, const char* file, int line)
 {
     if (result != cudaSuccess)
@@ -29,8 +31,10 @@ inline void checkOptix(OptixResult result, const char* expression, const char* f
     }
 }
 
-#define NR_GPU_CHECK(call) checkCuda((call), #call, __FILE__, __LINE__)
-#define NR_OPTIX_CHECK(call) checkOptix((call), #call, __FILE__, __LINE__)
+}
+
+#define NR_GPU_CHECK(call) ::nr::cuda::detail::checkCuda((call), #call, __FILE__, __LINE__)
+#define NR_OPTIX_CHECK(call) ::nr::cuda::detail::checkOptix((call), #call, __FILE__, __LINE__)
 #else
 #define NR_GPU_CHECK(call) (call)
 #define NR_OPTIX_CHECK(call) (call)

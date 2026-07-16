@@ -144,7 +144,16 @@ NR_CPU_GPU inline unique_ptr<T> make_unique(Args&&... args)
 {
     allocator<T> alloc;
     T* p = alloc.allocate(1);
+#if defined(__CUDA_ARCH__)
     alloc.construct(p, std::forward<Args>(args)...);
+#else
+    try {
+        alloc.construct(p, std::forward<Args>(args)...);
+    } catch (...) {
+        alloc.deallocate(p, 1);
+        throw;
+    }
+#endif
     return unique_ptr<T>(p, alloc);
 }
 
@@ -154,8 +163,21 @@ NR_CPU_GPU inline unique_ptr<T> make_unique(std::size_t n)
     using U = std::remove_extent_t<T>;
     allocator<U> alloc;
     U* p = alloc.allocate(n);
+#if defined(__CUDA_ARCH__)
     for (std::size_t i = 0; i < n; ++i)
         alloc.construct(p + i);
+#else
+    std::size_t constructed = 0;
+    try {
+        for (; constructed < n; ++constructed)
+            alloc.construct(p + constructed);
+    } catch (...) {
+        while (constructed != 0)
+            alloc.destroy(p + --constructed);
+        alloc.deallocate(p, n);
+        throw;
+    }
+#endif
     return unique_ptr<T>(p, n, alloc);
 }
 

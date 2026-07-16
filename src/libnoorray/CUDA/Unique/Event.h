@@ -2,7 +2,7 @@
 
 #include <cuda_runtime_api.h>
 
-#include "CUDA/Unique/Check.h"
+#include "CUDA/Checks.h"
 #include "CUDA/Unique/Handle.h"
 
 namespace nr::cuda
@@ -23,7 +23,7 @@ public:
     void create()
     {
         reset();
-        NR_CUDA_UNIQUE_CHECK(cudaEventCreate(event.put()));
+        NR_GPU_CHECK(cudaEventCreate(event.put()));
     }
 
     void reset() noexcept

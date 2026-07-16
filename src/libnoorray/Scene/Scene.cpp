@@ -1,7 +1,6 @@
 #include "Scene.h"
 #include <algorithm>
 #include "Camera/CameraInstance.h"
-#include "CUDA/rstd/Allocator.h"
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/GaussianInstance.h"

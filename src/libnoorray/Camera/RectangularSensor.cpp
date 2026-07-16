@@ -8,12 +8,9 @@
 #include <type_traits>
 #include <vector>
 
-#include "CUDA/rstd/Allocator.h"
-#include "CUDA/rstd/Memory.h"
 #include "CUDA/Checks.h"
 #include "CUDA/ManagedMemory.h"
 #include "Log.h"
-#include "libross/foundation/gpu/types/Allocator.h"
 #include "libross/imaging/imagesensor/ImageSensorReader.h"
 #include "portable-file-dialogs.h"
 
@@ -94,9 +91,8 @@ void loadPsfGrid(PsfSensor& sensor, const char* sensorName)
     }
 
     try {
-        nr::rstd::allocator<ross::InterpolatedPsfGrid> allocator;
-        sensor.psfGrid.reset(allocator.allocate(1));
-        allocator.construct(sensor.psfGrid.get(), std::filesystem::path(sensor.psfGridPath));
+        sensor.psfGrid = nr::rstd::make_unique<ross::InterpolatedPsfGrid>(
+            std::filesystem::path(sensor.psfGridPath));
         sensor.psfLoadStatus = "loaded, psf bins: " + std::to_string(sensor.psfGrid->metadata.psfs.size());
         LOG_INFO(sensorName << ": " << sensor.psfLoadStatus);
     } catch (const std::exception& e) {

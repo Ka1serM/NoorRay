@@ -41,19 +41,28 @@ const char* surfaceGeometryLabel(const ross::LensSurface& surface)
 bool RealisticCamera::renderUi()
 {
     Sensor& sensor = getSensor();
+    bool changed = false;
     if (lensDialog && lensDialog->ready(0)) {
         const auto selection = lensDialog->result();
         if (!selection.empty()) {
+            const std::string previousLensPath = lensPath;
             lensPath = selection.front();
-            loadLensAndSensor(true);
+            if (loadLensAndSensor(true))
+                changed = true;
+            else
+                lensPath = previousLensPath;
         }
         lensDialog.reset();
     }
     if (glassCatalogDialog && glassCatalogDialog->ready(0)) {
         const auto selection = glassCatalogDialog->result();
         if (!selection.empty()) {
+            const std::string previousGlassCatalogPaths = glassCatalogPaths;
             glassCatalogPaths = joinWithSemicolons(selection);
-            loadLensAndSensor();
+            if (loadLensAndSensor())
+                changed = true;
+            else
+                glassCatalogPaths = previousGlassCatalogPaths;
         }
         glassCatalogDialog.reset();
     }
@@ -94,8 +103,6 @@ bool RealisticCamera::renderUi()
     }
     ImGui::EndDisabled();
 
-    bool changed = false;
-
     ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](float value) {
         nr::synchronizeBeforeManagedMutation("Realistic camera exposure");
         exposure = value;
@@ -103,8 +110,7 @@ bool RealisticCamera::renderUi()
     });
 
     if (ImGui::Button("Reload##RealisticCamera")) {
-        loadLensAndSensor(true);
-        changed = true;
+        changed |= loadLensAndSensor(true);
     }
     ImGui::SameLine();
     ImGui::TextUnformatted(loadStatus.c_str());
@@ -121,7 +127,7 @@ bool RealisticCamera::renderUi()
 
     const bool sensorChanged = sensor.renderUi();
     if (sensorChanged && !lensPath.empty())
-        loadLensAndSensor();
+        changed |= loadLensAndSensor();
 
     ImGuiManager::tableRowLabel("Focal Length");
     ImGui::Text("%.1f mm", focalLengthMm);

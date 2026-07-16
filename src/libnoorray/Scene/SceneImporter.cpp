@@ -5,7 +5,6 @@
 #include <fstream>
 #include <stdexcept>
 #include "Camera/CameraInstance.h"
-#include "CUDA/rstd/Allocator.h"
 #include "Scene/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"

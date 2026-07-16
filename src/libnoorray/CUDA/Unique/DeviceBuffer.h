@@ -6,7 +6,7 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
-#include "CUDA/Unique/Check.h"
+#include "CUDA/Checks.h"
 
 namespace nr::cuda
 {
@@ -39,7 +39,7 @@ public:
     void allocate(std::size_t bytes)
     {
         reset();
-        NR_CUDA_UNIQUE_CHECK(cudaMalloc(&ptr, bytes));
+        NR_GPU_CHECK(cudaMalloc(&ptr, bytes));
     }
 
     void reset() noexcept

@@ -11,9 +11,7 @@
 #include <vector>
 
 #include "CUDA/ManagedMemory.h"
-#include "CUDA/rstd/Allocator.h"
 #include "Log.h"
-#include "libross/foundation/gpu/types/Allocator.h"
 #include "libross/foundation/physics/Wavelengths.h"
 #include "libross/imaging/cameralens/lenssystemio/CameraLensSystemReader.h"
 #include "libross/imaging/cameralens/raylut/FindRayThroughApertureCenterRayGenerator.h"
@@ -123,15 +121,9 @@ void HybridPsfCamera::updateLensSettings()
             ross::FraunhoferLines::d,
             ross::FraunhoferLines::F});
 
-        nr::rstd::allocator<ross::CameraLens> lensAllocator;
-        nr::rstd::unique_ptr<ross::CameraLens> newLens(lensAllocator.allocate(1));
-        lensAllocator.construct(newLens.get(), updatedLens);
-        nr::rstd::allocator<ross::ExitPupil> pupilAllocator;
-        nr::rstd::unique_ptr<ross::ExitPupil> newPupil(pupilAllocator.allocate(1));
-        pupilAllocator.construct(newPupil.get(), updatedPupil);
-        nr::rstd::allocator<ross::RayLUT> lutAllocator;
-        nr::rstd::unique_ptr<ross::RayLUT> newLut(lutAllocator.allocate(1));
-        lutAllocator.construct(newLut.get(), std::move(updatedLut));
+        auto newLens = nr::rstd::make_unique<ross::CameraLens>(updatedLens);
+        auto newPupil = nr::rstd::make_unique<ross::ExitPupil>(updatedPupil);
+        auto newLut = nr::rstd::make_unique<ross::RayLUT>(std::move(updatedLut));
 
         rossLens = std::move(newLens);
         exitPupil = std::move(newPupil);
@@ -202,29 +194,19 @@ HybridPsfCamera::HybridPsfCamera(const HybridPsfCamera& other)
     samplesPerDimension = other.samplesPerDimension;
 
     if (other.rossLens) {
-        nr::rstd::allocator<ross::CameraLens> allocator;
-        rossLens.reset(allocator.allocate(1));
-        allocator.construct(rossLens.get(), *other.rossLens);
+        rossLens = nr::rstd::make_unique<ross::CameraLens>(*other.rossLens);
     }
     if (other.sourceRossLens) {
-        nr::rstd::allocator<ross::CameraLens> allocator;
-        sourceRossLens.reset(allocator.allocate(1));
-        allocator.construct(sourceRossLens.get(), *other.sourceRossLens);
+        sourceRossLens = nr::rstd::make_unique<ross::CameraLens>(*other.sourceRossLens);
     }
     if (other.exitPupil) {
-        nr::rstd::allocator<ross::ExitPupil> allocator;
-        exitPupil.reset(allocator.allocate(1));
-        allocator.construct(exitPupil.get(), *other.exitPupil);
+        exitPupil = nr::rstd::make_unique<ross::ExitPupil>(*other.exitPupil);
     }
     if (other.rossSensor) {
-        nr::rstd::allocator<ross::ImageSensor> allocator;
-        rossSensor.reset(allocator.allocate(1));
-        allocator.construct(rossSensor.get(), *other.rossSensor);
+        rossSensor = nr::rstd::make_unique<ross::ImageSensor>(*other.rossSensor);
     }
     if (other.rayLut) {
-        nr::rstd::allocator<ross::RayLUT> allocator;
-        rayLut.reset(allocator.allocate(1));
-        allocator.construct(rayLut.get(), *other.rayLut);
+        rayLut = nr::rstd::make_unique<ross::RayLUT>(*other.rayLut);
     }
 }
 
@@ -259,9 +241,7 @@ void HybridPsfCamera::loadLensSensorAndPsf(
         ross::CameraLens loadedLens =
             ross::CameraLensSystemReader::readCameraLens(
                 lensPath, catalogs, ross::ReadOptions{1.0f, false});
-        nr::rstd::allocator<ross::CameraLens> lensAllocator;
-        sourceRossLens.reset(lensAllocator.allocate(1));
-        lensAllocator.construct(sourceRossLens.get(), loadedLens);
+        sourceRossLens = nr::rstd::make_unique<ross::CameraLens>(loadedLens);
         if (resetLensSettings)
             focusDistanceCm = 500.0f;
         focusDistanceCm = std::max(
@@ -273,8 +253,7 @@ void HybridPsfCamera::loadLensSensorAndPsf(
         }
         loadedLens.focusLens(focusDistanceCm);
 
-        rossLens.reset(lensAllocator.allocate(1));
-        lensAllocator.construct(rossLens.get(), loadedLens);
+        rossLens = nr::rstd::make_unique<ross::CameraLens>(loadedLens);
 
         const ross::ImageSensor loadedSensor =
             ross::ImageSensorReader::readFile(std::string(sensor.getImageSensorPath()));
@@ -285,18 +264,14 @@ void HybridPsfCamera::loadLensSensorAndPsf(
         sensor.loadImageSensorDimensions();
         const uint32_t psfBinCount = sensor.reloadPsfGrid();
 
-        nr::rstd::allocator<ross::ImageSensor> sensorAllocator;
-        rossSensor.reset(sensorAllocator.allocate(1));
-        sensorAllocator.construct(rossSensor.get(), loadedSensor);
+        rossSensor = nr::rstd::make_unique<ross::ImageSensor>(loadedSensor);
 
         ross::ExitPupilCalculator::CalculationSettings pupilSettings;
         ross::TaskReporter pupilReporter;
         ross::ExitPupilCalculator pupilCalculator(
             *rossLens, loadedSensor.getDiagonal().centimeter(), pupilSettings, pupilReporter);
         ross::ExitPupil computedPupil = pupilCalculator.calculate();
-        nr::rstd::allocator<ross::ExitPupil> pupilAllocator;
-        exitPupil.reset(pupilAllocator.allocate(1));
-        pupilAllocator.construct(exitPupil.get(), computedPupil);
+        exitPupil = nr::rstd::make_unique<ross::ExitPupil>(computedPupil);
 
         const bool cacheHit = !rayLutPath.empty() && std::filesystem::exists(rayLutPath);
         if (buildRayLut) {
@@ -317,9 +292,7 @@ void HybridPsfCamera::loadLensSensorAndPsf(
                     ross::RayLUTFileWriter().write(rayLutPath, loadedLut);
             }
 
-            nr::rstd::allocator<ross::RayLUT> lutAllocator;
-            rayLut.reset(lutAllocator.allocate(1));
-            lutAllocator.construct(rayLut.get(), std::move(loadedLut));
+            rayLut = nr::rstd::make_unique<ross::RayLUT>(std::move(loadedLut));
         }
 
         focalLengthMm = rossLens->metadata.focalLength * 10.0f;

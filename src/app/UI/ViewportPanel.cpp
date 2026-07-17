@@ -379,7 +379,7 @@ void ViewportPanel::handleViewGizmo() const {
     vec3 position = camera->getPosition();
     quat rotation = camera->getRotation();
 
-    vec3 pivot = camera->getArcballPivot();
+    vec3 pivot = position + normalize(rotation * CameraInstance::LocalForward) * 5.0f;
     if (const auto activeObject = scene.getActiveObjectPtr();
         activeObject && activeObject.get() != camera)
         pivot = activeObject->getPosition();

@@ -25,6 +25,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 option(NR_ENABLE_UNITY_BUILD "Batch NoorRay C++ sources for faster compilation" ON)
 option(NR_ENABLE_PCH "Precompile common NoorRay C++ headers" ON)
 option(NR_BUILD_PYTHON "Build the pynoorray Python bindings" OFF)
+option(NR_VERBOSE_CONFIGURE "Show FetchContent dependency progress during configuration" ON)
 set(NR_UNITY_BUILD_BATCH_SIZE "8" CACHE STRING "Maximum sources per NoorRay unity batch")
 set(NR_CUDA_SPLIT_COMPILE_JOBS "0" CACHE STRING "NVCC optimization threads per CUDA translation unit (0 = all cores)")
 set(CMAKE_SKIP_BUILD_RPATH ON)
@@ -51,8 +52,13 @@ if(NOT OPTIX_VERSION_LINE)
     message(FATAL_ERROR "NoorRay requires OptiX 9.1 headers")
 endif()
 
-# Suppress verbose status output from all external dependencies
-set(CMAKE_MESSAGE_LOG_LEVEL WARNING)
+# Suppress verbose status output from all external dependencies unless requested.
+if(NR_VERBOSE_CONFIGURE)
+    set(FETCHCONTENT_QUIET OFF CACHE BOOL "Show FetchContent download and update output" FORCE)
+    set(CMAKE_MESSAGE_LOG_LEVEL STATUS)
+else()
+    set(CMAKE_MESSAGE_LOG_LEVEL WARNING)
+endif()
 set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
 
 # SDL3 (Static Linking Setup)

@@ -1,19 +1,22 @@
 #include "Window.h"
 
 #include <cstdlib>
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
-Window::Window()
+Window::Window(const uint32_t requestedWidth, const uint32_t requestedHeight)
 {
 #ifdef __linux__
     SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
     SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
-    if (std::getenv("WAYLAND_DISPLAY") && !std::getenv("SDL_VIDEO_DRIVER"))
-        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
+    if (std::getenv("WAYLAND_DISPLAY")) {
+        if (!std::getenv("SDL_VIDEO_DRIVER"))
+            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland,x11");
+    }
 #endif
 
     if (!SDL_Init(SDL_INIT_VIDEO))
@@ -24,19 +27,48 @@ Window::Window()
         throw std::runtime_error(std::string("Failed to load Vulkan through SDL: ") + SDL_GetError());
     }
 
-    const float displayScale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    if (displayScale > 0.0f)
-        dpiScale = displayScale;
-    width = static_cast<uint32_t>(static_cast<float>(width) * dpiScale);
-    height = static_cast<uint32_t>(static_cast<float>(height) * dpiScale);
+    const SDL_DisplayID primaryDisplay = SDL_GetPrimaryDisplay();
+
+    if (requestedWidth > 0 && requestedHeight > 0) {
+        width = requestedWidth;
+        height = requestedHeight;
+    } else {
+        // Choose a logical startup size from the usable monitor area, like
+        // other desktop applications. The actual drawable pixel size is
+        // queried below.
+        SDL_Rect usableBounds{};
+        if (SDL_GetDisplayUsableBounds(primaryDisplay, &usableBounds)
+            && usableBounds.w > 0 && usableBounds.h > 0) {
+            constexpr float startupAreaFraction = 2.0f / 3.0f;
+            width = static_cast<uint32_t>(usableBounds.w * startupAreaFraction);
+            height = static_cast<uint32_t>(usableBounds.h * startupAreaFraction);
+        }
+    }
+
     window = SDL_CreateWindow("NoorRay by Marcel K.", static_cast<int>(width),
-        static_cast<int>(height), SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+        static_cast<int>(height),
+        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!window)
     {
         SDL_Vulkan_UnloadLibrary();
         SDL_Quit();
         throw std::runtime_error(std::string("Failed to create SDL window: ") + SDL_GetError());
     }
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED_DISPLAY(primaryDisplay),
+        SDL_WINDOWPOS_CENTERED_DISPLAY(primaryDisplay));
+
+    const float windowScale = SDL_GetWindowDisplayScale(window);
+    if (windowScale > 0.0f)
+        dpiScale = windowScale;
+
+    // Vulkan needs the drawable pixel extent, not the logical SDL window size.
+    // SDL applies the display scale when reporting pixels on high-DPI displays.
+    int pixelWidth = 0;
+    int pixelHeight = 0;
+    if (!SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight))
+        throw std::runtime_error(std::string("Failed to query SDL window pixel size: ") + SDL_GetError());
+    width = static_cast<uint32_t>(std::max(pixelWidth, 0));
+    height = static_cast<uint32_t>(std::max(pixelHeight, 0));
 }
 
 Window::~Window()

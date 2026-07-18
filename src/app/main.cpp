@@ -20,6 +20,8 @@ struct CliOptions
     int maxBounces{-1};
     int width{};
     int height{};
+    int windowWidth{};
+    int windowHeight{};
     std::optional<GaussianShadingMode> gaussianShadingMode;
     std::optional<GaussianProxyType> gaussianProxyType;
     bool statsEnabled{};
@@ -39,6 +41,8 @@ void printUsage()
         << "  --output <path>      Output image path (default: output.exr)\n"
         << "  --width  <int>       Output width (default: from camera sensor or 1280)\n"
         << "  --height <int>       Output height (default: from camera sensor or 720)\n"
+        << "  --window-width <int>  GUI window width (default: auto, 2/3 of display)\n"
+        << "  --window-height <int> GUI window height (default: auto, 2/3 of display)\n"
         << "  --max-bounces <int>  Maximum path depth (default: from scene)\n"
         << "  --gaussian-shading <direct|gi>\n"
         << "                       Override the scene's Gaussian shading mode\n"
@@ -76,6 +80,10 @@ CliOptions parseOptions(const int argc, char* argv[])
             options.width = std::stoi(requireValue(argc, argv, i));
         else if (arg == "--height")
             options.height = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--window-width")
+            options.windowWidth = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--window-height")
+            options.windowHeight = std::stoi(requireValue(argc, argv, i));
         else if (arg == "--max-bounces")
             options.maxBounces = std::stoi(requireValue(argc, argv, i));
         else if (arg == "--gaussian-shading")
@@ -116,6 +124,10 @@ CliOptions parseOptions(const int argc, char* argv[])
         throw std::invalid_argument("--spp must be greater than zero");
     if (options.width < 0 || options.height < 0)
         throw std::invalid_argument("--width and --height cannot be negative");
+    if (options.windowWidth < 0 || options.windowHeight < 0)
+        throw std::invalid_argument("--window-width and --window-height cannot be negative");
+    if ((options.windowWidth == 0) != (options.windowHeight == 0))
+        throw std::invalid_argument("--window-width and --window-height must be used together");
     if (options.maxBounces == 0 || options.maxBounces < -1)
         throw std::invalid_argument("--max-bounces must be greater than zero");
     return options;
@@ -179,7 +191,9 @@ int main(const int argc, char* argv[])
             runCli(options);
         else
         {
-            NoorRayUi ui(options.scenePath);
+            NoorRayUi ui(options.scenePath,
+                static_cast<uint32_t>(options.windowWidth),
+                static_cast<uint32_t>(options.windowHeight));
             ui.run();
         }
         return 0;

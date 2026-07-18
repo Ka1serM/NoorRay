@@ -72,10 +72,6 @@ ViewportPanel::ViewportPanel(const std::string& name, Window& window, Context& c
     
     updateDisplayDescriptor();
 
-    // DPI scale is fixed for the lifetime of the window (see Context::dpiScale), so
-    // everything derived from it below only needs to be set up once, not per frame.
-    uiScale = window.getDpiScale();
-
     // ImGizmo Style
     ImGuizmo::Style& style = ImGuizmo::GetStyle();
     style.HatchedAxisLineThickness = 0;

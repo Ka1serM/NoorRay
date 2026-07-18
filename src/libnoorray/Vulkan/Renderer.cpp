@@ -45,13 +45,20 @@ Renderer::~Renderer() {
 }
 
 void Renderer::notifyResize(const uint32_t width, const uint32_t height) {
+    if (swapchainExtent.width == width && swapchainExtent.height == height)
+        return;
+
+    swapchainExtent = vk::Extent2D{ width, height };
     m_framebufferResized = true;
-    if (width > 0 && height > 0)
-        swapchainExtent = vk::Extent2D{ width, height };
 }
 
 void Renderer::recreateSwapChain() {
-    context.getDevice().waitIdle();
+    if (swapchainExtent.width == 0 || swapchainExtent.height == 0)
+        return;
+
+    // All swapchain rendering and presentation uses this queue. Waiting only
+    // for it avoids stalling unrelated Vulkan queues during a window resize.
+    context.getGraphicsQueue().waitIdle();
     
     const vk::SurfaceCapabilitiesKHR surfaceCapabilities = context.getPhysicalDevice().getSurfaceCapabilitiesKHR(context.getSurface());
     

@@ -12,7 +12,7 @@
 class Window final : public VulkanSurfaceProvider
 {
 public:
-    Window();
+    Window(uint32_t requestedWidth = 0, uint32_t requestedHeight = 0);
     ~Window() override;
 
     Window(const Window&) = delete;

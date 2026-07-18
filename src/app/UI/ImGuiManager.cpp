@@ -33,14 +33,12 @@ ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numI
 
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
+    font_config.RasterizerDensity = window.getDpiScale();
 
-    const float font_size = 18.0f * window.getDpiScale();
+    constexpr float font_size = 18.0f;
     io.Fonts->AddFontFromMemoryTTF(
         const_cast<unsigned char*>(noorRayImGuiFont), noorRayImGuiFontLength,
         font_size, &font_config);
-
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(window.getDpiScale());
 
     if (const SDL_SystemTheme theme = SDL_GetSystemTheme(); theme == SDL_SYSTEM_THEME_LIGHT)
         SetTheme(Theme::Light);

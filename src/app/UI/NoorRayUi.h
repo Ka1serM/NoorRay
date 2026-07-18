@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -12,7 +13,7 @@ class Viewport;
 class NoorRayUi
 {
 public:
-    explicit NoorRayUi(std::string scenePath = {});
+    NoorRayUi(std::string scenePath = {}, uint32_t windowWidth = 0, uint32_t windowHeight = 0);
     ~NoorRayUi();
 
     void run();

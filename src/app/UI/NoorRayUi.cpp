@@ -30,8 +30,9 @@
 
 using namespace noorray;
 
-NoorRayUi::NoorRayUi(std::string scenePath)
-    : session(window)
+NoorRayUi::NoorRayUi(std::string scenePath, const uint32_t windowWidth, const uint32_t windowHeight)
+    : window(windowWidth, windowHeight)
+    , session(window)
 {
     Context& context = session.context;
     Scene& scene = session.scene;
@@ -93,6 +94,8 @@ void NoorRayUi::run() {
     uint32_t displayedSelectionIndex = ~0u;
     InteropFrame pendingDisplayFrame{};
     bool isRunning = true, isFullscreen = false, firstFrame = true;
+    uint64_t lastResizeEventMs = 0;
+    constexpr uint64_t LiveResizeCooldownMs = 100;
 
     while (isRunning) {
         SDL_Event event{};
@@ -106,9 +109,16 @@ void NoorRayUi::run() {
                 isFullscreen = !isFullscreen;
                 window.setFullscreen(isFullscreen);
             }
-            if (event.type == SDL_EVENT_WINDOW_RESIZED)
-                renderer->notifyResize(event.window.data1, event.window.data2);
+            if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+                renderer->notifyResize(
+                    static_cast<uint32_t>(std::max(event.window.data1, 0)),
+                    static_cast<uint32_t>(std::max(event.window.data2, 0)));
+                lastResizeEventMs = SDL_GetTicks();
+            }
         }
+
+        const bool liveResize = lastResizeEventMs != 0
+            && SDL_GetTicks() - lastResizeEventMs < LiveResizeCooldownMs;
 
         // Build ImGui and apply scene edits before submitting CUDA work. Vulkan
         // swapchain acquisition can block, so it happens only after the next
@@ -166,7 +176,7 @@ void NoorRayUi::run() {
             // A newly completed buffer may overlap one more render using the
             // other buffer. If Vulkan skipped the previous frame, wait until
             // its pending handoff is submitted before queueing anything else.
-            if (!raytracer->isRenderInFlight() && !displayHandoffPending)
+            if (!liveResize && !raytracer->isRenderInFlight() && !displayHandoffPending)
             {
                 trainingPanel->tick();
                 const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);

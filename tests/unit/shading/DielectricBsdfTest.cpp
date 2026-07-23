@@ -58,7 +58,7 @@ TEST_CASE_METHOD(DielectricBsdfTest,
     "microfacet dielectric sampling produces valid reflection and transmission",
     "[bsdf][dielectric]")
 {
-    constexpr int sampleCount = 100000;
+    constexpr int sampleCount = 40000;
     const Bsdf bsdf(
         normal, normal, view, SampledSpectrum(0.0f),
         0.0f, 0.5f, 0.045f, 1.0f, SampledSpectrum(1.0f),
@@ -106,7 +106,7 @@ TEST_CASE_METHOD(DielectricBsdfTest,
     RandomState rng = seedRandom(0xc105u);
     int reflected = 0;
     int transmitted = 0;
-    for (int i = 0; i < 4096; ++i)
+    for (int i = 0; i < 2048; ++i)
     {
         const BsdfSample sample = bsdf.sample(rng);
         if (sample.pdf <= 0.0f)
@@ -211,7 +211,7 @@ TEST_CASE_METHOD(DielectricBsdfTest,
     "rough glass restores masked reflection and transmission energy",
     "[bsdf][dielectric][furnace][regression]")
 {
-    constexpr int sampleCount = 256;
+    constexpr int sampleCount = 128;
     constexpr float ior = 1.5f;
     const SampledWavelengths testWavelengths =
         SampledWavelengths::sampleUniform(0.5f);

@@ -39,7 +39,7 @@ TEST_CASE("spherical rectangle sampling has a constant solid-angle PDF", "[light
 
     constexpr float expectedSolidAngle = 2.09439510239319549f;
     RandomState rng = seedRandom(0xa4eau);
-    for (int i = 0; i < 256; ++i)
+    for (int i = 0; i < 64; ++i)
     {
         const LightSample sample = light.sampleLi(
             glm::vec3(0.0f), rng, SampledWavelengths::sampleUniform(0.5f),

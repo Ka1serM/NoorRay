@@ -1,6 +1,6 @@
 Film "rgb"
-    "integer xresolution" 64
-    "integer yresolution" 64
+    "integer xresolution" 256
+    "integer yresolution" 256
 PixelFilter "gaussian"
 Sampler "sobol" "integer pixelsamples" 1
 

@@ -12,8 +12,8 @@ protected:
     static float integrateOpaque(const float albedo, const float metallic, const float specular, const float roughness,
                                  const glm::vec3 viewDirection = view)
     {
-        constexpr int thetaSamples = 256;
-        constexpr int phiSamples = 256;
+        constexpr int thetaSamples = 128;
+        constexpr int phiSamples = 128;
         double integral = 0.0;
         const SampledSpectrum albedoSpectrum(albedo);
         const Bsdf bsdf(

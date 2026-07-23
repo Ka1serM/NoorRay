@@ -18,9 +18,11 @@ __constant__ KernelParams params;
 
 extern "C" __global__ void __raygen__pathTrace()
 {
-    const uint32_t pixel = NR_GPU_OPTIX_LAUNCH_ID;
-    if (pixel < params.frame.width * params.frame.height)
-        PathIntegrator(params).renderSample(pixel);
+    const uint3 launchIndex = optixGetLaunchIndex();
+    const uint32_t x = launchIndex.x;
+    const uint32_t y = launchIndex.y;
+    const uint32_t pixel = y * params.frame.width + x;
+    PathIntegrator(params).renderSample(pixel, x, y);
 }
 
 #include "Kernels/Path/Aov.h"

@@ -1,7 +1,5 @@
 ﻿#include "ImGuiManager.h"
 #include "ImGuiComponent.h"
-#include "ImGuiFont.h"
-#include "ImGuiLayout.h"
 #include <imgui.h>
 #include "imgui_internal.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -10,7 +8,21 @@
 #include "Vulkan/Context.h"
 #include "UI/Window.h"
 #include <array>
+#include <cstddef>
 #include "Log.h"
+
+namespace
+{
+constexpr unsigned char noorRayImGuiFont[] = {
+    #embed "../../../assets/fonts/Inter.ttf"
+};
+constexpr std::size_t noorRayImGuiFontLength = sizeof(noorRayImGuiFont);
+
+constexpr unsigned char noorRayImGuiLayout[] = {
+    #embed "../../../assets/imgui.ini"
+};
+constexpr std::size_t noorRayImGuiLayoutLength = sizeof(noorRayImGuiLayout);
+}
 
 ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numImages,
     const vk::SurfaceFormatKHR targetFormat)

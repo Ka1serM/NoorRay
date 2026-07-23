@@ -18,8 +18,8 @@ NR_GPU_KERNEL void writeDenoisedOutputKernel(
         params.output.color, x * sizeof(float4), y);
 }
 
-NR_GPU_KERNEL void writeDenoiserAlbedoGuideKernel(
-    const KernelParams params, float3* albedoGuide)
+NR_GPU_KERNEL void writeDenoiserGuidesKernel(
+    const KernelParams params, float3* albedoGuide, float3* normalGuide)
 {
     const uint32_t pixel = NR_GPU_LAUNCH_IDX;
     const uint32_t pixelCount = params.frame.width * params.frame.height;
@@ -33,6 +33,13 @@ NR_GPU_KERNEL void writeDenoiserAlbedoGuideKernel(
     constexpr float Unorm8 = 1.0f / 255.0f;
     albedoGuide[pixel] = make_float3(
         packed.x * Unorm8, packed.y * Unorm8, packed.z * Unorm8);
+
+    const ushort4 packedNormal = surf2Dread<ushort4>(
+        params.output.normal, x * sizeof(ushort4), y);
+    normalGuide[pixel] = make_float3(
+        __half2float(__ushort_as_half(packedNormal.x)),
+        __half2float(__ushort_as_half(packedNormal.y)),
+        __half2float(__ushort_as_half(packedNormal.z)));
 }
 
 NR_GPU_KERNEL void postProcessKernel(

@@ -24,6 +24,7 @@ struct CliOptions
     int windowHeight{};
     std::optional<GaussianShadingMode> gaussianShadingMode;
     std::optional<GaussianProxyType> gaussianProxyType;
+    bool aovEnabled{};
     bool statsEnabled{};
     bool denoiserEnabled{};
     bool cliMode{};
@@ -46,9 +47,10 @@ void printUsage()
         << "  --max-bounces <int>  Maximum path depth (default: from scene)\n"
         << "  --gaussian-shading <direct|gi>\n"
         << "                       Override the scene's Gaussian shading mode\n"
-        << "  --gaussian-proxy <icosphere|octahedron>\n"
+        << "  --gaussian-proxy <icosphere|octahedron|icosahedron|icosphere2>\n"
         << "                       Override the Gaussian tracing proxy geometry\n"
         << "  --denoise            Apply the OptiX HDR beauty denoiser\n"
+        << "  --aov                Render surface AOVs (for profiling or diagnostics)\n"
         << "  --stats              Print a per-kernel GPU timing breakdown after rendering\n";
 }
 
@@ -104,14 +106,20 @@ CliOptions parseOptions(const int argc, char* argv[])
                 options.gaussianProxyType = GaussianProxyType::Icosphere;
             else if (type == "octahedron")
                 options.gaussianProxyType = GaussianProxyType::Octahedron;
+            else if (type == "icosahedron")
+                options.gaussianProxyType = GaussianProxyType::Icosahedron;
+            else if (type == "icosphere2")
+                options.gaussianProxyType = GaussianProxyType::IcosphereLevel2;
             else
                 throw std::invalid_argument(
-                    "--gaussian-proxy must be either 'icosphere' or 'octahedron'");
+                    "--gaussian-proxy must be 'icosphere', 'octahedron', 'icosahedron', or 'icosphere2'");
         }
         else if (arg == "--stats")
             options.statsEnabled = true;
         else if (arg == "--denoise")
             options.denoiserEnabled = true;
+        else if (arg == "--aov")
+            options.aovEnabled = true;
         else if (arg.starts_with("--"))
             throw std::invalid_argument("Unknown flag: " + arg);
         else
@@ -155,7 +163,7 @@ void runCli(const CliOptions& options)
     }
 
     Raytracer& raytracer = *session.raytracer;
-    raytracer.setAovEnabled(false);
+    raytracer.setAovEnabled(options.aovEnabled);
     raytracer.setStatsEnabled(options.statsEnabled);
     raytracer.setTimingEnabled(options.statsEnabled);
     session.scene.getRenderSettings().samples = options.samplesPerPixel;

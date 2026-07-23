@@ -33,7 +33,10 @@ public:
     bool tonemappingEnabled{false};
     bool transparentBackground{false};
     float gaussianCutoffSigma{3.0f};
-    GaussianProxyType gaussianProxyType{GaussianProxyType::Icosphere};
+    // The tighter level-2 proxy significantly reduces false-positive OptiX
+    // any-hit invocations in dense splat scenes while preserving coverage of
+    // the exact Gaussian cutoff volume.
+    GaussianProxyType gaussianProxyType{GaussianProxyType::IcosphereLevel2};
     GaussianShadingMode gaussianShadingMode{GaussianShadingMode::DirectColor};
     SphericalHarmonicsOrder gaussianRenderSphericalHarmonics{SphericalHarmonicsOrder::Degree3};
     bool gaussianProxyOverdrawVisualization{false};

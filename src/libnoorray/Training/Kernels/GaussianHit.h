@@ -15,10 +15,12 @@ extern __constant__ GaussianTrainingKernelParams params;
 
 extern "C" __global__ void __anyhit__trainingGaussian()
 {
-    const uint32_t sceneInstance = optixGetInstanceIdFromHandle(
-        optixGetTransformListHandle(0));
-    const uint32_t gaussianId =
-        params.scene.gaussianInstanceOffsets[sceneInstance] + optixGetInstanceIndex();
+    const uint32_t localGaussianId = optixGetInstanceIndex();
+    const uint32_t* const instanceOffsets = params.scene.gaussianInstanceOffsets;
+    const uint32_t gaussianId = instanceOffsets == nullptr
+        ? localGaussianId
+        : instanceOffsets[optixGetInstanceIdFromHandle(
+            optixGetTransformListHandle(0))] + localGaussianId;
     const float opacity = 1.0f
         / (1.0f + __expf(-params.train.opacityLogit[gaussianId]));
     if (opacity <= 0.0f)
@@ -108,10 +110,12 @@ NR_GPU inline RayHit intersectTrainingRay(
     if (gaussianT < gaussianTMax && optixHitObjectIsHit())
     {
         hit.t = gaussianT;
-        const uint32_t sceneInstance = optixGetInstanceIdFromHandle(
-            optixHitObjectGetTransformListHandle(0));
-        hit.instanceIndex = params.scene.gaussianInstanceOffsets[sceneInstance]
-            + optixHitObjectGetInstanceIndex();
+        const uint32_t localGaussianId = optixHitObjectGetInstanceIndex();
+        const uint32_t* const instanceOffsets = params.scene.gaussianInstanceOffsets;
+        hit.instanceIndex = instanceOffsets == nullptr
+            ? localGaussianId
+            : instanceOffsets[optixGetInstanceIdFromHandle(
+                optixHitObjectGetTransformListHandle(0))] + localGaussianId;
     }
     else if (meshHit.instanceIndex != InvalidIndex)
     {

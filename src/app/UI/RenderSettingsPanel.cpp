@@ -105,7 +105,7 @@ void RenderSettingsPanel::renderUi()
         changed |= ImGui::DragInt("##RRBounce", &settings.russianRouletteStartBounce, 0.1f, 0, 16, "%d");
 
         static constexpr const char* kProxyNames[] =
-            { "Icosphere", "Octahedron" };
+            { "Icosphere", "Octahedron", "Icosahedron", "Icosphere (Level 2)" };
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Gaussian Proxy");

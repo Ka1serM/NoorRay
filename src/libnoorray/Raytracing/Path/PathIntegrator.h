@@ -18,10 +18,9 @@ class PathIntegrator
 public:
     NR_GPU explicit PathIntegrator(const KernelParams& params_) : params(params_) {}
 
-    NR_GPU void renderSample(const uint32_t pixel) const
+    NR_GPU void renderSample(
+        const uint32_t pixel, const uint32_t x, const uint32_t y) const
     {
-        const uint32_t x = pixel % params.frame.width;
-        const uint32_t y = pixel / params.frame.width;
         const OwenSobolSampler sampler({
             params.frame.totalAccumulated, hashCombine32(x, y)});
         SampledWavelengths wavelengths = SampledWavelengths::sampleVisible(

@@ -92,7 +92,7 @@
       "command": "${workspaceFolder}/build/release/NoorRay",
       "args": [
         "--scene",
-        "${workspaceFolder}/tests/assets/simple_sphere.nrscene"
+        "${workspaceFolder}/tests/assets/hotel_old_mill_realistic.nrscene"
       ],
       "dependsOn": "Build NoorRay (Release)",
       "dependsOrder": "sequence",
@@ -145,7 +145,7 @@
       "command": "${workspaceFolder}/build/relwithdebinfo/NoorRay",
       "args": [
         "--scene",
-        "${workspaceFolder}/tests/assets/simple_sphere.nrscene"
+        "${workspaceFolder}/tests/assets/hotel_old_mill_realistic.nrscene"
       ],
       "dependsOn": "Build NoorRay (RelWithDebInfo)",
       "dependsOrder": "sequence",

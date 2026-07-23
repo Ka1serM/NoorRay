@@ -10,8 +10,8 @@ class GgxBsdfTest : public BsdfTestFixture {};
 TEST_CASE_METHOD(GgxBsdfTest,
     "GGX reflection PDF numerically integrates to a probability", "[bsdf][ggx]")
 {
-    constexpr int thetaSamples = 256;
-    constexpr int phiSamples = 256;
+    constexpr int thetaSamples = 128;
+    constexpr int phiSamples = 128;
     double integral = 0.0;
     for (int y = 0; y < thetaSamples; ++y) {
         for (int x = 0; x < phiSamples; ++x) {

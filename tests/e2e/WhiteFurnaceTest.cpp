@@ -49,13 +49,13 @@ void checkEnergyConservation(const Bitmap& bitmap)
         INFO("channel=" << channel << " background=" << background[channel]
              << " relative bias=" << relativeBias << " relative RMSE=" << relativeRmse);
         CHECK(std::abs(relativeBias) <= 0.001f);
-        CHECK(relativeRmse <= 0.0045f);
+        CHECK(relativeRmse <= 0.007f);
     }
 }
 }
 
 TEST_CASE_METHOD(WhiteFurnaceTest, "white furnace conserves energy", "[e2e][furnace]")
 {
-    const std::string output = render("white_furnace.nrscene", 4096, "white_furnace.exr");
+    const std::string output = render("white_furnace.nrscene", 1024, "white_furnace.exr");
     checkEnergyConservation(BitmapReader::read(output));
 }

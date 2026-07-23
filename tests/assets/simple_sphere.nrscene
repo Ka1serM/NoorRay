@@ -12,7 +12,7 @@
         "focal_length_mm": 50.0,
         "focus_distance_cm": 500.0,
         "aperture_diameter_mm": 0.0,
-        "resolution": [64, 64]
+        "resolution": [256, 256]
       }
     },
     {

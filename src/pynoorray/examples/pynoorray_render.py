@@ -7,7 +7,7 @@ import pynoorray as nr
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-TARGET = REPOSITORY_ROOT / "tests/assets/slanted_edge_target.glb"
+TARGET = REPOSITORY_ROOT / "src/pynoorray/examples/assets/slanted_edge_target.glb"
 OUTPUT_DIRECTORY = REPOSITORY_ROOT / "build/slanted-edge-depths"
 ROSS_RESOURCES = REPOSITORY_ROOT / "external/ROSS/resources"
 LENS = ROSS_RESOURCES / "lenses/lg-innotek/ADAS_NarrowViewing.zmx"

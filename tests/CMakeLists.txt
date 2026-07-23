@@ -10,27 +10,29 @@ function(add_noorray_test target source prefix)
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain)
+    set_target_properties(${target} PROPERTIES FOLDER "Tests/${prefix}")
     catch_discover_tests(${target}
         TEST_PREFIX "${prefix}:"
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        PROPERTIES LABELS "${prefix}"
     )
 endfunction()
 
-add_noorray_test(sampler_sequence_test SamplerSequenceTest.cpp sampler)
-add_noorray_test(sampler_distribution_test SamplerDistributionTest.cpp sampler)
-target_link_libraries(sampler_distribution_test PRIVATE glm)
-add_noorray_test(cuda_unique_handle_test CudaUniqueHandleTest.cpp cuda)
+add_noorray_test(sampler_test unit/sampling/SamplerTest.cpp sampler)
+target_link_libraries(sampler_test PRIVATE glm)
+
+add_noorray_test(cuda_unique_handle_test unit/cuda/CudaUniqueHandleTest.cpp cuda)
 add_noorray_test(tagged_object_test
-    "TaggedObjectTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/CUDA/rstd/Memory.cpp" tagged)
+    "unit/cuda/TaggedObjectTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/CUDA/rstd/Memory.cpp" tagged)
 target_compile_definitions(tagged_object_test PRIVATE NR_BACKEND_CUDA=1)
 target_include_directories(tagged_object_test PRIVATE "${OPTIX_INCLUDE_DIR}")
 target_link_libraries(tagged_object_test PRIVATE CUDA::cudart)
 
 add_noorray_test(pbrt_parser_test
-    "PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/PbrtParser.cpp" pbrt)
+    "unit/scene/PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/PbrtParser.cpp" pbrt)
 
 add_noorray_test(ply_mesh_loader_test
-    "PlyMeshLoaderTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Mesh/Assets/PlyMeshLoader.cpp" ply)
+    "unit/scene/PlyMeshLoaderTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Mesh/Assets/PlyMeshLoader.cpp" ply)
 target_include_directories(ply_mesh_loader_test PRIVATE
     "${OPTIX_INCLUDE_DIR}")
 target_compile_definitions(ply_mesh_loader_test PRIVATE
@@ -39,25 +41,25 @@ target_compile_definitions(ply_mesh_loader_test PRIVATE
 target_link_libraries(ply_mesh_loader_test PRIVATE
     tinyply glm Vulkan::Vulkan CUDA::cudart)
 
-add_noorray_test(opaque_bsdf_test OpaqueBsdfTest.cpp bsdf)
+add_noorray_test(opaque_bsdf_test unit/shading/OpaqueBsdfTest.cpp bsdf)
 target_link_libraries(opaque_bsdf_test PRIVATE glm CUDA::cudart)
 
-add_noorray_test(ggx_bsdf_test GgxBsdfTest.cpp bsdf)
+add_noorray_test(ggx_bsdf_test unit/shading/GgxBsdfTest.cpp bsdf)
 target_link_libraries(ggx_bsdf_test PRIVATE glm CUDA::cudart)
 
-add_noorray_test(dielectric_bsdf_test DielectricBsdfTest.cpp bsdf)
+add_noorray_test(dielectric_bsdf_test unit/shading/DielectricBsdfTest.cpp bsdf)
 target_link_libraries(dielectric_bsdf_test PRIVATE glm CUDA::cudart)
 
-add_noorray_test(light_sampling_test LightSamplingTest.cpp light)
+add_noorray_test(light_sampling_test unit/shading/LightSamplingTest.cpp light)
 target_link_libraries(light_sampling_test PRIVATE glm CUDA::cudart)
 
-add_noorray_test(shadow_terminator_test ShadowTerminatorTest.cpp raytracing)
+add_noorray_test(shadow_terminator_test unit/raytracing/ShadowTerminatorTest.cpp raytracing)
 target_link_libraries(shadow_terminator_test PRIVATE glm)
 
-add_noorray_test(ray_test RayTest.cpp raytracing)
+add_noorray_test(ray_test unit/raytracing/RayTest.cpp raytracing)
 target_link_libraries(ray_test PRIVATE glm)
 
-add_noorray_test(scene_lifetime_test SceneLifetimeTest.cpp scene)
+add_noorray_test(scene_lifetime_test unit/scene/SceneLifetimeTest.cpp scene)
 target_link_libraries(scene_lifetime_test PRIVATE
     "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
     CUDA::cudart_static)
@@ -72,5 +74,5 @@ function(add_noorray_render_test target source)
     add_dependencies(${target} NoorRay)
 endfunction()
 
-add_noorray_render_test(render_smoke_test RenderSmokeTest.cpp)
-add_noorray_render_test(white_furnace_test WhiteFurnaceTest.cpp)
+add_noorray_render_test(render_smoke_test e2e/RenderSmokeTest.cpp)
+add_noorray_render_test(white_furnace_test e2e/WhiteFurnaceTest.cpp)

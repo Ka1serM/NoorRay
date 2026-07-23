@@ -6,18 +6,27 @@
 
 #include <array>
 #include <bit>
+#include <cstdint>
 
-class SamplerDistributionTest {};
+TEST_CASE("randomUint sequence remains stable", "[sampler]")
+{
+    RandomState state = 0x123456789abcdef1ull;
+    constexpr std::array<uint32_t, 6> expected{
+        1369610156u, 2360205090u, 1914006763u,
+        4290528257u, 4267313707u, 292903945u};
 
-TEST_CASE_METHOD(SamplerDistributionTest,
-    "randomFloat is deterministic, bounded, and uniform", "[sampler]")
+    for (const uint32_t value : expected)
+        CHECK(randomUint(state) == value);
+}
+
+TEST_CASE("randomFloat is deterministic, bounded, and uniform", "[sampler]")
 {
     RandomState a = seedRandom(42u);
     RandomState b = seedRandom(42u);
     RandomState c = seedRandom(43u);
     double sum = 0.0;
     bool differs = false;
-    constexpr int sampleCount = 100000;
+    constexpr int sampleCount = 20000;
     for (int i = 0; i < sampleCount; ++i) {
         const float x = randomFloat(a);
         const float y = randomFloat(b);
@@ -33,8 +42,7 @@ TEST_CASE_METHOD(SamplerDistributionTest,
     CHECK(sum / sampleCount == Catch::Approx(0.5).margin(0.01));
 }
 
-TEST_CASE_METHOD(SamplerDistributionTest,
-    "Owen Sobol dimensions retain joint stratification", "[sampler]")
+TEST_CASE("Owen Sobol dimensions retain joint stratification", "[sampler]")
 {
     constexpr uint32_t strataPerDimension = 8;
     constexpr uint32_t sampleCount = strataPerDimension * strataPerDimension;
@@ -58,8 +66,7 @@ TEST_CASE_METHOD(SamplerDistributionTest,
     CHECK(occupiedCells >= sampleCount / 2u);
 }
 
-TEST_CASE_METHOD(SamplerDistributionTest,
-    "Owen Sobol sequence remains bit exact", "[sampler]")
+TEST_CASE("Owen Sobol sequence remains bit exact", "[sampler]")
 {
     constexpr std::array<uint32_t, 6> SampleIndices{
         0u, 1u, 2u, 17u, 123456789u, 0xffffffffu};

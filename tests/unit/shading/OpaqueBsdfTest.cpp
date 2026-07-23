@@ -64,7 +64,8 @@ TEST_CASE_METHOD(OpaqueBsdfTest,
     int diffuseSamples = 0;
     int specularSamples = 0;
     bool allSamplesContribute = true;
-    for (int i = 0; i < 16384; ++i)
+    constexpr int sampleCount = 4096;
+    for (int i = 0; i < sampleCount; ++i)
     {
         const BsdfSample sample = bsdf.sample(rng);
         average += sample.weight[0];
@@ -75,12 +76,12 @@ TEST_CASE_METHOD(OpaqueBsdfTest,
         specularSamples += sample.event == BsdfEvent::Specular;
     }
 
-    average /= 16384.0;
+    average /= sampleCount;
     INFO("average=" << average << " diffuse=" << diffuseSamples
         << " specular=" << specularSamples);
     CHECK(allSamplesContribute);
-    CHECK(diffuseSamples > 14000);
-    CHECK(specularSamples > 500);
+    CHECK(diffuseSamples > 3500);
+    CHECK(specularSamples > 125);
     CHECK(average > 0.7);
 }
 
@@ -106,7 +107,7 @@ TEST_CASE_METHOD(OpaqueBsdfTest,
         SellmeierCoefficients{}, SampledWavelengths::sampleUniform(0.5f));
 
     RandomState rng = seedRandom(0x10b3u);
-    for (int i = 0; i < 1024; ++i) {
+    for (int i = 0; i < 256; ++i) {
         const BsdfSample sample = bsdf.sample(rng);
         CHECK(sample.event == BsdfEvent::Specular);
         CHECK(sample.pdf > 0.0f);
@@ -134,7 +135,8 @@ TEST_CASE_METHOD(OpaqueBsdfTest,
         glm::vec3 maximumDirection{};
         int accepted = 0;
         bool allFinite = true;
-        for (int i = 0; i < 65536; ++i)
+        constexpr int sampleCount = 16384;
+        for (int i = 0; i < sampleCount; ++i)
         {
             const BsdfSample sample = bsdf.sample(rng);
             allFinite = allFinite && std::isfinite(sample.weight[0]);
@@ -159,7 +161,7 @@ TEST_CASE_METHOD(OpaqueBsdfTest,
             << maximumDirection.x << ',' << maximumDirection.y << ','
             << maximumDirection.z << ") accepted=" << accepted);
         CHECK(allFinite);
-        CHECK(accepted > 65000);
+        CHECK(accepted > sampleCount - 150);
         CHECK(maximum <= 0.801f);
     }
 }

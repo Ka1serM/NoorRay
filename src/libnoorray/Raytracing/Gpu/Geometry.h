@@ -61,8 +61,8 @@ NR_GPU inline ShadowSurface ShadowSurface::fromHit(
     ShadowSurface surface{};
     const GpuInstance instance = scene.instances[hit.instanceIndex];
     const MeshAsset& mesh = scene.meshes[instance.meshIndex];
-    const int materialIndex = mesh.getFaces()[hit.primitiveIndex].materialIndex;
-    surface.material = &mesh.getMaterials()[materialIndex];
+    const int materialSlot = mesh.getFaces()[hit.primitiveIndex].materialIndex;
+    surface.material = &scene.materials[mesh.getMaterialIds()[materialSlot]];
 
     // Constant opacity/transmission materials do not consume UVs in the
     // shadow walk. Avoid three vertex loads and the interpolation for the
@@ -88,8 +88,8 @@ NR_GPU inline Surface Surface::fromHit(
     Surface surface{};
     const GpuInstance instance = scene.instances[hit.instanceIndex];
     const MeshAsset& mesh = scene.meshes[instance.meshIndex];
-    const int materialIndex = mesh.getFaces()[hit.primitiveIndex].materialIndex;
-    surface.material = &mesh.getMaterials()[materialIndex];
+    const int materialSlot = mesh.getFaces()[hit.primitiveIndex].materialIndex;
+    surface.material = &scene.materials[mesh.getMaterialIds()[materialSlot]];
     const auto& indices = mesh.getIndices();
     const auto& vertices = mesh.getVertices();
     const uint32_t i0 = indices[hit.primitiveIndex * 3];

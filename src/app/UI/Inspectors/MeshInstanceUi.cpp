@@ -15,8 +15,7 @@ bool renderMeshAsset(MeshAsset& asset)
 {
     ImGuiManager::tableRowLabel("Source");
     ImGui::TextUnformatted(asset.getPath().c_str());
-    const auto& materials = asset.getMaterials();
-    if (materials.empty())
+    if (asset.getMaterialCount() == 0)
         return false;
 
     if (!ImGuiManager::accordionRow("Materials###MeshMaterials"))
@@ -47,9 +46,9 @@ bool renderMeshAsset(MeshAsset& asset)
         ImGui::EndCombo();
     };
 
-    for (size_t index = 0; index < materials.size(); ++index)
+    for (size_t index = 0; index < asset.getMaterialCount(); ++index)
     {
-        Material material = materials[index];
+        Material material = asset.getMaterial(static_cast<uint32_t>(index));
         bool materialChanged = false;
         const std::string label = "Material " + std::to_string(index);
         if (!ImGuiManager::accordionRow(label.c_str()))

@@ -626,6 +626,7 @@ void Raytracer::updateEnvironmentCdf()
 void Raytracer::updateMeshes()
 {
     gpuCache.data.meshes = scene.getMeshAssets().data();
+    gpuCache.data.materials = scene.getMaterials().data();
 }
 
 void Raytracer::updateTLAS()

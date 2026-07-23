@@ -69,6 +69,7 @@ class Scene {
     std::vector<Texture> textures;
     std::vector<std::string> textureNames;
     nr::rstd::vector<MeshAsset> meshAssets;
+    nr::rstd::vector<Material> materials;
     nr::rstd::vector<GaussianAsset> gaussianAssets;
     nr::rstd::unique_ptr<Environment> environment;
     RenderSettings renderSettings{};
@@ -133,6 +134,8 @@ public:
     void clear();
     uint64_t add(std::unique_ptr<SceneObject> sceneObject);
     uint32_t add(MeshAsset meshAsset);
+    uint32_t add(Material material);
+    void updateMaterial(uint32_t materialId, const Material& material);
     uint32_t add(GaussianAsset gaussianAsset);
     Texture& add(Texture&& texture);
     bool removeObject(uint64_t objectId);
@@ -158,6 +161,10 @@ public:
     const MeshAsset& getMeshAsset(uint32_t index) const { return meshAssets[index]; }
     const nr::rstd::vector<MeshAsset>& getMeshAssets() const { return meshAssets; }
     nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets; }
+    const nr::rstd::vector<Material>& getMaterials() const { return materials; }
+    nr::rstd::vector<Material>& getMaterials() { return materials; }
+    const Material& getMaterial(uint32_t id) const { return materials[id]; }
+    Material& getMaterial(uint32_t id) { return materials[id]; }
     // Gaussian assets
     GaussianAsset& getGaussianAsset(uint32_t index) { return gaussianAssets[index]; }
     const GaussianAsset& getGaussianAsset(uint32_t index) const { return gaussianAssets[index]; }

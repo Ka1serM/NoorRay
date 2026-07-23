@@ -58,12 +58,16 @@ public:
     NR_CPU_GPU const nr::rstd::vector<Vertex>& getVertices() const { return vertices; }
     NR_CPU_GPU const nr::rstd::vector<uint32_t>& getIndices() const { return indices; }
     NR_CPU_GPU const nr::rstd::vector<Face>& getFaces() const { return faces; }
-    NR_CPU_GPU const nr::rstd::vector<Material>& getMaterials() const { return materials; }
-    nr::rstd::vector<Material>& getMaterials() { return materials; }
+    NR_CPU_GPU const nr::rstd::vector<uint32_t>& getMaterialIds() const {
+        return materialIds;
+    }
+    size_t getMaterialCount() const { return materialIds.size(); }
+    const Material& getMaterial(uint32_t slot) const;
     Scene& getScene() const { return scene; }
     void replaceGeometry(const std::vector<Vertex>& newVertices,
         const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces);
     void setMaterial(uint32_t materialIndex, const Material& material);
+    void setMaterialId(uint32_t materialSlot, uint32_t materialId);
     void notifyMaterialsChanged();
 
 private:
@@ -73,7 +77,7 @@ private:
     nr::rstd::vector<Vertex> vertices;
     nr::rstd::vector<uint32_t> indices;
     nr::rstd::vector<Face> faces;
-    nr::rstd::vector<Material> materials;
+    nr::rstd::vector<uint32_t> materialIds;
 
     Blas blas;
 

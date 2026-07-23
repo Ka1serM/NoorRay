@@ -237,8 +237,10 @@ MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Mat
 MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
     : scene(scene), path(std::move(name)),
       vertices(vertices.begin(), vertices.end()), indices(indices.begin(), indices.end()),
-      faces(faces.begin(), faces.end()), materials(materials.begin(), materials.end())
+      faces(faces.begin(), faces.end())
 {
+    for (const Material& material : materials)
+        materialIds.push_back(scene.add(material));
     scene.synchronizeBeforeMutation();
     const auto& ctx = scene.getContext();
     if (ctx.getOptixContext() != nullptr && ctx.getCudaStream() != nullptr)
@@ -251,7 +253,7 @@ MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>&
 MeshAsset::MeshAsset(MeshAsset&& other) noexcept
     : scene(other.scene), path(std::move(other.path)), index(other.index),
       vertices(std::move(other.vertices)), indices(std::move(other.indices)),
-      faces(std::move(other.faces)), materials(std::move(other.materials)),
+      faces(std::move(other.faces)), materialIds(std::move(other.materialIds)),
       blas(std::move(other.blas))
 {
 }
@@ -283,9 +285,24 @@ void MeshAsset::replaceGeometry(const std::vector<Vertex>& newVertices,
 
 void MeshAsset::setMaterial(const uint32_t materialIndex, const Material& material)
 {
+    if (materialIndex < materialIds.size())
+        scene.updateMaterial(materialIds[materialIndex], material);
+}
+
+void MeshAsset::setMaterialId(
+    const uint32_t materialSlot, const uint32_t materialId)
+{
+    if (materialSlot >= materialIds.size()
+        || materialId >= scene.getMaterials().size())
+        return;
     scene.synchronizeBeforeMutation();
-    materials[materialIndex] = material;
+    materialIds[materialSlot] = materialId;
     notifyMaterialsChanged();
+}
+
+const Material& MeshAsset::getMaterial(const uint32_t slot) const
+{
+    return scene.getMaterial(materialIds[slot]);
 }
 
 void MeshAsset::notifyMaterialsChanged()

@@ -123,6 +123,7 @@ void Scene::clear() {
     gaussianInstances.clear();
     gaussianCount = 0;
     meshAssets.clear();
+    materials.clear();
     gaussianAssets.clear();
     textures.clear();
     textureNames.clear();
@@ -166,6 +167,26 @@ uint32_t Scene::add(MeshAsset meshAsset) {
     meshAssets.push_back(std::move(meshAsset));
     setDirtyFlag(Meshes);
     return index;
+}
+
+uint32_t Scene::add(Material material) {
+    synchronizeBeforeMutation();
+    const uint32_t index = static_cast<uint32_t>(materials.size());
+    materials.push_back(material);
+    // The managed vector may have reallocated, so refresh the GPU pointer.
+    setDirtyFlag(Meshes);
+    setDirtyFlag(Accumulation);
+    return index;
+}
+
+void Scene::updateMaterial(
+    const uint32_t materialId, const Material& material)
+{
+    if (materialId >= materials.size())
+        return;
+    synchronizeBeforeMutation();
+    materials[materialId] = material;
+    setDirtyFlag(Accumulation);
 }
 
 uint32_t Scene::add(GaussianAsset gaussianAsset) {

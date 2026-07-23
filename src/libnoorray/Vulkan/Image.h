@@ -33,6 +33,7 @@ public:
     vk::DeviceSize getAllocationSize() const { return allocationSize; }
     bool isExportable() const { return externalMemory != VK_NULL_HANDLE; }
     void setCudaArray(cudaArray_t array) { cudaArray = array; }
+    cudaArray_t getCudaArray() const { return cudaArray; }
     Bitmap toBitmap() const;
     void save(const std::string& path) const;
 

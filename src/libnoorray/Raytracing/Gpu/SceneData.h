@@ -34,6 +34,7 @@ struct AnalyticLightAliasEntry
 struct GpuSceneData
 {
     const MeshAsset* meshes{};
+    const Material* materials{};
     const GpuInstance* instances{};
     const PointLight* pointLights{};
     const SpotLight* spotLights{};

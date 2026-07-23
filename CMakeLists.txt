@@ -336,18 +336,43 @@ add_custom_command(
                 "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
                 --generate-nonsystem-dependencies-with-compile
                 --dependency-output "${NR_OPTIX_DEPFILE}"
-                -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
+                -DNR_BACKEND_CUDA=1 -DROSS_BUILD_GPU_SUPPORT=1
                 "-I${NR_CORE_DIR}"
                 "-I${NR_APP_DIR}"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
                 "-I${OPTIX_INCLUDE_DIR}"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/libross/main"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/nlohmann-json/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/spdlog/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/fmt/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/magic_enum/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/openlensfileio/src/openlensfileio/main"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/tabulate/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/libmorton/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/gilbert"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/ordered_map/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/lodepng"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/hash-library"
+                "-I${PROJECT_SOURCE_DIR}/external/tbb/include"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/OpenEXR"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/Iex"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/IlmThread"
+                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/OpenEXRCore"
+                "-I${CMAKE_CURRENT_BINARY_DIR}/ross/openexr/cmake"
+                "-I${CMAKE_CURRENT_BINARY_DIR}/_deps/imath-src/src/Imath"
+                "-I${CMAKE_CURRENT_BINARY_DIR}/_deps/imath-build/config"
                 -o "${NR_OPTIX_PTX}"
-                "${NR_CORE_DIR}/Kernels/Extend.cu"
+                -x cu "${NR_CORE_DIR}/Kernels/Path/PathTrace.h"
         DEPENDS
-                src/libnoorray/Kernels/Extend.cu
-                src/libnoorray/Kernels/Connect.cu
-                src/libnoorray/Kernels/GaussianHit.cu
-                src/libnoorray/Kernels/GaussianProxyOverdraw.cu
+                src/libnoorray/Kernels/Path/PathTrace.h
+                src/libnoorray/Kernels/Path/Aov.h
+                src/libnoorray/Kernels/Path/GaussianHit.h
+                src/libnoorray/Kernels/Path/GaussianProxyOverdraw.h
+                external/ROSS/libross/main/libross/imaging/cameralens/raytracing/exitpupil/ExitPupil.cpp
+                external/ROSS/libross/main/libross/imaging/cameralens/CameraLens.cpp
+                external/ROSS/libross/main/libross/imaging/cameralens/LensSurface.cpp
+                external/ROSS/libross/main/libross/imaging/cameralens/raytracing/sequential/SequentialRaytracer.cpp
+                external/ROSS/libross/main/libross/imaging/cameralens/raytracing/sequential/FromFilmToWorldRaytracer.cpp
         DEPFILE "${NR_OPTIX_DEPFILE}"
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
@@ -364,43 +389,42 @@ add_custom_command(
                 "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
                 --generate-nonsystem-dependencies-with-compile
                 --dependency-output "${NR_TRAINING_OPTIX_DEPFILE}"
-                -DNR_BACKEND_CUDA=1 -DNR_OPTIX_PTX_BUILD=1
+                -DNR_BACKEND_CUDA=1
                 "-I${NR_CORE_DIR}"
                 "-I${NR_APP_DIR}"
                 "-I${PROJECT_SOURCE_DIR}/external/glm"
                 "-I${OPTIX_INCLUDE_DIR}"
                 -o "${NR_TRAINING_OPTIX_PTX}"
-                "${NR_CORE_DIR}/Training/Kernels/Extend.cu"
+                -x cu "${NR_CORE_DIR}/Training/Kernels/GaussianHit.h"
         DEPENDS
-                src/libnoorray/Training/Kernels/Extend.cu
-                src/libnoorray/Training/Kernels/GaussianHit.cu
+                src/libnoorray/Training/Kernels/Backward.h
+                src/libnoorray/Training/Kernels/GaussianHit.h
         DEPFILE "${NR_TRAINING_OPTIX_DEPFILE}"
         VERBATIM)
 add_custom_target(NoorRayTrainingOptixIr DEPENDS "${NR_TRAINING_OPTIX_PTX}")
 
+set(NR_CUDA_SOURCES
+        src/libnoorray/Kernels/Post/PostProcess.h
+        src/libnoorray/Training/GaussianTrainerCuda.h)
+set_source_files_properties(${NR_CUDA_SOURCES} PROPERTIES
+        LANGUAGE CUDA
+        HEADER_FILE_ONLY OFF)
+
 add_library(NoorRayCuda STATIC
-        src/libnoorray/Raytracing/Blas.cpp
-        src/libnoorray/Raytracing/GaussianProxyBlas.cpp
-        src/libnoorray/Raytracing/OptixDenoiserState.cpp
+        src/libnoorray/Raytracing/Acceleration/Blas.cpp
+        src/libnoorray/Raytracing/Acceleration/GaussianProxyBlas.cpp
+        src/libnoorray/Raytracing/Denoising/OptixDenoiserState.cpp
         src/libnoorray/CUDA/Unique/Texture.cpp
         src/libnoorray/CUDA/Unique/SharedImage.cpp
         src/libnoorray/CUDA/Unique/SharedBuffer.cpp
         src/libnoorray/CUDA/rstd/Memory.cpp
-        src/libnoorray/Mesh/OpenPbrEnergy.cpp
-        src/libnoorray/Kernels/Generate.cu
-        src/libnoorray/Kernels/Shade.cu
-        src/libnoorray/Kernels/ShadeGaussianDirect.cu
-        src/libnoorray/Kernels/Finalize.cu
-        src/libnoorray/Kernels/Denoise.cu
-        src/libnoorray/Kernels/GenerateAov.cu
-        src/libnoorray/Kernels/ShadeAov.cu
-        src/libnoorray/Raytracing/Tlas.cpp
-        src/libnoorray/Raytracing/RgbSpectrumTableData.cpp
-        src/libnoorray/Raytracing/Raytracer.cpp
-        src/libnoorray/Training/Kernels/Forward.cu
-        src/libnoorray/Training/Kernels/Backward.cu
+        src/libnoorray/Shading/OpenPbrEnergy.cpp
+        ${NR_CUDA_SOURCES}
+        src/libnoorray/Raytracing/Acceleration/Tlas.cpp
+        src/libnoorray/Shading/RgbSpectrumTableData.cpp
+        src/libnoorray/Raytracing/Runtime/Raytracer.cpp
         src/libnoorray/Training/GaussianTrainRenderer.cpp
-        src/libnoorray/Training/GaussianTrainer.cu)
+        )
 add_dependencies(NoorRayCuda NoorRayOptixIr NoorRayTrainingOptixIr)
 set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 set_target_properties(NoorRayCuda PROPERTIES
@@ -439,13 +463,14 @@ file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
         "${NR_CORE_DIR}/*.h")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/CUDA/")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Kernels/")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Raytracer\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/RgbSpectrumTableData\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Blas\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/GaussianProxyBlas\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/OptixDenoiserState\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Tlas\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Mesh/OpenPbrEnergy\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Training/GaussianTrainerCuda\.h$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Runtime/Raytracer\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Shading/RgbSpectrumTableData\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Acceleration/Blas\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Acceleration/GaussianProxyBlas\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Denoising/OptixDenoiserState\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Acceleration/Tlas\\.cpp$")
+list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Shading/OpenPbrEnergy\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapReader\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapWriter\\.cpp$")
 list(FILTER NR_CORE_FILES EXCLUDE REGEX "/StbImpl\\.cpp$")
@@ -583,8 +608,8 @@ if(NR_ENABLE_UNITY_BUILD)
         src/app/UI/ImGuiManager.cpp
         src/libnoorray/Vulkan/Viewport.cpp
         src/libnoorray/Vulkan/VmaImpl.cpp
-        src/libnoorray/Mesh/GaussianAsset.cpp
-        src/libnoorray/Raytracing/GaussianProxyBlas.cpp
+        src/libnoorray/Mesh/Assets/GaussianAsset.cpp
+        src/libnoorray/Raytracing/Acceleration/GaussianProxyBlas.cpp
         PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 

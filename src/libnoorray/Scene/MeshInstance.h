@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "Scene.h"
-#include "Mesh/MeshAsset.h"
+#include "Mesh/Assets/MeshAsset.h"
 #include "SceneObject.h"
 
 class Scene;

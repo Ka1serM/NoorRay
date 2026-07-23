@@ -4,8 +4,8 @@
 
 #include <imgui.h>
 
-#include "Mesh/MeshAsset.h"
-#include "Raytracing/Sellmeier.h"
+#include "Mesh/Assets/MeshAsset.h"
+#include "Shading/Sellmeier.h"
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"
 
@@ -15,7 +15,7 @@ bool renderMeshAsset(MeshAsset& asset)
 {
     ImGuiManager::tableRowLabel("Source");
     ImGui::TextUnformatted(asset.getPath().c_str());
-    auto& materials = asset.getMaterials();
+    const auto& materials = asset.getMaterials();
     if (materials.empty())
         return false;
 
@@ -47,8 +47,7 @@ bool renderMeshAsset(MeshAsset& asset)
 
     for (size_t index = 0; index < materials.size(); ++index)
     {
-        Material& storedMaterial = materials[index];
-        Material material = storedMaterial;
+        Material material = materials[index];
         bool materialChanged = false;
         const std::string label = "Material " + std::to_string(index);
         if (!ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_Framed))
@@ -98,13 +97,10 @@ bool renderMeshAsset(MeshAsset& asset)
         }
         ImGui::TreePop();
         if (materialChanged) {
-            asset.getScene().synchronizeBeforeMutation();
-            storedMaterial = material;
+            asset.setMaterial(static_cast<uint32_t>(index), material);
             changed = true;
         }
     }
-    if (changed)
-        asset.notifyMaterialsChanged();
     return changed;
 }
 }

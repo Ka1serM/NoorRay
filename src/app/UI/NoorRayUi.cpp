@@ -24,7 +24,7 @@
 #include "Camera/Camera.h"
 #include "Camera/CameraInstance.h"
 #include "Camera/PerspectiveCamera.h"
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/Runtime/Raytracer.h"
 #include "Vulkan/Viewport.h"
 #include "Scene/LightInstance.h"
 
@@ -91,7 +91,7 @@ void NoorRayUi::run() {
     bool renderComplete = false;
     uint64_t displayedRenderValue = 0;
     uint32_t displayedBufferIndex = 0;
-    uint32_t displayedSelectionIndex = ~0u;
+    uint32_t displayedCryptomatteId = ~0u;
     InteropFrame pendingDisplayFrame{};
     bool isRunning = true, isFullscreen = false, firstFrame = true;
     uint64_t lastResizeEventMs = 0;
@@ -228,20 +228,23 @@ void NoorRayUi::run() {
                     ? viewportCamera->getCamera()->exposure : 0.0f;
                 const bool proxyOverdraw =
                     renderSettings.gaussianProxyOverdrawVisualization;
-                const uint32_t selectedIndex = scene.getActiveMeshInstanceIndex();
+                const uint32_t selectedCryptomatteId =
+                    scene.getActiveCryptomatteId(
+                        viewportPanel->getSelectedGaussianIndex());
                 const glm::mat4 viewProjection = viewportCamera
                     ? viewportCamera->getProjectionMatrix() * viewportCamera->getViewMatrix()
                     : glm::mat4(1.0f);
                 if (viewportPanel->showOverlays())
                     viewport->updateBillboards(scene);
                 viewport->dispatch(
-                    cmd, bufferIndex, selectedIndex, viewProjection,
+                    cmd, bufferIndex, selectedCryptomatteId,
+                    viewProjection,
                     proxyOverdraw ? 0.0f : cameraExposure,
                     proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
                     proxyOverdraw ? 0 : renderSettings.tonemappingEnabled,
                     viewportPanel->showOverlays());
                 viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());
-                displayedSelectionIndex = selectedIndex;
+                displayedCryptomatteId = selectedCryptomatteId;
             };
 
             if (pendingDisplayFrame.readyValue != 0) {
@@ -257,7 +260,9 @@ void NoorRayUi::run() {
                     pendingDisplayFrame.readyValue);
                 pendingDisplayFrame = {};
             } else if (displayedRenderValue != 0
-                && scene.getActiveMeshInstanceIndex() != displayedSelectionIndex)
+                && scene.getActiveCryptomatteId(
+                        viewportPanel->getSelectedGaussianIndex())
+                    != displayedCryptomatteId)
             {
                 dispatchViewportOverlay(displayedBufferIndex);
             }

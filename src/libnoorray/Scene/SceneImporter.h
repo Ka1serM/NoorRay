@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "Mesh/Material.h"
+#include "Shading/Material.h"
 #include "Scene/Scene.h"
 
 class SceneImporter {

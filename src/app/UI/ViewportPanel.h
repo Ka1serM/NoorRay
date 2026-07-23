@@ -16,7 +16,7 @@ class ViewportPanel : public ImGuiComponent {
 public:
     ivec2 screenToPixel() const;
     void renderUi() override;
-    void handleObjectPicking() const;
+    void handleObjectPicking();
     bool handleBillboardPicking() const;
     void handlePositionPicking() const;
     void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
@@ -27,6 +27,8 @@ public:
     ~ViewportPanel() override;
 
     bool showOverlays() const { return m_showOverlays; }
+    bool needsContinuousRedraw() const { return isCapturingMouse; }
+    uint32_t getSelectedGaussianIndex() const { return selectedGaussianIndex; }
 
     ViewportPanel(const std::string& name, Window& window, Context& context, Scene& scene,
         const Image& outputColor, Image& outputCrypto, Image& outputPosition,
@@ -92,4 +94,5 @@ private:
     
     ImGuizmo::OPERATION currentOperation = ImGuizmo::TRANSLATE;
     ImGuizmo::MODE currentMode = ImGuizmo::LOCAL;
+    uint32_t selectedGaussianIndex = ~0u;
 };

@@ -14,9 +14,9 @@
 #include "Camera/RealisticCamera.h"
 #include "Camera/HybridPsfCamera.h"
 #include "Camera/ThinLensCamera.h"
-#include "Mesh/MeshAsset.h"
+#include "Mesh/Assets/MeshAsset.h"
 #include "Mesh/Transform.h"
-#include "Raytracing/Sellmeier.h"
+#include "Shading/Sellmeier.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 #include "Scene/SceneFile.h"
@@ -224,6 +224,7 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
         scene.getRenderSettings().maxSamples = file.render_settings->max_samples;
         scene.getRenderSettings().noiseLimitEnabled = file.render_settings->noise_limit_enabled;
         scene.getRenderSettings().noiseLevel = std::max(file.render_settings->noise_level, 0.0f);
+        scene.getRenderSettings().aovEnabled = file.render_settings->aov_enabled;
         scene.getRenderSettings().optixDenoiserEnabled =
             file.render_settings->optix_denoiser_enabled;
         scene.getRenderSettings().optixDenoiserMinSamples =

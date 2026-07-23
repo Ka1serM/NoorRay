@@ -12,7 +12,7 @@
 
 #include "CUDA/Annotations.h"
 #include "CUDA/TaggedPointer.h"
-#include "Raytracing/Spectrum.h"
+#include "Shading/Spectrum.h"
 
 namespace ross {
 class InterpolatedPsfGrid;

@@ -8,22 +8,7 @@
 
 #include <optix.h>
 
-#include "Raytracing/SceneData.h"
-
-struct RayAdjoint
-{
-    glm::vec3 dOrigin{};
-    glm::vec3 dDirection{};
-    float dWeight{};
-};
-
-struct GaussianRayTape
-{
-    glm::vec3 origin{};
-    glm::vec3 direction{};
-    float weight{1.0f};
-    uint32_t sampleKey{};
-};
+#include "Raytracing/Gpu/SceneData.h"
 
 // Training payload carried only by the dedicated training launches.
 struct GaussianTrainParams
@@ -68,7 +53,6 @@ struct GaussianTrainParams
 struct GaussianTrainingKernelParams
 {
     GpuSceneData scene;
-    WavefrontQueues queues;
     GpuFrameSettings frame;
     GaussianTrainParams train;
     uint32_t depth{};

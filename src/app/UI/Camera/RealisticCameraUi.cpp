@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "CUDA/ManagedMemory.h"
-#include "Raytracing/Sellmeier.h"
+#include "Shading/Sellmeier.h"
 #include "UI/ImGuiManager.h"
 #include "portable-file-dialogs.h"
 

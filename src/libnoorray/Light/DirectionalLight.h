@@ -2,7 +2,7 @@
 
 #include <glm/vec3.hpp>
 #include "Light/LightSample.h"
-#include "Raytracing/RgbToSpectrum.h"
+#include "Shading/RgbToSpectrum.h"
 
 class DirectionalLight {
 public:

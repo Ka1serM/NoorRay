@@ -10,8 +10,8 @@
 #include "CUDA/rstd/UniquePtr.h"
 #include "CUDA/Unique/SharedVector.h"
 #include "Scene/RenderSettings.h"
-#include "Mesh/MeshAsset.h"
-#include "Mesh/GaussianAsset.h"
+#include "Mesh/Assets/MeshAsset.h"
+#include "Mesh/Assets/GaussianAsset.h"
 #include "Light/PointLight.h"
 #include "Light/SpotLight.h"
 #include "Light/RectLight.h"
@@ -82,7 +82,11 @@ class Scene {
 
     // Render-ready Gaussian attributes shared with CUDA kernels.
     nr::rstd::vector<float> gaussianOpacities;
-    nr::rstd::vector<glm::vec3> gaussianShCoeffs;
+    // Coefficient-major RGB binary16 values. Opacity remains float because it
+    // directly controls stochastic acceptance and benefits less from packing.
+    nr::rstd::vector<__half> gaussianShCoeffs;
+    nr::rstd::vector<uint32_t> gaussianInstanceOffsets;
+    uint32_t gaussianShCoefficientCount{MaxSphericalHarmonicsCoefficientCount};
 
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
     std::vector<std::shared_ptr<GaussianInstance>> gaussianInstances;
@@ -147,14 +151,13 @@ public:
     const std::vector<std::shared_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
     std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
     std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
-    uint32_t getActiveMeshInstanceIndex() const;
+    uint32_t getActiveCryptomatteId(uint32_t selectedGaussianIndex) const;
     MeshAsset* getMeshAsset(const std::string& name);
     const MeshAsset* getMeshAsset(const std::string& name) const;
     MeshAsset& getMeshAsset(uint32_t index) { return meshAssets[index]; }
     const MeshAsset& getMeshAsset(uint32_t index) const { return meshAssets[index]; }
     const nr::rstd::vector<MeshAsset>& getMeshAssets() const { return meshAssets; }
     nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets; }
-
     // Gaussian assets
     GaussianAsset& getGaussianAsset(uint32_t index) { return gaussianAssets[index]; }
     const GaussianAsset& getGaussianAsset(uint32_t index) const { return gaussianAssets[index]; }
@@ -166,7 +169,9 @@ public:
     uint32_t getGaussianCount() const { return gaussianCount; }
     void buildGaussianRenderData();
     const float* getGaussianOpacities() const { return gaussianOpacities.data(); }
-    const glm::vec3* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
+    const __half* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
+    const uint32_t* getGaussianInstanceOffsets() const { return gaussianInstanceOffsets.data(); }
+    uint32_t getGaussianShCoefficientCount() const { return gaussianShCoefficientCount; }
     const std::vector<Texture>& getTextures() const { return textures; }
     std::vector<std::string> getTextureNames() const { return textureNames; }
 
@@ -224,7 +229,8 @@ public:
     }
     void clearDirtyFlag(DirtyFlag flag) { dirtyFlags &= ~flag; }
     bool isDirty(DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
-    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures | EnvironmentCdf | Lights | CameraState); }
+    bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures
+        | EnvironmentCdf | Lights | CameraState | GaussianData); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
 

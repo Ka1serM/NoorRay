@@ -6,7 +6,7 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 ### Features
 
-- **CUDA/OptiX Backend:** Implements wavefront path tracing with CUDA 13 and OptiX 9.1, with Vulkan/CUDA external-memory interop for the interactive viewport.
+- **CUDA/OptiX Backend:** Implements an OptiX path tracer with CUDA 13 and OptiX 9.1, with Vulkan/CUDA external-memory interop for the interactive viewport.
 
 - **Path Tracing with MIS:** Uses **unidirectional path tracing** with **multiple importance sampling (MIS)**. Supports combined **Lambertian diffuse** and **GGX specular** materials.  
 

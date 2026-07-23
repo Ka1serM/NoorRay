@@ -11,7 +11,7 @@ static const int GROUP_SIZE = 16;
 
 struct PushConstants
 {
-    uint  selectedIndex;
+    uint  selectedCryptomatteId;
     float exposure;
     int   bufferVisualization;
     int   tonemappingEnabled;
@@ -109,10 +109,37 @@ void main(uint3 threadId : SV_DispatchThreadID)
             : float3(0.0);
         color = pushConstants.tonemappingEnabled != 0 ? acesFitted(straight) : straight;
 
-        static const int outlineRadius = 6;
-        if (pushConstants.selectedIndex != ~0u && idImage[pixel] != pushConstants.selectedIndex)
+        static const int outlineRadius = 3;
+        const bool selectionEnabled = pushConstants.selectedCryptomatteId != ~0u;
+        const bool selectedPixel = selectionEnabled
+            && idImage[pixel] == pushConstants.selectedCryptomatteId;
+        bool outline = false;
+        if (selectedPixel)
         {
-            bool outline = false;
+            // Gaussian footprints can be only one or a few pixels wide. Mark
+            // their boundary directly instead of relying solely on dilation
+            // from a neighboring pixel.
+            for (int y = -1; y <= 1 && !outline; ++y)
+            {
+                for (int x = -1; x <= 1; ++x)
+                {
+                    const int2 offset = int2(x, y);
+                    const int2 samplePixel = pixel + offset;
+                    if (x == 0 && y == 0)
+                        continue;
+                    if (!all(samplePixel >= int2(0)) ||
+                        !all(samplePixel < int2(width, height)) ||
+                        idImage[samplePixel] != pushConstants.selectedCryptomatteId)
+                    {
+                        outline = true;
+                        break;
+                    }
+                }
+            }
+        }
+        else if (selectionEnabled)
+        {
+            // Keep the existing soft outer outline for larger selected areas.
             for (int y = -outlineRadius; y <= outlineRadius && !outline; ++y)
             {
                 for (int x = -outlineRadius; x <= outlineRadius; ++x)
@@ -122,15 +149,18 @@ void main(uint3 threadId : SV_DispatchThreadID)
                     if (dot(offset, offset) <= outlineRadius * outlineRadius &&
                         all(samplePixel >= int2(0)) &&
                         all(samplePixel < int2(width, height)) &&
-                        idImage[samplePixel] == pushConstants.selectedIndex)
+                        idImage[samplePixel] == pushConstants.selectedCryptomatteId)
                     {
                         outline = true;
                         break;
                     }
                 }
             }
-            if (outline)
-                color = float3(1.0, 1.00, 0.00);
+        }
+        if (outline)
+        {
+            color = float3(1.0, 1.00, 0.00);
+            alpha = 1.0;
         }
         break;
     }

@@ -12,6 +12,8 @@
 #include "SDL3/SDL_mouse.h"
 #include "Camera/CameraInstance.h"
 #include "Scene/MeshInstance.h"
+#include "Scene/GaussianInstance.h"
+#include "Mesh/Assets/GaussianAsset.h"
 #include "Scene/LightInstance.h"
 #include "Vulkan/Viewport.h"
 #include "UI/Window.h"
@@ -362,9 +364,46 @@ void ViewportPanel::handleTransformGizmo() {
     const mat4& view = camera->getViewMatrix();
     mat4 proj = camera->getProjectionMatrix();
     mat4 model = activeObject->getWorldTransform().getMatrix();
+    GaussianInstance* gaussianInstance = dynamic_cast<GaussianInstance*>(activeObject.get());
+    Gaussian gaussian{};
+    uint32_t gaussianLocalIndex = ~0u;
+    if (gaussianInstance && selectedGaussianIndex != ~0u)
+    {
+        uint32_t offset = 0;
+        for (const auto& instance : scene.getGaussianInstances())
+        {
+            const uint32_t count = instance->getGaussianAsset().getGaussianCount();
+            if (instance.get() == gaussianInstance && selectedGaussianIndex >= offset
+                && selectedGaussianIndex < offset + count)
+            {
+                gaussianLocalIndex = selectedGaussianIndex - offset;
+                gaussian = instance->getGaussianAsset().getGaussian(gaussianLocalIndex);
+                mat4 gaussianModel(1.0f);
+                gaussianModel[0] = glm::vec4(gaussian.transform[0], 0.0f);
+                gaussianModel[1] = glm::vec4(gaussian.transform[1], 0.0f);
+                gaussianModel[2] = glm::vec4(gaussian.transform[2], 0.0f);
+                gaussianModel[3] = glm::vec4(gaussian.transform[3], 1.0f);
+                model = instance->getWorldTransform().getMatrix()
+                    * gaussianModel;
+                break;
+            }
+            offset += count;
+        }
+    }
 
     if (ImGuizmo::Manipulate(value_ptr(view), value_ptr(proj), currentOperation, currentMode, value_ptr(model)))
-        activeObject->setWorldTransformFromMatrix(model);
+    {
+        if (gaussianInstance && gaussianLocalIndex != ~0u)
+        {
+            const mat4 local = inverse(gaussianInstance->getWorldTransform().getMatrix()) * model;
+            gaussian.transform = glm::mat4x3(
+                glm::vec3(local[0]), glm::vec3(local[1]),
+                glm::vec3(local[2]), glm::vec3(local[3]));
+            gaussianInstance->getGaussianAsset().setGaussian(gaussianLocalIndex, gaussian);
+        }
+        else
+            activeObject->setWorldTransformFromMatrix(model);
+    }
 }
 
 void ViewportPanel::handleViewGizmo() const {
@@ -558,7 +597,7 @@ bool ViewportPanel::handleBillboardPicking() const {
     return true;
 }
 
-void ViewportPanel::handleObjectPicking() const {
+void ViewportPanel::handleObjectPicking() {
     if (m_showOverlays && handleBillboardPicking())
         return;
 
@@ -583,10 +622,30 @@ void ViewportPanel::handleObjectPicking() const {
     
     const auto meshInstances = scene.getMeshInstances();
     if (instanceId != ~0u && instanceId < meshInstances.size()) {
+        selectedGaussianIndex = ~0u;
         scene.setActiveObjectId(meshInstances[instanceId]->getId());
     }
-    else
+    else if (instanceId != ~0u && instanceId >= meshInstances.size()) {
+        const uint32_t gaussianInstanceIndex = instanceId
+            - static_cast<uint32_t>(meshInstances.size());
+        const auto& gaussianInstances = scene.getGaussianInstances();
+        uint32_t offset = 0;
+        for (const auto& gaussian : gaussianInstances) {
+            const uint32_t count = gaussian->getGaussianAsset().getGaussianCount();
+            if (gaussianInstanceIndex < offset + count) {
+                selectedGaussianIndex = gaussianInstanceIndex;
+                scene.setActiveObjectId(gaussian->getId());
+                return;
+            }
+            offset += count;
+        }
+        selectedGaussianIndex = ~0u;
         scene.clearActiveObject();
+    }
+    else {
+        selectedGaussianIndex = ~0u;
+        scene.clearActiveObject();
+    }
 }
 
 void ViewportPanel::setAovImages(Image& crypto, Image& position)

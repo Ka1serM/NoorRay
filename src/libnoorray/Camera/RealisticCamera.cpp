@@ -5,7 +5,7 @@
 #include <string>
 #include <stdexcept>
 #include "CUDA/ManagedMemory.h"
-#include "Raytracing/Sellmeier.h"
+#include "Shading/Sellmeier.h"
 #include "Log.h"
 #include "libross/foundation/gpu/types/Allocator.h"
 #include "libross/imaging/cameralens/lenssystemio/CameraLensSystemReader.h"

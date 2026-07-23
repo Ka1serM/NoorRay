@@ -7,7 +7,7 @@
 #include <glm/vec3.hpp>
 
 #include "CUDA/Annotations.h"
-#include "Raytracing/Spectrum.h"
+#include "Shading/Spectrum.h"
 #include "Samplers/RandomSampler.h"
 
 inline constexpr float LightPi = 3.14159265358979323846f;

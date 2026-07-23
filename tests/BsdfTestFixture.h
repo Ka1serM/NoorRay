@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Mesh/Material.h"
+#include "Shading/Material.h"
 #include "Samplers/HemisphereSampler.h"
 
 class BsdfTestFixture

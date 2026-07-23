@@ -13,8 +13,10 @@ public:
 
     // Blends the sample into the running accumulation. The finalize kernel,
     // which owns the frame output surface, writes resolved pixels afterward.
+    template <typename WritePixel>
     NR_CPU_GPU void addSample(uint32_t pixel, const SampledSpectrum& L,
-        const SampledWavelengths& wl, float, const SensorSampleContext& ctx) const
+        const SampledWavelengths& wl, float, const SensorSampleContext& ctx,
+        const WritePixel& writePixel) const
     {
         glm::vec3 radiance = sensorRGBFromSpectrum(L, wl, ctx.cieX, ctx.cieY, ctx.cieZ);
         updateNoiseMoments(pixel, radiance, ctx);
@@ -25,5 +27,6 @@ public:
         const float accAlpha = previous.w * (1.0f - weight) + ctx.alpha * weight;
         const glm::vec4 blended(radiance, accAlpha);
         ctx.accumulation[pixel] = blended;
+        writePixel(blended);
     }
 };

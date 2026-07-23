@@ -7,7 +7,7 @@
 #include "UI/NoorRayUi.h"
 #include "Camera/CameraInstance.h"
 #include "Log.h"
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/Runtime/Raytracer.h"
 
 namespace
 {

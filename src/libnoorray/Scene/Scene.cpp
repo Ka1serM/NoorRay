@@ -135,6 +135,7 @@ void Scene::clear() {
     dirtyGaussianInstanceFlags.clear();
     gaussianOpacities.clear();
     gaussianShCoeffs.clear();
+    gaussianInstanceOffsets.clear();
     copiedObject.reset();
     activeObjectId = 0;
     nextObjectId = 1;
@@ -530,17 +531,25 @@ void Scene::buildGaussianRenderData()
     };
 
     std::vector<GaussianSpan> spans;
+    const auto& gaussianInstances = getGaussianInstances();
+    gaussianInstanceOffsets.resize(gaussianInstances.size());
     uint32_t total = 0;
-    for (const auto& instance : getGaussianInstances())
+    for (size_t instanceIndex = 0; instanceIndex < gaussianInstances.size(); ++instanceIndex)
     {
-        const auto& gaussians = instance->getGaussianAsset().getGaussians();
+        const auto& instance = gaussianInstances[instanceIndex];
+        const GaussianAsset& asset = instance->getGaussianAsset();
+        gaussianInstanceOffsets[instanceIndex] = total;
+        const auto& gaussians = asset.getGaussians();
         spans.push_back({gaussians.data(), total});
         total += static_cast<uint32_t>(gaussians.size());
     }
 
     gaussianOpacities.resize(total);
-    constexpr uint32_t coefficientsPerGaussian = 16;
-    gaussianShCoeffs.resize(static_cast<size_t>(total) * coefficientsPerGaussian);
+    const uint32_t coefficientsPerGaussian = sphericalHarmonicsCoefficientCount(
+        renderSettings.gaussianRenderSphericalHarmonics);
+    gaussianShCoefficientCount = coefficientsPerGaussian;
+    gaussianShCoeffs.resize(static_cast<size_t>(total)
+        * coefficientsPerGaussian * SphericalHarmonicsChannelCount);
     if (total == 0)
         return;
 
@@ -559,29 +568,57 @@ void Scene::buildGaussianRenderData()
                 span = &*--found;
             }
             const Gaussian& gaussian = span->gaussians[globalIndex - span->offset];
-
             gaussianOpacities[globalIndex] = gaussian.opacity;
-            glm::vec3* coefficients = gaussianShCoeffs.data()
-                + static_cast<size_t>(globalIndex) * coefficientsPerGaussian;
-            for (uint32_t coefficient = 0; coefficient < coefficientsPerGaussian; ++coefficient)
-                coefficients[coefficient] = glm::vec3(0.0f);
-            const uint32_t count = std::min(gaussian.shCoeffCount, coefficientsPerGaussian);
+            __half* coefficients = gaussianShCoeffs.data()
+                + static_cast<size_t>(globalIndex) * coefficientsPerGaussian
+                    * SphericalHarmonicsChannelCount;
+            std::fill_n(coefficients,
+                coefficientsPerGaussian * SphericalHarmonicsChannelCount, __half{});
+            const uint32_t count = std::min(
+                gaussian.sphericalHarmonics.count, coefficientsPerGaussian);
+            const __half* source = gaussian.sphericalHarmonics.values.data();
             for (uint32_t coefficient = 0; coefficient < count; ++coefficient)
-                coefficients[coefficient] = gaussian.shCoeffs[coefficient];
+            {
+                std::copy_n(source + coefficient * 3, 3,
+                    coefficients + coefficient * 3);
+            }
         }
     });
 }
 
-uint32_t Scene::getActiveMeshInstanceIndex() const
+uint32_t Scene::getActiveCryptomatteId(const uint32_t selectedGaussianIndex) const
 {
-    uint32_t instanceIndex = 0;
+    uint32_t meshInstanceCount = 0;
+    for (const auto& object : sceneObjects)
+        if (std::dynamic_pointer_cast<MeshInstance>(object))
+            ++meshInstanceCount;
+
+    uint32_t meshIndex = 0;
+    uint32_t gaussianOffset = 0;
     for (const auto& object : sceneObjects)
     {
-        if (!std::dynamic_pointer_cast<MeshInstance>(object))
-            continue;
-        if (object->getId() == activeObjectId)
-            return instanceIndex;
-        ++instanceIndex;
+        if (auto mesh = std::dynamic_pointer_cast<MeshInstance>(object))
+        {
+            if (object->getId() == activeObjectId)
+                return meshIndex;
+            ++meshIndex;
+        }
+        else if (auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object))
+        {
+            if (object->getId() == activeObjectId)
+            {
+                const uint32_t gaussianCount = gaussian->getGaussianAsset().getGaussianCount();
+                // The picker and transform gizmo use flattened Gaussian
+                // indices; Cryptomatte places those after all mesh instances.
+                if (selectedGaussianIndex >= gaussianOffset
+                    && selectedGaussianIndex < gaussianOffset + gaussianCount)
+                {
+                    return meshInstanceCount + selectedGaussianIndex;
+                }
+                return meshInstanceCount + gaussianOffset;
+            }
+            gaussianOffset += gaussian->getGaussianAsset().getGaussianCount();
+        }
     }
     return ~0u;
 }

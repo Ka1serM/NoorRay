@@ -20,7 +20,6 @@ add_noorray_test(sampler_sequence_test SamplerSequenceTest.cpp sampler)
 add_noorray_test(sampler_distribution_test SamplerDistributionTest.cpp sampler)
 target_link_libraries(sampler_distribution_test PRIVATE glm)
 add_noorray_test(cuda_unique_handle_test CudaUniqueHandleTest.cpp cuda)
-
 add_noorray_test(tagged_object_test
     "TaggedObjectTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/CUDA/rstd/Memory.cpp" tagged)
 target_compile_definitions(tagged_object_test PRIVATE NR_BACKEND_CUDA=1)
@@ -31,12 +30,12 @@ add_noorray_test(pbrt_parser_test
     "PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/PbrtParser.cpp" pbrt)
 
 add_noorray_test(ply_mesh_loader_test
-    "PlyMeshLoaderTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Mesh/PlyMeshLoader.cpp" ply)
+    "PlyMeshLoaderTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Mesh/Assets/PlyMeshLoader.cpp" ply)
 target_include_directories(ply_mesh_loader_test PRIVATE
     "${OPTIX_INCLUDE_DIR}")
 target_compile_definitions(ply_mesh_loader_test PRIVATE
     NR_BACKEND_CUDA=1
-    PLY_TEST_DIR="${CMAKE_SOURCE_DIR}/assets/tests")
+    PLY_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 target_link_libraries(ply_mesh_loader_test PRIVATE
     tinyply glm Vulkan::Vulkan CUDA::cudart)
 
@@ -57,7 +56,7 @@ target_link_libraries(scene_lifetime_test PRIVATE
 function(add_noorray_render_test target source)
     add_noorray_test(${target} ${source} e2e)
     target_compile_definitions(${target} PRIVATE
-        TEST_SCENE_DIR="${CMAKE_SOURCE_DIR}/assets/tests"
+        TEST_SCENE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
         NOORRAY_EXECUTABLE="$<TARGET_FILE:NoorRay>"
     )
     target_link_libraries(${target} PRIVATE NoorRayIO)

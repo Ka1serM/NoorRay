@@ -17,7 +17,7 @@
 #include "Log.h"
 #include "IO/Bitmap.h"
 #include "IO/BitmapWriter.h"
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/Runtime/Raytracer.h"
 #include "Vulkan/Buffer.h"
 #include "Vulkan/Viewport.h"
 

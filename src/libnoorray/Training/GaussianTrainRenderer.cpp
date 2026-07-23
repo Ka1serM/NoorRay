@@ -16,9 +16,9 @@
 #include <gf/io/sog.h>
 
 #include "CUDA/Checks.h"
-#include "Mesh/GaussianAsset.h"
+#include "Mesh/Assets/GaussianAsset.h"
 #include "Training/GaussianTrainData.h"
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/Runtime/Raytracer.h"
 #include "Scene/CoordinateSystem.h"
 #include "Scene/GaussianInstance.h"
 #include "Scene/Scene.h"
@@ -42,7 +42,6 @@ void GaussianTrainRenderer::syncScene(
     if (instances.size() != 1 || scene.getGaussianAssets().size() != 1)
         throw std::runtime_error("Gaussian training requires exactly one Gaussian instance and asset");
     GaussianAsset& asset = scene.getGaussianAsset(instances.front()->getGaussianAssetIndex());
-    asset.resizeGaussians(gaussianCount);
 
     std::vector<glm::vec3> positions(gaussianCount), logScales(gaussianCount), colors(gaussianCount);
     std::vector<glm::vec4> rotations(gaussianCount);
@@ -52,19 +51,24 @@ void GaussianTrainRenderer::syncScene(
     NR_GPU_CHECK(cudaMemcpy(rotations.data(), rotationDevice, rotations.size() * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
     NR_GPU_CHECK(cudaMemcpy(opacityLogits.data(), opacityLogitDevice, opacityLogits.size() * sizeof(float), cudaMemcpyDeviceToHost));
     NR_GPU_CHECK(cudaMemcpy(colors.data(), colorRgbDevice, colors.size() * sizeof(glm::vec3), cudaMemcpyDeviceToHost));
+    auto& gaussians = asset.getGaussians();
+    gaussians.resize(gaussianCount);
     for (uint32_t i = 0; i < gaussianCount; ++i)
     {
-        Gaussian& gaussian = asset.getGaussians()[i];
+        Gaussian& gaussian = gaussians[i];
         const glm::vec4 r = rotations[i];
-        const glm::mat3 rotation = glm::mat3_cast(glm::normalize(glm::quat(r.w, r.x, r.y, r.z)));
+        const glm::mat3 rotation = glm::mat3_cast(
+            glm::normalize(glm::quat(r.w, r.x, r.y, r.z)));
         const glm::vec3 scale = glm::exp(logScales[i]);
         gaussian.transform = glm::mat4x3(rotation[0] * scale.x, rotation[1] * scale.y,
             rotation[2] * scale.z, positions[i]);
         gaussian.opacity = 1.0f / (1.0f + std::exp(-opacityLogits[i]));
-        if (gaussian.shCoeffCount == 0) gaussian.shCoeffCount = 1;
-        constexpr float C0 = 0.28209479177387814f;
-        gaussian.shCoeffs[0] = (colors[i] - glm::vec3(0.5f)) / C0;
+        if (gaussian.sphericalHarmonics.count == 0)
+            gaussian.sphericalHarmonics.count = 1;
+        gaussian.setShCoefficient(0,
+            (colors[i] - glm::vec3(0.5f)) / SphericalHarmonicsC0);
     }
+    asset.notifyGaussiansChanged();
     raytracer.updateTLAS();
 }
 
@@ -80,17 +84,6 @@ void GaussianTrainRenderer::bakeTransformsAndUpdateTlas(
             "Gaussian instance/asset");
     }
     GaussianAsset& asset = scene.getGaussianAsset(instances.front()->getGaussianAssetIndex());
-    if (asset.getGaussianCount() != gaussianCount)
-    {
-        // Densification/pruning changes the trainable parameter count
-        // between iterations; grow/shrink the backing storage to match
-        // (see GaussianAsset::resizeGaussians). Only `.transform` is
-        // populated for the new entries below -- opacity/SH coefficients
-        // stay zeroed, which is fine since the training kernels never read
-        // them (they use opacityLogit/colorRgb passed in directly).
-        asset.resizeGaussians(gaussianCount);
-    }
-
     std::vector<glm::vec3> position(gaussianCount);
     std::vector<glm::vec3> logScale(gaussianCount);
     std::vector<glm::vec4> rotation(gaussianCount);
@@ -100,15 +93,19 @@ void GaussianTrainRenderer::bakeTransformsAndUpdateTlas(
         logScale.size() * sizeof(glm::vec3), cudaMemcpyDeviceToHost));
     NR_GPU_CHECK(cudaMemcpy(rotation.data(), rotationDevice,
         rotation.size() * sizeof(glm::vec4), cudaMemcpyDeviceToHost));
+    auto& gaussians = asset.getGaussians();
+    gaussians.resize(gaussianCount);
     for (uint32_t i = 0; i < gaussianCount; ++i)
     {
+        Gaussian& gaussian = gaussians[i];
         const glm::quat q = glm::normalize(glm::quat(
             rotation[i].w, rotation[i].x, rotation[i].y, rotation[i].z));
         const glm::mat3 R = glm::mat3_cast(q);
         const glm::vec3 scale = glm::exp(logScale[i]);
-        asset.getGaussians()[i].transform = glm::mat4x3(
+        gaussian.transform = glm::mat4x3(
             R[0] * scale.x, R[1] * scale.y, R[2] * scale.z, position[i]);
     }
+    asset.notifyGaussiansChanged();
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
 
     raytracer.updateTLAS();
@@ -208,7 +205,6 @@ void GaussianTrainRenderer::exportGaussians(
     // Inverse of GaussianAsset.cpp's import conversion: YDownZForwardSpace's
     // basis flip is its own inverse (diag(1,-1,-1)), so the same call
     // converts OpenGL-space back to the raw-3DGS convention.
-    static constexpr float SH_C0 = 0.28209479177387814f;
     gf::GaussianCloudIR ir;
     ir.numPoints = static_cast<int32_t>(gaussianCount);
     ir.positions.resize(gaussianCount * 3);
@@ -242,9 +238,9 @@ void GaussianTrainRenderer::exportGaussians(
 
         ir.alphas[i] = opacityLogit[i];
 
-        ir.colors[i * 3 + 0] = (colorRgb[i].x - 0.5f) / SH_C0;
-        ir.colors[i * 3 + 1] = (colorRgb[i].y - 0.5f) / SH_C0;
-        ir.colors[i * 3 + 2] = (colorRgb[i].z - 0.5f) / SH_C0;
+        ir.colors[i * 3 + 0] = (colorRgb[i].x - 0.5f) / SphericalHarmonicsC0;
+        ir.colors[i * 3 + 1] = (colorRgb[i].y - 0.5f) / SphericalHarmonicsC0;
+        ir.colors[i * 3 + 2] = (colorRgb[i].z - 0.5f) / SphericalHarmonicsC0;
     }
 
     const std::filesystem::path filePath(path);

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Raytracing/GaussianProxyBlas.h"
-#include "Scene/SphericalHarmonicsOrder.h"
+#include "Raytracing/Acceleration/GaussianProxyBlas.h"
+#include "Shading/SphericalHarmonics.h"
 
 enum class BufferVisualization : int
 {
@@ -25,6 +25,7 @@ public:
     int maxSamples{3000};
     bool noiseLimitEnabled{false};
     float noiseLevel{0.0001f};
+    bool aovEnabled{true};
     bool optixDenoiserEnabled{false};
     int optixDenoiserMinSamples{1};
     int maxBounces{10};

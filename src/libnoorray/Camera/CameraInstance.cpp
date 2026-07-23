@@ -123,7 +123,7 @@ void CameraInstance::onTransformUpdated()
 {
     SceneObject::onTransformUpdated();
     rebuildCamera();
-    if (scene) scene->setDirtyFlag(CameraState);
+    markDirty();
 }
 
 void CameraInstance::switchTo(CameraProjectionType type)

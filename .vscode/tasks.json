@@ -7,7 +7,7 @@
       "command": "${workspaceFolder}/build/release/NoorRay",
       "args": [
         "--scene",
-        "/home/marcel/GitRepositories/NoorRay/assets/tests/hotel_old_mill_realistic.nrscene"
+        "/home/marcel/GitRepositories/NoorRay/tests/assets/simple_sphere.nrscene"
       ],
       "options": {
         "cwd": "${workspaceFolder}"

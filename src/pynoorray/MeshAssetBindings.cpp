@@ -2,7 +2,7 @@
 
 #include <nanobind/stl/string.h>
 
-#include "Mesh/MeshAsset.h"
+#include "Mesh/Assets/MeshAsset.h"
 #include "Scene/Scene.h"
 
 namespace nb = nanobind;

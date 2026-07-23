@@ -22,6 +22,7 @@ struct RenderSettingsFile {
     int max_samples{3000};
     bool noise_limit_enabled{false};
     float noise_level{0.0001f};
+    bool aov_enabled{true};
     bool optix_denoiser_enabled{false};
     int optix_denoiser_min_samples{1};
     int gaussian_shading_mode{};

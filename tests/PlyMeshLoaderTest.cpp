@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "Mesh/PlyMeshLoader.h"
+#include "Mesh/Assets/PlyMeshLoader.h"
 
 TEST_CASE("PLY mesh loader triangulates polygon faces", "[ply]")
 {

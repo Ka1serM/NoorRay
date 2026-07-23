@@ -1,6 +1,6 @@
 #include <imgui.h>
 
-#include "Mesh/GaussianAsset.h"
+#include "Mesh/Assets/GaussianAsset.h"
 #include "Scene/GaussianInstance.h"
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"

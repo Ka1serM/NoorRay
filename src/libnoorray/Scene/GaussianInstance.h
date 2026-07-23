@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Scene/Scene.h"
-#include "Mesh/GaussianAsset.h"
+#include "Mesh/Assets/GaussianAsset.h"
 #include "SceneObject.h"
 
 class GaussianInstance : public SceneObject
@@ -17,6 +17,7 @@ public:
     void accept(SceneObjectVisitor& visitor) override;
 
     uint32_t getGaussianAssetIndex() const { return gaussianAssetIndex; }
+    GaussianAsset& getGaussianAsset() { return scene->getGaussianAsset(gaussianAssetIndex); }
     const GaussianAsset& getGaussianAsset() const { return scene->getGaussianAsset(gaussianAssetIndex); }
 
     void onTransformUpdated() override;

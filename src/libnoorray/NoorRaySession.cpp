@@ -1,6 +1,6 @@
 #include "NoorRaySession.h"
 
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/Runtime/Raytracer.h"
 #include "Vulkan/Renderer.h"
 
 namespace noorray

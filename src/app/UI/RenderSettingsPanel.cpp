@@ -5,7 +5,7 @@
 
 #include <imgui.h>
 
-#include "Raytracing/GaussianProxyBlas.h"
+#include "Raytracing/Acceleration/GaussianProxyBlas.h"
 #include "Scene/RenderSettings.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
@@ -71,6 +71,12 @@ void RenderSettingsPanel::renderUi()
         ImGui::TextUnformatted("OptiX Denoiser");
         ImGui::TableSetColumnIndex(1);
         changed |= ImGui::Checkbox("##OptixDenoiser", &settings.optixDenoiserEnabled);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("AOVs During Camera Motion");
+        ImGui::TableSetColumnIndex(1);
+        changed |= ImGui::Checkbox("##AovEnabled", &settings.aovEnabled);
 
         if (settings.optixDenoiserEnabled)
         {
@@ -154,6 +160,7 @@ void RenderSettingsPanel::renderUi()
         {
             settings.gaussianRenderSphericalHarmonics = static_cast<SphericalHarmonicsOrder>(renderOrder);
             changed = true;
+            scene.setDirtyFlag(GaussianData);
         }
 
         ImGui::TableNextRow();

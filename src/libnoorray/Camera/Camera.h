@@ -2,7 +2,9 @@
 
 #include "CUDA/Annotations.h"
 #include "CUDA/TaggedPointer.h"
+#include "CUDA/rstd/Optional.h"
 #include "CUDA/rstd/UniquePtr.h"
+#include "Raytracing/Gpu/Types.h"
 
 #include <glm/glm.hpp>
 
@@ -68,6 +70,10 @@ public:
         origin = glm::vec3(cameraToWorld * glm::vec4(origin, 1.f));
         direction = glm::normalize(glm::vec3(cameraToWorld * glm::vec4(direction, 0.f)));
     }
+
+    // A missing pinhole/fisheye sample means no sensor contribution. Optical
+    // cameras use it for rays stopped by their lens model and keep alpha opaque.
+    NR_CPU_GPU bool invalidRayIsOpaque() const { return false; }
 
     NR_CPU_GPU Sensor& getSensor() { return *sensor; }
     NR_CPU_GPU const Sensor& getSensor() const { return *sensor; }

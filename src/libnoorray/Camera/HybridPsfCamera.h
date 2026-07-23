@@ -25,12 +25,14 @@ public:
     int rayLutStepSize{32};
     int samplesPerDimension{8};
 
-    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
+    NR_CPU_GPU bool invalidRayIsOpaque() const { return true; }
+
+    NR_CPU_GPU nr::rstd::optional<CameraRay> generateRay(
         float nx, float ny, const glm::vec2&, uint32_t, SampledWavelengths& wavelengths,
         bool = false) const
     {
         if (!rayLut)
-            return false;
+            return nr::rstd::nullopt;
 
         wavelengths.terminateSecondary();
         const Sensor& sensor = getSensor();
@@ -41,16 +43,16 @@ public:
 
         const auto traced = rayLut->lookupInterpolated(ross::Vector2f(px, py), wavelengths[0]);
         if (!traced)
-            return false;
+            return nr::rstd::nullopt;
 
         // ROSS's hybrid PSF camera uses a unit camera weight.
-        weight = 1.0f;
-        origin = glm::vec3(traced->startPoint.x * 0.01f, traced->startPoint.y * 0.01f,
+        CameraRay result{};
+        result.ray.origin = glm::vec3(traced->startPoint.x * 0.01f, traced->startPoint.y * 0.01f,
             -traced->startPoint.z * 0.01f);
-        direction = glm::normalize(glm::vec3(
+        result.ray.direction = glm::normalize(glm::vec3(
             traced->direction.x, traced->direction.y, -traced->direction.z));
-        transformRay(origin, direction);
-        return true;
+        transformRay(result.ray.origin, result.ray.direction);
+        return result;
     }
 
     HybridPsfCamera();

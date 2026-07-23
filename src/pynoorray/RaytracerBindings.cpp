@@ -2,7 +2,7 @@
 
 #include <nanobind/stl/string.h>
 
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/Runtime/Raytracer.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -31,5 +31,5 @@ void bindRaytracer(nb::module_& module)
             nb::rv_policy::reference_internal)
         .def_prop_ro("position", nb::overload_cast<>(&Raytracer::getOutputPosition),
             nb::rv_policy::reference_internal)
-        .def_prop_ro("ray_queue_capacity", &Raytracer::getRayQueueCapacity);
+        .def_prop_ro("scratch_capacity", &Raytracer::getScratchCapacity);
 }

@@ -13,8 +13,8 @@
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
-#include "Mesh/GaussianAsset.h"
-#include "Raytracing/Raytracer.h"
+#include "Mesh/Assets/GaussianAsset.h"
+#include "Raytracing/Runtime/Raytracer.h"
 #include "Scene/GaussianInstance.h"
 #include "Scene/Scene.h"
 #include "Training/ColmapReconstruction.h"
@@ -49,8 +49,7 @@ void TrainingPanel::reconstructAndBegin()
         if (!scene.getGaussianInstances().empty())
             throw std::runtime_error("Remove the existing Gaussian object before starting an image reconstruction");
 
-        nr::rstd::vector<Gaussian> gaussians(reconstruction.points.size());
-        constexpr float C0 = 0.28209479177387814f;
+        std::vector<Gaussian> gaussians(reconstruction.points.size());
         glm::vec3 boundsMin(std::numeric_limits<float>::max());
         glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
         for (const glm::vec3& point : reconstruction.points)
@@ -69,8 +68,9 @@ void TrainingPanel::reconstructAndBegin()
                 glm::vec3(0, initialScale, 0), glm::vec3(0, 0, initialScale),
                 reconstruction.points[i]);
             gaussian.opacity = 0.1f;
-            gaussian.shCoeffs[0] = (reconstruction.colors[i] - glm::vec3(0.5f)) / C0;
-            gaussian.shCoeffCount = 1;
+            gaussian.setShCoefficient(0,
+                (reconstruction.colors[i] - glm::vec3(0.5f)) / SphericalHarmonicsC0);
+            gaussian.sphericalHarmonics.count = 1;
         }
         const uint32_t assetIndex = scene.add(GaussianAsset(scene, "COLMAP sparse points", std::move(gaussians)));
         scene.add(std::make_unique<GaussianInstance>(scene, "Trained Gaussians", assetIndex, Transform{}));
@@ -83,18 +83,18 @@ void TrainingPanel::reconstructAndBegin()
             if (!source) throw std::runtime_error("Could not load " + view.imagePath.string());
 
             constexpr int maxTrainingDimension = 1024;
-            const size_t queueCapacity = raytracer.getRayQueueCapacity();
+            const size_t scratchCapacity = raytracer.getScratchCapacity();
             const double dimensionScale = static_cast<double>(maxTrainingDimension)
                 / static_cast<double>(std::max(width, height));
-            const double capacityScale = queueCapacity > 0
-                ? std::sqrt(static_cast<double>(queueCapacity)
+            const double capacityScale = scratchCapacity > 0
+                ? std::sqrt(static_cast<double>(scratchCapacity)
                     / static_cast<double>(static_cast<size_t>(width) * height))
                 : 0.0;
             const double scale = std::min({1.0, dimensionScale, capacityScale});
             if (scale <= 0.0)
             {
                 stbi_image_free(source);
-                throw std::runtime_error("Raytracing queues are not initialized for training");
+                throw std::runtime_error("Raytracing scratch buffers are not initialized for training");
             }
             const int trainingWidth = std::max(1, static_cast<int>(std::floor(width * scale)));
             const int trainingHeight = std::max(1, static_cast<int>(std::floor(height * scale)));

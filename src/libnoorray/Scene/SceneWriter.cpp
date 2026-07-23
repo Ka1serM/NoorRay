@@ -11,7 +11,7 @@
 #include "Camera/CameraInstance.h"
 #include "Camera/FisheyeCamera.h"
 #include "Camera/ThinLensCamera.h"
-#include "Mesh/MeshAsset.h"
+#include "Mesh/Assets/MeshAsset.h"
 #include "Scene/GaussianInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
@@ -63,6 +63,7 @@ nr::sceneio::RenderSettingsFile makeRenderSettingsFile(const RenderSettings& set
         .max_samples = settings.maxSamples,
         .noise_limit_enabled = settings.noiseLimitEnabled,
         .noise_level = settings.noiseLevel,
+        .aov_enabled = settings.aovEnabled,
         .optix_denoiser_enabled = settings.optixDenoiserEnabled,
         .optix_denoiser_min_samples = settings.optixDenoiserMinSamples,
         .gaussian_shading_mode = static_cast<int>(settings.gaussianShadingMode),

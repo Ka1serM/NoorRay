@@ -83,10 +83,12 @@ public:
         return glm::vec4(rgb, 1.0f);
     }
 
+    template <typename WritePixel>
     NR_CPU_GPU void addSample(uint32_t pixel, const SampledSpectrum& L,
-        const SampledWavelengths& wl, float sampleWeight, const SensorSampleContext& ctx) const
+        const SampledWavelengths& wl, float sampleWeight, const SensorSampleContext& ctx,
+        const WritePixel& writePixel) const
     {
-        RectangularSensor::addSample(pixel, L, wl, sampleWeight, ctx);
+        RectangularSensor::addSample(pixel, L, wl, sampleWeight, ctx, writePixel);
 
         if (!psfGrid || ctx.psfBuckets == nullptr)
             return;

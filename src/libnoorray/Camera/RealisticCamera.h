@@ -22,6 +22,8 @@ public:
     float sensorHeightCm{};
     float filmDiagonalCm{};
 
+    NR_CPU_GPU bool invalidRayIsOpaque() const { return true; }
+
     // Construct the libross film ray used by generateRay. Keeping this public lets diagnostic
     // views exercise exactly the same film mapping and exit-pupil sampling as rendered rays.
     NR_CPU_GPU bool makeFilmRay(ross::Ray& filmRay, float nx, float ny,
@@ -41,40 +43,40 @@ public:
         return true;
     }
 
-    NR_CPU_GPU bool generateRay(glm::vec3& origin, glm::vec3& direction, float& weight,
+    NR_CPU_GPU nr::rstd::optional<CameraRay> generateRay(
         float nx, float ny, const glm::vec2 lensSample, uint32_t,
         SampledWavelengths& wavelengths,
         bool centered = false) const
     {
         wavelengths.terminateSecondary();
-        weight = 0.0f;
         const ross::Vector2f sample(
             centered ? 0.5f : lensSample.x,
             centered ? 0.5f : lensSample.y);
         ross::Ray filmRay;
         float sampleBoundsArea;
         if (!makeFilmRay(filmRay, nx, ny, sample, &sampleBoundsArea))
-            return false;
+            return nr::rstd::nullopt;
 
         ross::FromFilmToWorldRaytracer raytracer(*rossLens);
         const auto traced = raytracer.trace(filmRay, wavelengths[0]);
         if (!traced)
-            return false;
+            return nr::rstd::nullopt;
 
         // Match ROSS's RossRealisticCamera importance weighting: the sampled exit-pupil
         // area, cosine-fourth falloff, and inverse-square pupil-plane distance.
         const float cosTheta = filmRay.direction.z;
         const float cosTheta2 = cosTheta * cosTheta;
         const float pupilPlaneDistance = rossLens->getLastSurface().center;
-        weight = (cosTheta2 * cosTheta2) /
+        CameraRay result{};
+        result.weight = (cosTheta2 * cosTheta2) /
             ((1.0f / sampleBoundsArea) * (pupilPlaneDistance * pupilPlaneDistance));
 
-        origin = glm::vec3(traced->startPoint.x * 0.01f, traced->startPoint.y * 0.01f,
+        result.ray.origin = glm::vec3(traced->startPoint.x * 0.01f, traced->startPoint.y * 0.01f,
             -traced->startPoint.z * 0.01f);
-        direction = glm::normalize(glm::vec3(
+        result.ray.direction = glm::normalize(glm::vec3(
             traced->direction.x, traced->direction.y, -traced->direction.z));
-        transformRay(origin, direction);
-        return true;
+        transformRay(result.ray.origin, result.ray.direction);
+        return result;
     }
 
     RealisticCamera();

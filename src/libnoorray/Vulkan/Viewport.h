@@ -40,7 +40,7 @@ public:
     void dispatch(
         vk::CommandBuffer commandBuffer,
         uint32_t bufferIndex,
-        uint32_t selectedIndex,
+        uint32_t selectedCryptomatteId,
         const glm::mat4& viewProjection,
         float exposure,
         int bufferVisualization,

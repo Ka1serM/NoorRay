@@ -1,6 +1,6 @@
 #include "Bindings.h"
 
-#include "Raytracing/Sellmeier.h"
+#include "Shading/Sellmeier.h"
 
 namespace nb = nanobind;
 

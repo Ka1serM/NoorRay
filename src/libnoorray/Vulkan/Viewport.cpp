@@ -14,7 +14,7 @@ constexpr uint32_t ViewportGroupSize = 16;
 
 struct ViewportPushConstants
 {
-    uint32_t selectedIndex;
+    uint32_t selectedCryptomatteId;
     float    exposure;
     int32_t  bufferVisualization;
     int32_t  tonemappingEnabled;
@@ -284,7 +284,7 @@ void Viewport::drawBillboards(const vk::CommandBuffer commandBuffer, const glm::
 void Viewport::dispatch(
     const vk::CommandBuffer commandBuffer,
     const uint32_t bufferIndex,
-    const uint32_t selectedIndex,
+    const uint32_t selectedCryptomatteId,
     const glm::mat4& viewProjection,
     const float exposure,
     const int bufferVisualization,
@@ -296,7 +296,7 @@ void Viewport::dispatch(
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0,
                                      descriptorSets[bufferIndex].get(), {});
     const ViewportPushConstants pushConstants{
-        selectedIndex, exposure, bufferVisualization, tonemappingEnabled ? 1 : 0};
+        selectedCryptomatteId, exposure, bufferVisualization, tonemappingEnabled ? 1 : 0};
     commandBuffer.pushConstants(
         *pipelineLayout, vk::ShaderStageFlagBits::eCompute,
         0, sizeof(pushConstants), &pushConstants);

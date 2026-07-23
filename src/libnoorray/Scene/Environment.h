@@ -12,7 +12,7 @@ using glm::vec3;
 
 #include "CUDA/Annotations.h"
 #include "CUDA/Unique/Texture.h"
-#include "Raytracing/RgbToSpectrum.h"
+#include "Shading/RgbToSpectrum.h"
 #include "Samplers/RandomSampler.h"
 
 class Texture;

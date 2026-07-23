@@ -109,12 +109,6 @@ bool RealisticCamera::renderUi()
         changed = true;
     });
 
-    if (ImGui::Button("Reload##RealisticCamera")) {
-        changed |= loadLensAndSensor(true);
-    }
-    ImGui::SameLine();
-    ImGui::TextUnformatted(loadStatus.c_str());
-
     ImGuiManager::dragFloatRow("Aperture Diameter (mm)", apertureDiameterMm, 0.1f, 0.f, 64.f, [&](float value) {
         setApertureDiameterMm(value);
         changed = true;
@@ -124,6 +118,13 @@ bool RealisticCamera::renderUi()
         setOpticalFocusDistanceCm(value);
         changed = true;
     });
+
+    ImGuiManager::tableRowLabel("");
+    if (ImGui::Button("Reload##RealisticCamera")) {
+        changed |= loadLensAndSensor(true);
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(loadStatus.c_str());
 
     const bool sensorChanged = sensor.renderUi();
     if (sensorChanged && !lensPath.empty())
@@ -137,13 +138,37 @@ bool RealisticCamera::renderUi()
             ImGuiTableFlags_Borders |
             ImGuiTableFlags_RowBg |
             ImGuiTableFlags_Resizable |
-            ImGuiTableFlags_ScrollY |
             ImGuiTableFlags_SizingStretchProp;
-        const float tableHeight = std::min(320.0f, 28.0f +
-            static_cast<float>(rossLens->surfaces.size()) * ImGui::GetTextLineHeightWithSpacing());
-        if (ImGui::BeginChild("##LensElements", ImVec2(0.0f, tableHeight), ImGuiChildFlags_Borders)) {
-            if (ImGui::BeginTable("##LensTable", 7, tableFlags)) {
-                ImGui::TableSetupScrollFreeze(0, 1);
+        const float contentHeight = 28.0f
+            + static_cast<float>(rossLens->surfaces.size())
+                * ImGui::GetTextLineHeightWithSpacing();
+        if (ImGui::TableGetColumnCount() > 0) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+        }
+
+        const ImVec2 tablePosition = ImGui::GetCursorScreenPos();
+        const float availableHeight = ImGui::GetContentRegionAvail().y;
+        const float minimumHeight = 28.0f + ImGui::GetTextLineHeightWithSpacing();
+        const float tableHeight = std::min(
+            contentHeight, std::max(availableHeight, minimumHeight));
+        const bool tableScrollable = tableHeight < contentHeight;
+        const ImGuiTableFlags activeTableFlags = tableFlags
+            | (tableScrollable ? ImGuiTableFlags_ScrollY : ImGuiTableFlags_None);
+        const float tableWidth = ImGui::GetWindowPos().x
+            + ImGui::GetWindowContentRegionMax().x - tablePosition.x;
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 currentClipMin = drawList->GetClipRectMin();
+        const ImVec2 currentClipMax = drawList->GetClipRectMax();
+        ImGui::PushClipRect(
+            ImVec2(tablePosition.x, currentClipMin.y),
+            ImVec2(tablePosition.x + tableWidth, currentClipMax.y),
+            false);
+        if (ImGui::BeginChild(
+                "##LensElements", ImVec2(tableWidth, tableHeight), ImGuiChildFlags_Borders)) {
+            if (ImGui::BeginTable("##LensTable", 7, activeTableFlags)) {
+                if (tableScrollable)
+                    ImGui::TableSetupScrollFreeze(0, 1);
                 ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 32.0f);
                 ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 84.0f);
                 ImGui::TableSetupColumn("Radius mm");
@@ -175,6 +200,7 @@ bool RealisticCamera::renderUi()
             }
         }
         ImGui::EndChild();
+        ImGui::PopClipRect();
     }
 
     return changed || sensorChanged;

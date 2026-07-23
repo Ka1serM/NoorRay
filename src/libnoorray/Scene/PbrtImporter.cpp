@@ -543,6 +543,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                 light->setPhotometry(color, intensity);
                 if (type == "point") light->setPointRadius(scalar(command, "radius", 0.f));
                 if (type == "spot") {
+                    light->setSpotRadius(scalar(command, "radius", 0.f));
                     const float outer = scalar(command, "coneangle", 30.f);
                     light->setSpotAngles(std::max(0.f, outer - scalar(command, "conedeltaangle", 5.f)), outer);
                 }

@@ -24,6 +24,7 @@
 #include "Raytracing/Gpu/GpuSceneCache.h"
 #include "Raytracing/Denoising/OptixDenoiserState.h"
 #include "Raytracing/Acceleration/Tlas.h"
+#include "Shading/EnergyLut.h"
 
 class CameraInstance;
 class Context;
@@ -126,12 +127,12 @@ private:
     nr::cuda::UniqueDeviceBuffer spectrumTableScaleDevice;
     nr::cuda::UniqueDeviceBuffer spectrumTableCoeffsDevice;
     nr::cuda::UniqueTexture spectrumTableTexture;
+    nr::shading::energy_lut::Storage energyLutStorage;
     nr::cuda::UniqueDeviceBuffer d65Device;
     nr::cuda::UniqueDeviceBuffer cieXDevice;
     nr::cuda::UniqueDeviceBuffer cieYDevice;
     nr::cuda::UniqueDeviceBuffer cieZDevice;
     nr::cuda::UniqueDeviceBuffer analyticLightAliasDevice;
-    nr::openpbr::EnergyLutStorage openPbrLutStorage;
     GpuSceneCache gpuCache;
     uint32_t nextBuffer{};
     uint32_t lastLaunched{};

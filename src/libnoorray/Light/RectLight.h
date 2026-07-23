@@ -33,9 +33,12 @@ public:
         const glm::vec3 normal = glm::normalize(direction);
         const glm::vec3 u = glm::normalize(tangent);
         const glm::vec3 v = glm::normalize(glm::cross(normal, u));
-        const glm::vec3 sampledPosition = position
-            + u * ((randomFloat(rng) - 0.5f) * width)
-            + v * ((randomFloat(rng) - 0.5f) * height);
+        glm::vec3 sampledPosition = position;
+        sample.pdf = sampleSphericalRectangle(surfacePosition,
+            sampledPosition, u, width, v, height,
+            glm::vec2(randomFloat(rng), randomFloat(rng)));
+        if (sample.pdf <= 0.0f)
+            return sample;
         const glm::vec3 delta = sampledPosition - surfacePosition;
         sample.distance = glm::length(delta);
         if (sample.distance <= 0.0f)
@@ -44,6 +47,8 @@ public:
 
         float emitterCosine = glm::dot(normal, -sample.direction);
         emitterCosine = twoSided != 0 ? fabsf(emitterCosine) : fmaxf(emitterCosine, 0.0f);
+        if (emitterCosine <= 0.0f)
+            return sample;
         float barnDoorMask = 1.0f;
         if (barnDoorLength > 0.0f && barnDoorAngle < 89.9f && emitterCosine > 0.0f)
         {
@@ -61,9 +66,8 @@ public:
                 || fabsf(projectedV) > height * 0.5f + expansion)
                 barnDoorMask = 0.0f;
         }
-        const float area = fmaxf(width * height, 0.0f);
-        const glm::vec3 rgb = color * (intensity * emitterCosine * barnDoorMask * area /
-            fmaxf(sample.distance * sample.distance, 1e-6f));
+        const glm::vec3 rgb = color * (intensity * barnDoorMask
+            / fmaxf(sample.pdf, 1.0e-20f));
         sample.radiance = rgbIlluminantToSpectrum(rgb, wl, spectrumScale, spectrumCoeffs, d65);
         return sample;
     }

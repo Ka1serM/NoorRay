@@ -51,12 +51,12 @@ extern "C" __global__ void __raygen__gaussianProxyOverdraw()
     const float ny = 1.0f - (static_cast<float>(y) + 0.5f)
         / static_cast<float>(params.frame.height) * 2.0f;
     SampledWavelengths wavelengths = SampledWavelengths::sampleVisible(0.5f);
-    const nr::rstd::optional<CameraRay> cameraRay = params.scene.camera->Dispatch(
+    const nr::rstd::optional<CameraSample> cameraSample = params.scene.camera->Dispatch(
         [&](const auto* camera) {
             return camera->generateRay(nx, ny, glm::vec2(0.5f), pixel,
                 wavelengths, true);
         });
-    if (!cameraRay)
+    if (!cameraSample)
     {
         surf2Dwrite(make_float4(0.0f, 0.0f, 0.0f, 1.0f),
             params.output.color, x * sizeof(float4), y);
@@ -64,11 +64,12 @@ extern "C" __global__ void __raygen__gaussianProxyOverdraw()
     }
 
     uint32_t count = 0;
+    const Ray& ray = cameraSample->ray;
     optixTrace(
         params.scene.tlasHandle,
-        make_float3(cameraRay->ray.origin.x, cameraRay->ray.origin.y, cameraRay->ray.origin.z),
-        make_float3(cameraRay->ray.direction.x, cameraRay->ray.direction.y, cameraRay->ray.direction.z),
-        0.001f, 1000.0f, 0.0f,
+        make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
+        make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
+        ray.minDistance(), ray.maxDistance(), 0.0f,
         GaussianVisibility,
         OPTIX_RAY_FLAG_NONE,
         0, 1, 0,

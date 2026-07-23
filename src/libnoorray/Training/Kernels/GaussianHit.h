@@ -29,24 +29,22 @@ extern "C" __global__ void __anyhit__trainingGaussian()
         return;
     }
 
-    const float3 rayOrigin = optixGetObjectRayOrigin();
-    const float3 rayDirection = optixGetObjectRayDirection();
-    const float directionLengthSq = rayDirection.x * rayDirection.x
-        + rayDirection.y * rayDirection.y + rayDirection.z * rayDirection.z;
-    const float tClosest = -(rayOrigin.x * rayDirection.x
-        + rayOrigin.y * rayDirection.y + rayOrigin.z * rayDirection.z)
-        / directionLengthSq;
-    const float hitT = fmaxf(tClosest, optixGetRayTmin());
-    if (hitT >= __uint_as_float(optixGetPayload_1()))
+    const float3 optixOrigin = optixGetObjectRayOrigin();
+    const float3 optixDirection = optixGetObjectRayDirection();
+    const Ray ray(
+        glm::vec3(optixOrigin.x, optixOrigin.y, optixOrigin.z),
+        glm::vec3(optixDirection.x, optixDirection.y, optixDirection.z),
+        optixGetRayTmin(), __uint_as_float(optixGetPayload_1()));
+    const float hitT = fmaxf(
+        ray.closestDistanceTo(glm::vec3(0.0f)), ray.minDistance());
+    if (hitT >= ray.maxDistance())
     {
         optixIgnoreIntersection();
         return;
     }
 
-    const float px = rayOrigin.x + hitT * rayDirection.x;
-    const float py = rayOrigin.y + hitT * rayDirection.y;
-    const float pz = rayOrigin.z + hitT * rayDirection.z;
-    const float distanceSq = px * px + py * py + pz * pz;
+    const glm::vec3 hitPoint = ray.at(hitT);
+    const float distanceSq = glm::dot(hitPoint, hitPoint);
     if (distanceSq >= params.frame.cutoffDistanceSq)
     {
         optixIgnoreIntersection();
@@ -78,16 +76,17 @@ extern "C" __global__ void __anyhit__trainingGaussian()
 }
 
 NR_GPU inline RayHit intersectTrainingRay(
-    const TlasHandle accel, const glm::vec3 origin, const glm::vec3 direction,
-    const float tMin, const float tMax, const uint32_t sampleIndex,
+    const TlasHandle accel, const Ray& ray, const uint32_t sampleIndex,
     const bool meshVisibilityBoundEnabled)
 {
     RayHit hit{};
     RayHit meshHit{};
     if (meshVisibilityBoundEnabled)
     {
-        optixTraverse(accel, make_float3(origin.x, origin.y, origin.z),
-            make_float3(direction.x, direction.y, direction.z), tMin, tMax, 0.0f,
+        optixTraverse(accel,
+            make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
+            make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
+            ray.minDistance(), ray.maxDistance(), 0.0f,
             MeshVisibility, OPTIX_RAY_FLAG_DISABLE_ANYHIT, 0, 1, 0);
         if (optixHitObjectIsHit())
         {
@@ -99,11 +98,14 @@ NR_GPU inline RayHit intersectTrainingRay(
         }
     }
 
-    const float gaussianTMax = meshHit.instanceIndex != InvalidIndex ? meshHit.t : tMax;
+    const float gaussianTMax = meshHit.instanceIndex != InvalidIndex
+        ? meshHit.t : ray.maxDistance();
     uint32_t payload0 = sampleIndex;
     uint32_t payload1 = __float_as_uint(gaussianTMax);
-    optixTraverse(accel, make_float3(origin.x, origin.y, origin.z),
-        make_float3(direction.x, direction.y, direction.z), tMin, gaussianTMax, 0.0f,
+    optixTraverse(accel,
+        make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
+        make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
+        ray.minDistance(), gaussianTMax, 0.0f,
         GaussianVisibility, OPTIX_RAY_FLAG_NONE, 0, 1, 0, payload0, payload1);
 
     const float gaussianT = __uint_as_float(payload1);
@@ -124,9 +126,8 @@ NR_GPU inline RayHit intersectTrainingRay(
     return hit;
 }
 
-NR_GPU inline bool makeTrainingRay(
-    const GaussianTrainingKernelParams& params, const uint32_t pixel,
-    glm::vec3& origin, glm::vec3& direction)
+NR_GPU inline Ray makeTrainingRay(
+    const GaussianTrainingKernelParams& params, const uint32_t pixel)
 {
     const uint32_t x = pixel % params.frame.width;
     const uint32_t y = pixel / params.frame.width;
@@ -136,14 +137,14 @@ NR_GPU inline bool makeTrainingRay(
     if (params.frame.frameIndex != 0)
         jitter = sampler.sample2D(PixelSampleDimensions);
 
-    origin = glm::vec3(params.train.cameraToWorld[3]);
+    const glm::vec3 origin = glm::vec3(params.train.cameraToWorld[3]);
     const glm::vec3 cameraDirection(
         (static_cast<float>(x) + jitter.x - params.train.cx) / params.train.fx,
         -(static_cast<float>(y) + jitter.y - params.train.cy) / params.train.fy,
         -1.0f);
-    direction = glm::normalize(glm::vec3(
+    const glm::vec3 direction = glm::normalize(glm::vec3(
         params.train.cameraToWorld * glm::vec4(cameraDirection, 0.0f)));
-    return true;
+    return Ray(origin, direction);
 }
 
 extern "C" __global__ void __raygen__trainingPath()
@@ -153,20 +154,17 @@ extern "C" __global__ void __raygen__trainingPath()
     if (pixel >= pixelCount)
         return;
 
-    glm::vec3 origin{};
-    glm::vec3 direction{};
-    if (!makeTrainingRay(params, pixel, origin, direction))
-        return;
-
-    const RayHit hit = intersectTrainingRay(params.train.tlas, origin, direction,
-        0.001f, 1000.0f, pixel, params.scene.meshInstanceCount > 0);
+    const Ray ray = makeTrainingRay(params, pixel);
+    const RayHit hit = intersectTrainingRay(params.train.tlas, ray,
+        pixel, params.scene.meshInstanceCount > 0);
     if (hit.instanceIndex == InvalidIndex || hit.primitiveIndex != InvalidIndex)
         return;
 
     const uint32_t gaussianId = hit.instanceIndex;
     if (params.train.dLdImage != nullptr)
     {
-        accumulateGaussianTrainGradient(params, pixel, gaussianId, origin, direction);
+        accumulateGaussianTrainGradient(
+            params, pixel, gaussianId, ray.origin(), ray.direction());
         return;
     }
 

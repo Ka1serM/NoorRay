@@ -389,6 +389,7 @@ Raytracer::Raytracer(
     }
     spectrumTableTexture = nr::cuda::UniqueTexture::uploadFloat4Lut3D(
         filteredCoefficients.data(), 64, 64, 3 * 64, stream);
+    gpuCache.data.energyLuts = energyLutStorage.upload(stream);
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     gpuCache.data.spectrumTableTexture = spectrumTableTexture.getObject();
 
@@ -408,9 +409,6 @@ Raytracer::Raytracer(
     gpuCache.data.cieX = static_cast<float*>(cieXDevice.get());
     gpuCache.data.cieY = static_cast<float*>(cieYDevice.get());
     gpuCache.data.cieZ = static_cast<float*>(cieZDevice.get());
-
-    // Upload OpenPBR opaque-dielectric energy-compensation LUTs as hardware-filtered textures.
-    nr::openpbr::uploadEnergyLuts(openPbrLutStorage, gpuCache.data.openPbrLuts, stream);
 
     {
         optixLaunchParamsDevice.allocate(std::max(
@@ -556,7 +554,6 @@ void Raytracer::freeSceneData() noexcept
     cieYDevice.reset();
     cieZDevice.reset();
     analyticLightAliasDevice.reset();
-    openPbrLutStorage.reset();
     gpuCache.clearSceneResources();
 }
 
@@ -1032,6 +1029,9 @@ void Raytracer::renderFrame(
     params.frame.width = width;
     params.frame.height = height;
     params.frame.frameIndex = frameIndex;
+    params.frame.visibilityMask = params.scene.gaussianCount > 0
+        ? SceneVisibility
+        : MeshVisibility;
     params.accumulation = accumulationBuffer.as<glm::vec4>();
 
     if (renderSettings.noiseLimitEnabled && !noiseMomentsBuffer)

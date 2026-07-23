@@ -43,7 +43,7 @@ public:
         return true;
     }
 
-    NR_CPU_GPU nr::rstd::optional<CameraRay> generateRay(
+    NR_CPU_GPU nr::rstd::optional<CameraSample> generateRay(
         float nx, float ny, const glm::vec2 lensSample, uint32_t,
         SampledWavelengths& wavelengths,
         bool centered = false) const
@@ -67,15 +67,15 @@ public:
         const float cosTheta = filmRay.direction.z;
         const float cosTheta2 = cosTheta * cosTheta;
         const float pupilPlaneDistance = rossLens->getLastSurface().center;
-        CameraRay result{};
+        CameraSample result{};
         result.weight = (cosTheta2 * cosTheta2) /
             ((1.0f / sampleBoundsArea) * (pupilPlaneDistance * pupilPlaneDistance));
 
-        result.ray.origin = glm::vec3(traced->startPoint.x * 0.01f, traced->startPoint.y * 0.01f,
-            -traced->startPoint.z * 0.01f);
-        result.ray.direction = glm::normalize(glm::vec3(
-            traced->direction.x, traced->direction.y, -traced->direction.z));
-        transformRay(result.ray.origin, result.ray.direction);
+        result.ray = transformRay(Ray(
+            glm::vec3(traced->startPoint.x * 0.01f,
+                traced->startPoint.y * 0.01f, -traced->startPoint.z * 0.01f),
+            glm::normalize(glm::vec3(
+                traced->direction.x, traced->direction.y, -traced->direction.z))));
         return result;
     }
 

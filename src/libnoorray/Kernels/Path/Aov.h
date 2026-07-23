@@ -6,7 +6,6 @@
 #include "Camera/Camera.h"
 #include "Raytracing/Gpu/Geometry.h"
 #include "Raytracing/Path/PathIntegrator.h"
-#include "Shading/GaussianAlbedo.h"
 
 extern "C"
 {
@@ -49,7 +48,7 @@ extern "C" __global__ void __raygen__aov()
         / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
     const float ny = 1.0f - (static_cast<float>(y) + 0.5f)
         / static_cast<float>(params.frame.height) * 2.0f;
-    const nr::rstd::optional<CameraRay> cameraRay = params.scene.camera->Dispatch(
+    const nr::rstd::optional<CameraSample> cameraSample = params.scene.camera->Dispatch(
         [&](const auto* camera) {
             return camera->generateRay(nx, ny, glm::vec2(0.5f), pixel,
                 wavelengths, true);
@@ -59,17 +58,15 @@ extern "C" __global__ void __raygen__aov()
     // Keep the opaque-query sentinel unambiguous for the transparent query.
     if (gaussianSampleIndex == OpaqueAovGaussianSample)
         gaussianSampleIndex = 0u;
-    const RayHit hit = cameraRay
-        ? integrator.intersect(cameraRay->ray, 0.001f, 1000.0f,
-            gaussianSampleIndex)
+    const RayHit hit = cameraSample
+        ? integrator.intersect(cameraSample->ray, gaussianSampleIndex)
         : RayHit{};
-    const RayHit cryptomatteHit = cameraRay
-        ? integrator.intersect(cameraRay->ray, 0.001f, 1000.0f,
-            OpaqueAovGaussianSample)
+    const RayHit cryptomatteHit = cameraSample
+        ? integrator.intersect(cameraSample->ray, OpaqueAovGaussianSample)
         : RayHit{};
-    const bool valid = cameraRay.has_value() && hit.instanceIndex != InvalidIndex;
+    const bool valid = cameraSample.has_value() && hit.instanceIndex != InvalidIndex;
     const bool gaussianHit = valid && hit.primitiveIndex == InvalidIndex;
-    const bool cryptomatteValid = cameraRay.has_value()
+    const bool cryptomatteValid = cameraSample.has_value()
         && cryptomatteHit.instanceIndex != InvalidIndex;
     const bool cryptomatteGaussian = cryptomatteValid
         && cryptomatteHit.primitiveIndex == InvalidIndex;
@@ -83,9 +80,13 @@ extern "C" __global__ void __raygen__aov()
         {
             // An albedo pass must remain view-independent, so Gaussian splats
             // use their DC SH coefficient rather than the beauty SH order.
-            albedo = gaussianAlbedoRgb(params.scene, cameraRay->ray, hit.instanceIndex,
-                SphericalHarmonicsOrder::Degree0);
-            position = cameraRay->ray.at(hit.t);
+            albedo = gaussianAlbedoRgb(
+                params.scene.gaussianShCoeffs,
+                params.scene.gaussianShCoefficientCount,
+                hit.instanceIndex,
+                SphericalHarmonicsOrder::Degree0,
+                -cameraSample->ray.direction());
+            position = cameraSample->ray.at(hit.t);
         }
         else
         {
@@ -93,7 +94,7 @@ extern "C" __global__ void __raygen__aov()
             albedo = surface.material->albedoAt(params.scene.textures, surface.uv);
             normal = surface.material->shadingNormalAt(params.scene.textures,
                 surface.uv, surface.tangent, surface.normal);
-            if (glm::dot(normal, cameraRay->ray.direction) > 0.0f)
+            if (glm::dot(normal, cameraSample->ray.direction()) > 0.0f)
                 normal = -normal;
             position = surface.position;
         }

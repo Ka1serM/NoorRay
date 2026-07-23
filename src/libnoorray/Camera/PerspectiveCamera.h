@@ -9,7 +9,7 @@ public:
     explicit PerspectiveCamera(std::unique_ptr<Sensor> sensor);
     PerspectiveCamera(const PerspectiveCamera& other);
     ~PerspectiveCamera();
-    NR_CPU_GPU nr::rstd::optional<CameraRay> generateRay(
+    NR_CPU_GPU nr::rstd::optional<CameraSample> generateRay(
         float nx, float ny, const glm::vec2&, uint32_t, SampledWavelengths&,
         bool = false) const
     {
@@ -17,9 +17,9 @@ public:
         const glm::vec2 scale{
             sensor.width() / (2.f * focalLengthMm),
             sensor.height() / (2.f * focalLengthMm)};
-        CameraRay result{};
-        result.ray.direction = glm::normalize(glm::vec3(nx * scale.x, ny * scale.y, -1.f));
-        transformRay(result.ray.origin, result.ray.direction);
+        CameraSample result{};
+        result.ray = transformRay(Ray(glm::vec3(0.0f),
+            glm::normalize(glm::vec3(nx * scale.x, ny * scale.y, -1.0f))));
         return result;
     }
 

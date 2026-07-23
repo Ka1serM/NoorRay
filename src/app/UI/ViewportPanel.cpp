@@ -559,7 +559,7 @@ bool ViewportPanel::handleBillboardPicking() const {
     if (!camera)
         return false;
 
-    // A little more forgiving than the visual icon so small targets are still easy to click.
+    // Match the visual icon so hit-testing scales with the billboard.
     constexpr float pickRadius = ViewportBillboardPixelRadius;
 
     const vec2 pixel = vec2(screenToPixel());

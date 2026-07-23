@@ -24,7 +24,7 @@ struct ViewportBillboard
 
 // Fixed screen-space half-size of a billboard icon, in pixels. Shared with
 // ViewportPanel's click-picking radius so hit-testing matches what's drawn.
-constexpr float ViewportBillboardPixelRadius = 64.0f;
+constexpr float ViewportBillboardPixelRadius = 32.0f;
 
 class Viewport {
 public:

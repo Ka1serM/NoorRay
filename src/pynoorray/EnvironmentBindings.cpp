@@ -21,8 +21,6 @@ void bindEnvironment(nb::module_& module)
                 value.rotation = rotation;
                 value.updateDerivedSettings();
             })
-        .def_prop_rw("visible", [](const Environment& value) { return value.visible != 0; },
-            [](Environment& value, const bool visible) { value.visible = visible ? 1 : 0; })
         .def_prop_rw("visible_exposure", [](const Environment& value) { return value.visibleExposure; },
             [](Environment& value, const float exposure) {
                 value.visibleExposure = exposure;

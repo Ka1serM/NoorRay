@@ -15,7 +15,6 @@ struct EnvironmentFile {
     Vec3 color{1.0f, 1.0f, 1.0f};
     float lighting_exposure{1.0f};
     float visible_exposure{};
-    bool visible{true};
 };
 
 struct RenderSettingsFile {

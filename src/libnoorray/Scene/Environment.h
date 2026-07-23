@@ -40,7 +40,6 @@ public:
     float rotationCos{1.0f};
     float visibleExposureScale{1.0f};
     float lightingExposureScale{1.0f};
-    int visible{1};
     float rotation{};
     float visibleExposure{};
     float lightingExposure{1.0f};

@@ -2,8 +2,7 @@
   "environment": {
     "color": [1.0, 1.0, 1.0],
     "lighting_exposure": 1.0,
-    "visible_exposure": 0.0,
-    "visible": true
+    "visible_exposure": 0.0
   },
   "objects": [
     {

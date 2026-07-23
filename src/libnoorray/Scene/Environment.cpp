@@ -59,11 +59,11 @@ void Environment::clearHdriTexture()
     cdfDirty = 1;
 }
 
-void Environment::setEquirectangularMapping()
+void Environment::setEquirectangularMapping(const glm::mat3& transform)
 {
     mapping = EnvironmentMapping::Equirectangular;
-    environmentFromWorld = glm::mat3(1.f);
-    worldFromEnvironment = glm::mat3(1.f);
+    environmentFromWorld = transform;
+    worldFromEnvironment = glm::inverse(transform);
     cdfDirty = 1;
 }
 

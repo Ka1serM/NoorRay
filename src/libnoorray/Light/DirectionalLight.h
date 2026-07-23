@@ -50,4 +50,34 @@ public:
         return sample;
     }
 
+    NR_CPU_GPU LightHit intersect(
+        const Ray& ray, const SampledWavelengths& wl,
+        const float* spectrumScale, const float* spectrumCoeffs,
+        const float* d65) const
+    {
+        LightHit hit{};
+        const glm::vec3 centerDirection = -glm::normalize(direction);
+        const float halfAngle = 0.5f * fminf(fmaxf(softAngle, 0.0f), 180.0f)
+            * LightPi / 180.0f;
+        if (halfAngle <= 0.0f) {
+            if (glm::dot(ray.direction(), centerDirection) < 1.0f - 1.0e-7f)
+                return hit;
+            hit.radiance = rgbIlluminantToSpectrum(
+                color * intensity, wl, spectrumScale, spectrumCoeffs, d65);
+        } else {
+            const float oneMinusCosineHalfAngle = oneMinusCosine(halfAngle);
+            if (1.0f - glm::dot(ray.direction(), centerDirection)
+                > oneMinusCosineHalfAngle)
+                return hit;
+            hit.pdf = 1.0f / (2.0f * LightPi * oneMinusCosineHalfAngle);
+            const float projectedArea =
+                LightPi * sinf(halfAngle) * sinf(halfAngle);
+            hit.radiance = rgbIlluminantToSpectrum(
+                color * (intensity / fmaxf(projectedArea, 1.0e-20f)),
+                wl, spectrumScale, spectrumCoeffs, d65);
+        }
+        hit.distance = Ray::InfiniteDistance;
+        return hit;
+    }
+
 };

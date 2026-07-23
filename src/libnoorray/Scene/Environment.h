@@ -61,7 +61,8 @@ public:
     void updateDerivedSettings();
     void setHdriTexture(const Texture& texture);
     void clearHdriTexture();
-    void setEquirectangularMapping();
+    void setEquirectangularMapping(
+        const glm::mat3& environmentFromWorldTransform = glm::mat3(1.f));
     void setEqualAreaMapping(const glm::mat3& environmentFromWorldTransform);
 
     static std::vector<float> computeCdf(const float* hdr, int w, int h,
@@ -123,11 +124,13 @@ public:
                 local.z);
             return equalAreaSphereToSquare(local);
         }
-        const float rotatedX = rotationCos * direction.x - rotationSin * direction.z;
-        const float rotatedZ = rotationSin * direction.x + rotationCos * direction.z;
+        const glm::vec3 local = glm::normalize(
+            environmentFromWorld * direction);
+        const float rotatedX = rotationCos * local.x - rotationSin * local.z;
+        const float rotatedZ = rotationSin * local.x + rotationCos * local.z;
         return {
             0.5f + atan2f(rotatedZ, rotatedX) / (2.0f * EnvironmentPi),
-            acosf(fminf(fmaxf(direction.y, -1.0f), 1.0f)) / EnvironmentPi};
+            acosf(fminf(fmaxf(local.y, -1.0f), 1.0f)) / EnvironmentPi};
     }
 
 #if defined(NR_GPU_CODE)
@@ -223,10 +226,11 @@ public:
                 + randomFloat(rng) * (cosf(theta1) - cosf(theta0));
             const float sinTheta = sqrtf(fmaxf(1.0f - cosTheta * cosTheta, 0.0f));
             const glm::vec3 rotated(sinTheta * cosf(phi), cosTheta, sinTheta * sinf(phi));
-            sample.direction = glm::normalize(glm::vec3(
+            const glm::vec3 local(
                 rotationCos * rotated.x + rotationSin * rotated.z,
                 rotated.y,
-                -rotationSin * rotated.x + rotationCos * rotated.z));
+                -rotationSin * rotated.x + rotationCos * rotated.z);
+            sample.direction = glm::normalize(worldFromEnvironment * local);
         }
         sample.pdf = pdf(sample.direction);
         return sample;

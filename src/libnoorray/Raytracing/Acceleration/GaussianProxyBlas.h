@@ -14,6 +14,8 @@ enum class GaussianProxyType : int
 {
     Icosphere,
     Octahedron,
+    Icosahedron,
+    IcosphereLevel2,
 };
 
 class GaussianProxyBlas

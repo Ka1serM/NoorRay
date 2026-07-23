@@ -14,18 +14,21 @@ OptixDenoiserState::~OptixDenoiserState() noexcept
 
 void OptixDenoiserState::ensure(const OptixDeviceContext context,
     const cudaStream_t stream, const uint32_t width, const uint32_t height,
-    const bool useAlbedoGuide)
+    const bool useAlbedoGuide, const bool useNormalGuide)
 {
-    if (denoiser != nullptr && albedoGuideEnabled != useAlbedoGuide)
+    if (denoiser != nullptr && (albedoGuideEnabled != useAlbedoGuide
+        || normalGuideEnabled != useNormalGuide))
         reset();
     if (denoiser == nullptr)
     {
         OptixDenoiserOptions options{};
         options.guideAlbedo = useAlbedoGuide ? 1u : 0u;
+        options.guideNormal = useNormalGuide ? 1u : 0u;
         options.denoiseAlpha = OPTIX_DENOISER_ALPHA_MODE_COPY;
         NR_OPTIX_CHECK(optixDenoiserCreate(
             context, OPTIX_DENOISER_MODEL_KIND_AOV, &options, &denoiser));
         albedoGuideEnabled = useAlbedoGuide;
+        normalGuideEnabled = useNormalGuide;
     }
     if (configuredWidth == width && configuredHeight == height)
         return;
@@ -47,10 +50,11 @@ void OptixDenoiserState::ensure(const OptixDeviceContext context,
 
 const void* OptixDenoiserState::run(const OptixDeviceContext context,
     const cudaStream_t stream, const void* input, const void* albedoGuide,
-    const uint32_t width, const uint32_t height)
+    const void* normalGuide, const uint32_t width, const uint32_t height)
 {
     const bool useAlbedoGuide = albedoGuide != nullptr;
-    ensure(context, stream, width, height, useAlbedoGuide);
+    const bool useNormalGuide = normalGuide != nullptr;
+    ensure(context, stream, width, height, useAlbedoGuide, useNormalGuide);
     const size_t rowStride = static_cast<size_t>(width) * sizeof(glm::vec4);
     OptixDenoiserLayer layer{};
     layer.input = {reinterpret_cast<CUdeviceptr>(input), width, height,
@@ -68,6 +72,13 @@ const void* OptixDenoiserState::run(const OptixDeviceContext context,
         const size_t albedoRowStride = static_cast<size_t>(width) * sizeof(float3);
         guide.albedo = {reinterpret_cast<CUdeviceptr>(albedoGuide), width, height,
             static_cast<unsigned int>(albedoRowStride), sizeof(float3),
+            OPTIX_PIXEL_FORMAT_FLOAT3};
+    }
+    if (useNormalGuide)
+    {
+        const size_t normalRowStride = static_cast<size_t>(width) * sizeof(float3);
+        guide.normal = {reinterpret_cast<CUdeviceptr>(normalGuide), width, height,
+            static_cast<unsigned int>(normalRowStride), sizeof(float3),
             OPTIX_PIXEL_FORMAT_FLOAT3};
     }
     NR_OPTIX_CHECK(optixDenoiserInvoke(denoiser, stream, &params,
@@ -90,4 +101,5 @@ void OptixDenoiserState::reset() noexcept
     stateSize = 0;
     scratchSize = 0;
     albedoGuideEnabled = false;
+    normalGuideEnabled = false;
 }

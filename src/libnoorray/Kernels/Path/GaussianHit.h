@@ -11,10 +11,16 @@ extern __constant__ KernelParams params;
 
 extern "C" __global__ void __anyhit__gaussian()
 {
-    const uint32_t sceneInstance = optixGetInstanceIdFromHandle(
-        optixGetTransformListHandle(0));
-    const uint32_t globalGaussianId =
-        params.scene.gaussianInstanceOffsets[sceneInstance] + optixGetInstanceIndex();
+    const uint32_t localGaussianId = optixGetInstanceIndex();
+    const uint32_t* const instanceOffsets = params.scene.gaussianInstanceOffsets;
+    // A single Gaussian instance needs no outer-IAS lookup: its IAS index is
+    // already the packed global Gaussian ID.  Large splat scenes spend most
+    // of their time here, so avoid transform-list traversal and an extra
+    // global load for every proxy candidate.
+    const uint32_t globalGaussianId = instanceOffsets == nullptr
+        ? localGaussianId
+        : instanceOffsets[optixGetInstanceIdFromHandle(
+            optixGetTransformListHandle(0))] + localGaussianId;
 
     // The Cryptomatte query keeps its sentinel in payload 0, which is never
     // changed by traversal. Surface AOV and beauty queries retain their normal
@@ -26,6 +32,26 @@ extern "C" __global__ void __anyhit__gaussian()
     {
         optixIgnoreIntersection();
         return;
+    }
+
+    // If xi is above opacity it is necessarily above alpha, independent of
+    // the proxy hit distance.  Evaluate that rejection before the object-space
+    // closest-point calculation; dense splat scenes hit this path constantly.
+    float xi = 0.0f;
+    if (!opaqueAov)
+    {
+        const uint32_t sampleIndex = optixGetPayload_0();
+        // The first Sobol dimension is a bit-reversed Van der Corput sequence,
+        // retaining 1-D low discrepancy without a direction-number walk.
+        const uint32_t gaussianSeed = hashCombine32(sampleIndex, globalGaussianId);
+        const OwenSobolSampler sampler({
+            params.frame.totalAccumulated, gaussianSeed});
+        xi = sampler.sample1D(SampleDimension::PixelX);
+        if (xi >= opacity)
+        {
+            optixIgnoreIntersection();
+            return;
+        }
     }
 
     // The instance transform carries each Gaussian's true (untruncated) R*S;
@@ -70,25 +96,6 @@ extern "C" __global__ void __anyhit__gaussian()
     // Accept with probability alpha so that expected value matches 3DGS
     // over operator compositing:
     //   E[C] = Σᵢ αᵢ·cᵢ·Πⱼ<ᵢ(1-αⱼ)
-    // Payload layout:
-    //   0: sampleIndex (set before traversal, preserved)
-    //   1: world-space hit distance (float as uint) of the accepted gaussian's
-    //      closest-approach point, set only on acceptance (init to tMax)
-    //   2: accepted gaussianId (init to InvalidIndex)
-    const uint32_t sampleIndex = optixGetPayload_0();
-
-    const uint32_t pathSeed = hashCombine32(sampleIndex, params.depth);
-    const uint32_t gaussianSeed = hashCombine32(globalGaussianId, 0u);
-    const OwenSobolSampler sampler({
-        params.frame.totalAccumulated, hashCombine32(pathSeed, gaussianSeed)});
-    const float xi = sampler.sample1D(SampleDimension::Opacity);
-    // alpha <= opacity, so low-opacity rejections avoid evaluating the
-    // exponential.
-    if (xi >= opacity)
-    {
-        optixIgnoreIntersection();
-        return;
-    }
     const float alpha = opacity * __expf(-0.5f * distanceSq);
 
     if (xi < alpha)

@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 
+# -----------------------------------------------------------------------------
+# Toolchains and project configuration
+# -----------------------------------------------------------------------------
+
 set(NR_CUDA_ROOT "" CACHE PATH "CUDA Toolkit 13.x installation root")
 if(NOT NR_CUDA_ROOT)
     message(FATAL_ERROR "NR_CUDA_ROOT is required (for example: -DNR_CUDA_ROOT=/usr/local/cuda)")
@@ -14,22 +18,48 @@ project(NoorRay VERSION 0.1.0 LANGUAGES C CXX CUDA)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "NoorRay currently supports Linux with an NVIDIA CUDA/OptiX GPU")
 endif()
+
+# NoorRay supports an optimized distribution build and an optimized build with
+# symbols for profiling and post-mortem debugging.  Do not add -g globally:
+# CMake's Release flags deliberately omit debug information.
+set(NR_SUPPORTED_BUILD_TYPES Release RelWithDebInfo)
+if(CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_CONFIGURATION_TYPES "${NR_SUPPORTED_BUILD_TYPES}" CACHE STRING
+            "Supported build configurations" FORCE)
+else()
+    if(NOT CMAKE_BUILD_TYPE)
+        set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
+    endif()
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS ${NR_SUPPORTED_BUILD_TYPES})
+    if(NOT CMAKE_BUILD_TYPE IN_LIST NR_SUPPORTED_BUILD_TYPES)
+        message(FATAL_ERROR
+                "Unsupported CMAKE_BUILD_TYPE='${CMAKE_BUILD_TYPE}'. "
+                "Choose Release or RelWithDebInfo.")
+    endif()
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-add_compile_options($<$<CONFIG:Release>:-g>)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build dependencies as static libraries" FORCE)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_SKIP_BUILD_RPATH ON)
+
 option(NR_ENABLE_UNITY_BUILD "Batch NoorRay C++ sources for faster compilation" ON)
 option(NR_ENABLE_PCH "Precompile common NoorRay C++ headers" ON)
 option(NR_BUILD_PYTHON "Build the pynoorray Python bindings" OFF)
 option(NR_VERBOSE_CONFIGURE "Show FetchContent dependency progress during configuration" ON)
 set(NR_UNITY_BUILD_BATCH_SIZE "8" CACHE STRING "Maximum sources per NoorRay unity batch")
-set(NR_CUDA_SPLIT_COMPILE_JOBS "0" CACHE STRING "NVCC optimization threads per CUDA translation unit (0 = all cores)")
-set(CMAKE_SKIP_BUILD_RPATH ON)
-set(NR_CUDA_ARCH "89" CACHE STRING "CUDA architecture (e.g. 89 for sm_89)")
+# Build systems compile multiple CUDA translation units concurrently. Keep the
+# per-translation-unit NVCC workers bounded so parallel builds do not create
+# hundreds of competing compiler threads.
+set(NR_CUDA_SPLIT_COMPILE_JOBS "4" CACHE STRING
+        "NVCC optimization threads per CUDA translation unit")
+# Target the project's RTX 30- and RTX 40-series machines by default. The
+# first architecture also selects the compatible OptiX PTX virtual target.
+set(NR_CUDA_ARCH "86;89" CACHE STRING "CUDA architectures (e.g. 86;89)")
 set(CMAKE_CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 # A single PTX file is generated below, so select the first architecture when
 # the build is configured with multiple CUDA architectures.
@@ -52,7 +82,11 @@ if(NOT OPTIX_VERSION_LINE)
     message(FATAL_ERROR "NoorRay requires OptiX 9.1 headers")
 endif()
 
-# Suppress verbose status output from all external dependencies unless requested.
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
+
+# Suppress verbose status output from external dependencies unless requested.
 if(NR_VERBOSE_CONFIGURE)
     set(FETCHCONTENT_QUIET OFF CACHE BOOL "Show FetchContent download and update output" FORCE)
     set(CMAKE_MESSAGE_LOG_LEVEL STATUS)
@@ -61,7 +95,13 @@ else()
 endif()
 set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
 
-# SDL3 (Static Linking Setup)
+# Small helper for the header-only dependencies declared below.
+function(nr_add_header_only_library target include_directory)
+    add_library(${target} INTERFACE)
+    target_include_directories(${target} INTERFACE "${include_directory}")
+endfunction()
+
+# SDL3
 set(SDL_STATIC ON CACHE BOOL "Build SDL3 as a static library" FORCE)
 set(SDL_SHARED OFF CACHE BOOL "Do not build SDL3 as a shared library" FORCE)
 set(SDL_ALSA OFF CACHE BOOL "NoorRay does not use SDL audio" FORCE)
@@ -70,28 +110,17 @@ if(TARGET SDL3-static)
     set_target_properties(SDL3-static PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
-# External Libraries
+# Vendored dependencies with their own CMake targets.
 add_subdirectory(external/glm)
 add_subdirectory(external/portable-file-dialogs)
 add_subdirectory(external/VulkanMemoryAllocator)
 
-# tinygltf (header-only)
-add_library(tinygltf INTERFACE)
-target_include_directories(tinygltf INTERFACE
-        ${PROJECT_SOURCE_DIR}/external/tinygltf
-)
-
-# tinyobjloader (header-only)
-add_library(tinyobjloader INTERFACE)
-target_include_directories(tinyobjloader INTERFACE
-        ${PROJECT_SOURCE_DIR}/external/tinyobjloader
-)
-
-# stb (header-only)
-add_library(stb INTERFACE)
-target_include_directories(stb INTERFACE
-        ${PROJECT_SOURCE_DIR}/external/stb
-)
+# Header-only dependencies.
+nr_add_header_only_library(tinygltf "${PROJECT_SOURCE_DIR}/external/tinygltf")
+nr_add_header_only_library(tinyobjloader "${PROJECT_SOURCE_DIR}/external/tinyobjloader")
+nr_add_header_only_library(stb "${PROJECT_SOURCE_DIR}/external/stb")
+nr_add_header_only_library(ImViewGuizmo "${PROJECT_SOURCE_DIR}/external/ImViewGuizmo")
+nr_add_header_only_library(glaze "${PROJECT_SOURCE_DIR}/external/glaze/include")
 
 # tinyply
 add_library(tinyply STATIC external/tinyply/source/tinyply.cpp)
@@ -108,18 +137,6 @@ set_target_properties(tinyexr PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(tinyexr PUBLIC
         ${PROJECT_SOURCE_DIR}/external/tinyexr
         ${PROJECT_SOURCE_DIR}/external/tinyexr/deps/miniz)
-
-# ImViewGuizmo (header-only)
-add_library(ImViewGuizmo INTERFACE)
-target_include_directories(ImViewGuizmo INTERFACE
-        ${PROJECT_SOURCE_DIR}/external/ImViewGuizmo
-)
-
-# glaze (header-only JSON/reflection library)
-add_library(glaze INTERFACE)
-target_include_directories(glaze INTERFACE
-        ${PROJECT_SOURCE_DIR}/external/glaze/include
-)
 
 # Intel oneTBB
 set(TBB_TEST     OFF CACHE BOOL "" FORCE)
@@ -177,12 +194,18 @@ target_include_directories(gauss_forge_readers PUBLIC
 )
 target_link_libraries(gauss_forge_readers PUBLIC spz::spz webp nlohmann_json::nlohmann_json ZLIB::ZLIB)
 
-# Restore normal log level for project-own messages
+# Restore normal log level for project messages.
 set(CMAKE_MESSAGE_LOG_LEVEL STATUS)
 
-# Vulkan
-if(DEFINED ENV{VULKAN_SDK})
-    set(VULKAN_SDK_ROOT "$ENV{VULKAN_SDK}")
+# -----------------------------------------------------------------------------
+# Vulkan and embedded application assets
+# -----------------------------------------------------------------------------
+
+# The SDK provides slangc; its Vulkan loader is preferred when available.
+# Supplying VULKAN_SDK_ROOT is equivalent to setting the VULKAN_SDK environment
+# variable and avoids relying on the editor process's environment.
+set(VULKAN_SDK_ROOT "$ENV{VULKAN_SDK}" CACHE PATH "Vulkan SDK root")
+if(VULKAN_SDK_ROOT)
     if(NOT EXISTS "${VULKAN_SDK_ROOT}/include")
         get_filename_component(VULKAN_SDK_PARENT "${VULKAN_SDK_ROOT}" DIRECTORY)
         if(EXISTS "${VULKAN_SDK_PARENT}/include")
@@ -210,10 +233,13 @@ find_program(NR_SLANGC_EXECUTABLE
 
 set(NR_CORE_DIR "${PROJECT_SOURCE_DIR}/src/libnoorray")
 set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
-set(SHADER_DIR     "${NR_CORE_DIR}/Shaders")
+set(NR_SHADER_DIR "${NR_CORE_DIR}/Shaders")
+# PTX is shared by the two supported build configurations so source files can
+# embed it directly via a stable, source-relative path.
+set(NR_PTX_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/build/generated")
 
-# Base slangc flags (software BVH, no USE_RAY_QUERY)
-set(SLANGC_BASE
+# Base slangc flags (software BVH, no USE_RAY_QUERY).
+set(NR_SLANGC_FLAGS
         -target spirv
         -profile spirv_1_5
         -emit-spirv-directly
@@ -222,78 +248,47 @@ set(SLANGC_BASE
         -Wno-30081
 )
 
-set(SHADER_OUTPUTS
-        "${SHADER_DIR}/Viewport/Viewport.spv"
-        "${SHADER_DIR}/Viewport/ViewportBillboards.spv"
+set(NR_SHADER_OUTPUTS
+        "${NR_SHADER_DIR}/Viewport/Viewport.spv"
+        "${NR_SHADER_DIR}/Viewport/ViewportBillboards.spv"
 )
 
 add_custom_command(
-        OUTPUT ${SHADER_OUTPUTS}
-        COMMAND "${NR_SLANGC_EXECUTABLE}" "${SHADER_DIR}/Viewport/Viewport.slang" -entry main ${SLANGC_BASE} -o "${SHADER_DIR}/Viewport/Viewport.spv"
-        COMMAND "${NR_SLANGC_EXECUTABLE}" "${SHADER_DIR}/Viewport/ViewportBillboards.slang" -entry vertMain -stage vertex -entry fragMain -stage fragment ${SLANGC_BASE} -o "${SHADER_DIR}/Viewport/ViewportBillboards.spv"
+        OUTPUT ${NR_SHADER_OUTPUTS}
+        COMMAND "${NR_SLANGC_EXECUTABLE}"
+                "${NR_SHADER_DIR}/Viewport/Viewport.slang"
+                -entry main ${NR_SLANGC_FLAGS}
+                -o "${NR_SHADER_DIR}/Viewport/Viewport.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}"
+                "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
+                -entry vertMain -stage vertex -entry fragMain -stage fragment
+                ${NR_SLANGC_FLAGS}
+                -o "${NR_SHADER_DIR}/Viewport/ViewportBillboards.spv"
         DEPENDS
-        "${SHADER_DIR}/Viewport/Viewport.slang"
-        "${SHADER_DIR}/Viewport/ViewportBillboards.slang"
+                "${NR_SHADER_DIR}/Viewport/Viewport.slang"
+                "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
         COMMENT "Compiling the Vulkan viewport shaders"
         VERBATIM
 )
 
-add_custom_target(NoorRayShaders DEPENDS ${SHADER_OUTPUTS})
+add_custom_target(NoorRayShaders DEPENDS ${NR_SHADER_OUTPUTS})
 
-# Generate embed wrapper headers with absolute paths (GCC 15 #embed only resolves
-# absolute or source-relative paths, not -I search paths)
-cmake_path(SET NR_GEN "${CMAKE_CURRENT_BINARY_DIR}/generated")
-file(MAKE_DIRECTORY "${NR_GEN}")
+set(NR_OPTIX_PTX "${NR_PTX_OUTPUT_DIR}/NoorRayOptix.ptx")
+set(NR_TRAINING_OPTIX_PTX "${NR_PTX_OUTPUT_DIR}/NoorRayTrainingOptix.ptx")
 
-file(CONFIGURE OUTPUT "${NR_GEN}/ViewportSpv.h" CONTENT
-"#pragma once
-static constexpr unsigned char noorRayViewportSpv[] = {
-    #embed \"${SHADER_DIR}/Viewport/Viewport.spv\"
-};
-static constexpr size_t noorRayViewportSpvLength = sizeof(noorRayViewportSpv);\n" @ONLY)
+# CUDA line information is useful when profiling RelWithDebInfo, but it is not
+# included in distribution builds. These custom PTX commands need a configure-
+# time list so Release does not receive an empty command-line argument.
+set(NR_OPTIX_PTX_DEBUG_OPTIONS)
+if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    list(APPEND NR_OPTIX_PTX_DEBUG_OPTIONS --generate-line-info)
+endif()
 
-file(CONFIGURE OUTPUT "${NR_GEN}/ViewportBillboardsSpv.h" CONTENT
-"#pragma once
-static constexpr unsigned char noorRayViewportBillboardsSpv[] = {
-    #embed \"${SHADER_DIR}/Viewport/ViewportBillboards.spv\"
-};
-static constexpr size_t noorRayViewportBillboardsSpvLength = sizeof(noorRayViewportBillboardsSpv);\n" @ONLY)
+# -----------------------------------------------------------------------------
+# NoorRay libraries
+# -----------------------------------------------------------------------------
 
-file(CONFIGURE OUTPUT "${NR_GEN}/ImGuiFont.h" CONTENT
-"#pragma once
-static constexpr unsigned char noorRayImGuiFont[] = {
-    #embed \"${PROJECT_SOURCE_DIR}/assets/fonts/Inter.ttf\"
-};
-static constexpr size_t noorRayImGuiFontLength = sizeof(noorRayImGuiFont);\n" @ONLY)
-
-file(CONFIGURE OUTPUT "${NR_GEN}/ImGuiLayout.h" CONTENT
-"#pragma once
-static constexpr unsigned char noorRayImGuiLayout[] = {
-    #embed \"${PROJECT_SOURCE_DIR}/assets/imgui.ini\"
-};
-static constexpr size_t noorRayImGuiLayoutLength = sizeof(noorRayImGuiLayout);\n" @ONLY)
-
-# NR_OPTIX_PTX defined here early so it can be used in the embed header and
-# also referenced by the custom command further below
-set(NR_OPTIX_PTX "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.ptx")
-set(NR_TRAINING_OPTIX_PTX "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayTrainingOptix.ptx")
-
-file(CONFIGURE OUTPUT "${NR_GEN}/NoorRayOptixIr.h" CONTENT
-"#pragma once
-static constexpr unsigned char noorRayOptixIr[] = {
-    #embed \"${NR_OPTIX_PTX}\"
-};
-static constexpr size_t noorRayOptixIrLength = sizeof(noorRayOptixIr);\n" @ONLY)
-
-file(CONFIGURE OUTPUT "${NR_GEN}/NoorRayTrainingOptixIr.h" CONTENT
-"#pragma once
-static constexpr unsigned char noorRayTrainingOptixIr[] = {
-    #embed \"${NR_TRAINING_OPTIX_PTX}\"
-};
-static constexpr size_t noorRayTrainingOptixIrLength = sizeof(noorRayTrainingOptixIr);\n" @ONLY)
-
-
-# Dear ImGui (core + Vulkan + SDL3 backend) + ImGuizmo
+# Dear ImGui (core + Vulkan + SDL3 backend) + ImGuizmo.
 add_library(imgui STATIC
         external/imgui/imgui.cpp
         external/imgui/imgui_draw.cpp
@@ -324,43 +319,54 @@ target_compile_features(NoorRayIO PUBLIC cxx_std_23)
 target_include_directories(NoorRayIO PUBLIC "${NR_CORE_DIR}")
 target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 
-set(NR_OPTIX_DEPFILE "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayOptix.d")
+set(NR_OPTIX_PTX_OPTIONS
+        -ccbin "${CMAKE_CXX_COMPILER}"
+        --ptx
+        "--gpu-architecture=compute_${NR_OPTIX_CUDA_ARCH}"
+        --std=c++20
+        --expt-relaxed-constexpr
+        "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
+        --generate-nonsystem-dependencies-with-compile
+)
+
+set(NR_OPTIX_INCLUDE_FLAGS
+        "-I${NR_CORE_DIR}"
+        "-I${NR_APP_DIR}"
+        "-I${PROJECT_SOURCE_DIR}/external/glm"
+        "-I${OPTIX_INCLUDE_DIR}"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/libross/main"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/nlohmann-json/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/spdlog/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/fmt/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/magic_enum/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/openlensfileio/src/openlensfileio/main"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/tabulate/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/libmorton/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/gilbert"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/ordered_map/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/lodepng"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/hash-library"
+        "-I${PROJECT_SOURCE_DIR}/external/tbb/include"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/OpenEXR"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/Iex"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/IlmThread"
+        "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/OpenEXRCore"
+        "-I${CMAKE_CURRENT_BINARY_DIR}/ross/openexr/cmake"
+        "-I${CMAKE_CURRENT_BINARY_DIR}/_deps/imath-src/src/Imath"
+        "-I${CMAKE_CURRENT_BINARY_DIR}/_deps/imath-build/config"
+)
+
+set(NR_OPTIX_DEPFILE "${NR_PTX_OUTPUT_DIR}/NoorRayOptix.d")
 
 add_custom_command(
         OUTPUT "${NR_OPTIX_PTX}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_PTX_OUTPUT_DIR}"
         COMMAND "${CMAKE_CUDA_COMPILER}"
-                -ccbin "${CMAKE_CXX_COMPILER}"
-                --ptx --gpu-architecture=compute_${NR_OPTIX_CUDA_ARCH} --std=c++20
-                --generate-line-info --expt-relaxed-constexpr
-                "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
-                --generate-nonsystem-dependencies-with-compile
+                ${NR_OPTIX_PTX_OPTIONS}
+                ${NR_OPTIX_PTX_DEBUG_OPTIONS}
                 --dependency-output "${NR_OPTIX_DEPFILE}"
                 -DNR_BACKEND_CUDA=1 -DROSS_BUILD_GPU_SUPPORT=1
-                "-I${NR_CORE_DIR}"
-                "-I${NR_APP_DIR}"
-                "-I${PROJECT_SOURCE_DIR}/external/glm"
-                "-I${OPTIX_INCLUDE_DIR}"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/libross/main"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/nlohmann-json/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/spdlog/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/fmt/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/magic_enum/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/openlensfileio/src/openlensfileio/main"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/tabulate/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/libmorton/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/gilbert"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/ordered_map/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/lodepng"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/ext/hash-library"
-                "-I${PROJECT_SOURCE_DIR}/external/tbb/include"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/OpenEXR"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/Iex"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/IlmThread"
-                "-I${PROJECT_SOURCE_DIR}/external/ROSS/pbrt-v4/src/ext/openexr/src/lib/OpenEXRCore"
-                "-I${CMAKE_CURRENT_BINARY_DIR}/ross/openexr/cmake"
-                "-I${CMAKE_CURRENT_BINARY_DIR}/_deps/imath-src/src/Imath"
-                "-I${CMAKE_CURRENT_BINARY_DIR}/_deps/imath-build/config"
+                ${NR_OPTIX_INCLUDE_FLAGS}
                 -o "${NR_OPTIX_PTX}"
                 -x cu "${NR_CORE_DIR}/Kernels/Path/PathTrace.h"
         DEPENDS
@@ -377,23 +383,23 @@ add_custom_command(
         VERBATIM)
 add_custom_target(NoorRayOptixIr DEPENDS "${NR_OPTIX_PTX}")
 
-set(NR_TRAINING_OPTIX_DEPFILE
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/NoorRayTrainingOptix.d")
+set(NR_TRAINING_OPTIX_INCLUDE_FLAGS
+        "-I${NR_CORE_DIR}"
+        "-I${NR_APP_DIR}"
+        "-I${PROJECT_SOURCE_DIR}/external/glm"
+        "-I${OPTIX_INCLUDE_DIR}"
+)
+set(NR_TRAINING_OPTIX_DEPFILE "${NR_PTX_OUTPUT_DIR}/NoorRayTrainingOptix.d")
+
 add_custom_command(
         OUTPUT "${NR_TRAINING_OPTIX_PTX}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_PTX_OUTPUT_DIR}"
         COMMAND "${CMAKE_CUDA_COMPILER}"
-                -ccbin "${CMAKE_CXX_COMPILER}"
-                --ptx --gpu-architecture=compute_${NR_OPTIX_CUDA_ARCH} --std=c++20
-                --generate-line-info --expt-relaxed-constexpr
-                "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
-                --generate-nonsystem-dependencies-with-compile
+                ${NR_OPTIX_PTX_OPTIONS}
+                ${NR_OPTIX_PTX_DEBUG_OPTIONS}
                 --dependency-output "${NR_TRAINING_OPTIX_DEPFILE}"
                 -DNR_BACKEND_CUDA=1
-                "-I${NR_CORE_DIR}"
-                "-I${NR_APP_DIR}"
-                "-I${PROJECT_SOURCE_DIR}/external/glm"
-                "-I${OPTIX_INCLUDE_DIR}"
+                ${NR_TRAINING_OPTIX_INCLUDE_FLAGS}
                 -o "${NR_TRAINING_OPTIX_PTX}"
                 -x cu "${NR_CORE_DIR}/Training/Kernels/GaussianHit.h"
         DEPENDS
@@ -410,6 +416,10 @@ set_source_files_properties(${NR_CUDA_SOURCES} PROPERTIES
         LANGUAGE CUDA
         HEADER_FILE_ONLY OFF)
 
+set(NR_COMMON_COMPILE_DEFINITIONS
+        NR_BACKEND_CUDA=1
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+
 add_library(NoorRayCuda STATIC
         src/libnoorray/Raytracing/Acceleration/Blas.cpp
         src/libnoorray/Raytracing/Acceleration/GaussianProxyBlas.cpp
@@ -424,17 +434,15 @@ add_library(NoorRayCuda STATIC
         src/libnoorray/Shading/RgbSpectrumTableData.cpp
         src/libnoorray/Raytracing/Runtime/Raytracer.cpp
         src/libnoorray/Training/GaussianTrainRenderer.cpp
-        )
+)
 add_dependencies(NoorRayCuda NoorRayOptixIr NoorRayTrainingOptixIr)
-set_target_properties(NoorRayCuda PROPERTIES CUDA_ARCHITECTURES "${NR_CUDA_ARCH}")
 set_target_properties(NoorRayCuda PROPERTIES
+        CUDA_ARCHITECTURES "${NR_CUDA_ARCH}"
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS OFF
         POSITION_INDEPENDENT_CODE ON)
 target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
-target_compile_definitions(NoorRayCuda PUBLIC
-        NR_BACKEND_CUDA=1
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+target_compile_definitions(NoorRayCuda PUBLIC ${NR_COMMON_COMPILE_DEFINITIONS})
 target_include_directories(NoorRayCuda PUBLIC
         "${NR_CORE_DIR}"
         "${NR_APP_DIR}"
@@ -443,10 +451,12 @@ target_include_directories(NoorRayCuda PUBLIC
         "${PROJECT_SOURCE_DIR}/external/VulkanMemoryAllocator/include"
         "${PROJECT_SOURCE_DIR}/external/portable-file-dialogs"
         "${Vulkan_INCLUDE_DIR}"
-        "${OPTIX_INCLUDE_DIR}"
-        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        "${OPTIX_INCLUDE_DIR}")
 target_compile_options(NoorRayCuda PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info;--extended-lambda;--expt-relaxed-constexpr;--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}>)
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:RelWithDebInfo>>:--generate-line-info>
+        $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>
+        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+        $<$<COMPILE_LANGUAGE:CUDA>:--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}>)
 target_link_libraries(NoorRayCuda PUBLIC
         CUDA::cudart_static
         CUDA::cuda_driver
@@ -455,25 +465,33 @@ target_link_libraries(NoorRayCuda PUBLIC
         Vulkan::Vulkan
         portable_file_dialogs
         GPUOpen::VulkanMemoryAllocator
-        gauss_forge_readers)
-target_link_libraries(NoorRayCuda PUBLIC libross)
+        gauss_forge_readers
+        libross)
+
+# -----------------------------------------------------------------------------
+# Core library
+# -----------------------------------------------------------------------------
 
 file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
         "${NR_CORE_DIR}/*.cpp"
         "${NR_CORE_DIR}/*.h")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/CUDA/")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Kernels/")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Training/GaussianTrainerCuda\.h$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Runtime/Raytracer\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Shading/RgbSpectrumTableData\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Acceleration/Blas\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Acceleration/GaussianProxyBlas\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Denoising/OptixDenoiserState\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Raytracing/Acceleration/Tlas\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/Shading/OpenPbrEnergy\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapReader\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/IO/BitmapWriter\\.cpp$")
-list(FILTER NR_CORE_FILES EXCLUDE REGEX "/StbImpl\\.cpp$")
+set(NR_CORE_EXCLUDED_SOURCE_PATTERNS
+        "/CUDA/"
+        "/Kernels/"
+        "/Training/GaussianTrainerCuda\\.h$"
+        "/Raytracing/Runtime/Raytracer\\.cpp$"
+        "/Shading/RgbSpectrumTableData\\.cpp$"
+        "/Raytracing/Acceleration/Blas\\.cpp$"
+        "/Raytracing/Acceleration/GaussianProxyBlas\\.cpp$"
+        "/Raytracing/Denoising/OptixDenoiserState\\.cpp$"
+        "/Raytracing/Acceleration/Tlas\\.cpp$"
+        "/Shading/OpenPbrEnergy\\.cpp$"
+        "/IO/BitmapReader\\.cpp$"
+        "/IO/BitmapWriter\\.cpp$"
+        "/StbImpl\\.cpp$")
+foreach(pattern IN LISTS NR_CORE_EXCLUDED_SOURCE_PATTERNS)
+    list(FILTER NR_CORE_FILES EXCLUDE REGEX "${pattern}")
+endforeach()
 
 add_library(libnoorray STATIC ${NR_CORE_FILES})
 add_dependencies(libnoorray NoorRayShaders)
@@ -484,11 +502,9 @@ set_target_properties(libnoorray PROPERTIES
 target_compile_features(libnoorray PUBLIC cxx_std_23)
 target_include_directories(libnoorray
         PUBLIC
-        "${NR_CORE_DIR}"
-        "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        "${NR_CORE_DIR}")
 target_compile_definitions(libnoorray PUBLIC
-        NR_BACKEND_CUDA=1
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+        ${NR_COMMON_COMPILE_DEFINITIONS}
         NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
         NR_ROSS_RESOURCE_DIR="${PROJECT_SOURCE_DIR}/external/ROSS/resources")
 target_link_libraries(libnoorray
@@ -511,6 +527,10 @@ target_link_libraries(libnoorray
 file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS
         "${NR_APP_DIR}/*.cpp"
         "${NR_APP_DIR}/*.h")
+
+# -----------------------------------------------------------------------------
+# Optional Python bindings
+# -----------------------------------------------------------------------------
 
 if(NR_BUILD_PYTHON)
     if(CMAKE_VERSION VERSION_LESS 3.18)
@@ -538,9 +558,7 @@ if(NR_BUILD_PYTHON)
     target_link_libraries(_pynoorray PRIVATE
             "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
             CUDA::cudart_static)
-    target_compile_definitions(_pynoorray PRIVATE
-            NR_BACKEND_CUDA=1
-            VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+    target_compile_definitions(_pynoorray PRIVATE ${NR_COMMON_COMPILE_DEFINITIONS})
     # Keep the source layout flat. The extension and its Python files are
     # installed into one package directory next to each other.
     add_custom_command(TARGET _pynoorray POST_BUILD
@@ -558,20 +576,21 @@ if(NR_BUILD_PYTHON)
             COMMENT "Copying pynoorray package")
 endif()
 
+# -----------------------------------------------------------------------------
+# Application
+# -----------------------------------------------------------------------------
+
 add_executable(NoorRay ${NR_APP_FILES})
-set_target_properties(NoorRay PROPERTIES PREFIX "")
 set_target_properties(NoorRay PROPERTIES
+        PREFIX ""
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 add_dependencies(NoorRay NoorRayShaders)
 
 target_include_directories(NoorRay PRIVATE
-        ${NR_APP_DIR}
-        ${NR_CORE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}/generated
-)
+        "${NR_APP_DIR}"
+        "${NR_CORE_DIR}")
 
-# Link against all libraries
 target_link_libraries(NoorRay PRIVATE
         libnoorray
         NoorRayCuda
@@ -594,8 +613,7 @@ target_link_libraries(NoorRay PRIVATE
 
 target_compile_definitions(NoorRay PRIVATE
         SDL_MAIN_HANDLED
-        NR_BACKEND_CUDA=1)
-target_compile_definitions(NoorRay PRIVATE VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
+        ${NR_COMMON_COMPILE_DEFINITIONS})
 
 if(NR_ENABLE_UNITY_BUILD)
     set_target_properties(NoorRay PROPERTIES
@@ -628,6 +646,10 @@ if(NR_ENABLE_PCH)
 endif()
 
 target_link_options(NoorRay PRIVATE -static-libgcc -static-libstdc++)
+
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
 
 option(NR_BUILD_TESTS "Build and register NoorRay tests" ON)
 if(NR_BUILD_TESTS)

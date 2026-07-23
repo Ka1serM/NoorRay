@@ -103,6 +103,7 @@ private:
     Scene& scene;
     bool aovEnabled{true};
     bool aovAvailable{};
+    bool aovStale{true};
     uint32_t width{};
     uint32_t height{};
     cudaStream_t stream{};
@@ -119,6 +120,7 @@ private:
     uint32_t scratchCapacity{};
     nr::cuda::UniqueAsyncDeviceBuffer accumulationBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer denoiserAlbedoGuideBuffer;
+    nr::cuda::UniqueAsyncDeviceBuffer denoiserNormalGuideBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer noiseMomentsBuffer;
     nr::cuda::UniqueAsyncDeviceBuffer noiseVarianceSumBuffer;
     nr::cuda::UniqueDeviceBuffer spectrumTableScaleDevice;
@@ -186,7 +188,7 @@ private:
     void launchPostProcess(
         const KernelParams& params, cudaStream_t stream, uint32_t flags) const;
     void launchDenoiser(
-        const KernelParams& params, cudaStream_t stream, bool useAlbedoGuide);
+        const KernelParams& params, cudaStream_t stream, bool useAovGuides);
     void prepareSensorFrame(Sensor& sensor, KernelParams& params, bool resetAccumulation);
     void launchGaussianTrainPath(
         const GaussianTrainingKernelParams& params,

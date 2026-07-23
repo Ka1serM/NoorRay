@@ -134,7 +134,7 @@ void validateMesh(ProxyMesh& mesh, const size_t expectedVertices,
     mesh.inradius = minInradius;
 }
 
-ProxyMesh generateIcosphereProxy()
+ProxyMesh generateIcosahedronProxy()
 {
     ProxyMesh mesh;
     constexpr float phi = std::numbers::phi_v<float>;
@@ -148,6 +148,12 @@ ProxyMesh generateIcosphereProxy()
 
     normalizeVertices(mesh);
     generateConvexHullFaces(mesh);
+    validateMesh(mesh, 12, 20);
+    return mesh;
+}
+
+ProxyMesh subdivideIcosphere(ProxyMesh mesh)
+{
     std::map<std::pair<uint32_t, uint32_t>, uint32_t> midpoints;
     const auto midpoint = [&](const uint32_t a, const uint32_t b) {
         const auto edge = std::minmax(a, b);
@@ -177,6 +183,12 @@ ProxyMesh generateIcosphereProxy()
         });
     }
     mesh.indices = std::move(refinedIndices);
+    return mesh;
+}
+
+ProxyMesh generateIcosphereProxy()
+{
+    ProxyMesh mesh = subdivideIcosphere(generateIcosahedronProxy());
 
     // Minimax orientation for the frequency-2 vertex set. It reduces the
     // object-space BLAS AABB half-extent from 1 to 0.94502682 on every axis.
@@ -192,6 +204,13 @@ ProxyMesh generateIcosphereProxy()
     }
     normalizeVertices(mesh);
     validateMesh(mesh, 42, 80, false);
+    return mesh;
+}
+
+ProxyMesh generateIcosphereLevel2Proxy()
+{
+    ProxyMesh mesh = subdivideIcosphere(generateIcosphereProxy());
+    validateMesh(mesh, 162, 320, false);
     return mesh;
 }
 
@@ -216,6 +235,8 @@ const ProxyMesh& generatedProxy(const GaussianProxyType type)
     static const std::array meshes{
         generateIcosphereProxy(),
         generateOctahedronProxy(),
+        generateIcosahedronProxy(),
+        generateIcosphereLevel2Proxy(),
     };
     return meshes.at(static_cast<size_t>(type));
 }

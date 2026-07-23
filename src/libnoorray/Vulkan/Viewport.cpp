@@ -3,13 +3,21 @@
 
 #include "Globals.h"
 #include "Log.h"
-#include "ViewportSpv.h"
-#include "ViewportBillboardsSpv.h"
 #include "Scene/Scene.h"
 #include "Scene/LightInstance.h"
 
 namespace
 {
+alignas(uint32_t) constexpr unsigned char noorRayViewportSpv[] = {
+    #embed "../Shaders/Viewport/Viewport.spv"
+};
+constexpr std::size_t noorRayViewportSpvLength = sizeof(noorRayViewportSpv);
+
+alignas(uint32_t) constexpr unsigned char noorRayViewportBillboardsSpv[] = {
+    #embed "../Shaders/Viewport/ViewportBillboards.spv"
+};
+constexpr std::size_t noorRayViewportBillboardsSpvLength = sizeof(noorRayViewportBillboardsSpv);
+
 constexpr uint32_t ViewportGroupSize = 16;
 
 struct ViewportPushConstants

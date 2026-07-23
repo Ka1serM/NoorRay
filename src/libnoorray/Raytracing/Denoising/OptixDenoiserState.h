@@ -17,8 +17,8 @@ public:
     OptixDenoiserState& operator=(const OptixDenoiserState&) = delete;
 
     const void* run(OptixDeviceContext context, cudaStream_t stream,
-        const void* input, const void* albedoGuide, uint32_t width,
-        uint32_t height);
+        const void* input, const void* albedoGuide, const void* normalGuide,
+        uint32_t width, uint32_t height);
     void reset() noexcept;
 
 private:
@@ -28,11 +28,13 @@ private:
     size_t stateSize{};
     size_t scratchSize{};
     bool albedoGuideEnabled{};
+    bool normalGuideEnabled{};
     nr::cuda::UniqueAsyncDeviceBuffer state;
     nr::cuda::UniqueAsyncDeviceBuffer scratch;
     nr::cuda::UniqueAsyncDeviceBuffer output;
     nr::cuda::UniqueAsyncDeviceBuffer intensity;
 
     void ensure(OptixDeviceContext context, cudaStream_t stream,
-        uint32_t width, uint32_t height, bool useAlbedoGuide);
+        uint32_t width, uint32_t height, bool useAlbedoGuide,
+        bool useNormalGuide);
 };

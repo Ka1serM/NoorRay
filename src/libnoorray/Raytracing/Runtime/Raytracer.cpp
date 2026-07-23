@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -21,8 +22,6 @@
 #include "CUDA/rstd/Memory.h"
 #include "Raytracing/Gpu/SceneData.h"
 #include "Log.h"
-#include "NoorRayOptixIr.h"
-#include "NoorRayTrainingOptixIr.h"
 #include "Mesh/Assets/MeshAsset.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
@@ -34,6 +33,16 @@ extern const float sRGBToSpectrumTable_Data[3][64][64][64][3];
 
 namespace
 {
+constexpr unsigned char noorRayOptixIr[] = {
+    #embed "../../../../build/generated/NoorRayOptix.ptx"
+};
+constexpr std::size_t noorRayOptixIrLength = sizeof(noorRayOptixIr);
+
+constexpr unsigned char noorRayTrainingOptixIr[] = {
+    #embed "../../../../build/generated/NoorRayTrainingOptix.ptx"
+};
+constexpr std::size_t noorRayTrainingOptixIrLength = sizeof(noorRayTrainingOptixIr);
+
 template <typename Data = uint32_t>
 struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord
 {
@@ -75,8 +84,8 @@ nr::cuda::UniqueDeviceBuffer uploadRecord(const OptixProgramGroup group)
 extern NR_GPU_KERNEL void postProcessKernel(KernelParams, float*, uint32_t);
 extern NR_GPU_KERNEL void writeDenoisedOutputKernel(
     KernelParams, const glm::vec4*);
-extern NR_GPU_KERNEL void writeDenoiserAlbedoGuideKernel(
-    KernelParams, float3*);
+extern NR_GPU_KERNEL void writeDenoiserGuidesKernel(
+    KernelParams, float3*, float3*);
 
 Raytracer::Raytracer(
     Context& context,
@@ -467,6 +476,8 @@ Raytracer::~Raytracer()
 
 void Raytracer::setAovEnabled(const bool enabled)
 {
+    if (enabled && !aovEnabled)
+        aovStale = true;
     aovEnabled = enabled;
 }
 
@@ -491,6 +502,7 @@ void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
     freeScratchBuffers();
     denoiser.reset();
     aovAvailable = false;
+    aovStale = true;
 
     auto createImages = [&](nr::cuda::UniqueSharedImage (&arr)[2], const vk::Format format)
     {
@@ -527,6 +539,7 @@ void Raytracer::freeScratchBuffers() noexcept
 {
     accumulationBuffer.reset();
     denoiserAlbedoGuideBuffer.reset();
+    denoiserNormalGuideBuffer.reset();
     noiseMomentsBuffer.reset();
     noiseVarianceSumBuffer.reset();
     scratchCapacity = 0;
@@ -636,7 +649,12 @@ void Raytracer::updateTLAS()
         gpuCache.data.gaussianOpacities = scene.getGaussianOpacities();
         gpuCache.data.gaussianShCoeffs = scene.getGaussianShCoeffs();
         gpuCache.data.gaussianShCoefficientCount = scene.getGaussianShCoefficientCount();
-        gpuCache.data.gaussianInstanceOffsets = scene.getGaussianInstanceOffsets();
+        // A single Gaussian instance already uses global IDs as its IAS indices.
+        // Keep the offset pointer null in that common case so the any-hit
+        // program can avoid walking the nested IAS transform list per proxy.
+        gpuCache.data.gaussianInstanceOffsets = scene.getGaussianInstances().size() > 1
+            ? scene.getGaussianInstanceOffsets()
+            : nullptr;
 
         int cudaDevice = 0;
         NR_GPU_CHECK(cudaGetDevice(&cudaDevice));
@@ -776,27 +794,34 @@ void Raytracer::launchPostProcess(
 
 void Raytracer::launchDenoiser(
     KernelParams const& params, const cudaStream_t stream,
-    const bool useAlbedoGuide)
+    const bool useAovGuides)
 {
     constexpr uint32_t blockSize = 256;
     const uint32_t count = width * height;
     const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
     const void* albedoGuide = nullptr;
-    if (useAlbedoGuide)
+    const void* normalGuide = nullptr;
+    if (useAovGuides)
     {
         if (!denoiserAlbedoGuideBuffer)
             denoiserAlbedoGuideBuffer.allocate(
                 sizeof(float3) * static_cast<size_t>(count), stream);
-        float3* guide = denoiserAlbedoGuideBuffer.as<float3>();
-        void* guideArgs[] = {const_cast<KernelParams*>(&params), &guide};
+        if (!denoiserNormalGuideBuffer)
+            denoiserNormalGuideBuffer.allocate(
+                sizeof(float3) * static_cast<size_t>(count), stream);
+        float3* albedo = denoiserAlbedoGuideBuffer.as<float3>();
+        float3* normal = denoiserNormalGuideBuffer.as<float3>();
+        void* guideArgs[] = {
+            const_cast<KernelParams*>(&params), &albedo, &normal};
         NR_GPU_CHECK(cudaLaunchKernel(
-            reinterpret_cast<const void*>(&writeDenoiserAlbedoGuideKernel),
+            reinterpret_cast<const void*>(&writeDenoiserGuidesKernel),
             grid, blockSize, guideArgs, 0, stream));
-        albedoGuide = guide;
+        albedoGuide = albedo;
+        normalGuide = normal;
     }
     const glm::vec4* denoised = static_cast<const glm::vec4*>(
         denoiser.run(optixCtx, stream, params.accumulation, albedoGuide,
-            width, height));
+            normalGuide, width, height));
     void* args[] = {const_cast<KernelParams*>(&params), &denoised};
     NR_GPU_CHECK(cudaLaunchKernel(
         reinterpret_cast<const void*>(&writeDenoisedOutputKernel),
@@ -840,7 +865,7 @@ void Raytracer::launchPathTrace(
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
         optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
-        &optixPathTraceSbt, params.frame.width * params.frame.height, 1, 1));
+        &optixPathTraceSbt, params.frame.width, params.frame.height, 1));
 }
 
 void Raytracer::launchAov(
@@ -850,7 +875,7 @@ void Raytracer::launchAov(
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
         optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
-        &optixAovSbt, params.frame.width * params.frame.height, 1, 1));
+        &optixAovSbt, params.frame.width, params.frame.height, 1));
 }
 
 void Raytracer::renderGaussianTrainForward(
@@ -938,15 +963,18 @@ void Raytracer::launchProxyOverdraw(
 void Raytracer::renderFrame(
     const uint32_t frameIndex, const uint32_t accumulatedSamples)
 {
-    // Refresh AOVs whenever the scene changes so selection/outline data stays
-    // aligned with moved objects, while unchanged progressive frames avoid the
-    // extra launch entirely.
+    // Refresh AOVs immediately whenever scene data changes so viewport guides,
+    // picking, outlines, and denoiser inputs stay aligned with moved cameras
+    // and objects. Unchanged progressive frames continue reusing the last AOVs.
     const bool sceneAovEnabled = scene.getRenderSettings().aovEnabled;
     const bool sceneDirty = scene.isAnyDirty();
-    const bool renderAov = aovEnabled && sceneAovEnabled
-        && sceneDirty;
+    const bool useAovs = aovEnabled && sceneAovEnabled;
+    const bool renderAov = useAovs && (sceneDirty || aovStale);
     if (!aovEnabled || !sceneAovEnabled)
+    {
         aovAvailable = false;
+        aovStale = true;
+    }
     CameraInstance* activeCamera = scene.getRenderCamera();
     if (!activeCamera)
         return;
@@ -1052,6 +1080,7 @@ void Raytracer::renderFrame(
                 [&] { launchAov(params, stream); });
             params.frame.aovQuery = 0;
             aovAvailable = true;
+            aovStale = false;
         }
         for (uint32_t s = 0; s < samplesPerFrame; ++s)
         {

@@ -1,9 +1,71 @@
 cmake_minimum_required(VERSION 3.25)
 
-if(NOT NR_USD_ROOT)
-    message(FATAL_ERROR
-            "NR_BUILD_HYDRA requires NR_USD_ROOT to point at an OpenUSD SDK. "
-            "For Blender, use the headers and libusd_ms from the Blender 5.2 dependency package.")
+# --------------------------------------------------------------------------
+# Automatic setup of the vendored Blender USD SDK
+# --------------------------------------------------------------------------
+set(NR_VENDORED_USD_DIR "${PROJECT_SOURCE_DIR}/external/blender-usd")
+
+if(NR_USD_ROOT STREQUAL NR_VENDORED_USD_DIR)
+    # Vendored headers — fetch from Blender's dependency package if missing.
+    if(NOT EXISTS "${NR_USD_ROOT}/include/pxr/pxr.h")
+        message(STATUS "Vendoring USD headers from Blender 5.2 dependency package...")
+        find_package(Git REQUIRED)
+        set(_nr_usd_tmp "${NR_VENDORED_USD_DIR}/.tmp")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" clone --depth 1 --filter=blob:none --sparse
+                    --branch blender-v5.2-release
+                    https://projects.blender.org/blender/lib-linux_x64.git
+                    "${_nr_usd_tmp}"
+            COMMAND_ERROR_IS_FATAL ANY)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${_nr_usd_tmp}"
+                    sparse-checkout set usd/include python/include
+            COMMAND_ERROR_IS_FATAL ANY)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${_nr_usd_tmp}" checkout
+            COMMAND_ERROR_IS_FATAL ANY)
+        file(MAKE_DIRECTORY "${NR_VENDORED_USD_DIR}/include")
+        file(RENAME "${_nr_usd_tmp}/usd/include/pxr"
+             "${NR_VENDORED_USD_DIR}/include/pxr")
+        file(MAKE_DIRECTORY "${NR_VENDORED_USD_DIR}/include/python3.13")
+        file(RENAME "${_nr_usd_tmp}/python/include/python3.13/pyconfig.h"
+             "${NR_VENDORED_USD_DIR}/include/python3.13/pyconfig.h")
+        file(REMOVE_RECURSE "${_nr_usd_tmp}")
+        message(STATUS "Vendored USD headers at ${NR_VENDORED_USD_DIR}")
+    endif()
+
+    # Vendored library — search common Blender install paths when missing.
+    if(NOT EXISTS "${NR_USD_ROOT}/lib/libusd_ms.so")
+        find_library(_nr_usd_lib
+            NAMES usd_ms
+            HINTS
+                "$ENV{BLENDER_LIB_DIR}"
+                "/home/marcel/Programs/Blender/5.2/lib"
+            PATHS
+                /usr/lib/blender
+                /app/lib
+            NO_DEFAULT_PATH)
+        if(_nr_usd_lib)
+            file(MAKE_DIRECTORY "${NR_USD_ROOT}/lib")
+            file(CREATE_LINK "${_nr_usd_lib}"
+                 "${NR_USD_ROOT}/lib/libusd_ms.so" SYMBOLIC)
+            message(STATUS "Linked libusd_ms.so from ${_nr_usd_lib}")
+        else()
+            message(FATAL_ERROR
+                "Could not find libusd_ms.so. Install Blender 5.2, set "
+                "BLENDER_LIB_DIR, or symlink manually:\n"
+                "  ln -s /path/to/blender/5.2/lib/libusd_ms.so "
+                "${NR_VENDORED_USD_DIR}/lib/libusd_ms.so")
+        endif()
+    endif()
+else()
+    # Custom NR_USD_ROOT — user is responsible for providing the SDK.
+    if(NOT EXISTS "${NR_USD_ROOT}/include/pxr/pxr.h")
+        message(FATAL_ERROR
+                "NR_USD_ROOT set to '${NR_USD_ROOT}' but pxr/pxr.h not found. "
+                "Install Blender 5.2 or vendor the SDK at "
+                "${NR_VENDORED_USD_DIR}.")
+    endif()
 endif()
 
 # A normal OpenUSD installation exports individual CMake targets. Blender
@@ -17,7 +79,8 @@ if(TARGET hd)
     target_link_libraries(NoorRayHydraUsd INTERFACE
             hd
             plug
-            tf)
+            tf
+            usdLux)
 else()
     find_path(NR_USD_INCLUDE_DIR
             NAMES pxr/pxr.h
@@ -49,12 +112,32 @@ if(NR_USD_PYTHON_INCLUDE_DIR)
             NoorRayHydraUsd INTERFACE "${NR_USD_PYTHON_INCLUDE_DIR}")
 endif()
 
+# The vendored Python include only provides pyconfig.h, but USD headers also
+# need patchlevel.h. Find the system Python include dir to supply the rest.
+find_path(NR_USD_PYTHON_PATCHLEVEL_DIR
+        NAMES patchlevel.h
+        PATHS /usr/include/python3.13)
+if(NR_USD_PYTHON_PATCHLEVEL_DIR)
+    target_include_directories(
+            NoorRayHydraUsd INTERFACE "${NR_USD_PYTHON_PATCHLEVEL_DIR}")
+endif()
+
 add_library(hdNoorRay MODULE
         api.h
         instancer.cpp
         instancer.h
-        light.cpp
-        light.h
+        lights/diskLight.cpp
+        lights/diskLight.h
+        lights/distantLight.cpp
+        lights/distantLight.h
+        lights/domeLight.cpp
+        lights/domeLight.h
+        lights/light.cpp
+        lights/light.h
+        lights/rectLight.cpp
+        lights/rectLight.h
+        lights/sphereLight.cpp
+        lights/sphereLight.h
         material.cpp
         material.h
         mesh.cpp
@@ -96,7 +179,7 @@ configure_file(
 
 set(HDNOORRAY_BLENDER_EXTENSION_DIR
         "${CMAKE_BINARY_DIR}/hdnoorray/blender_extension/hdnoorray")
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/hdnoorray/blender_extension")
+file(MAKE_DIRECTORY "${HDNOORRAY_BLENDER_EXTENSION_DIR}")
 add_custom_command(TARGET hdNoorRay POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
                 "${HDNOORRAY_BLENDER_EXTENSION_DIR}/plugin"

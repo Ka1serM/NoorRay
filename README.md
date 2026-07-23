@@ -18,6 +18,10 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 - **Platform:** The current backend targets Linux with an NVIDIA GPU. The former macOS and Windows release paths were removed when CUDA/OptiX became mandatory.
 
+- **Blender Hydra Delegate (hdNoorRay):** A Hydra render-delegate plugin for
+  Blender 5.2, built to the exact OpenUSD ABI of its host. Supports polygon
+  meshes, transforms, cameras, and color/depth AOVs in the viewport.
+
 ### Build Instructions
 
 #### Prerequisites
@@ -31,6 +35,8 @@ My personal path tracer for exploring graphics programming and testing out new r
 - **Compiler:** GCC/G++ 15 with C++23 support. CUDA compilation also uses G++ 15
   as its host compiler.
 - **Python bindings:** `uv` and Python 3.12.
+- **Hydra delegate (optional):** `python3.13-devel` for the vendored USD
+  Python headers, and Blender 5.2 installed (see `src/hdnoorray/README.md`).
 
 
 #### Clone the Repository
@@ -115,6 +121,28 @@ ctest --test-dir build/release --output-on-failure
 ```
 
 Tests are enabled by default. Set `NR_BUILD_TESTS=OFF` for a production-only build.
+
+#### Build hdNoorRay (Blender Hydra Delegate)
+
+See `src/hdnoorray/README.md` for full details. Quick build:
+
+```bash
+cmake -S . -B build/hdnoorray \
+  -DNR_BUILD_HYDRA=ON \
+  -DNR_CUDA_ROOT=/usr/local/cuda \
+  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
+  -DCMAKE_C_COMPILER=/usr/bin/gcc-15 \
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 \
+  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DNR_CUDA_ARCH='86;89' \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build build/hdnoorray --target hdNoorRay -j"$(nproc)"
+```
+
+This requires `python3.13-devel` for the vendored USD Python headers. The
+plugin is built at `build/hdnoorray/hdnoorray/plugin/hdNoorRay.so` and bundled
+as a Blender extension at `build/hdnoorray/hdnoorray/blender_extension/`.
 
 
 ### Shader Compilation

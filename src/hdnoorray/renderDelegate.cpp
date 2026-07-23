@@ -2,7 +2,11 @@
 
 #include "mesh.h"
 #include "instancer.h"
-#include "light.h"
+#include "lights/diskLight.h"
+#include "lights/distantLight.h"
+#include "lights/domeLight.h"
+#include "lights/rectLight.h"
+#include "lights/sphereLight.h"
 #include "material.h"
 #include "renderBuffer.h"
 #include "renderParam.h"
@@ -34,6 +38,7 @@ const TfTokenVector SprimTypes{
     HdPrimTypeTokens->diskLight,
     HdPrimTypeTokens->rectLight,
     HdPrimTypeTokens->distantLight,
+    HdPrimTypeTokens->domeLight,
 };
 const TfTokenVector BprimTypes{HdPrimTypeTokens->renderBuffer};
 }
@@ -117,11 +122,16 @@ HdSprim* HdNoorRayRenderDelegate::CreateSprim(
         return new HdCamera(id);
     if (typeId == HdPrimTypeTokens->material)
         return new HdNoorRayMaterial(id);
-    if (typeId == HdPrimTypeTokens->sphereLight
-        || typeId == HdPrimTypeTokens->diskLight
-        || typeId == HdPrimTypeTokens->rectLight
-        || typeId == HdPrimTypeTokens->distantLight)
-        return new HdNoorRayLight(id, typeId);
+    if (typeId == HdPrimTypeTokens->sphereLight)
+        return new HdNoorRaySphereLight(id);
+    if (typeId == HdPrimTypeTokens->rectLight)
+        return new HdNoorRayRectLight(id);
+    if (typeId == HdPrimTypeTokens->diskLight)
+        return new HdNoorRayDiskLight(id);
+    if (typeId == HdPrimTypeTokens->distantLight)
+        return new HdNoorRayDistantLight(id);
+    if (typeId == HdPrimTypeTokens->domeLight)
+        return new HdNoorRayDomeLight(id);
     return nullptr;
 }
 
@@ -131,11 +141,16 @@ HdSprim* HdNoorRayRenderDelegate::CreateFallbackSprim(const TfToken& typeId)
         return new HdCamera(SdfPath());
     if (typeId == HdPrimTypeTokens->material)
         return new HdNoorRayMaterial(SdfPath());
-    if (typeId == HdPrimTypeTokens->sphereLight
-        || typeId == HdPrimTypeTokens->diskLight
-        || typeId == HdPrimTypeTokens->rectLight
-        || typeId == HdPrimTypeTokens->distantLight)
-        return new HdNoorRayLight(SdfPath(), typeId);
+    if (typeId == HdPrimTypeTokens->sphereLight)
+        return new HdNoorRaySphereLight(SdfPath());
+    if (typeId == HdPrimTypeTokens->rectLight)
+        return new HdNoorRayRectLight(SdfPath());
+    if (typeId == HdPrimTypeTokens->diskLight)
+        return new HdNoorRayDiskLight(SdfPath());
+    if (typeId == HdPrimTypeTokens->distantLight)
+        return new HdNoorRayDistantLight(SdfPath());
+    if (typeId == HdPrimTypeTokens->domeLight)
+        return new HdNoorRayDomeLight(SdfPath());
     return nullptr;
 }
 

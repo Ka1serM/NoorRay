@@ -43,15 +43,6 @@ VtMatrix4dArray HdNoorRayInstancer::ComputeInstanceTransforms(
         GetDelegate()->GetInstanceIndices(GetId(), prototypeId);
     VtMatrix4dArray result(indices.size(), GetDelegate()->GetInstancerTransform(GetId()));
 
-    const auto transforms = primvars_.find(HdInstancerTokens->instanceTransforms);
-    if (transforms != primvars_.end()
-        && transforms->second.IsHolding<VtMatrix4dArray>()) {
-        const VtMatrix4dArray& values =
-            transforms->second.UncheckedGet<VtMatrix4dArray>();
-        for (size_t i = 0; i < indices.size(); ++i)
-            if (indices[i] >= 0 && static_cast<size_t>(indices[i]) < values.size())
-                result[i] = values[indices[i]] * result[i];
-    }
     const auto translations =
         primvars_.find(HdInstancerTokens->instanceTranslations);
     if (translations != primvars_.end()
@@ -63,17 +54,6 @@ VtMatrix4dArray HdNoorRayInstancer::ComputeInstanceTransforms(
                 continue;
             GfMatrix4d transform(1.0);
             transform.SetTranslate(GfVec3d(values[indices[i]]));
-            result[i] = transform * result[i];
-        }
-    }
-    const auto scales = primvars_.find(HdInstancerTokens->instanceScales);
-    if (scales != primvars_.end() && scales->second.IsHolding<VtVec3fArray>()) {
-        const VtVec3fArray& values = scales->second.UncheckedGet<VtVec3fArray>();
-        for (size_t i = 0; i < indices.size(); ++i) {
-            if (indices[i] < 0 || static_cast<size_t>(indices[i]) >= values.size())
-                continue;
-            GfMatrix4d transform(1.0);
-            transform.SetScale(GfVec3d(values[indices[i]]));
             result[i] = transform * result[i];
         }
     }
@@ -90,6 +70,26 @@ VtMatrix4dArray HdNoorRayInstancer::ComputeInstanceTransforms(
             transform.SetRotate(GfQuatd(q[0], q[1], q[2], q[3]));
             result[i] = transform * result[i];
         }
+    }
+    const auto scales = primvars_.find(HdInstancerTokens->instanceScales);
+    if (scales != primvars_.end() && scales->second.IsHolding<VtVec3fArray>()) {
+        const VtVec3fArray& values = scales->second.UncheckedGet<VtVec3fArray>();
+        for (size_t i = 0; i < indices.size(); ++i) {
+            if (indices[i] < 0 || static_cast<size_t>(indices[i]) >= values.size())
+                continue;
+            GfMatrix4d transform(1.0);
+            transform.SetScale(GfVec3d(values[indices[i]]));
+            result[i] = transform * result[i];
+        }
+    }
+    const auto transforms = primvars_.find(HdInstancerTokens->instanceTransforms);
+    if (transforms != primvars_.end()
+        && transforms->second.IsHolding<VtMatrix4dArray>()) {
+        const VtMatrix4dArray& values =
+            transforms->second.UncheckedGet<VtMatrix4dArray>();
+        for (size_t i = 0; i < indices.size(); ++i)
+            if (indices[i] >= 0 && static_cast<size_t>(indices[i]) < values.size())
+                result[i] = values[indices[i]] * result[i];
     }
 
     if (GetParentId().IsEmpty())

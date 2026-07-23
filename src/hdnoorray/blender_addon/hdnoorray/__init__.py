@@ -6,6 +6,7 @@ import os
 import bpy
 from bpy.props import IntProperty, PointerProperty
 from bpy.types import Panel, PropertyGroup
+from bl_ui import properties_data_light, properties_world
 
 
 def _plugin_directory() -> Path:
@@ -89,6 +90,28 @@ _CLASSES = (
     NOORRAY_PT_render_settings,
 )
 
+_COMPATIBLE_PANELS = (
+    properties_data_light.DATA_PT_context_light,
+    properties_data_light.DATA_PT_preview,
+    properties_data_light.DATA_PT_EEVEE_light,
+    properties_data_light.DATA_PT_spot,
+    properties_data_light.DATA_PT_light_animation,
+    properties_data_light.DATA_PT_custom_props_light,
+    properties_world.WORLD_PT_context_world,
+    properties_world.EEVEE_WORLD_PT_surface,
+    properties_world.WORLD_PT_animation,
+    properties_world.WORLD_PT_custom_props,
+)
+
+
+def _set_panel_compatibility(enabled: bool):
+    engine_id = NoorRayHydraRenderEngine.bl_idname
+    for panel in _COMPATIBLE_PANELS:
+        if enabled:
+            panel.COMPAT_ENGINES.add(engine_id)
+        else:
+            panel.COMPAT_ENGINES.discard(engine_id)
+
 
 def register():
     plugin_directory = _plugin_directory()
@@ -104,9 +127,11 @@ def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.hdnoorray = PointerProperty(type=NoorRaySettings)
+    _set_panel_compatibility(True)
 
 
 def unregister():
+    _set_panel_compatibility(False)
     if hasattr(bpy.types.Scene, "hdnoorray"):
         del bpy.types.Scene.hdnoorray
     for cls in reversed(_CLASSES):

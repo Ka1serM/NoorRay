@@ -20,3 +20,4 @@ CMakeUserPresets.json
 __pycache__/
 *.py[cod]
 /imgui.ini
+/external/blender-usd

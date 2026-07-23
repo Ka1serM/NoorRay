@@ -1,0 +1,20 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "Types": {
+                    "HdNoorRayRendererPlugin": {
+                        "bases": [
+                            "HdRendererPlugin"
+                        ],
+                        "displayName": "NoorRay",
+                        "priority": 100
+                    }
+                }
+            },
+            "LibraryPath": "./@HDNOORRAY_PLUGIN_LIBRARY@",
+            "Name": "hdNoorRay",
+            "Type": "library"
+        }
+    ]
+}

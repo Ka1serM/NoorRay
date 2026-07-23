@@ -50,7 +50,10 @@ set(CMAKE_SKIP_BUILD_RPATH ON)
 option(NR_ENABLE_UNITY_BUILD "Batch NoorRay C++ sources for faster compilation" ON)
 option(NR_ENABLE_PCH "Precompile common NoorRay C++ headers" ON)
 option(NR_BUILD_PYTHON "Build the pynoorray Python bindings" OFF)
+option(NR_BUILD_HYDRA "Build the hdNoorRay Hydra render delegate" OFF)
 option(NR_VERBOSE_CONFIGURE "Show FetchContent dependency progress during configuration" ON)
+set(NR_USD_ROOT "" CACHE PATH
+        "OpenUSD SDK root used to build hdNoorRay (must match the host application)")
 set(NR_UNITY_BUILD_BATCH_SIZE "8" CACHE STRING "Maximum sources per NoorRay unity batch")
 # Build systems compile multiple CUDA translation units concurrently. Keep the
 # per-translation-unit NVCC workers bounded so parallel builds do not create
@@ -543,6 +546,10 @@ target_link_libraries(libnoorray
         GPUOpen::VulkanMemoryAllocator
         glaze
         TBB::tbb)
+
+if(NR_BUILD_HYDRA)
+    add_subdirectory(src/hdnoorray)
+endif()
 
 file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS
         "${NR_APP_DIR}/*.cpp"

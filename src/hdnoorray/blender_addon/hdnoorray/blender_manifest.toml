@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+
+id = "hdnoorray"
+version = "0.1.0"
+name = "NoorRay Hydra Renderer"
+tagline = "Render Blender scenes with the NoorRay Hydra delegate"
+maintainer = "NoorRay contributors"
+type = "add-on"
+
+blender_version_min = "5.2.0"
+platforms = ["linux-x64"]
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Load the bundled Hydra plugin and scene textures"

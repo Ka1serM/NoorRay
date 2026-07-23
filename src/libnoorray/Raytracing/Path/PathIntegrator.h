@@ -36,7 +36,11 @@ public:
             / static_cast<float>(params.frame.height) * 2.0f;
         const nr::rstd::optional<CameraSample> cameraSample = params.scene.camera->Dispatch(
             [&](const auto* camera) {
-                return camera->generateRay(nx, ny, lensSample, pixel, wavelengths);
+                const float filmY =
+                    camera->getSensor().origin() == SensorOrigin::LowerLeft
+                    ? -ny : ny;
+                return camera->generateRay(
+                    nx, filmY, lensSample, pixel, wavelengths);
             });
 
         PathState state{};

@@ -22,6 +22,7 @@ Sensor::Sensor(const Sensor& other)
     , heightMm(other.height())
     , resolutionWidth(other.resolutionX())
     , resolutionHeight(other.resolutionY())
+    , sensorOrigin(other.origin())
 {
     std::snprintf(imageSensorPath, sizeof(imageSensorPath), "%s",
         std::string(other.getImageSensorPath()).c_str());
@@ -37,6 +38,7 @@ Sensor& Sensor::operator=(const Sensor& other)
     heightMm = other.heightMm;
     resolutionWidth = other.resolutionWidth;
     resolutionHeight = other.resolutionHeight;
+    sensorOrigin = other.sensorOrigin;
     std::memcpy(imageSensorPath, other.imageSensorPath, sizeof(imageSensorPath));
     std::memcpy(imageSensorLoadStatus, other.imageSensorLoadStatus,
         sizeof(imageSensorLoadStatus));

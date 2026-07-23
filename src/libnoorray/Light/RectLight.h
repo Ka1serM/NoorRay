@@ -72,4 +72,42 @@ public:
         return sample;
     }
 
+    NR_CPU_GPU LightHit intersect(
+        const Ray& ray, const SampledWavelengths& wl,
+        const float* spectrumScale, const float* spectrumCoeffs,
+        const float* d65) const
+    {
+        LightHit hit{};
+        if (width <= 0.0f || height <= 0.0f)
+            return hit;
+
+        const glm::vec3 normal = glm::normalize(direction);
+        const glm::vec3 u = glm::normalize(tangent);
+        const glm::vec3 v = glm::normalize(glm::cross(normal, u));
+        const float denominator = glm::dot(normal, ray.direction());
+        if (fabsf(denominator) <= 1.0e-8f)
+            return hit;
+
+        hit.distance = glm::dot(position - ray.origin(), normal) / denominator;
+        if (hit.distance < ray.minDistance()
+            || hit.distance > ray.maxDistance())
+            return {};
+
+        const glm::vec3 hitPosition = ray.at(hit.distance);
+        const glm::vec3 local = hitPosition - position;
+        if (fabsf(glm::dot(local, u)) > 0.5f * width
+            || fabsf(glm::dot(local, v)) > 0.5f * height)
+            return {};
+
+        const float emitterCosine = glm::dot(normal, -ray.direction());
+        if (twoSided == 0 && emitterCosine <= 0.0f)
+            return {};
+
+        hit.pdf = sphericalRectanglePdf(
+            ray.origin(), position, hitPosition, u, width, v, height);
+        hit.radiance = rgbIlluminantToSpectrum(
+            color * intensity, wl, spectrumScale, spectrumCoeffs, d65);
+        return hit;
+    }
+
 };

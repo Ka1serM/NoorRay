@@ -185,6 +185,63 @@ NR_CPU_GPU inline float safeArcsine(const float value)
     return asinf(fminf(fmaxf(value, -1.0f), 1.0f));
 }
 
+NR_CPU_GPU inline float sphericalRectanglePdf(
+    const glm::vec3 origin,
+    const glm::vec3 center,
+    const glm::vec3 sampledPosition,
+    const glm::vec3 axisU,
+    const float lengthU,
+    const glm::vec3 axisV,
+    const float lengthV)
+{
+    const float area = lengthU * lengthV;
+    if (lengthU <= 0.0f || lengthV <= 0.0f || area <= 0.0f)
+        return 0.0f;
+
+    const glm::vec3 x = axisU;
+    const glm::vec3 y = axisV;
+    glm::vec3 z = glm::cross(x, y);
+    const glm::vec3 direction = center - origin;
+    float z0 = glm::dot(direction, z);
+    if (z0 > 0.0f)
+    {
+        z = -z;
+        z0 = -z0;
+    }
+
+    const float centerX = glm::dot(direction, x);
+    const float centerY = glm::dot(direction, y);
+    const float x0 = centerX - 0.5f * lengthU;
+    const float x1 = centerX + 0.5f * lengthU;
+    const float y0 = centerY - 0.5f * lengthV;
+    const float y1 = centerY + 0.5f * lengthV;
+
+    float n0 = -y0;
+    float n1 = x1;
+    float n2 = y1;
+    float n3 = -x0;
+    n0 /= sqrtf(n0 * n0 + z0 * z0);
+    n1 /= sqrtf(n1 * n1 + z0 * z0);
+    n2 /= sqrtf(n2 * n2 + z0 * z0);
+    n3 /= sqrtf(n3 * n3 + z0 * z0);
+
+    const float solidAngle = -(
+        safeArcsine(-n0 * n1)
+        + safeArcsine(-n1 * n2)
+        + safeArcsine(-n2 * n3)
+        + safeArcsine(-n3 * n0));
+    const float minimumNormalSquared = fminf(fminf(n0 * n0, n1 * n1),
+        fminf(n2 * n2, n3 * n3));
+    if (solidAngle >= 1.0e-5f && minimumNormalSquared <= 0.99999f)
+        return 1.0f / solidAngle;
+
+    const glm::vec3 sampledDelta = sampledPosition - origin;
+    const float distanceSquared = glm::dot(sampledDelta, sampledDelta);
+    const float projectedDistance = fabsf(glm::dot(z, sampledDelta));
+    return distanceSquared * sqrtf(distanceSquared)
+        / fmaxf(projectedDistance * area, 1.0e-20f);
+}
+
 // Area-preserving spherical-rectangle sampling from Cycles (Urena et al.).
 // The returned PDF is in solid-angle measure and sampledPosition is updated
 // only when a numerically valid rectangle can be sampled.

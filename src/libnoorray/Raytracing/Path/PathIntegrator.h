@@ -337,6 +337,57 @@ private:
         return light.radiance.maxComponent() > 0.0f;
     }
 
+    NR_GPU LightHit intersectAnalyticLights(
+        const Ray& ray, const SampledWavelengths& wavelengths) const
+    {
+        LightHit nearest{};
+        uint32_t globalIndex = 0;
+        const auto consider = [&](LightHit candidate) {
+            candidate.lightIndex = globalIndex++;
+            if (candidate.radiance.maxComponent() > 0.0f
+                && candidate.distance <= nearest.distance)
+                nearest = candidate;
+        };
+        for (uint32_t i = 0; i < params.scene.pointLightCount; ++i)
+            consider(params.scene.pointLights[i].intersect(
+                ray, wavelengths, params.scene.spectrumTableScale,
+                params.scene.spectrumTableCoeffs, params.scene.d65));
+        for (uint32_t i = 0; i < params.scene.spotLightCount; ++i)
+            consider(params.scene.spotLights[i].intersect(
+                ray, wavelengths, params.scene.spectrumTableScale,
+                params.scene.spectrumTableCoeffs, params.scene.d65));
+        for (uint32_t i = 0; i < params.scene.rectLightCount; ++i)
+            consider(params.scene.rectLights[i].intersect(
+                ray, wavelengths, params.scene.spectrumTableScale,
+                params.scene.spectrumTableCoeffs, params.scene.d65));
+        for (uint32_t i = 0; i < params.scene.directionalLightCount; ++i)
+            consider(params.scene.directionalLights[i].intersect(
+                ray, wavelengths, params.scene.spectrumTableScale,
+                params.scene.spectrumTableCoeffs, params.scene.d65));
+        return nearest;
+    }
+
+    NR_GPU float analyticLightHitMisWeight(
+        const LightHit& light, const float bsdfPdf) const
+    {
+        if (bsdfPdf <= 0.0f || light.pdf <= 0.0f
+            || params.scene.analyticLightAliases == nullptr
+            || light.lightIndex >= params.scene.analyticLightAliasCount)
+            return 1.0f;
+        const float environmentWeight = fmaxf(
+            params.scene.environment->importanceWeight, 0.0f);
+        const float totalWeight =
+            params.scene.analyticLightSelectionWeight + environmentWeight;
+        if (totalWeight <= 0.0f)
+            return 1.0f;
+        const float selectionPdf =
+            params.scene.analyticLightAliases[light.lightIndex].selectionPdf;
+        const float lightPdf =
+            (params.scene.analyticLightSelectionWeight / totalWeight)
+            * selectionPdf * light.pdf;
+        return powerHeuristic(bsdfPdf, lightPdf);
+    }
+
     NR_GPU bool shadowOccluded(
         const Ray& ray,
         const uint32_t excludedGaussianId,
@@ -461,6 +512,22 @@ private:
             const uint32_t gaussianSampleIndex = gaussian
                 ? hashCombine32(pixel, segment) : pixel;
             const RayHit hit = intersect(ray, gaussianSampleIndex);
+            if (state.depth > 0)
+            {
+                const LightHit light = intersectAnalyticLights(ray, state.wl);
+                const float surfaceDistance = hit.instanceIndex == InvalidIndex
+                    ? Ray::InfiniteDistance : hit.t;
+                if (light.radiance.maxComponent() > 0.0f
+                    && light.distance <= surfaceDistance)
+                {
+                    state.radiance += state.throughput * light.radiance
+                        * analyticLightHitMisWeight(light, state.lastBsdfPdf);
+                    if (light.distance == Ray::InfiniteDistance)
+                        state.radiance += state.throughput
+                            * environmentRadiance(ray, state);
+                    return;
+                }
+            }
             if (hit.instanceIndex == InvalidIndex)
             {
                 const bool cameraPath = state.depth == 0;

@@ -144,7 +144,6 @@ void Scene::clear() {
     environment->textureIndex = -1;
     environment->color = vec3(1.0f);
     environment->rotation = 0.0f;
-    environment->visible = 1;
     environment->visibleExposure = 0.0f;
     environment->lightingExposure = 1.0f;
     environment->setEquirectangularMapping();

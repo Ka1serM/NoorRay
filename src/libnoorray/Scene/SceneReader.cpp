@@ -216,7 +216,6 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
         environment.color = toVec3(file.environment->color);
         environment.lightingExposure = file.environment->lighting_exposure;
         environment.visibleExposure = file.environment->visible_exposure;
-        environment.visible = file.environment->visible ? 1 : 0;
         environment.updateDerivedSettings();
     }
 

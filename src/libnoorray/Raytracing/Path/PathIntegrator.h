@@ -460,8 +460,8 @@ private:
             if (hit.instanceIndex == InvalidIndex)
             {
                 const bool cameraPath = state.depth == 0;
-                const bool backgroundVisible = params.scene.environment->visible != 0
-                    && !params.scene.renderSettings.transparentBackground;
+                const bool backgroundVisible =
+                    !params.scene.renderSettings.transparentBackground;
                 if (!cameraPath || backgroundVisible)
                     state.radiance += state.throughput * environmentRadiance(ray, state);
                 if (cameraPath && backgroundVisible)

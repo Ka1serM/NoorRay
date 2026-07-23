@@ -69,9 +69,6 @@ void EnvironmentPanel::renderUi() {
             });
         }
 
-        ImGuiManager::checkboxRow("Visible", environment.visible, [&](const bool v) {
-            scene.synchronizeBeforeMutation(); environment.visible = v; anyChanged = true;
-        });
         ImGui::EndTable();
     }
     

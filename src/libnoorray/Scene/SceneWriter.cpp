@@ -53,7 +53,6 @@ nr::sceneio::EnvironmentFile makeEnvironmentFile(const Environment& environment)
         .color = fromVec3(environment.color),
         .lighting_exposure = environment.lightingExposure,
         .visible_exposure = environment.visibleExposure,
-        .visible = environment.visible != 0,
     };
 }
 

@@ -319,12 +319,31 @@ target_compile_features(NoorRayIO PUBLIC cxx_std_23)
 target_include_directories(NoorRayIO PUBLIC "${NR_CORE_DIR}")
 target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 
+# NoorRay-owned GGX energy tables. This target is intentionally manual: the
+# generated headers are checked in, so normal builds never spend time fitting
+# them and regeneration remains a single explicit command.
+add_executable(NoorRayEnergyLutGenerator
+        src/libnoorray/Shading/EnergyLut/GenerateEnergyLuts.cpp)
+target_compile_features(NoorRayEnergyLutGenerator PRIVATE cxx_std_20)
+target_include_directories(NoorRayEnergyLutGenerator PRIVATE
+        "${NR_CORE_DIR}"
+        "${PROJECT_SOURCE_DIR}/external/glm"
+        "${CUDAToolkit_INCLUDE_DIRS}")
+target_link_libraries(NoorRayEnergyLutGenerator PRIVATE glm)
+add_custom_target(NoorRayEnergyLuts
+        COMMAND NoorRayEnergyLutGenerator
+                --output "${NR_CORE_DIR}/Shading/EnergyLut/Generated"
+        DEPENDS NoorRayEnergyLutGenerator
+        COMMENT "Regenerating NoorRay GGX energy LUT headers"
+        VERBATIM)
+
 set(NR_OPTIX_PTX_OPTIONS
         -ccbin "${CMAKE_CXX_COMPILER}"
         --ptx
         "--gpu-architecture=compute_${NR_OPTIX_CUDA_ARCH}"
         --std=c++20
         --expt-relaxed-constexpr
+        --extended-lambda
         "--split-compile=${NR_CUDA_SPLIT_COMPILE_JOBS}"
         --generate-nonsystem-dependencies-with-compile
 )
@@ -428,7 +447,7 @@ add_library(NoorRayCuda STATIC
         src/libnoorray/CUDA/Unique/SharedImage.cpp
         src/libnoorray/CUDA/Unique/SharedBuffer.cpp
         src/libnoorray/CUDA/rstd/Memory.cpp
-        src/libnoorray/Shading/OpenPbrEnergy.cpp
+        src/libnoorray/Shading/EnergyLut.cpp
         ${NR_CUDA_SOURCES}
         src/libnoorray/Raytracing/Acceleration/Tlas.cpp
         src/libnoorray/Shading/RgbSpectrumTableData.cpp
@@ -478,6 +497,8 @@ file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
 set(NR_CORE_EXCLUDED_SOURCE_PATTERNS
         "/CUDA/"
         "/Kernels/"
+        "/Shading/EnergyLut/GenerateEnergyLuts\\.cpp$"
+        "/Shading/EnergyLut\\.cpp$"
         "/Training/GaussianTrainerCuda\\.h$"
         "/Raytracing/Runtime/Raytracer\\.cpp$"
         "/Shading/RgbSpectrumTableData\\.cpp$"
@@ -485,7 +506,6 @@ set(NR_CORE_EXCLUDED_SOURCE_PATTERNS
         "/Raytracing/Acceleration/GaussianProxyBlas\\.cpp$"
         "/Raytracing/Denoising/OptixDenoiserState\\.cpp$"
         "/Raytracing/Acceleration/Tlas\\.cpp$"
-        "/Shading/OpenPbrEnergy\\.cpp$"
         "/IO/BitmapReader\\.cpp$"
         "/IO/BitmapWriter\\.cpp$"
         "/StbImpl\\.cpp$")

@@ -7,12 +7,12 @@
 
 #include "CUDA/Unique/Texture.h"
 #include "Raytracing/Gpu/Output.h"
+#include "Shading/EnergyLut.h"
 #include "Shading/SphericalHarmonics.h"
 #include "Raytracing/Gpu/Types.h"
 #include "Scene/GpuInstance.h"
 #include "Scene/RenderSettings.h"
 #include "Mesh/Assets/MeshAsset.h"
-#include "Shading/OpenPbrEnergy.h"
 #include "Scene/Environment.h"
 #include "Light/DirectionalLight.h"
 #include "Light/PointLight.h"
@@ -49,13 +49,12 @@ struct GpuSceneData
     const float* spectrumTableScale{};   // 64 floats (z-nodes, non-uniform)
     const float* spectrumTableCoeffs{};  // float[3][64][64][64][3]
     cudaTextureObject_t spectrumTableTexture{}; // hardware-filtered float4 coefficient LUT
+    nr::shading::energy_lut::Textures energyLuts{};
     const float* d65{};                  // CIE D65, 300--830 nm at 5 nm
     // CIE 1931 2-degree CMFs (471 floats each, device pointers).
     const float* cieX{};
     const float* cieY{};
     const float* cieZ{};
-    // OpenPBR opaque-dielectric energy-compensation LUTs (hardware-filtered).
-    nr::openpbr::EnergyLutTextures openPbrLuts{};
     uint32_t pointLightCount{};
     uint32_t spotLightCount{};
     uint32_t rectLightCount{};

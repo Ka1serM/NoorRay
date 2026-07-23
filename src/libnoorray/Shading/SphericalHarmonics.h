@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include <cuda_fp16.h>
@@ -104,4 +105,20 @@ NR_GPU inline glm::vec3 evaluateSphericalHarmonics(
             + C3[6] * x * (x * x - 3.0f * y * y) * coefficient(15);
     }
     return result;
+}
+
+// Decode one Gaussian's view-dependent SH color. Beauty and AOV passes share
+// this primitive and select the order appropriate to the pass.
+NR_GPU inline glm::vec3 gaussianAlbedoRgb(
+    const __half* allCoefficients,
+    const uint32_t coefficientCount,
+    const uint32_t gaussianId,
+    const SphericalHarmonicsOrder order,
+    const glm::vec3 viewDirection)
+{
+    const __half* coefficients = allCoefficients
+        + static_cast<std::size_t>(gaussianId)
+            * coefficientCount * SphericalHarmonicsChannelCount;
+    return glm::vec3(0.5f) + evaluateSphericalHarmonics(
+        coefficients, order, viewDirection);
 }

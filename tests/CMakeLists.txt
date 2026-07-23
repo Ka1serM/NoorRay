@@ -48,6 +48,15 @@ target_link_libraries(ggx_bsdf_test PRIVATE glm CUDA::cudart)
 add_noorray_test(dielectric_bsdf_test DielectricBsdfTest.cpp bsdf)
 target_link_libraries(dielectric_bsdf_test PRIVATE glm CUDA::cudart)
 
+add_noorray_test(light_sampling_test LightSamplingTest.cpp light)
+target_link_libraries(light_sampling_test PRIVATE glm CUDA::cudart)
+
+add_noorray_test(shadow_terminator_test ShadowTerminatorTest.cpp raytracing)
+target_link_libraries(shadow_terminator_test PRIVATE glm)
+
+add_noorray_test(ray_test RayTest.cpp raytracing)
+target_link_libraries(ray_test PRIVATE glm)
+
 add_noorray_test(scene_lifetime_test SceneLifetimeTest.cpp scene)
 target_link_libraries(scene_lifetime_test PRIVATE
     "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"

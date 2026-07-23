@@ -2,9 +2,8 @@
 
 #include <cstdint>
 
-#include <glm/vec3.hpp>
-
 #include "CUDA/Annotations.h"
+#include "Raytracing/Ray.h"
 #include "Shading/Spectrum.h"
 #include "Samplers/RandomSampler.h"
 
@@ -20,35 +19,18 @@ static constexpr uint8_t FullVisibility = ~uint8_t{0};
 
 using TlasHandle = uint64_t;
 
-struct Ray
-{
-    glm::vec3 origin{};
-    glm::vec3 direction{};
-
-    NR_CPU_GPU glm::vec3 at(const float t) const
-    {
-        return origin + direction * t;
-    }
-
-    NR_CPU_GPU static Ray fromOffset(
-        const glm::vec3& point, const glm::vec3& direction, const float offset)
-    {
-        return {point + direction * offset, direction};
-    }
-};
-
 // POD result of an OptiX scene query. Mesh hits carry barycentrics; Gaussian
 // hits leave primitiveIndex invalid and use instanceIndex as their Gaussian id.
 struct RayHit
 {
-    float t{1e30f};
+    float t{Ray::InfiniteDistance};
     float u{};
     float v{};
     uint32_t instanceIndex{InvalidIndex};
     uint32_t primitiveIndex{InvalidIndex};
 };
 
-struct CameraRay
+struct CameraSample
 {
     Ray ray{};
     float weight{1.0f};
@@ -73,7 +55,6 @@ struct alignas(16) PathState
     float alpha;
     float lastBsdfPdf;
     float etaScale;
-    float cameraWeight{1.0f};
 
     NR_CPU_GPU PathRandomStreams nextRandomStreams(
         const uint32_t pixel, const uint32_t accumulatedSamples)
@@ -101,7 +82,6 @@ struct alignas(16) PathState
     NR_CPU_GPU void transmit(const float eta)
     {
         etaScale *= eta * eta;
-        wl.terminateSecondary();
     }
 
 };

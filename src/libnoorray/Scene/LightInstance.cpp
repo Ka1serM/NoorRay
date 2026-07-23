@@ -77,6 +77,11 @@ void LightInstance::setPointRadius(const float radius)
     if (auto* value = std::get_if<PointLight>(&light)) value->softRadius = radius;
 }
 
+void LightInstance::setSpotRadius(const float radius)
+{
+    if (auto* value = std::get_if<SpotLight>(&light)) value->softRadius = radius;
+}
+
 void LightInstance::setSpotAngles(const float innerDegrees, const float outerDegrees)
 {
     if (auto* value = std::get_if<SpotLight>(&light)) {

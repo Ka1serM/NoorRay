@@ -21,28 +21,33 @@ public:
         const SampledWavelengths& wl,
         const float* spectrumScale, const float* spectrumCoeffs, const float* d65) const
     {
-        LightSample sample{};
-        glm::vec3 sampledPosition = position;
-        if (softRadius > 0.0f)
-        {
-            const float z = 1.0f - 2.0f * randomFloat(rng);
-            const float r = sqrtf(fmaxf(1.0f - z * z, 0.0f));
-            const float phi = 2.0f * LightPi * randomFloat(rng);
-            float sinPhi = 0.0f;
-            float cosPhi = 1.0f;
-            sincosf(phi, &sinPhi, &cosPhi);
-            sampledPosition += softRadius * glm::vec3(r * cosPhi, z, r * sinPhi);
-        }
-
-        const glm::vec3 delta = sampledPosition - surfacePosition;
-        sample.distance = glm::length(delta);
+        LightSample sample = sampleSphereLight(
+            surfacePosition, position, softRadius, rng);
         if (sample.distance <= 0.0f)
             return sample;
-        sample.direction = delta / sample.distance;
-        const glm::vec3 rgb = color * (intensity /
-            fmaxf(sample.distance * sample.distance, 1e-6f));
+        const glm::vec3 rgb = softRadius > 0.0f
+            ? color * (intensity / (LightPi * softRadius * softRadius)
+                / fmaxf(sample.pdf, 1.0e-20f))
+            : color * (intensity
+                / fmaxf(sample.distance * sample.distance, 1e-6f));
         sample.radiance = rgbIlluminantToSpectrum(rgb, wl, spectrumScale, spectrumCoeffs, d65);
         return sample;
+    }
+
+    NR_CPU_GPU LightHit intersect(
+        const Ray& ray, const SampledWavelengths& wl,
+        const float* spectrumScale, const float* spectrumCoeffs,
+        const float* d65) const
+    {
+        LightHit hit{};
+        if (!intersectSphereLight(ray, position, softRadius, hit.distance))
+            return {};
+        hit.pdf = sphereLightPdf(ray.origin(), position, softRadius);
+        const glm::vec3 rgb = color
+            * (intensity / (LightPi * softRadius * softRadius));
+        hit.radiance = rgbIlluminantToSpectrum(
+            rgb, wl, spectrumScale, spectrumCoeffs, d65);
+        return hit;
     }
 
 };

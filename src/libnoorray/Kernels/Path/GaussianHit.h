@@ -1,6 +1,7 @@
 #include <optix_device.h>
 
 #include "Raytracing/Gpu/SceneData.h"
+#include "Raytracing/Ray.h"
 #include "Samplers/OwenSobolSampler.h"
 #include "Samplers/RandomSampler.h"
 
@@ -57,25 +58,25 @@ extern "C" __global__ void __anyhit__gaussian()
     // The instance transform carries each Gaussian's true (untruncated) R*S;
     // object-space coordinates are already Mahalanobis space. Compute the
     // closest-point-on-ray-to-origin distance.
-    const float3 rayOrigin = optixGetObjectRayOrigin();
-    const float3 rayDir    = optixGetObjectRayDirection();
-    const float tClosest = -(rayOrigin.x * rayDir.x + rayOrigin.y * rayDir.y + rayOrigin.z * rayDir.z)
-                         / (rayDir.x * rayDir.x + rayDir.y * rayDir.y + rayDir.z * rayDir.z);
+    const float3 optixOrigin = optixGetObjectRayOrigin();
+    const float3 optixDirection = optixGetObjectRayDirection();
+    const Ray ray(
+        glm::vec3(optixOrigin.x, optixOrigin.y, optixOrigin.z),
+        glm::vec3(optixDirection.x, optixDirection.y, optixDirection.z),
+        optixGetRayTmin(), __uint_as_float(optixGetPayload_1()));
+    const float tClosest = ray.closestDistanceTo(glm::vec3(0.0f));
     // OptiX does not normalize the object-space ray direction, so this t is
     // numerically identical to the world-space ray parameter — usable as the
     // shading hit distance without any extra transform.
-    const float hitT = fmaxf(tClosest, optixGetRayTmin());
-    const float maxHitT = __uint_as_float(optixGetPayload_1());
-    if (hitT >= maxHitT)
+    const float hitT = fmaxf(tClosest, ray.minDistance());
+    if (hitT >= ray.maxDistance())
     {
         optixIgnoreIntersection();
         return;
     }
 
-    const float px = rayOrigin.x + hitT * rayDir.x;
-    const float py = rayOrigin.y + hitT * rayDir.y;
-    const float pz = rayOrigin.z + hitT * rayDir.z;
-    const float distanceSq = px * px + py * py + pz * pz;
+    const glm::vec3 hitPoint = ray.at(hitT);
+    const float distanceSq = glm::dot(hitPoint, hitPoint);
 
     // Precomputed cutoffDistanceSq (host-side, see Raytracer::renderFrame).
     if (distanceSq >= params.frame.cutoffDistanceSq)

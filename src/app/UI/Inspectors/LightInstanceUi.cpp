@@ -24,6 +24,8 @@ bool renderLight(SpotLight& light)
         [&](glm::vec3 value) { light.color = value; changed = true; });
     ImGuiManager::dragFloatRow("Intensity", light.intensity, 0.1f, 0.f, 1e6f,
         [&](float value) { light.intensity = value; changed = true; });
+    ImGuiManager::dragFloatRow("Soft Radius", light.softRadius, 0.01f, 0.f, 1e6f,
+        [&](float value) { light.softRadius = value; changed = true; });
     ImGuiManager::dragFloatRow("Inner Cone", light.innerConeAngle, 0.5f, 0.f, 90.f,
         [&](float value) { light.innerConeAngle = value; changed = true; });
     ImGuiManager::dragFloatRow("Outer Cone", light.outerConeAngle, 0.5f, 0.f, 90.f,

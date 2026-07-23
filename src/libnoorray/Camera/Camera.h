@@ -65,10 +65,13 @@ private:
     char retainedPsfGridPath[512]{};
 public:
 
-    NR_CPU_GPU void transformRay(glm::vec3& origin, glm::vec3& direction) const
+    NR_CPU_GPU Ray transformRay(const Ray& ray) const
     {
-        origin = glm::vec3(cameraToWorld * glm::vec4(origin, 1.f));
-        direction = glm::normalize(glm::vec3(cameraToWorld * glm::vec4(direction, 0.f)));
+        const glm::vec3 origin = glm::vec3(
+            cameraToWorld * glm::vec4(ray.origin(), 1.0f));
+        const glm::vec3 direction = glm::normalize(glm::vec3(
+            cameraToWorld * glm::vec4(ray.direction(), 0.0f)));
+        return Ray(origin, direction, ray.minDistance(), ray.maxDistance());
     }
 
     // A missing pinhole/fisheye sample means no sensor contribution. Optical

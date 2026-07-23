@@ -8,8 +8,6 @@
 
 #include "CUDA/Annotations.h"
 #include "CUDA/Unique/Texture.h"
-#include "Shading/OpenPbrEnergy.h"
-#include "Shading/Bsdf.h"
 #include "Shading/RgbToSpectrum.h"
 #include "Shading/Sellmeier.h"
 #include "Raytracing/Gpu/Types.h"
@@ -38,6 +36,19 @@ public:
     int transmissionIndex{-1};
     int opacityIndex{-1};
     float opacity{1.0f};
+
+    NR_CPU_GPU bool hasDispersiveIor(
+        const SampledWavelengths& wavelengths) const
+    {
+        if (wavelengths.secondaryTerminated())
+            return false;
+
+        const float heroIor = sellmeierIor(sellmeier, wavelengths[0]);
+        for (int i = 1; i < NrSpectrumSamples; ++i)
+            if (sellmeierIor(sellmeier, wavelengths[i]) != heroIor)
+                return true;
+        return false;
+    }
 
 #if defined(NR_GPU_CODE)
     // ── Texture resolution (GPU only) ───────────────────────────────────────
@@ -102,46 +113,51 @@ public:
             + shadingNormal * tangentNormal.z);
     }
 
-    NR_GPU Bsdf makeBsdf(
+    NR_GPU SampledSpectrum sampleDiffuse(
         const nr::cuda::UniqueTexture* textures,
         const glm::vec2 uv,
-        const glm::vec3 view,
-        const glm::vec3 geometricNormal,
-        const glm::vec3 shadingNormal,
         const SampledWavelengths& wl,
         const float* spectrumScale,
-        const float* spectrumCoeffs,
-        const nr::openpbr::EnergyLutTextures& openPbrLuts) const
+        const float* spectrumCoeffs) const
     {
-        const glm::vec3 rgbAlbedo = albedoAt(textures, uv);
-        const SampledSpectrum albedoSpec = rgbAlbedoToSpectrum(
-            rgbAlbedo, wl, spectrumScale, spectrumCoeffs);
+        return rgbAlbedoToSpectrum(
+            albedoAt(textures, uv), wl, spectrumScale, spectrumCoeffs);
+    }
 
-        float met = metallic;
+    NR_GPU float sampleMetallic(
+        const nr::cuda::UniqueTexture* textures, const glm::vec2 uv) const
+    {
+        float value = metallic;
         if (metallicIndex >= 0)
-            met *= textures[metallicIndex].sample(uv).z;
-        met = fminf(fmaxf(met, 0.0f), 1.0f);
+            value *= textures[metallicIndex].sample(uv).z;
+        return fminf(fmaxf(value, 0.0f), 1.0f);
+    }
 
-        float rough = roughness;
+    NR_GPU float sampleRoughness(
+        const nr::cuda::UniqueTexture* textures, const glm::vec2 uv) const
+    {
+        float value = roughness;
         if (roughnessIndex >= 0)
-            rough *= textures[roughnessIndex].sample(uv).y;
-        rough = fminf(fmaxf(rough, 0.0f), 1.0f);
+            value *= textures[roughnessIndex].sample(uv).y;
+        return fminf(fmaxf(value, 0.0f), 1.0f);
+    }
 
-        float trans = transmission;
-        if (transmissionIndex >= 0)
-            trans *= textures[transmissionIndex].sample(uv).x;
-        trans = fminf(fmaxf(trans, 0.0f), 1.0f);
-
-        float spec = specular;
+    NR_GPU float sampleSpecular(
+        const nr::cuda::UniqueTexture* textures, const glm::vec2 uv) const
+    {
+        float value = specular;
         if (specularIndex >= 0)
-            spec *= textures[specularIndex].sample(uv).x;
-        spec = fminf(fmaxf(spec, 0.0f), 1.0f);
+            value *= textures[specularIndex].sample(uv).x;
+        return fminf(fmaxf(value, 0.0f), 1.0f);
+    }
 
-        const SampledSpectrum transmissionColorSpec = rgbAlbedoToSpectrum(
-            transmissionColor, wl, spectrumScale, spectrumCoeffs);
-
-        return Bsdf(geometricNormal, shadingNormal, view, albedoSpec, met, spec, rough, trans,
-            transmissionColorSpec, sellmeier, wl, openPbrLuts);
+    NR_GPU float sampleTransmission(
+        const nr::cuda::UniqueTexture* textures, const glm::vec2 uv) const
+    {
+        float value = transmission;
+        if (transmissionIndex >= 0)
+            value *= textures[transmissionIndex].sample(uv).x;
+        return fminf(fmaxf(value, 0.0f), 1.0f);
     }
 
     NR_GPU SampledSpectrum emissionSpectral(
@@ -152,6 +168,8 @@ public:
         const float* spectrumCoeffs,
         const float* d65) const
     {
+        if (emissionStrength == 0.0f)
+            return SampledSpectrum(0.0f);
         glm::vec3 rgbEmission = emission;
         if (emissionIndex >= 0)
             rgbEmission *= glm::vec3(textures[emissionIndex].sample(uv));
@@ -159,13 +177,5 @@ public:
         return rgbIlluminantToSpectrum(rgbEmission, wl, spectrumScale, spectrumCoeffs, d65);
     }
 
-    // Surface reconstruction belongs to geometry; material owns the conversion
-    // of that record into its shading model.
-    NR_GPU Bsdf makeBsdf(
-        const GpuSceneData& scene,
-        const Surface& surface,
-        const Ray& incident,
-        const glm::vec3& geometricNormal,
-        const SampledWavelengths& wavelengths) const;
 #endif
 };

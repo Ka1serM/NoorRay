@@ -31,16 +31,22 @@ public:
         if (softAngle <= 0.0f)
             return sample;
 
-        glm::vec3 tangent{}, bitangent{};
-        makeLightBasis(centerDirection, tangent, bitangent);
-        const float maxAngle = fminf(softAngle, 90.0f) * LightPi / 180.0f;
-        const float cosTheta = 1.0f - randomFloat(rng) * (1.0f - cosf(maxAngle));
-        const float sinTheta = sqrtf(fmaxf(1.0f - cosTheta * cosTheta, 0.0f));
-        const float phi = 2.0f * LightPi * randomFloat(rng);
-        sample.direction = glm::normalize(
-            centerDirection * cosTheta
-            + tangent * (sinTheta * cosf(phi))
-            + bitangent * (sinTheta * sinf(phi)));
+        // Match Cycles' sun-light convention: the UI value is the angular
+        // diameter, while sampling uses its half-angle.
+        const float halfAngle = 0.5f * fminf(softAngle, 180.0f)
+            * LightPi / 180.0f;
+        const UniformConeSample cone = sampleUniformCone(
+            centerDirection, oneMinusCosine(halfAngle),
+            glm::vec2(randomFloat(rng), randomFloat(rng)));
+        sample.direction = cone.direction;
+        sample.pdf = cone.pdf;
+
+        // Cycles normalizes the sun disk by its projected area. Store Le/pdf,
+        // as the other NoorRay analytic-light samples do.
+        const float projectedArea = LightPi * sinf(halfAngle) * sinf(halfAngle);
+        const float estimatorScale = 1.0f
+            / fmaxf(projectedArea * sample.pdf, 1.0e-20f);
+        sample.radiance *= estimatorScale;
         return sample;
     }
 

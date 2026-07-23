@@ -6,8 +6,9 @@
 #include "Camera/Camera.h"
 #include "Raytracing/Gpu/Geometry.h"
 #include "Raytracing/Path/MisHeuristic.h"
-#include "Shading/GaussianAlbedo.h"
+#include "Raytracing/Path/ShadowTerminator.h"
 #include "Samplers/OwenSobolSampler.h"
+#include "Shading/Bsdf.h"
 
 // PathIntegrator owns transport policy: path continuation, direct-light
 // selection, visibility, MIS, and termination. Persistent domain objects own
@@ -33,19 +34,18 @@ public:
             / static_cast<float>(params.frame.width) * 2.0f - 1.0f;
         const float ny = 1.0f - (static_cast<float>(y) + jitter.y)
             / static_cast<float>(params.frame.height) * 2.0f;
-        const nr::rstd::optional<CameraRay> cameraRay = params.scene.camera->Dispatch(
+        const nr::rstd::optional<CameraSample> cameraSample = params.scene.camera->Dispatch(
             [&](const auto* camera) {
                 return camera->generateRay(nx, ny, lensSample, pixel, wavelengths);
             });
 
         PathState state{};
         state.wl = wavelengths;
-        if (cameraRay)
+        if (cameraSample)
         {
-            state.cameraWeight = cameraRay->weight;
-            state.throughput = SampledSpectrum(cameraRay->weight);
+            state.throughput = SampledSpectrum(cameraSample->weight);
             state.etaScale = 1.0f;
-            trace(cameraRay->ray, state, pixel);
+            trace(cameraSample->ray, state, pixel);
         }
         else
             state.alpha = params.scene.camera->Dispatch(
@@ -57,8 +57,6 @@ public:
     // reuse this exact query rather than giving the scene a renderer-specific API.
     NR_GPU RayHit intersect(
         const Ray& ray,
-        const float tMin,
-        const float tMax,
         const uint32_t sampleIndex,
         const uint32_t excludedGaussianId = InvalidIndex,
         const bool terminateOnFirstGaussianHit = false) const
@@ -72,10 +70,10 @@ public:
             {
                 optixTraverse(
                     params.scene.tlasHandle,
-                    make_float3(ray.origin.x, ray.origin.y, ray.origin.z),
-                    make_float3(ray.direction.x, ray.direction.y, ray.direction.z),
-                    tMin,
-                    tMax,
+                    make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
+                    make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
+                    ray.minDistance(),
+                    ray.maxDistance(),
                     0.0f,
                     MeshVisibility,
                     OPTIX_RAY_FLAG_DISABLE_ANYHIT,
@@ -94,7 +92,7 @@ public:
 
             const float gaussianTMax = meshHit.instanceIndex != InvalidIndex
                 ? meshHit.t
-                : tMax;
+                : ray.maxDistance();
             uint32_t payload0 = sampleIndex;
             uint32_t payload1 = __float_as_uint(gaussianTMax);
             uint32_t payload2 = excludedGaussianId;
@@ -104,9 +102,9 @@ public:
                     : OPTIX_RAY_FLAG_NONE);
             optixTraverse(
                 params.scene.tlasHandle,
-                make_float3(ray.origin.x, ray.origin.y, ray.origin.z),
-                make_float3(ray.direction.x, ray.direction.y, ray.direction.z),
-                tMin,
+                make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
+                make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
+                ray.minDistance(),
                 gaussianTMax,
                 0.0f,
                 GaussianVisibility,
@@ -133,10 +131,10 @@ public:
         {
             optixTraverse(
                 params.scene.tlasHandle,
-                make_float3(ray.origin.x, ray.origin.y, ray.origin.z),
-                make_float3(ray.direction.x, ray.direction.y, ray.direction.z),
-                tMin,
-                tMax,
+                make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
+                make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
+                ray.minDistance(),
+                ray.maxDistance(),
                 0.0f,
                 MeshVisibility,
                 OPTIX_RAY_FLAG_DISABLE_ANYHIT,
@@ -156,7 +154,7 @@ public:
     }
 
 private:
-    static constexpr float RayOffset = 0.001f;
+    static constexpr float RayOffset = Ray::DefaultMinDistance;
     static constexpr float Inv4Pi = 0.07957747154594767f;
 
     NR_GPU bool gaussianEnabled() const
@@ -166,7 +164,7 @@ private:
 
     NR_GPU static glm::vec3 orientedNormal(const Surface& surface, const Ray& ray)
     {
-        return glm::dot(surface.geometricNormal, ray.direction) > 0.0f
+        return glm::dot(surface.geometricNormal, ray.direction()) > 0.0f
             ? -surface.geometricNormal : surface.geometricNormal;
     }
 
@@ -175,11 +173,34 @@ private:
         const glm::vec3& direction,
         const glm::vec3& normal)
     {
-        Ray ray{};
-        ray.direction = direction;
-        ray.origin = surface.position + normal
-            * (glm::dot(direction, normal) >= 0.0f ? RayOffset : -RayOffset);
-        return ray;
+        return Ray(surface.position + normal
+                * (glm::dot(direction, normal) >= 0.0f ? RayOffset : -RayOffset),
+            direction);
+    }
+
+    NR_GPU Ray spawnShadowRay(
+        const Surface& surface,
+        const LightSample& light,
+        const glm::vec3& geometricNormal,
+        const glm::vec3& shadingNormal) const
+    {
+        const glm::vec3 terminatorOffset = nr::shadowTerminatorOffset(
+            params.scene, surface.instanceIndex, surface.primitiveIndex,
+            surface.barycentricU, surface.barycentricV,
+            shadingNormal, geometricNormal, light.direction);
+        const glm::vec3 toLight = light.direction * light.distance - terminatorOffset;
+        const float distance = glm::length(toLight);
+        if (distance <= 0.0f)
+            return Ray::invalid();
+
+        const glm::vec3 direction = toLight / distance;
+        return Ray(
+            surface.position + terminatorOffset + geometricNormal
+                * (glm::dot(direction, geometricNormal) >= 0.0f
+                    ? RayOffset : -RayOffset),
+            direction,
+            RayOffset,
+            distance - 2.0f * RayOffset);
     }
 
     NR_GPU static glm::vec3 sampleIsotropicDirection(RandomState& rng)
@@ -274,51 +295,12 @@ private:
 
     NR_GPU bool sampleDirectLight(
         const glm::vec3& position,
-        const Bsdf& bsdf,
         const SampledWavelengths& wavelengths,
         RandomState& rng,
-        LightSample& light) const
+        LightSample& light,
+        float& environmentPdf) const
     {
-        const float analyticWeight = params.scene.analyticLightSelectionWeight;
-        const float environmentWeight = bsdf.transmission <= 0.0f
-            ? fmaxf(params.scene.environment->importanceWeight, 0.0f) : 0.0f;
-        const float totalWeight = analyticWeight + environmentWeight;
-        if (totalWeight <= 0.0f)
-            return false;
-
-        if (randomFloat(rng) * totalWeight < analyticWeight && analyticWeight > 0.0f)
-        {
-            float selectionPdf = 0.0f;
-            if (!sampleAnalyticLight(position, wavelengths, rng, light, selectionPdf)
-                || selectionPdf <= 0.0f)
-                return false;
-            light.radiance *= totalWeight / (selectionPdf * analyticWeight);
-            return light.radiance.maxComponent() > 0.0f;
-        }
-
-        if (environmentWeight <= 0.0f)
-            return false;
-        const EnvironmentSample sample = params.scene.environment->sampleDirection(rng);
-        if (sample.pdf <= 0.0f)
-            return false;
-        light.direction = sample.direction;
-        light.distance = 1e16f;
-        light.radiance = params.scene.environment->radiance(
-            params.scene.textures, params.scene.textureCount, sample.direction, false,
-            wavelengths, params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-            params.scene.d65);
-        const float lightPdf = (environmentWeight / totalWeight) * sample.pdf;
-        light.radiance *= powerHeuristic(lightPdf, bsdf.pdf(sample.direction))
-            / fmaxf(lightPdf, 1e-20f);
-        return light.radiance.maxComponent() > 0.0f;
-    }
-
-    NR_GPU bool sampleDirectLight(
-        const glm::vec3& position,
-        const SampledWavelengths& wavelengths,
-        RandomState& rng,
-        LightSample& light) const
-    {
+        environmentPdf = 0.0f;
         const float analyticWeight = params.scene.analyticLightSelectionWeight;
         const float environmentWeight = fmaxf(
             params.scene.environment->importanceWeight, 0.0f);
@@ -347,23 +329,21 @@ private:
             params.scene.textures, params.scene.textureCount, sample.direction, false,
             wavelengths, params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
             params.scene.d65);
-        const float lightPdf = (environmentWeight / totalWeight) * sample.pdf;
-        light.radiance *= powerHeuristic(lightPdf, Inv4Pi) / fmaxf(lightPdf, 1e-20f);
+        environmentPdf = (environmentWeight / totalWeight) * sample.pdf;
         return light.radiance.maxComponent() > 0.0f;
     }
 
     NR_GPU bool shadowOccluded(
         const Ray& ray,
-        const float tMax,
         const uint32_t excludedGaussianId,
         RandomState& rng) const
     {
         const bool gaussian = gaussianEnabled();
-        float rayMin = RayOffset;
-        while (rayMin < tMax)
+        float rayMin = ray.minDistance();
+        while (rayMin < ray.maxDistance())
         {
             const uint32_t gaussianSampleIndex = gaussian ? randomUint(rng) : 0;
-            const RayHit hit = intersect(ray, rayMin, tMax, gaussianSampleIndex,
+            const RayHit hit = intersect(ray.withMinDistance(rayMin), gaussianSampleIndex,
                 excludedGaussianId, true);
             if (hit.instanceIndex == InvalidIndex)
                 return false;
@@ -386,15 +366,23 @@ private:
         RandomState& shadowRng) const
     {
         LightSample light{};
-        if (!sampleDirectLight(surface.position, bsdf, wavelengths, lightRng, light))
+        float environmentPdf = 0.0f;
+        if (!sampleDirectLight(surface.position, wavelengths,
+                lightRng, light, environmentPdf))
             return SampledSpectrum(0.0f);
 
-        const float tMax = light.distance - 2.0f * RayOffset;
-        if (tMax <= RayOffset || shadowOccluded(
-                spawnSurfaceRay(surface, light.direction, geometricNormal), tMax,
-                InvalidIndex, shadowRng))
+        const Ray shadowRay = spawnShadowRay(
+            surface, light, geometricNormal, bsdf.shadingNormal());
+        if (!shadowRay.hasTraversalInterval()
+            || shadowOccluded(shadowRay, InvalidIndex, shadowRng))
             return SampledSpectrum(0.0f);
-        return bsdf.evaluateDirect(light.direction, light.radiance);
+        const BsdfEvaluation evaluation = bsdf.evaluate(light.direction);
+        if (environmentPdf > 0.0f)
+            light.radiance *= powerHeuristic(
+                environmentPdf, evaluation.pdf)
+                / fmaxf(environmentPdf, 1.0e-20f);
+        return evaluation.value * light.radiance
+            * bsdf.cosine(light.direction);
     }
 
     NR_GPU SampledSpectrum estimateDirect(
@@ -406,14 +394,20 @@ private:
         RandomState& shadowRng) const
     {
         LightSample light{};
-        if (!sampleDirectLight(position, wavelengths, lightRng, light))
+        float environmentPdf = 0.0f;
+        if (!sampleDirectLight(position, wavelengths,
+                lightRng, light, environmentPdf))
             return SampledSpectrum(0.0f);
 
-        const float tMax = light.distance - 2.0f * RayOffset;
-        if (tMax <= RayOffset || shadowOccluded(
-                Ray::fromOffset(position, light.direction, RayOffset), tMax, gaussianId,
-                shadowRng))
+        const Ray shadowRay = Ray::fromOffset(
+            position, light.direction, RayOffset, RayOffset,
+            light.distance - 2.0f * RayOffset);
+        if (!shadowRay.hasTraversalInterval()
+            || shadowOccluded(shadowRay, gaussianId, shadowRng))
             return SampledSpectrum(0.0f);
+        if (environmentPdf > 0.0f)
+            light.radiance *= powerHeuristic(environmentPdf, Inv4Pi)
+                / fmaxf(environmentPdf, 1.0e-20f);
         return albedo * Inv4Pi * light.radiance;
     }
 
@@ -432,12 +426,12 @@ private:
                 && totalWeight > 0.0f)
             {
                 const float lightPdf = (environmentWeight / totalWeight)
-                    * params.scene.environment->pdf(ray.direction);
+                    * params.scene.environment->pdf(ray.direction());
                 misWeight = powerHeuristic(state.lastBsdfPdf, lightPdf);
             }
         }
         return params.scene.environment->radiance(
-            params.scene.textures, params.scene.textureCount, ray.direction, cameraRay,
+            params.scene.textures, params.scene.textureCount, ray.direction(), cameraRay,
             state.wl, params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
             params.scene.d65) * misWeight;
     }
@@ -462,7 +456,7 @@ private:
         {
             const uint32_t gaussianSampleIndex = gaussian
                 ? hashCombine32(pixel, segment) : pixel;
-            const RayHit hit = intersect(ray, RayOffset, 1000.0f, gaussianSampleIndex);
+            const RayHit hit = intersect(ray, gaussianSampleIndex);
             if (hit.instanceIndex == InvalidIndex)
             {
                 const bool cameraPath = state.depth == 0;
@@ -479,8 +473,11 @@ private:
             {
                 const glm::vec3 position = ray.at(hit.t);
                 const glm::vec3 gaussianRgb = gaussianAlbedoRgb(
-                    params.scene, ray, hit.instanceIndex,
-                    params.scene.renderSettings.gaussianRenderSphericalHarmonics);
+                    params.scene.gaussianShCoeffs,
+                    params.scene.gaussianShCoefficientCount,
+                    hit.instanceIndex,
+                    params.scene.renderSettings.gaussianRenderSphericalHarmonics,
+                    -ray.direction());
                 if (params.scene.renderSettings.gaussianShadingMode
                     == GaussianShadingMode::DirectColor)
                 {
@@ -512,12 +509,21 @@ private:
             if (!surface.material->acceptsRayHit(
                     params.scene.textures, surface.uv, randoms.opacity))
             {
-                ray = spawnSurfaceRay(surface, ray.direction, geometricNormal);
+                ray = spawnSurfaceRay(surface, ray.direction(), geometricNormal);
                 continue;
             }
 
-            const Bsdf bsdf = surface.material->makeBsdf(
-                params.scene, surface, ray, geometricNormal, state.wl);
+            // A dispersive BSDF has wavelength-dependent branch probabilities,
+            // refractive half-vectors, Jacobians, and PDFs. Collapse the packet
+            // before evaluating direct lighting so every quantity belongs to the
+            // same hero wavelength. Constant-IOR glass can retain the packet.
+            if (surface.material->sampleTransmission(
+                    params.scene.textures, surface.uv) > 0.0f
+                && surface.material->hasDispersiveIor(state.wl))
+                state.wl.terminateSecondary();
+
+            const Bsdf bsdf(*surface.material, surface, params.scene,
+                ray, state.wl);
             state.alpha = 1.0f;
             state.radiance += state.throughput * surface.material->emissionSpectral(
                 params.scene.textures, surface.uv, state.wl, params.scene.spectrumTableScale,
@@ -528,7 +534,7 @@ private:
             if (bsdfSample.event == BsdfEvent::Transmission)
                 state.transmit(bsdfSample.eta);
             state.scatter(bsdfSample.weight,
-                bsdf.transmission <= 0.0f ? bsdfSample.pdf : 0.0f);
+                bsdfSample.singular ? 0.0f : bsdfSample.pdf);
             if (!survivesRussianRoulette(state, randoms.roulette))
                 return;
             ray = spawnSurfaceRay(surface, bsdfSample.direction, geometricNormal);

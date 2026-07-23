@@ -13,6 +13,21 @@ void ImGuiManager::tableRowLabel(const char* label) {
     } else { ImGui::TextUnformatted(label); ImGui::SameLine(); }
 }
 
+bool ImGuiManager::accordionRow(const char* label) {
+    if (ImGui::GetCurrentTable()) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+    }
+
+    // Do not push an indent when the accordion opens. Its contents are still
+    // rendered conditionally beneath it, but continue using the full table.
+    return ImGui::TreeNodeEx(label,
+        ImGuiTreeNodeFlags_Framed
+        | ImGuiTreeNodeFlags_SpanAllColumns
+        | ImGuiTreeNodeFlags_LabelSpanAllColumns
+        | ImGuiTreeNodeFlags_NoTreePushOnOpen);
+}
+
 void ImGuiManager::checkboxRow(const char* label, bool value, const std::function<void(bool)>& setter) {
     tableRowLabel(label);
     if (ImGui::Checkbox((std::string("##") + label).c_str(), &value)) setter(value);

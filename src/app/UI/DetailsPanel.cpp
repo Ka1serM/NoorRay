@@ -9,7 +9,13 @@ DetailsPanel::DetailsPanel(std::string name, Scene& scene)
 void DetailsPanel::renderUi() {
     ImGui::Begin(name.c_str());
     
-    if (ImGui::BeginTable("ObjectDetails", 2, ImGuiTableFlags_SizingStretchProp)) {
+    const ImGuiTableFlags tableFlags =
+        ImGuiTableFlags_SizingStretchProp
+        | ImGuiTableFlags_Resizable
+        | ImGuiTableFlags_PadOuterX;
+    if (ImGui::BeginTable("ObjectDetails", 2, tableFlags)) {
+        ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthStretch, 0.42f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.58f);
         
         if (const auto activeObject = scene.getActiveObjectPtr())
             domain_ui::render(*activeObject);

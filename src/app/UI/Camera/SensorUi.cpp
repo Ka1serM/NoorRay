@@ -27,8 +27,7 @@ void synchronizeSensorMutation(const char* reason)
 
 bool beginSensorUi(const char* label)
 {
-    ImGuiManager::tableRowLabel("Sensor");
-    return ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_Framed);
+    return ImGuiManager::accordionRow(label);
 }
 
 bool renderSensorTypeCombo(Sensor& owner, const SensorType currentType)
@@ -143,14 +142,10 @@ bool renderConcreteSensor(Sensor& owner, Concrete& sensor, const char* label, co
 {
     if (!beginSensorUi(label)) return false;
     bool changed = false;
-    if (ImGui::BeginTable("SensorTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-        changed |= renderSensorTypeCombo(owner, type);
-        changed |= renderPhysicalSensorRows(owner);
-        if constexpr (!std::is_same_v<Concrete, RectangularSensor>)
-            changed |= renderPsfGridRows(sensor);
-        ImGui::EndTable();
-    }
-    ImGui::TreePop();
+    changed |= renderSensorTypeCombo(owner, type);
+    changed |= renderPhysicalSensorRows(owner);
+    if constexpr (!std::is_same_v<Concrete, RectangularSensor>)
+        changed |= renderPsfGridRows(sensor);
     return changed;
 }
 }
@@ -162,15 +157,18 @@ bool Sensor::renderUi()
 
 bool RectangularSensor::renderUi(Sensor& owner)
 {
-    return renderConcreteSensor(owner, *this, "Rectangular###SensorProperties", SensorType::Rectangular);
+    return renderConcreteSensor(owner, *this,
+        "Sensor###SensorProperties", SensorType::Rectangular);
 }
 
 bool ScatterPsfSensor::renderUi(Sensor& owner)
 {
-    return renderConcreteSensor(owner, *this, "Scatter PSF###SensorProperties", SensorType::ScatterPsf);
+    return renderConcreteSensor(owner, *this,
+        "Sensor###SensorProperties", SensorType::ScatterPsf);
 }
 
 bool GatherPsfSensor::renderUi(Sensor& owner)
 {
-    return renderConcreteSensor(owner, *this, "Gather PSF###SensorProperties", SensorType::GatherPsf);
+    return renderConcreteSensor(owner, *this,
+        "Sensor###SensorProperties", SensorType::GatherPsf);
 }

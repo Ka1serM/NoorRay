@@ -33,6 +33,7 @@ ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numI
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigDragClickToInputText = true;
 
 #ifdef NDEBUG // Release mode: embed ini into binary
     io.IniFilename = nullptr;  // don't use external file

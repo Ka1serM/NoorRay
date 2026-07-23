@@ -12,6 +12,7 @@
 #include "Camera/ScatterPsfSensor.h"
 #include "CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
+#include "UI/MathInput.h"
 #include "portable-file-dialogs.h"
 
 namespace
@@ -82,12 +83,12 @@ bool renderPhysicalSensorRows(Sensor& sensor)
     int resolutionX = static_cast<int>(sensor.resolutionX());
     int resolutionY = static_cast<int>(sensor.resolutionY());
     ImGuiManager::tableRowLabel("Resolution X");
-    if (ImGui::InputInt("##ResolutionX", &resolutionX, 0, 0, ImGuiInputTextFlags_CharsDecimal) && resolutionX > 0) {
+    if (MathInput::InputInt("##ResolutionX", &resolutionX, 0, 0, ImGuiInputTextFlags_CharsDecimal) && resolutionX > 0) {
         synchronizeSensorMutation("Sensor horizontal resolution");
         sensor.setResolution(resolutionX, sensor.resolutionY()); changed = true;
     }
     ImGuiManager::tableRowLabel("Resolution Y");
-    if (ImGui::InputInt("##ResolutionY", &resolutionY, 0, 0, ImGuiInputTextFlags_CharsDecimal) && resolutionY > 0) {
+    if (MathInput::InputInt("##ResolutionY", &resolutionY, 0, 0, ImGuiInputTextFlags_CharsDecimal) && resolutionY > 0) {
         synchronizeSensorMutation("Sensor vertical resolution");
         sensor.setResolution(sensor.resolutionX(), resolutionY); changed = true;
     }

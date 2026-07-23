@@ -4,6 +4,8 @@
 #include <imgui_internal.h>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "UI/MathInput.h"
+
 void ImGuiManager::tableRowLabel(const char* label) {
     if (ImGui::GetCurrentTable()) {
         ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(label);
@@ -19,14 +21,14 @@ void ImGuiManager::checkboxRow(const char* label, bool value, const std::functio
 void ImGuiManager::dragFloatRow(const char* label, float value, const float speed,
     const float min, const float max, const std::function<void(float)>& setter) {
     tableRowLabel(label);
-    if (ImGui::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max,
+    if (MathInput::DragFloat((std::string("##") + label).c_str(), &value, speed, min, max,
         "%.3f", ImGuiSliderFlags_AlwaysClamp)) setter(value);
 }
 
 void ImGuiManager::dragFloat3Row(const char* label, glm::vec3 value, const float speed,
     const std::function<void(glm::vec3)>& setter) {
     tableRowLabel(label);
-    if (ImGui::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed)) setter(value);
+    if (MathInput::DragFloat3((std::string("##") + label).c_str(), glm::value_ptr(value), speed)) setter(value);
 }
 
 void ImGuiManager::colorEdit3Row(const char* label, const glm::vec3 value,

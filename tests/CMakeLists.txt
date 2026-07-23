@@ -59,6 +59,11 @@ target_link_libraries(shadow_terminator_test PRIVATE glm)
 add_noorray_test(ray_test unit/raytracing/RayTest.cpp raytracing)
 target_link_libraries(ray_test PRIVATE glm)
 
+add_noorray_test(imgui_math_input_test
+    "unit/ui/ImGuiMathInputTest.cpp;${CMAKE_SOURCE_DIR}/src/app/UI/MathInput.cpp" ui)
+target_include_directories(imgui_math_input_test PRIVATE "${CMAKE_SOURCE_DIR}/src/app")
+target_link_libraries(imgui_math_input_test PRIVATE imgui)
+
 add_noorray_test(scene_lifetime_test unit/scene/SceneLifetimeTest.cpp scene)
 target_link_libraries(scene_lifetime_test PRIVATE
     "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"

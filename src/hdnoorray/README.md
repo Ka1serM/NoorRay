@@ -1,7 +1,8 @@
 # hdNoorRay
 
-`hdNoorRay` is NoorRay's OpenUSD Hydra render-delegate plugin. OpenUSD types
-are confined to this directory; `libnoorray` remains independent of USD.
+`hdNoorRay` is NoorRay's OpenUSD Hydra render-delegate plugin for Blender 5.2.
+OpenUSD types are confined to this directory; `libnoorray` remains independent
+of USD.
 
 ## Compatibility
 
@@ -9,39 +10,54 @@ The target is Blender 5.2, which creates a legacy `HdRenderDelegate` through
 `HdRendererPluginRegistry::CreateRenderDelegate`. OpenUSD can also adapt this
 delegate into its Hydra 2 renderer path.
 
-The plugin must be compiled against the exact OpenUSD ABI of its host. For
-Blender, point `NR_USD_ROOT` at an SDK assembled from that Blender build's
-dependency package, containing:
+The plugin must be compiled against the exact OpenUSD ABI of its host. CMake
+automatically vendors the USD SDK from Blender's dependency package when
+`NR_USD_ROOT` is left at its default.
 
-```text
-include/pxr/pxr.h
-lib/libusd_ms.so
-```
+## Prerequisites
 
-Blender 5.2 development builds used OpenUSD 25.08 and the current 5.2 release
-branch uses OpenUSD 26.03. The adapter supports both source APIs, but each
-binary is tied to the OpenUSD version and internal namespace of the Blender
-build it was compiled for.
+- Blender 5.2 installed (provides `libusd_ms.so`)
+- `python3.13-devel` — the vendored USD Python headers only ship
+  `pyconfig.h`; the rest are pulled from the system's Python 3.13
+- NVIDIA CUDA Toolkit 13.x at `/usr/local/cuda`
+- OptiX 9.1 at `$HOME/Programs/OptixSDK`
+- GCC/G++ 15 with C++23 support
+- Vulkan SDK (set `VULKAN_SDK`)
 
-Configure NoorRay with:
+## Build
 
 ```sh
-cmake -S . -B build \
+cmake -S . -B build/hdnoorray \
   -DNR_BUILD_HYDRA=ON \
-  -DNR_USD_ROOT=/path/to/blender-5.2-usd-sdk \
   -DNR_CUDA_ROOT=/usr/local/cuda \
-  -DOPTIX_ROOT=/path/to/OptixSDK
+  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
+  -DCMAKE_C_COMPILER=/usr/bin/gcc-15 \
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 \
+  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DNR_CUDA_ARCH='86;89' \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+cmake --build build/hdnoorray --target hdNoorRay -j"$(nproc)"
 ```
 
-The plugin bundle is written to `build/hdnoorray/plugin`. Register that
-directory with `pxr.Plug.Registry().RegisterPlugins()` in Blender, or add it to
-`PXR_PLUGINPATH_NAME` for `usdview`.
+The vendored USD SDK is automatically fetched from Blender's
+`lib-linux_x64` repository on first configure. The Blender extension is
+assembled at `build/hdnoorray/hdnoorray/blender_extension/hdnoorray/`.
 
-The build also creates
-`build/hdnoorray/hdnoorray-blender-5.2.zip`. Install that archive through
-Blender's Extensions preferences. The extension bundles the compiled delegate,
-registers `HdNoorRayRendererPlugin`, and adds **NoorRay** to the render-engine
-selector.
+## Install in Blender
+
+Link the built extension into Blender's user extension directory:
+
+```sh
+mkdir -p ~/.config/blender/5.2/extensions/user_default
+ln -sfn "$PWD/build/hdnoorray/hdnoorray/blender_extension/hdnoorray" \
+  ~/.config/blender/5.2/extensions/user_default/hdnoorray
+```
+
+Restart Blender and select **NoorRay** from the render-engine dropdown.
+
+## Status
 
 The first viewport implementation supports polygon meshes (fan-triangulated),
 object transforms, perspective/orthographic cameras, a default diffuse

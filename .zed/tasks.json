@@ -72,6 +72,15 @@
     "hide": "never"
   },
   {
+    "label": "build hdNoorRay Blender 5.2",
+    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/hdnoorray -DNR_BUILD_HYDRA=ON -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNR_CUDA_ARCH='86;89' -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake --build build/hdnoorray --target hdNoorRay -j$(nproc) && mkdir -p /home/marcel/.config/blender/5.2/extensions/user_default && ln -sfn $ZED_WORKTREE_ROOT/build/hdnoorray/hdnoorray/blender_extension/hdnoorray /home/marcel/.config/blender/5.2/extensions/user_default/hdnoorray",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
     "label": "run NoorRay Debug",
     "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake --build build/debug --target NoorRay -j$(nproc) && ./build/debug/NoorRay",
     "cwd": "$ZED_WORKTREE_ROOT",

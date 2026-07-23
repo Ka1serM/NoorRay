@@ -52,8 +52,8 @@ option(NR_ENABLE_PCH "Precompile common NoorRay C++ headers" ON)
 option(NR_BUILD_PYTHON "Build the pynoorray Python bindings" OFF)
 option(NR_BUILD_HYDRA "Build the hdNoorRay Hydra render delegate" OFF)
 option(NR_VERBOSE_CONFIGURE "Show FetchContent dependency progress during configuration" ON)
-set(NR_USD_ROOT "" CACHE PATH
-        "OpenUSD SDK root used to build hdNoorRay (must match the host application)")
+set(NR_USD_ROOT "${PROJECT_SOURCE_DIR}/external/blender-usd" CACHE PATH
+        "OpenUSD SDK root used to build hdNoorRay (defaults to vendored Blender SDK)")
 set(NR_UNITY_BUILD_BATCH_SIZE "8" CACHE STRING "Maximum sources per NoorRay unity batch")
 # Build systems compile multiple CUDA translation units concurrently. Keep the
 # per-translation-unit NVCC workers bounded so parallel builds do not create

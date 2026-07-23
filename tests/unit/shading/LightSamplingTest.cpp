@@ -53,6 +53,28 @@ TEST_CASE("spherical rectangle sampling has a constant solid-angle PDF", "[light
     }
 }
 
+TEST_CASE("rectangle intersection matches its solid-angle sampling PDF", "[light][rect]")
+{
+    RectLight light{};
+    light.position = glm::vec3(0.0f, 0.0f, 1.0f);
+    light.direction = glm::vec3(0.0f, 0.0f, -1.0f);
+    light.tangent = glm::vec3(1.0f, 0.0f, 0.0f);
+    light.color = glm::vec3(0.0f);
+    light.width = 2.0f;
+    light.height = 2.0f;
+
+    const Ray ray(
+        glm::vec3(0.0f), glm::normalize(glm::vec3(0.25f, -0.5f, 1.0f)));
+    const LightHit hit = light.intersect(
+        ray, SampledWavelengths::sampleUniform(0.5f),
+        nullptr, nullptr, nullptr);
+
+    constexpr float expectedSolidAngle = 2.09439510239319549f;
+    CHECK(ray.at(hit.distance).z == Catch::Approx(1.0f));
+    CHECK(hit.pdf == Catch::Approx(1.0f / expectedSolidAngle)
+        .epsilon(2.0e-5f));
+}
+
 TEST_CASE("directional light treats soft angle as an angular diameter", "[light][sun]")
 {
     DirectionalLight light{};
@@ -70,6 +92,28 @@ TEST_CASE("directional light treats soft angle as an angular diameter", "[light]
 
     CHECK(glm::dot(sample.direction, -light.direction) >= cosf(halfAngle));
     CHECK(sample.pdf == Catch::Approx(expectedPdf).epsilon(2.0e-5f));
+}
+
+TEST_CASE("directional light can be hit inside its sun disk", "[light][sun]")
+{
+    DirectionalLight light{};
+    light.direction = glm::vec3(0.0f, 0.0f, -1.0f);
+    light.color = glm::vec3(0.0f);
+    light.softAngle = 10.0f;
+
+    const float halfAngle = 0.5f * light.softAngle * LightPi / 180.0f;
+    const Ray inside(
+        glm::vec3(0.0f),
+        glm::normalize(glm::vec3(sinf(halfAngle * 0.5f), 0.0f,
+            cosf(halfAngle * 0.5f))));
+    const LightHit hit = light.intersect(
+        inside, SampledWavelengths::sampleUniform(0.5f),
+        nullptr, nullptr, nullptr);
+    const float expectedPdf = 1.0f
+        / (2.0f * LightPi * oneMinusCosine(halfAngle));
+
+    CHECK(hit.distance == Ray::InfiniteDistance);
+    CHECK(hit.pdf == Catch::Approx(expectedPdf).epsilon(2.0e-5f));
 }
 
 TEST_CASE("tiny sphere lights retain a finite solid-angle PDF", "[light][point]")

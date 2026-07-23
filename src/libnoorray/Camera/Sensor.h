@@ -35,6 +35,11 @@ enum class SensorType : int
     GatherPsf,
 };
 
+enum class SensorOrigin : uint8_t {
+    UpperLeft,
+    LowerLeft,
+};
+
 struct PsfGatherBucketSample {
     double rgbSum[3]{};
     double count{};
@@ -83,6 +88,7 @@ public:
     float heightMm{3.264f};
     uint32_t resolutionWidth{1280};
     uint32_t resolutionHeight{720};
+    SensorOrigin sensorOrigin{SensorOrigin::UpperLeft};
 
     char imageSensorPath[512]{};
     char imageSensorLoadStatus[512]{};
@@ -93,8 +99,10 @@ public:
     NR_CPU_GPU uint32_t resolutionX() const;
     NR_CPU_GPU uint32_t resolutionY() const;
     NR_CPU_GPU glm::uvec2 resolution() const;
+    NR_CPU_GPU SensorOrigin origin() const;
     NR_CPU_GPU void setResolution(uint32_t w, uint32_t h);
     NR_CPU_GPU void setDimensionsMm(float w, float h);
+    NR_CPU_GPU void setOrigin(SensorOrigin value);
     NR_CPU_GPU void copyPhysicalFrom(const Sensor& other);
     NR_CPU_GPU float aspectRatio() const;
 
@@ -176,6 +184,11 @@ NR_CPU_GPU inline glm::uvec2 Sensor::resolution() const
     return {resolutionX(), resolutionY()};
 }
 
+NR_CPU_GPU inline SensorOrigin Sensor::origin() const
+{
+    return sensorOrigin;
+}
+
 NR_CPU_GPU inline void Sensor::setResolution(uint32_t w, uint32_t h)
 {
     resolutionWidth = w;
@@ -188,10 +201,16 @@ NR_CPU_GPU inline void Sensor::setDimensionsMm(float w, float h)
     heightMm = std::max(0.001f, h);
 }
 
+NR_CPU_GPU inline void Sensor::setOrigin(const SensorOrigin value)
+{
+    sensorOrigin = value;
+}
+
 NR_CPU_GPU inline void Sensor::copyPhysicalFrom(const Sensor& other)
 {
     setDimensionsMm(other.width(), other.height());
     setResolution(other.resolutionX(), other.resolutionY());
+    setOrigin(other.origin());
 }
 
 NR_CPU_GPU inline float Sensor::aspectRatio() const

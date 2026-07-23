@@ -9,6 +9,7 @@
 #include "Scene/RenderSettings.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
+#include "UI/MathInput.h"
 
 RenderSettingsPanel::RenderSettingsPanel(std::string name, Scene& scene)
     : ImGuiComponent(std::move(name)), scene(scene)
@@ -39,14 +40,14 @@ void RenderSettingsPanel::renderUi()
         ImGui::TextUnformatted("Samples Per Pixel");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= ImGui::DragInt("##SamplesDrag", &settings.samples, 0.1f, 1, 64, "%d");
+        changed |= MathInput::DragInt("##SamplesDrag", &settings.samples, 0.1f, 1, 64, "%d");
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Max Samples");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= ImGui::DragInt("##MaxSamples", &settings.maxSamples, 1.f, 1, 100000, "%d");
+        changed |= MathInput::DragInt("##MaxSamples", &settings.maxSamples, 1.f, 1, 100000, "%d");
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -61,7 +62,7 @@ void RenderSettingsPanel::renderUi()
             ImGui::TextUnformatted("Noise Level");
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(-FLT_MIN);
-            changed |= ImGui::SliderFloat(
+            changed |= MathInput::SliderFloat(
                 "##NoiseLevel", &settings.noiseLevel, 0.000001f, 0.1f, "%.6f",
                 ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
         }
@@ -85,7 +86,7 @@ void RenderSettingsPanel::renderUi()
             ImGui::TextUnformatted("Denoiser Min Samples");
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(-FLT_MIN);
-            changed |= ImGui::DragInt(
+            changed |= MathInput::DragInt(
                 "##OptixDenoiserMinSamples", &settings.optixDenoiserMinSamples,
                 1.0f, 1, 100000, "%d", ImGuiSliderFlags_AlwaysClamp);
         }
@@ -95,14 +96,14 @@ void RenderSettingsPanel::renderUi()
         ImGui::TextUnformatted("Max Bounces");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= ImGui::DragInt("##MaxBounces", &settings.maxBounces, 0.1f, 1, 64, "%d");
+        changed |= MathInput::DragInt("##MaxBounces", &settings.maxBounces, 0.1f, 1, 64, "%d");
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("RR Start Bounce");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= ImGui::DragInt("##RRBounce", &settings.russianRouletteStartBounce, 0.1f, 0, 16, "%d");
+        changed |= MathInput::DragInt("##RRBounce", &settings.russianRouletteStartBounce, 0.1f, 0, 16, "%d");
 
         static constexpr const char* kProxyNames[] =
             { "Icosphere", "Octahedron", "Icosahedron", "Icosphere (Level 2)" };
@@ -124,7 +125,7 @@ void RenderSettingsPanel::renderUi()
         ImGui::TextUnformatted("Cutoff Sigma");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::SliderFloat("##CutoffSigma", &settings.gaussianCutoffSigma, 1.0f, 6.0f, "%.1f"))
+        if (MathInput::SliderFloat("##CutoffSigma", &settings.gaussianCutoffSigma, 1.0f, 6.0f, "%.1f"))
         {
             changed = true;
             scene.setDirtyFlag(TLAS);
@@ -176,7 +177,7 @@ void RenderSettingsPanel::renderUi()
             ImGui::TextUnformatted("Overdraw Range");
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(-FLT_MIN);
-            changed |= ImGui::SliderInt(
+            changed |= MathInput::SliderInt(
                 "##ProxyOverdrawMax", &settings.gaussianProxyOverdrawMax, 1, 1024);
         }
 

@@ -9,6 +9,7 @@
 
 #include "CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
+#include "UI/MathInput.h"
 #include "portable-file-dialogs.h"
 
 namespace
@@ -131,14 +132,14 @@ bool HybridPsfCamera::renderUi()
 
     ImGuiManager::tableRowLabel("Ray LUT Step");
     int requestedRayLutStep = rayLutStepSize;
-    if (ImGui::InputInt("##RossPsfRayLutStep", &requestedRayLutStep)) {
+    if (MathInput::InputInt("##RossPsfRayLutStep", &requestedRayLutStep)) {
         nr::synchronizeBeforeManagedMutation("Hybrid PSF ray LUT step");
         rayLutStepSize = std::max(1, requestedRayLutStep);
         changed = true;
     }
     ImGuiManager::tableRowLabel("Aperture Samples/Dim");
     int requestedSamplesPerDimension = samplesPerDimension;
-    if (ImGui::InputInt("##RossPsfSamplesPerDim", &requestedSamplesPerDimension)) {
+    if (MathInput::InputInt("##RossPsfSamplesPerDim", &requestedSamplesPerDimension)) {
         nr::synchronizeBeforeManagedMutation("Hybrid PSF aperture samples");
         samplesPerDimension = std::max(1, requestedSamplesPerDimension);
         changed = true;

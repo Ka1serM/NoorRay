@@ -19,6 +19,7 @@
 #include "Scene/Scene.h"
 #include "Training/ColmapReconstruction.h"
 #include "Training/GaussianTrainRenderer.h"
+#include "UI/MathInput.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "stb_image_resize2.h"
@@ -200,16 +201,16 @@ void TrainingPanel::renderUi()
         reconstructionMapper = mapperIndex == 0 ? noorray::ReconstructionMapper::Global
                                                 : noorray::ReconstructionMapper::Incremental;
     int spp = static_cast<int>(config.samplesPerPixel);
-    if (ImGui::DragInt("Samples per pixel", &spp, 0.1f, 1, 64))
+    if (MathInput::DragInt("Samples per pixel", &spp, 0.1f, 1, 64))
         config.samplesPerPixel = static_cast<uint32_t>(std::max(1, spp));
-    ImGui::InputInt("Target iterations", &targetIterations);
+    MathInput::InputInt("Target iterations", &targetIterations);
     targetIterations = std::max(1, targetIterations);
-    ImGui::InputScalar("Seed", ImGuiDataType_U64, &config.seed);
-    ImGui::DragFloat("Position learning rate", &config.learningRatePosition, 1.0e-5f, 0.0f, 1.0f, "%.6f");
-    ImGui::DragFloat("Scale learning rate", &config.learningRateScale, 1.0e-4f, 0.0f, 1.0f, "%.6f");
-    ImGui::DragFloat("Rotation learning rate", &config.learningRateRotation, 1.0e-4f, 0.0f, 1.0f, "%.6f");
-    ImGui::DragFloat("Opacity learning rate", &config.learningRateOpacity, 1.0e-3f, 0.0f, 1.0f, "%.6f");
-    ImGui::DragFloat("Color learning rate", &config.learningRateColor, 1.0e-4f, 0.0f, 1.0f, "%.6f");
+    MathInput::InputScalar("Seed", ImGuiDataType_U64, &config.seed);
+    MathInput::DragFloat("Position learning rate", &config.learningRatePosition, 1.0e-5f, 0.0f, 1.0f, "%.6f");
+    MathInput::DragFloat("Scale learning rate", &config.learningRateScale, 1.0e-4f, 0.0f, 1.0f, "%.6f");
+    MathInput::DragFloat("Rotation learning rate", &config.learningRateRotation, 1.0e-4f, 0.0f, 1.0f, "%.6f");
+    MathInput::DragFloat("Opacity learning rate", &config.learningRateOpacity, 1.0e-3f, 0.0f, 1.0f, "%.6f");
+    MathInput::DragFloat("Color learning rate", &config.learningRateColor, 1.0e-4f, 0.0f, 1.0f, "%.6f");
 
     ImGui::BeginDisabled(trainer || imageDirectory.empty());
     if (ImGui::Button("Start")) reconstructAndBegin();

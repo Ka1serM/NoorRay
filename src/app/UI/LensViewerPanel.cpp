@@ -7,6 +7,7 @@
 #include "Camera/CameraInstance.h"
 #include "Camera/RealisticCamera.h"
 #include "Scene/Scene.h"
+#include "UI/MathInput.h"
 #include "libross/foundation/physics/Wavelengths.h"
 
 namespace {
@@ -275,7 +276,7 @@ void LensViewerPanel::renderUi()
     }
 
     ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::DragInt("Pixel stride", &pixelStride, 1.0f, 1,
+    if (MathInput::DragInt("Pixel stride", &pixelStride, 1.0f, 1,
         static_cast<int>(camera->getSensor().resolutionHeight)))
         settingsDirty = true;
     ImGui::SameLine();

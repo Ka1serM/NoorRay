@@ -15,8 +15,10 @@
 #include <pxr/imaging/hd/bprim.h>
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/instancer.h>
+#include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/resourceRegistry.h>
 #include <pxr/imaging/hd/rprim.h>
+#include <pxr/imaging/hd/sceneDelegate.h>
 #include <pxr/imaging/hd/sprim.h>
 #include <pxr/imaging/hd/tokens.h>
 
@@ -105,8 +107,9 @@ void HdNoorRayRenderDelegate::DestroyInstancer(HdInstancer* instancer)
 HdRprim* HdNoorRayRenderDelegate::CreateRprim(
     const TfToken& typeId, const SdfPath& id)
 {
-    if (typeId == HdPrimTypeTokens->mesh)
+    if (typeId == HdPrimTypeTokens->mesh) {
         return new HdNoorRayMesh(id);
+    }
     return nullptr;
 }
 
@@ -179,6 +182,48 @@ void HdNoorRayRenderDelegate::DestroyBprim(HdBprim* bprim)
     delete bprim;
 }
 
+void HdNoorRayRenderDelegate::SetRenderSetting(
+    const TfToken& key, const VtValue& value)
+{
+    // Intercept camera-specific settings and store on renderParam directly.
+    CameraSettings cs = renderParam_->cameraSettings;
+    bool isCamera = true;
+    if (key == TfToken("cameraProjection"))
+        cs.projectionType = value.Get<int>();
+    else if (key == TfToken("cameraApertureDiameter"))
+        cs.apertureDiameterMm = value.Get<float>();
+    else if (key == TfToken("cameraBokehBias"))
+        cs.bokehBias = value.Get<float>();
+    else if (key == TfToken("cameraLensPath"))
+        cs.lensPath = value.Get<std::string>();
+    else if (key == TfToken("cameraGlassCatalogs"))
+        cs.glassCatalogs = value.Get<std::string>();
+    else if (key == TfToken("cameraRayLutPath"))
+        cs.rayLutPath = value.Get<std::string>();
+    else if (key == TfToken("cameraSensorType"))
+        cs.sensorType = value.Get<int>();
+    else if (key == TfToken("cameraSensorPath"))
+        cs.sensorPath = value.Get<std::string>();
+    else if (key == TfToken("cameraPsfPath"))
+        cs.psfPath = value.Get<std::string>();
+    else
+        isCamera = false;
+
+    if (isCamera) {
+        if (renderParam_->cameraSettings != cs) {
+            renderParam_->cameraSettings = cs;
+            renderParam_->MarkRenderSettingsChanged();
+        }
+        return;
+    }
+
+    // Regular render setting
+    if (GetRenderSetting(key) == value)
+        return;
+    HdRenderDelegate::SetRenderSetting(key, value);
+    renderParam_->MarkRenderSettingsChanged();
+}
+
 void HdNoorRayRenderDelegate::CommitResources(HdChangeTracker*)
 {
     resourceRegistry_->Commit();
@@ -190,6 +235,18 @@ HdNoorRayRenderDelegate::GetRenderSettingDescriptors() const
     return {
         {"Samples", TfToken("samples"), VtValue(64)},
         {"Maximum Bounces", TfToken("maxBounces"), VtValue(8)},
+        {"Noise Limit", TfToken("noiseLimitEnabled"), VtValue(0)},
+        {"Noise Threshold", TfToken("noiseLevel"), VtValue(0.0001f)},
+        {"OptiX Denoiser", TfToken("optixDenoiserEnabled"), VtValue(0)},
+        {"Denoiser Min Samples", TfToken("optixDenoiserMinSamples"), VtValue(1)},
+        {"Russian Roulette Start", TfToken("russianRouletteStartBounce"), VtValue(3)},
+        {"Tonemapping", TfToken("tonemappingEnabled"), VtValue(0)},
+        {"Transparent Background", TfToken("transparentBackground"), VtValue(0)},
+        {"Buffer Visualization", TfToken("bufferVisualization"), VtValue(0)},
+        {"Gaussian Cutoff Sigma", TfToken("gaussianCutoffSigma"), VtValue(3.0f)},
+        {"Gaussian Proxy Type", TfToken("gaussianProxyType"), VtValue(3)},
+        {"Gaussian Shading Mode", TfToken("gaussianShadingMode"), VtValue(1)},
+        {"Gaussian SH Degree", TfToken("gaussianRenderSphericalHarmonics"), VtValue(3)},
     };
 }
 

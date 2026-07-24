@@ -171,6 +171,7 @@ void HdNoorRayRenderPass::_Execute(
     Scene& scene = renderParam_.session.scene;
     Raytracer& raytracer = *renderParam_.session.raytracer;
 
+    HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
     const uint64_t sceneVersion = renderParam_.GetSceneVersion();
     const GfMatrix4d newProjection = renderPassState->GetProjectionMatrix();
     const HdCamera* hydraCamera = renderPassState->GetCamera();
@@ -179,7 +180,9 @@ void HdNoorRayRenderPass::_Execute(
         : renderPassState->GetWorldToViewMatrix().GetInverse();
     const bool cameraChanged = cameraTransform_ != newCameraTransform
         || projectionMatrix_ != newProjection;
+
     const bool reset = collectionDirty_ || cameraChanged
+        || renderParam_.ConsumeRenderSettingsChanged()
         || observedSceneVersion_ != sceneVersion;
     if (reset) {
         accumulatedSamples_ = 0;
@@ -190,16 +193,25 @@ void HdNoorRayRenderPass::_Execute(
     if (cameraInstance == nullptr)
         return;
     Camera* camera = cameraInstance->getCamera();
-    const CameraProjectionType projection = hydraCamera != nullptr
-        && hydraCamera->GetProjection() == HdCamera::Orthographic
-        ? CameraProjectionType::Orthographic
-        : CameraProjectionType::Perspective;
-    if (cameraInstance->getProjectionType() != projection) {
-        cameraInstance->switchTo(projection);
-        camera = cameraInstance->getCamera();
+
+    // Apply NoorRay camera projection (overrides USD orthographic hint).
+    bool projectionSwitched = false;
+    {
+        const CameraSettings& cs = renderParam_.cameraSettings;
+        const CameraProjectionType projection = cs.projectionType >= 0
+            ? static_cast<CameraProjectionType>(cs.projectionType)
+            : hydraCamera != nullptr
+                  && hydraCamera->GetProjection() == HdCamera::Orthographic
+              ? CameraProjectionType::Orthographic
+              : CameraProjectionType::Perspective;
+        if (cameraInstance->getProjectionType() != projection) {
+            cameraInstance->switchTo(projection);
+            camera = cameraInstance->getCamera();
+            projectionSwitched = true;
+        }
     }
 
-    if (cameraChanged || reset) {
+    if (cameraChanged || reset || projectionSwitched) {
         camera->getSensor().setResolution(
             width, height);
         if (hydraCamera != nullptr) {
@@ -210,38 +222,106 @@ void HdNoorRayRenderPass::_Execute(
             camera->setFocusDistanceCm(
                 hydraCamera->GetFocusDistance() * 100.0f);
         }
+
+        const CameraSettings& cs = renderParam_.cameraSettings;
+        if (cs.apertureDiameterMm >= 0.0f) {
+            if (auto* tl = camera->CastOrNullptr<ThinLensCamera>())
+                tl->apertureDiameterMm = cs.apertureDiameterMm;
+            else if (auto* fi = camera->CastOrNullptr<FisheyeCamera>())
+                fi->apertureDiameterMm = cs.apertureDiameterMm;
+            else if (auto* re = camera->CastOrNullptr<RealisticCamera>())
+                re->apertureDiameterMm = cs.apertureDiameterMm;
+            else if (auto* hp = camera->CastOrNullptr<HybridPsfCamera>())
+                hp->apertureDiameterMm = cs.apertureDiameterMm;
+        }
+        if (cs.bokehBias >= 0.0f) {
+            if (auto* tl = camera->CastOrNullptr<ThinLensCamera>())
+                tl->bokehBias = cs.bokehBias;
+            else if (auto* fi = camera->CastOrNullptr<FisheyeCamera>())
+                fi->bokehBias = cs.bokehBias;
+        }
+        if (!cs.lensPath.empty()) {
+            if (auto* re = camera->CastOrNullptr<RealisticCamera>()) {
+                if (cs.lensPath != re->getLensPath()
+                    || cs.glassCatalogs != re->getGlassCatalogPaths())
+                    re->load(cs.lensPath, cs.glassCatalogs);
+            } else if (auto* hp = camera->CastOrNullptr<HybridPsfCamera>()) {
+                if (cs.lensPath != hp->getLensPath()
+                    || cs.glassCatalogs != hp->getGlassCatalogPaths())
+                    hp->load(cs.lensPath, cs.glassCatalogs, cs.rayLutPath);
+            }
+        }
+
         cameraInstance->setWorldTransformFromMatrix(ToGlm(newCameraTransform));
         camera->getSensor().setOrigin(SensorOrigin::LowerLeft);
     }
 
-    HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
     const int targetSamples = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("samples"), 64));
-    RenderSettings& settings = scene.getRenderSettings();
-    settings.samples = 1;
-    settings.maxSamples = targetSamples;
-    settings.maxBounces = std::max(
+    RenderSettings& rs = scene.getRenderSettings();
+    rs.samples = 1;
+    rs.maxSamples = targetSamples;
+    rs.maxBounces = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("maxBounces"), 8));
-    settings.aovEnabled = depthRequested && !directViewport;
-    raytracer.setAovEnabled(depthRequested);
+    rs.noiseLimitEnabled = delegate->GetRenderSetting<int>(
+        TfToken("noiseLimitEnabled"), 0) != 0;
+    rs.noiseLevel = delegate->GetRenderSetting<float>(
+        TfToken("noiseLevel"), 0.0001f);
+    rs.optixDenoiserEnabled = delegate->GetRenderSetting<int>(
+        TfToken("optixDenoiserEnabled"), 0) != 0;
+    rs.optixDenoiserMinSamples = std::max(
+        1, delegate->GetRenderSetting<int>(TfToken("optixDenoiserMinSamples"), 1));
+    rs.russianRouletteStartBounce = std::clamp(
+        delegate->GetRenderSetting<int>(TfToken("russianRouletteStartBounce"), 3),
+        0, 65);
+    rs.tonemappingEnabled = delegate->GetRenderSetting<int>(
+        TfToken("tonemappingEnabled"), 0) != 0;
+    rs.transparentBackground = delegate->GetRenderSetting<int>(
+        TfToken("transparentBackground"), 0) != 0;
+    rs.bufferVisualization = static_cast<BufferVisualization>(
+        delegate->GetRenderSetting<int>(TfToken("bufferVisualization"), 0));
+    rs.gaussianCutoffSigma = std::max(
+        0.1f, delegate->GetRenderSetting<float>(TfToken("gaussianCutoffSigma"), 3.0f));
+    rs.gaussianProxyType = static_cast<GaussianProxyType>(
+        delegate->GetRenderSetting<int>(TfToken("gaussianProxyType"), 3));
+    rs.gaussianShadingMode = static_cast<GaussianShadingMode>(
+        delegate->GetRenderSetting<int>(TfToken("gaussianShadingMode"), 1));
+    rs.gaussianRenderSphericalHarmonics = static_cast<SphericalHarmonicsOrder>(
+        std::clamp(delegate->GetRenderSetting<int>(TfToken("gaussianRenderSphericalHarmonics"), 3), 0, 3));
+    const bool bufferVisActive = rs.bufferVisualization != BufferVisualization::Beauty;
+    rs.aovEnabled = depthRequested || bufferVisActive;
+    raytracer.setAovEnabled(rs.aovEnabled);
 
     raytracer.renderFrame(accumulatedSamples_, accumulatedSamples_);
     raytracer.waitForRender();
 
-    const Image& colorImage = raytracer.getOutputColor();
+    const Image* outputImage = &raytracer.getOutputColor();
+    switch (rs.bufferVisualization) {
+    case BufferVisualization::Albedo:
+        outputImage = &raytracer.getOutputAlbedo();
+        break;
+    case BufferVisualization::Normal:
+        outputImage = &raytracer.getOutputNormal();
+        break;
+    case BufferVisualization::Position:
+        outputImage = &raytracer.getOutputPosition();
+        break;
+    default:
+        break;
+    }
     bool copied = directViewport && CopyToOpenGlTexture(
-        glColorTexture, colorImage.getCudaArray(), width, height);
+        glColorTexture, outputImage->getCudaArray(), width, height);
     if (!copied && colorBuffer != nullptr)
-        copied = colorBuffer->CopyFromCudaArray(colorImage.getCudaArray());
+        copied = colorBuffer->CopyFromCudaArray(outputImage->getCudaArray());
     if (!copied) {
-        const Bitmap color = colorImage.toBitmap();
+        const Bitmap bitmap = outputImage->toBitmap();
         if (directViewport) {
-            UploadToOpenGlTexture(glColorTexture, color, width, height);
+            UploadToOpenGlTexture(glColorTexture, bitmap, width, height);
             copied = true;
         } else if (colorBuffer != nullptr) {
-            for (size_t pixel = 0; pixel < color.pixels().size(); ++pixel)
+            for (size_t pixel = 0; pixel < bitmap.pixels().size(); ++pixel)
                 colorBuffer->WriteFloatPixel(
-                    pixel, &color.pixels()[pixel].x, 4);
+                    pixel, &bitmap.pixels()[pixel].x, 4);
         }
     }
 

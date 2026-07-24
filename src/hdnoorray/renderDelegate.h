@@ -39,6 +39,7 @@ public:
     HdBprim* CreateFallbackBprim(const TfToken& typeId) override;
     void DestroyBprim(HdBprim* bprim) override;
 
+    void SetRenderSetting(const TfToken& key, const VtValue& value) override;
     void CommitResources(HdChangeTracker* tracker) override;
     HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
     HdAovDescriptor GetDefaultAovDescriptor(const TfToken& name) const override;

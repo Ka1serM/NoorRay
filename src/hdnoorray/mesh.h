@@ -5,6 +5,7 @@
 #include <pxr/imaging/hd/mesh.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -31,6 +32,9 @@ private:
     uint32_t meshIndex_{~0u};
     std::vector<uint64_t> objectIds_;
     SdfPath boundMaterialId_;
+
+    uint64_t gaussianAssetIndex_{~0u};
+    std::string splatPath_;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

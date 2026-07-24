@@ -13,13 +13,18 @@
 #include <pxr/imaging/hd/tokens.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include <glm/geometric.hpp>
 
+#include "Mesh/Assets/GaussianAsset.h"
 #include "Mesh/Assets/MeshAsset.h"
 #include "Mesh/Transform.h"
+#include "Scene/GaussianInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 
@@ -166,6 +171,54 @@ void BuildTriangleMesh(
 }
 }
 
+// ---------------------------------------------------------------------------
+// Decode a gaussian-splat path from a UV-encoded marker mesh.
+// The encoding stores "GSPLAT\0" + 4-byte LE path length + UTF-8 path bytes
+// in the st primvar, with two bytes per UV channel (u=byte0/255, v=byte1/255).
+// ---------------------------------------------------------------------------
+static std::string SplatNameFromPath(const std::string& path)
+{
+    const size_t slash = path.find_last_of("/\\");
+    std::string name = slash != std::string::npos ? path.substr(slash + 1) : path;
+    const size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos)
+        name = name.substr(0, dot);
+    return name;
+}
+
+static std::optional<std::string> DecodeSplatPath(const VtValue& value)
+{
+    if (!value.IsHolding<VtVec2fArray>())
+        return std::nullopt;
+
+    const VtVec2fArray& uvs = value.UncheckedGet<VtVec2fArray>();
+
+    std::vector<uint8_t> bytes;
+    bytes.reserve(uvs.size() * 2);
+    for (const GfVec2f& uv : uvs) {
+        bytes.push_back(static_cast<uint8_t>(
+            std::clamp(std::lround(uv[0] * 255.0f), 0L, 255L)));
+        bytes.push_back(static_cast<uint8_t>(
+            std::clamp(std::lround(uv[1] * 255.0f), 0L, 255L)));
+    }
+
+    constexpr uint8_t magic[] = {'G', 'S', 'P', 'L', 'A', 'T', 0};
+    constexpr size_t headerSize = sizeof(magic) + sizeof(uint32_t);
+
+    if (bytes.size() < headerSize
+        || std::memcmp(bytes.data(), magic, sizeof(magic)) != 0)
+        return std::nullopt;
+
+    uint32_t pathLength = 0;
+    std::memcpy(&pathLength, bytes.data() + sizeof(magic), sizeof(pathLength));
+
+    if (pathLength > bytes.size() - headerSize)
+        return std::nullopt;
+
+    return std::string(
+        reinterpret_cast<const char*>(bytes.data() + headerSize), pathLength);
+}
+
 HdNoorRayMesh::HdNoorRayMesh(const SdfPath& id)
     : HdMesh(id)
 {
@@ -201,6 +254,105 @@ void HdNoorRayMesh::Sync(
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     std::scoped_lock lock(param.mutex);
     Scene& scene = param.session.scene;
+    const std::string primName = GetId().GetString();
+
+    // --- Gaussian splat detection via UV-encoded marker mesh ---
+    if (*dirtyBits & HdChangeTracker::DirtyPrimvar) {
+        const VtValue st = delegate->Get(GetId(), TfToken("st"));
+        const auto decodedPath = DecodeSplatPath(st);
+        if (decodedPath) {
+            if (*decodedPath != splatPath_) {
+                // Path changed — remove old instances so we reload below.
+                for (const uint64_t oid : objectIds_)
+                    scene.removeObject(oid);
+                objectIds_.clear();
+                gaussianAssetIndex_ = ~0u;
+                splatPath_ = *decodedPath;
+            }
+        } else if (!splatPath_.empty()) {
+            for (const uint64_t oid : objectIds_)
+                scene.removeObject(oid);
+            objectIds_.clear();
+            gaussianAssetIndex_ = ~0u;
+            splatPath_.clear();
+        }
+    }
+
+    const bool isGaussian = !splatPath_.empty();
+
+    if (isGaussian) {
+        if (meshIndex_ != ~0u) {
+            param.UnbindMaterial(boundMaterialId_, meshIndex_);
+            boundMaterialId_ = SdfPath();
+            for (const uint64_t oid : objectIds_)
+                scene.removeObject(oid);
+            objectIds_.clear();
+            meshIndex_ = ~0u;
+        }
+
+        if (gaussianAssetIndex_ == ~0u) {
+            gaussianAssetIndex_ = scene.add(
+                GaussianAsset::CreateFromFile(scene, primName, splatPath_));
+        }
+
+        const bool instancesDirty = objectIds_.empty()
+            || (*dirtyBits & (HdChangeTracker::DirtyTransform
+                | HdChangeTracker::DirtyInstancer)) != 0;
+        if (instancesDirty) {
+            _UpdateInstancer(delegate, dirtyBits);
+            VtMatrix4dArray transforms;
+            if (GetInstancerId().IsEmpty()) {
+                transforms.push_back(delegate->GetTransform(GetId()));
+            } else {
+                HdInstancer::_SyncInstancerAndParents(
+                    delegate->GetRenderIndex(), GetInstancerId());
+                auto* instancer = dynamic_cast<HdNoorRayInstancer*>(
+                    delegate->GetRenderIndex().GetInstancer(GetInstancerId()));
+                if (instancer != nullptr)
+                    transforms = instancer->ComputeInstanceTransforms(GetId());
+                const GfMatrix4d prototypeTransform = delegate->GetTransform(GetId());
+                for (GfMatrix4d& transform : transforms)
+                    transform = prototypeTransform * transform;
+                if (transforms.empty())
+                    transforms.push_back(prototypeTransform);
+            }
+
+            // Resize gaussian instance list to match the number of transforms.
+            while (objectIds_.size() > transforms.size()) {
+                scene.removeObject(objectIds_.back());
+                objectIds_.pop_back();
+            }
+            while (objectIds_.size() < transforms.size()) {
+                auto instance = std::make_unique<GaussianInstance>(
+                    scene, SplatNameFromPath(splatPath_),
+                    static_cast<uint32_t>(gaussianAssetIndex_),
+                    Transform{});
+                objectIds_.push_back(scene.add(std::move(instance)));
+            }
+            for (size_t i = 0; i < transforms.size(); ++i)
+                if (SceneObject* object = scene.getObject(objectIds_[i]))
+                    object->setWorldTransformFromMatrix(ToGlm(transforms[i]));
+        }
+
+        if (*dirtyBits & HdChangeTracker::DirtyVisibility) {
+            const bool visible = delegate->GetVisible(GetId());
+            for (const uint64_t oid : objectIds_)
+                if (SceneObject* object = scene.getObject(oid))
+                    object->setVisible(visible);
+        }
+
+        if (!objectIds_.empty()) {
+            scene.setDirtyFlag(TLAS);
+            scene.setDirtyFlag(Accumulation);
+        }
+
+        UpdateRenderTag(delegate, renderParam);
+        param.MarkSceneDirty();
+        *dirtyBits = HdChangeTracker::Clean;
+        return;
+    }
+
+    // --- Regular mesh code ---
     _UpdateInstancer(delegate, dirtyBits);
     const SdfPath requestedMaterialId = delegate->GetMaterialId(GetId());
     SetMaterialId(requestedMaterialId);
@@ -288,12 +440,15 @@ void HdNoorRayMesh::Finalize(HdRenderParam* renderParam)
 {
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     std::scoped_lock lock(param.mutex);
+    Scene& scene = param.session.scene;
     if (meshIndex_ != ~0u)
         param.UnbindMaterial(boundMaterialId_, meshIndex_);
     boundMaterialId_ = SdfPath();
-    for (const uint64_t objectId : objectIds_)
-        param.session.scene.removeObject(objectId);
+    for (const uint64_t oid : objectIds_)
+        scene.removeObject(oid);
     objectIds_.clear();
+    gaussianAssetIndex_ = ~0u;
+    splatPath_.clear();
     param.MarkSceneDirty();
 }
 

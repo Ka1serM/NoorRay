@@ -36,6 +36,7 @@ private:
     bool collectionDirty_{true};
     GfMatrix4d cameraTransform_;
     GfMatrix4d projectionMatrix_;
+
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

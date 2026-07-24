@@ -1,8 +1,7 @@
 #include "renderParam.h"
 
 #include "Raytracing/Runtime/Raytracer.h"
-
-#include <algorithm>
+#include "Scene/Texture.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -16,12 +15,39 @@ HdNoorRayRenderParam::HdNoorRayRenderParam()
 HdNoorRayRenderParam::~HdNoorRayRenderParam()
 {
     session.scene.setMutationBarrier({});
-    session.raytracer->waitForRender();
+    if (session.raytracer) {
+        session.raytracer->waitForRender();
+        session.raytracer.reset();
+    }
+}
+
+int HdNoorRayRenderParam::GetOrCreateTexture(
+    const std::string& filePath, const TextureEncoding encoding)
+{
+    const auto existing = textureCache_.find(filePath);
+    if (existing != textureCache_.end())
+        return existing->second;
+
+    Texture texture(filePath, encoding);
+    const Texture& added = session.scene.add(std::move(texture));
+    const int index = added.getSceneIndex();
+    textureCache_[filePath] = index;
+    return index;
 }
 
 void HdNoorRayRenderParam::MarkSceneDirty()
 {
     sceneVersion_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void HdNoorRayRenderParam::MarkRenderSettingsChanged()
+{
+    renderSettingsChanged_.store(true, std::memory_order_relaxed);
+}
+
+bool HdNoorRayRenderParam::ConsumeRenderSettingsChanged()
+{
+    return renderSettingsChanged_.exchange(false, std::memory_order_relaxed);
 }
 
 uint64_t HdNoorRayRenderParam::GetSceneVersion() const

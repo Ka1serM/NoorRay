@@ -6,7 +6,11 @@
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec4d.h>
 #include <pxr/base/gf/vec4f.h>
+#include <pxr/base/tf/warning.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
+#include <pxr/usd/sdf/assetPath.h>
+
+#include "Shading/Sellmeier.h"
 
 #include <algorithm>
 #include <mutex>
@@ -47,6 +51,20 @@ glm::vec3 ColorValue(const VtValue& value, const glm::vec3 fallback)
     return fallback;
 }
 
+std::string TextureFilePath(const VtValue& value)
+{
+    if (value.IsHolding<SdfAssetPath>()) {
+        const SdfAssetPath& assetPath = value.UncheckedGet<SdfAssetPath>();
+        std::string path = assetPath.GetResolvedPath();
+        if (path.empty())
+            path = assetPath.GetAssetPath();
+        return path;
+    }
+    if (value.IsHolding<std::string>())
+        return value.UncheckedGet<std::string>();
+    return {};
+}
+
 void ApplyPreviewSurface(
     const std::map<TfToken, VtValue>& parameters, Material& material)
 {
@@ -62,6 +80,12 @@ void ApplyPreviewSurface(
         material.metallic = std::clamp(FloatValue(*v, material.metallic), 0.0f, 1.0f);
     if (const VtValue* v = get("opacity"))
         material.opacity = std::clamp(FloatValue(*v, material.opacity), 0.0f, 1.0f);
+    if (const VtValue* v = get("transmission"))
+        material.transmission = std::clamp(FloatValue(*v, material.transmission), 0.0f, 1.0f);
+    if (const VtValue* v = get("transmissionColor"))
+        material.transmissionColor = ColorValue(*v, material.transmissionColor);
+    if (const VtValue* v = get("ior"))
+        material.sellmeier = constantIorSellmeier(FloatValue(*v, 1.5f));
     if (const VtValue* v = get("emissiveColor")) {
         material.emission = ColorValue(*v, material.emission);
         material.emissionStrength = std::max({
@@ -74,6 +98,30 @@ void ApplyPreviewSurface(
         material.specular = std::clamp(
             (color.x + color.y + color.z) / 3.0f, 0.0f, 1.0f);
     }
+}
+
+void ApplyTextureConnection(
+    const TfToken& inputName,
+    const int textureIndex,
+    Material& material)
+{
+    const std::string& name = inputName.GetString();
+    if (name == "diffuseColor")
+        material.albedoIndex = textureIndex;
+    else if (name == "roughness")
+        material.roughnessIndex = textureIndex;
+    else if (name == "metallic")
+        material.metallicIndex = textureIndex;
+    else if (name == "specularColor")
+        material.specularIndex = textureIndex;
+    else if (name == "opacity")
+        material.opacityIndex = textureIndex;
+    else if (name == "transmission")
+        material.transmissionIndex = textureIndex;
+    else if (name == "emissiveColor")
+        material.emissionIndex = textureIndex;
+    else if (name == "normal")
+        material.normalIndex = textureIndex;
 }
 }
 
@@ -92,6 +140,7 @@ void HdNoorRayMaterial::Sync(
     Material parsed;
     parsed.albedo = glm::vec3(0.8f);
     parsed.roughness = 0.5f;
+    auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     if (resource.IsHolding<HdMaterialNetworkMap>()) {
         const HdMaterialNetworkMap& networks =
             resource.UncheckedGet<HdMaterialNetworkMap>();
@@ -106,15 +155,47 @@ void HdNoorRayMaterial::Sync(
     } else if (resource.IsHolding<HdMaterialNetwork2>()) {
         const HdMaterialNetwork2& network =
             resource.UncheckedGet<HdMaterialNetwork2>();
+
+        // First pass: collect texture nodes and load textures.
+        std::map<SdfPath, int> textureNodeIndices;
         for (const auto& [path, node] : network.nodes) {
-            (void)path;
+            if (node.nodeTypeId.GetString().find("UsdUVTexture")
+                == std::string::npos)
+                continue;
+            const auto fileIt = node.parameters.find(TfToken("file"));
+            if (fileIt == node.parameters.end())
+                continue;
+            const std::string filePath = TextureFilePath(fileIt->second);
+            if (filePath.empty())
+                continue;
+            try {
+                const int texIndex = param.GetOrCreateTexture(
+                    filePath, TextureEncoding::Linear8);
+                textureNodeIndices[path] = texIndex;
+            } catch (const std::exception& e) {
+                TF_WARN("Failed to load texture '%s': %s",
+                    filePath.c_str(), e.what());
+            }
+        }
+
+        // Second pass: process UsdPreviewSurface and wire up textures.
+        for (const auto& [path, node] : network.nodes) {
             if (node.nodeTypeId.GetString().find("UsdPreviewSurface")
-                != std::string::npos)
-                ApplyPreviewSurface(node.parameters, parsed);
+                == std::string::npos)
+                continue;
+            ApplyPreviewSurface(node.parameters, parsed);
+            for (const auto& [inputName, connections] : node.inputConnections) {
+                if (connections.empty())
+                    continue;
+                const auto texIt = textureNodeIndices.find(
+                    connections[0].upstreamNode);
+                if (texIt == textureNodeIndices.end())
+                    continue;
+                ApplyTextureConnection(inputName, texIt->second, parsed);
+            }
         }
     }
     material_ = parsed;
-    auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     std::scoped_lock lock(param.mutex);
     param.PublishMaterial(GetId(), material_);
     *dirtyBits = Clean;

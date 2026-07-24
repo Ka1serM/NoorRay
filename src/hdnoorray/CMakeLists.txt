@@ -122,7 +122,7 @@ if(NR_USD_PYTHON_PATCHLEVEL_DIR)
             NoorRayHydraUsd INTERFACE "${NR_USD_PYTHON_PATCHLEVEL_DIR}")
 endif()
 
-add_library(hdNoorRay MODULE
+add_library(hdnoorray MODULE
         api.h
         instancer.cpp
         instancer.h
@@ -153,25 +153,25 @@ add_library(hdNoorRay MODULE
         rendererPlugin.cpp
         rendererPlugin.h)
 
-target_compile_features(hdNoorRay PRIVATE cxx_std_23)
-target_compile_definitions(hdNoorRay PRIVATE HDNOORRAY_EXPORTS)
-target_link_libraries(hdNoorRay PRIVATE
+target_compile_features(hdnoorray PRIVATE cxx_std_23)
+target_compile_definitions(hdnoorray PRIVATE HDNOORRAY_EXPORTS)
+target_link_libraries(hdnoorray PRIVATE
         libnoorray
         NoorRayHydraUsd
         OpenGL::GL)
 if(UNIX AND NOT APPLE)
     # The Blender Flatpak does not provide CUDA's user-mode runtime. Bundle it
     # beside the delegate and let the dynamic loader resolve it locally.
-    target_link_options(hdNoorRay PRIVATE "LINKER:-rpath,$ORIGIN")
+    target_link_options(hdnoorray PRIVATE "LINKER:-rpath,$ORIGIN")
 endif()
-set_target_properties(hdNoorRay PROPERTIES
+set_target_properties(hdnoorray PROPERTIES
         POSITION_INDEPENDENT_CODE ON
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hdnoorray/plugin")
 
 set(HDNOORRAY_PLUGIN_LIBRARY
-        "${CMAKE_SHARED_LIBRARY_PREFIX}hdNoorRay${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        "${CMAKE_SHARED_LIBRARY_PREFIX}hdnoorray${CMAKE_SHARED_LIBRARY_SUFFIX}")
 configure_file(
         resources/plugInfo.json.in
         "${CMAKE_BINARY_DIR}/hdnoorray/plugin/plugInfo.json"
@@ -180,15 +180,34 @@ configure_file(
 set(HDNOORRAY_BLENDER_EXTENSION_DIR
         "${CMAKE_BINARY_DIR}/hdnoorray/blender_extension/hdnoorray")
 file(MAKE_DIRECTORY "${HDNOORRAY_BLENDER_EXTENSION_DIR}")
-add_custom_command(TARGET hdNoorRay POST_BUILD
+
+# Track Python files as proper dependencies so changes to them trigger a copy
+# even when the C++ library doesn't need relinking.
+add_custom_command(
+    OUTPUT "${HDNOORRAY_BLENDER_EXTENSION_DIR}/__init__.py"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/__init__.py"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/__init__.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/__init__.py"
+    COMMENT "Copying __init__.py")
+add_custom_command(
+    OUTPUT "${HDNOORRAY_BLENDER_EXTENSION_DIR}/blender_manifest.toml"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/blender_manifest.toml"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/blender_manifest.toml"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/blender_manifest.toml"
+    COMMENT "Copying blender_manifest.toml")
+add_custom_target(hdnoorray_py
+    DEPENDS
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/__init__.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/blender_manifest.toml")
+add_dependencies(hdnoorray hdnoorray_py)
+
+add_custom_command(TARGET hdnoorray POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory
                 "${HDNOORRAY_BLENDER_EXTENSION_DIR}/plugin"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/__init__.py"
-                "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/blender_manifest.toml"
-                "${HDNOORRAY_BLENDER_EXTENSION_DIR}"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "$<TARGET_FILE:hdNoorRay>"
+                "$<TARGET_FILE:hdnoorray>"
                 "${CMAKE_BINARY_DIR}/hdnoorray/plugin/plugInfo.json"
                 "${HDNOORRAY_BLENDER_EXTENSION_DIR}/plugin"
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -201,10 +220,10 @@ add_custom_command(TARGET hdNoorRay POST_BUILD
                 blender_manifest.toml
                 plugin
         WORKING_DIRECTORY "${HDNOORRAY_BLENDER_EXTENSION_DIR}"
-        COMMENT "Assembling the installable hdNoorRay Blender extension")
+        COMMENT "Assembling the installable hdnoorray Blender extension")
 
 include(GNUInstallDirs)
-install(TARGETS hdNoorRay
-        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/usd/hdNoorRay")
+install(TARGETS hdnoorray
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/usd/hdnoorray")
 install(FILES "${CMAKE_BINARY_DIR}/hdnoorray/plugin/plugInfo.json"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/usd/hdNoorRay")
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/usd/hdnoorray")

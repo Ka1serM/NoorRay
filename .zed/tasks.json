@@ -19,7 +19,7 @@
   },
   {
     "label": "configure release",
-    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DPython_EXECUTABLE=$ZED_WORKTREE_ROOT/.venv/bin/python -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH='86;89' -DNR_BUILD_PYTHON=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DPython_EXECUTABLE=/usr/bin/python3.13 -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH='86;89' -DNR_BUILD_HYDRA=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -72,8 +72,8 @@
     "hide": "never"
   },
   {
-    "label": "build hdNoorRay Blender 5.2",
-    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/hdnoorray -DNR_BUILD_HYDRA=ON -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DCMAKE_C_COMPILER=/usr/bin/gcc-15 -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNR_CUDA_ARCH='86;89' -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake --build build/hdnoorray --target hdNoorRay -j$(nproc) && mkdir -p /home/marcel/.config/blender/5.2/extensions/user_default && ln -sfn $ZED_WORKTREE_ROOT/build/hdnoorray/hdnoorray/blender_extension/hdnoorray /home/marcel/.config/blender/5.2/extensions/user_default/hdnoorray",
+    "label": "build hdnoorray Blender 5.2",
+    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake --build build/release --target hdnoorray -j$(nproc) && rm -rf /home/marcel/.config/blender/5.2/extensions/user_default/hdnoorray && mkdir -p /home/marcel/.config/blender/5.2/extensions/user_default && ln -sfn $ZED_WORKTREE_ROOT/build/release/hdnoorray/blender_extension/hdnoorray /home/marcel/.config/blender/5.2/extensions/user_default/hdnoorray",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,

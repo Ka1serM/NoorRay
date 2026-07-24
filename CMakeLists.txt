@@ -566,6 +566,7 @@ if(NR_BUILD_PYTHON)
         set(NR_PYTHON_DEV_MODULE Development.Module)
     endif()
 
+    set(Python_EXECUTABLE "/usr/bin/python3.13" CACHE FILEPATH "Python interpreter")
     find_package(Python 3.12 COMPONENTS Interpreter ${NR_PYTHON_DEV_MODULE} REQUIRED)
     add_subdirectory("${PROJECT_SOURCE_DIR}/external/nanobind" "${CMAKE_BINARY_DIR}/pynoorray/nanobind" EXCLUDE_FROM_ALL)
 

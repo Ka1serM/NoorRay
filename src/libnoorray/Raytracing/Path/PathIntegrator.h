@@ -61,6 +61,8 @@ public:
     // reuse this exact query rather than giving the scene a renderer-specific API.
     NR_GPU RayHit intersect(
         const Ray& ray,
+        const float tMin,
+        const float tMax,
         const uint32_t sampleIndex,
         const uint32_t excludedGaussianId = InvalidIndex,
         const bool terminateOnFirstGaussianHit = false) const
@@ -76,8 +78,8 @@ public:
                     params.scene.tlasHandle,
                     make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
                     make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
-                    ray.minDistance(),
-                    ray.maxDistance(),
+                    tMin,
+                    tMax,
                     0.0f,
                     MeshVisibility,
                     OPTIX_RAY_FLAG_DISABLE_ANYHIT,
@@ -96,7 +98,7 @@ public:
 
             const float gaussianTMax = meshHit.instanceIndex != InvalidIndex
                 ? meshHit.t
-                : ray.maxDistance();
+                : tMax;
             uint32_t payload0 = sampleIndex;
             uint32_t payload1 = __float_as_uint(gaussianTMax);
             uint32_t payload2 = excludedGaussianId;
@@ -108,7 +110,7 @@ public:
                 params.scene.tlasHandle,
                 make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
                 make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
-                ray.minDistance(),
+                tMin,
                 gaussianTMax,
                 0.0f,
                 GaussianVisibility,
@@ -137,8 +139,8 @@ public:
                 params.scene.tlasHandle,
                 make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
                 make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
-                ray.minDistance(),
-                ray.maxDistance(),
+                tMin,
+                tMax,
                 0.0f,
                 MeshVisibility,
                 OPTIX_RAY_FLAG_DISABLE_ANYHIT,
@@ -186,7 +188,9 @@ private:
         const Surface& surface,
         const LightSample& light,
         const glm::vec3& geometricNormal,
-        const glm::vec3& shadingNormal) const
+        const glm::vec3& shadingNormal,
+        float& outTMin,
+        float& outTMax) const
     {
         const glm::vec3 terminatorOffset = nr::shadowTerminatorOffset(
             params.scene, surface.instanceIndex, surface.primitiveIndex,
@@ -195,16 +199,20 @@ private:
         const glm::vec3 toLight = light.direction * light.distance - terminatorOffset;
         const float distance = glm::length(toLight);
         if (distance <= 0.0f)
+        {
+            outTMin = 0.0f;
+            outTMax = 0.0f;
             return Ray::invalid();
+        }
 
         const glm::vec3 direction = toLight / distance;
+        outTMin = RayOffset;
+        outTMax = distance - 2.0f * RayOffset;
         return Ray(
             surface.position + terminatorOffset + geometricNormal
                 * (glm::dot(direction, geometricNormal) >= 0.0f
                     ? RayOffset : -RayOffset),
-            direction,
-            RayOffset,
-            distance - 2.0f * RayOffset);
+            direction);
     }
 
     NR_GPU static glm::vec3 sampleIsotropicDirection(RandomState& rng)
@@ -338,7 +346,8 @@ private:
     }
 
     NR_GPU LightHit intersectAnalyticLights(
-        const Ray& ray, const SampledWavelengths& wavelengths) const
+        const Ray& ray, const float tMin, const float tMax,
+        const SampledWavelengths& wavelengths) const
     {
         LightHit nearest{};
         uint32_t globalIndex = 0;
@@ -350,15 +359,15 @@ private:
         };
         for (uint32_t i = 0; i < params.scene.pointLightCount; ++i)
             consider(params.scene.pointLights[i].intersect(
-                ray, wavelengths, params.scene.spectrumTableScale,
+                ray, tMin, tMax, wavelengths, params.scene.spectrumTableScale,
                 params.scene.spectrumTableCoeffs, params.scene.d65));
         for (uint32_t i = 0; i < params.scene.spotLightCount; ++i)
             consider(params.scene.spotLights[i].intersect(
-                ray, wavelengths, params.scene.spectrumTableScale,
+                ray, tMin, tMax, wavelengths, params.scene.spectrumTableScale,
                 params.scene.spectrumTableCoeffs, params.scene.d65));
         for (uint32_t i = 0; i < params.scene.rectLightCount; ++i)
             consider(params.scene.rectLights[i].intersect(
-                ray, wavelengths, params.scene.spectrumTableScale,
+                ray, tMin, tMax, wavelengths, params.scene.spectrumTableScale,
                 params.scene.spectrumTableCoeffs, params.scene.d65));
         for (uint32_t i = 0; i < params.scene.directionalLightCount; ++i)
             consider(params.scene.directionalLights[i].intersect(
@@ -390,15 +399,17 @@ private:
 
     NR_GPU bool shadowOccluded(
         const Ray& ray,
+        const float tMin,
+        const float tMax,
         const uint32_t excludedGaussianId,
         RandomState& rng) const
     {
         const bool gaussian = gaussianEnabled();
-        float rayMin = ray.minDistance();
-        while (rayMin < ray.maxDistance())
+        float rayMin = tMin;
+        while (rayMin < tMax)
         {
             const uint32_t gaussianSampleIndex = gaussian ? randomUint(rng) : 0;
-            const RayHit hit = intersect(ray.withMinDistance(rayMin), gaussianSampleIndex,
+            const RayHit hit = intersect(ray, rayMin, tMax, gaussianSampleIndex,
                 excludedGaussianId, true);
             if (hit.instanceIndex == InvalidIndex)
                 return false;
@@ -426,10 +437,13 @@ private:
                 lightRng, light, environmentPdf))
             return SampledSpectrum(0.0f);
 
+        float shadowTMin, shadowTMax;
         const Ray shadowRay = spawnShadowRay(
-            surface, light, geometricNormal, bsdf.shadingNormal());
-        if (!shadowRay.hasTraversalInterval()
-            || shadowOccluded(shadowRay, InvalidIndex, shadowRng))
+            surface, light, geometricNormal, bsdf.shadingNormal(),
+            shadowTMin, shadowTMax);
+        if (glm::dot(shadowRay.direction(), shadowRay.direction()) <= 0.0f
+            || shadowTMax <= shadowTMin
+            || shadowOccluded(shadowRay, shadowTMin, shadowTMax, InvalidIndex, shadowRng))
             return SampledSpectrum(0.0f);
         const BsdfEvaluation evaluation = bsdf.evaluate(light.direction);
         if (environmentPdf > 0.0f)
@@ -455,10 +469,12 @@ private:
             return SampledSpectrum(0.0f);
 
         const Ray shadowRay = Ray::fromOffset(
-            position, light.direction, RayOffset, RayOffset,
-            light.distance - 2.0f * RayOffset);
-        if (!shadowRay.hasTraversalInterval()
-            || shadowOccluded(shadowRay, gaussianId, shadowRng))
+            position, light.direction, RayOffset);
+        const float shadowTMin = RayOffset;
+        const float shadowTMax = light.distance - 2.0f * RayOffset;
+        if (glm::dot(shadowRay.direction(), shadowRay.direction()) <= 0.0f
+            || shadowTMax <= shadowTMin
+            || shadowOccluded(shadowRay, shadowTMin, shadowTMax, gaussianId, shadowRng))
             return SampledSpectrum(0.0f);
         if (environmentPdf > 0.0f)
             light.radiance *= powerHeuristic(environmentPdf, Inv4Pi)
@@ -507,14 +523,16 @@ private:
     NR_GPU void trace(Ray ray, PathState& state, const uint32_t pixel) const
     {
         const bool gaussian = gaussianEnabled();
+        float tMin = Ray::DefaultMinDistance;
+        float tMax = Ray::DefaultMaxDistance;
         for (uint32_t segment = 0; segment < params.depth; ++segment)
         {
             const uint32_t gaussianSampleIndex = gaussian
                 ? hashCombine32(pixel, segment) : pixel;
-            const RayHit hit = intersect(ray, gaussianSampleIndex);
+            const RayHit hit = intersect(ray, tMin, tMax, gaussianSampleIndex);
             if (state.depth > 0)
             {
-                const LightHit light = intersectAnalyticLights(ray, state.wl);
+                const LightHit light = intersectAnalyticLights(ray, tMin, tMax, state.wl);
                 const float surfaceDistance = hit.instanceIndex == InvalidIndex
                     ? Ray::InfiniteDistance : hit.t;
                 if (light.radiance.maxComponent() > 0.0f
@@ -566,6 +584,8 @@ private:
                     hit.instanceIndex, albedo, state.wl, randoms.light, randoms.shadow);
                 const glm::vec3 direction = sampleIsotropicDirection(randoms.bsdf);
                 ray = Ray::fromOffset(position, direction, RayOffset);
+                tMin = Ray::DefaultMinDistance;
+                tMax = Ray::DefaultMaxDistance;
                 state.scatter(albedo, Inv4Pi);
                 state.alpha = 1.0f;
                 if (!survivesRussianRoulette(state, randoms.roulette))
@@ -581,6 +601,8 @@ private:
                     params.scene.textures, surface.uv, randoms.opacity))
             {
                 ray = spawnSurfaceRay(surface, ray.direction(), geometricNormal);
+                tMin = Ray::DefaultMinDistance;
+                tMax = Ray::DefaultMaxDistance;
                 continue;
             }
 
@@ -609,6 +631,8 @@ private:
             if (!survivesRussianRoulette(state, randoms.roulette))
                 return;
             ray = spawnSurfaceRay(surface, bsdfSample.direction, geometricNormal);
+            tMin = Ray::DefaultMinDistance;
+            tMax = Ray::DefaultMaxDistance;
         }
     }
 

@@ -112,8 +112,7 @@ HostParameters parametersFromScene(const Scene& scene)
     const auto instances = scene.getGaussianInstances();
     if (instances.size() != 1 || scene.getGaussianAssets().size() != 1)
         throw std::runtime_error("Gaussian training requires exactly one Gaussian instance and asset");
-    const GaussianAsset& asset = scene.getGaussianAsset(
-        instances.front()->getGaussianAssetIndex());
+    const GaussianAsset& asset = instances.front()->getGaussianAsset();
     const size_t gaussianCount = asset.getGaussianCount();
     HostParameters result{std::vector<float>(gaussianCount * 3), std::vector<float>(gaussianCount * 3),
         std::vector<float>(gaussianCount * 4), std::vector<float>(gaussianCount),

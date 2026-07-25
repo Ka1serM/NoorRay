@@ -33,19 +33,19 @@ void MainMenuBar::renderAddMenu() const {
     if (ImGui::BeginMenu("Add")) {
         if (ImGui::BeginMenu("Primitives")) {
             if (ImGui::MenuItem("Cube")) {
-                const uint32_t cube = scene.add(MeshAsset::CreateCube(scene, "Cube", {}));
+                const MeshAssetRef cube = scene.add(MeshAsset::CreateCube(scene, "Cube", {}));
                 auto instance = std::make_unique<MeshInstance>(scene, "Cube Instance", cube, Transform(vec3(0, 0, 0)));
-                scene.setActiveObjectId(scene.add(std::move(instance)));
+                scene.setActiveObject(scene.add(std::move(instance)));
             }
             if (ImGui::MenuItem("Plane")) {
-                const uint32_t plane = scene.add(MeshAsset::CreatePlane(scene, "Plane", {}));
+                const MeshAssetRef plane = scene.add(MeshAsset::CreatePlane(scene, "Plane", {}));
                 auto instance = std::make_unique<MeshInstance>(scene, "Plane Instance", plane, Transform(vec3(0, 0, 0)));
-                scene.setActiveObjectId(scene.add(std::move(instance)));
+                scene.setActiveObject(scene.add(std::move(instance)));
             }
             if (ImGui::MenuItem("Sphere")) {
-                const uint32_t sphere = scene.add(MeshAsset::CreateSphere(scene, "Sphere", {}, 24, 48));
+                const MeshAssetRef sphere = scene.add(MeshAsset::CreateSphere(scene, "Sphere", {}, 24, 48));
                 auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
-                scene.setActiveObjectId(scene.add(std::move(instance)));
+                scene.setActiveObject(scene.add(std::move(instance)));
             }
             ImGui::EndMenu();
         }
@@ -54,22 +54,22 @@ void MainMenuBar::renderAddMenu() const {
             if (ImGui::MenuItem("Directional Light")) {
                 auto light = std::make_unique<LightInstance>(scene, "Directional Light",
                     Transform(vec3(0, 0, 0)), LightInstance::TypeDirectional);
-                scene.setActiveObjectId(scene.add(std::move(light)));
+                scene.setActiveObject(scene.add(std::move(light)));
             }
             if (ImGui::MenuItem("Point Light")) {
                 auto light = std::make_unique<LightInstance>(scene, "Point Light",
                     Transform(vec3(0, 0, 0)), LightInstance::TypePoint);
-                scene.setActiveObjectId(scene.add(std::move(light)));
+                scene.setActiveObject(scene.add(std::move(light)));
             }
             if (ImGui::MenuItem("Spot Light")) {
                 auto light = std::make_unique<LightInstance>(scene, "Spot Light",
                     Transform(vec3(0, 0, 0)), LightInstance::TypeSpot);
-                scene.setActiveObjectId(scene.add(std::move(light)));
+                scene.setActiveObject(scene.add(std::move(light)));
             }
             if (ImGui::MenuItem("Rect Light")) {
                 auto light = std::make_unique<LightInstance>(scene, "Rect Light",
                     Transform(vec3(0, 0, 0)), LightInstance::TypeRect);
-                scene.setActiveObjectId(scene.add(std::move(light)));
+                scene.setActiveObject(scene.add(std::move(light)));
             }
             ImGui::EndMenu();
         }
@@ -77,7 +77,7 @@ void MainMenuBar::renderAddMenu() const {
             auto camera = std::make_unique<ThinLensCamera>();
             auto instance = std::make_unique<CameraInstance>(
                 std::move(camera), "Camera", Transform(vec3(0.f, 0.f, 5.f)));
-            scene.setActiveObjectId(scene.add(std::move(instance)));
+            scene.setActiveObject(scene.add(std::move(instance)));
         }
         ImGui::EndMenu();
     }

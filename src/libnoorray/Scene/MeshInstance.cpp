@@ -8,13 +8,13 @@ void MeshInstance::accept(SceneObjectVisitor& visitor)
     visitor.visit(*this);
 }
 
-MeshInstance::MeshInstance(Scene& scene, const std::string& name, const uint32_t meshIndex, const Transform& transf)
-    : SceneObject(scene, name, transf), meshIndex(meshIndex)
+MeshInstance::MeshInstance(Scene& scene, const std::string& name, const MeshAssetRef& meshAsset, const Transform& transf)
+    : SceneObject(scene, name, transf), meshAsset(meshAsset)
 {}
 
 MeshInstance::MeshInstance(const MeshInstance& other)
     : SceneObject(other),
-      meshIndex(other.meshIndex)
+      meshAsset(other.meshAsset)
 {}
 
 std::unique_ptr<SceneObject> MeshInstance::clone() const {

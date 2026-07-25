@@ -182,6 +182,43 @@ void HdNoorRayRenderDelegate::DestroyBprim(HdBprim* bprim)
     delete bprim;
 }
 
+namespace
+{
+// Render settings arrive from Python, where the value type is whatever the host
+// happened to pass. Reading them defensively keeps a mistyped setting from
+// throwing out of a Hydra callback and taking the host down with it.
+int IntSetting(const VtValue& value, const int fallback)
+{
+    if (value.IsHolding<int>())
+        return value.UncheckedGet<int>();
+    if (value.IsHolding<bool>())
+        return value.UncheckedGet<bool>() ? 1 : 0;
+    if (value.IsHolding<float>())
+        return static_cast<int>(value.UncheckedGet<float>());
+    if (value.IsHolding<double>())
+        return static_cast<int>(value.UncheckedGet<double>());
+    return fallback;
+}
+
+float FloatSetting(const VtValue& value, const float fallback)
+{
+    if (value.IsHolding<float>())
+        return value.UncheckedGet<float>();
+    if (value.IsHolding<double>())
+        return static_cast<float>(value.UncheckedGet<double>());
+    if (value.IsHolding<int>())
+        return static_cast<float>(value.UncheckedGet<int>());
+    return fallback;
+}
+
+std::string StringSetting(const VtValue& value, const std::string& fallback)
+{
+    if (value.IsHolding<std::string>())
+        return value.UncheckedGet<std::string>();
+    return fallback;
+}
+}
+
 void HdNoorRayRenderDelegate::SetRenderSetting(
     const TfToken& key, const VtValue& value)
 {
@@ -189,23 +226,23 @@ void HdNoorRayRenderDelegate::SetRenderSetting(
     CameraSettings cs = renderParam_->cameraSettings;
     bool isCamera = true;
     if (key == TfToken("cameraProjection"))
-        cs.projectionType = value.Get<int>();
+        cs.projectionType = IntSetting(value, cs.projectionType);
     else if (key == TfToken("cameraApertureDiameter"))
-        cs.apertureDiameterMm = value.Get<float>();
+        cs.apertureDiameterMm = FloatSetting(value, cs.apertureDiameterMm);
     else if (key == TfToken("cameraBokehBias"))
-        cs.bokehBias = value.Get<float>();
+        cs.bokehBias = FloatSetting(value, cs.bokehBias);
     else if (key == TfToken("cameraLensPath"))
-        cs.lensPath = value.Get<std::string>();
+        cs.lensPath = StringSetting(value, cs.lensPath);
     else if (key == TfToken("cameraGlassCatalogs"))
-        cs.glassCatalogs = value.Get<std::string>();
+        cs.glassCatalogs = StringSetting(value, cs.glassCatalogs);
     else if (key == TfToken("cameraRayLutPath"))
-        cs.rayLutPath = value.Get<std::string>();
+        cs.rayLutPath = StringSetting(value, cs.rayLutPath);
     else if (key == TfToken("cameraSensorType"))
-        cs.sensorType = value.Get<int>();
+        cs.sensorType = IntSetting(value, cs.sensorType);
     else if (key == TfToken("cameraSensorPath"))
-        cs.sensorPath = value.Get<std::string>();
+        cs.sensorPath = StringSetting(value, cs.sensorPath);
     else if (key == TfToken("cameraPsfPath"))
-        cs.psfPath = value.Get<std::string>();
+        cs.psfPath = StringSetting(value, cs.psfPath);
     else
         isCamera = false;
 
@@ -240,13 +277,12 @@ HdNoorRayRenderDelegate::GetRenderSettingDescriptors() const
         {"OptiX Denoiser", TfToken("optixDenoiserEnabled"), VtValue(0)},
         {"Denoiser Min Samples", TfToken("optixDenoiserMinSamples"), VtValue(1)},
         {"Russian Roulette Start", TfToken("russianRouletteStartBounce"), VtValue(3)},
-        {"Tonemapping", TfToken("tonemappingEnabled"), VtValue(0)},
         {"Transparent Background", TfToken("transparentBackground"), VtValue(0)},
-        {"Buffer Visualization", TfToken("bufferVisualization"), VtValue(0)},
         {"Gaussian Cutoff Sigma", TfToken("gaussianCutoffSigma"), VtValue(3.0f)},
         {"Gaussian Proxy Type", TfToken("gaussianProxyType"), VtValue(3)},
         {"Gaussian Shading Mode", TfToken("gaussianShadingMode"), VtValue(1)},
         {"Gaussian SH Degree", TfToken("gaussianRenderSphericalHarmonics"), VtValue(3)},
+        {"Gaussian Proxy Overdraw", TfToken("gaussianProxyOverdrawVisualization"), VtValue(0)},
     };
 }
 
@@ -256,8 +292,6 @@ HdAovDescriptor HdNoorRayRenderDelegate::GetDefaultAovDescriptor(
     if (name == HdAovTokens->color)
         return {
             HdFormatFloat32Vec4, false, VtValue(GfVec4f(0.0f, 0.0f, 0.0f, 1.0f))};
-    if (name == HdAovTokens->depth)
-        return {HdFormatFloat32, false, VtValue(1.0f)};
     return {};
 }
 
@@ -265,7 +299,8 @@ VtDictionary HdNoorRayRenderDelegate::GetRenderStats() const
 {
     return {
         {"rendererName", VtValue(std::string("NoorRay"))},
-        {"percentDone", VtValue(0.0)},
+        {"percentDone", VtValue(renderParam_->GetProgress() * 100.0)},
+        {"totalClockTime", VtValue(renderParam_->GetTotalClockTime())},
     };
 }
 

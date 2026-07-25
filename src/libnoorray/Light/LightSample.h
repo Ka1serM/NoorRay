@@ -104,8 +104,8 @@ NR_CPU_GPU inline glm::vec3 sampleUniformSphere(const glm::vec2 random)
 }
 
 NR_CPU_GPU inline bool intersectSphereLight(
-    const Ray& ray, const glm::vec3 center, const float radius,
-    float& distance)
+    const Ray& ray, const float tMin, const float tMax,
+    const glm::vec3 center, const float radius, float& distance)
 {
     if (radius <= 0.0f)
         return false;
@@ -119,8 +119,8 @@ NR_CPU_GPU inline bool intersectSphereLight(
     const float root = sqrtf(discriminant);
     const float nearDistance = (-halfB - root) / a;
     const float farDistance = (-halfB + root) / a;
-    distance = nearDistance >= ray.minDistance() ? nearDistance : farDistance;
-    return distance >= ray.minDistance() && distance <= ray.maxDistance();
+    distance = nearDistance >= tMin ? nearDistance : farDistance;
+    return distance >= tMin && distance <= tMax;
 }
 
 NR_CPU_GPU inline float sphereLightPdf(
@@ -173,8 +173,8 @@ NR_CPU_GPU inline LightSample sampleSphereLight(
     sample.direction = sampleUniformSphere(
         glm::vec2(randomFloat(rng), randomFloat(rng)));
 
-    const Ray sampleRay(origin, sample.direction, 0.0f, Ray::InfiniteDistance);
-    if (!intersectSphereLight(sampleRay, center, radius, sample.distance))
+    const Ray sampleRay(origin, sample.direction);
+    if (!intersectSphereLight(sampleRay, 0.0f, Ray::InfiniteDistance, center, radius, sample.distance))
         return {};
     sample.pdf = sphereLightPdf(origin, center, radius);
     return sample;

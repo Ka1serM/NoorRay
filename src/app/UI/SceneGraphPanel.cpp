@@ -23,9 +23,9 @@ void SceneGraphPanel::renderUi() {
     // The Dummy also serves as the drop target.
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT")) {
-            IM_ASSERT(payload->DataSize == sizeof(uint64_t));
-            const uint64_t objectId = *static_cast<const uint64_t*>(payload->Data);
-            scene.reparentObject(objectId);
+            IM_ASSERT(payload->DataSize == sizeof(SceneObjectHandle));
+            scene.reparentObject(
+                *static_cast<const SceneObjectHandle*>(payload->Data));
         }
         ImGui::EndDragDropTarget();
     }
@@ -34,16 +34,16 @@ void SceneGraphPanel::renderUi() {
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
     {
         const bool isCtrlDown = ImGui::IsKeyDown(ImGuiMod_Ctrl);
-        const uint64_t activeObjectId = scene.getActiveObjectId();
+        const SceneObjectHandle activeObject = scene.getActiveObjectHandle();
 
-        if (activeObjectId != 0) {
+        if (activeObject.isValid()) {
             // Copy (Ctrl+C)
             if (isCtrlDown && ImGui::IsKeyPressed(ImGuiKey_C))
-                scene.copyObject(activeObjectId);
-            
+                scene.copyObject(activeObject);
+
             // Deletion (Delete key)
             if (ImGui::IsKeyPressed(ImGuiKey_Delete))
-                scene.removeObject(activeObjectId);
+                scene.removeObject(activeObject);
         }
 
         // Paste (Ctrl+V) - can happen even if no object is selected
@@ -58,10 +58,10 @@ void SceneGraphPanel::drawNode(const std::shared_ptr<SceneObject>& node) {
     if (!node)
         return;
 
-    const uint64_t objectId = node->getId();
+    const SceneObjectHandle objectHandle = node->getHandle();
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
-    
-    if (objectId == scene.getActiveObjectId())
+
+    if (objectHandle == scene.getActiveObjectHandle())
         flags |= ImGuiTreeNodeFlags_Selected;
     
     if (node->getChildren().empty())
@@ -77,17 +77,18 @@ void SceneGraphPanel::drawNode(const std::shared_ptr<SceneObject>& node) {
         ImGui::SameLine();
     }
 
-    const std::string label = node->getName() + "##SceneObject" + std::to_string(objectId);
+    const std::string label = node->getName() + "##SceneObject"
+        + std::to_string(objectHandle.index());
     const bool node_open = ImGui::TreeNodeEx(label.c_str(), flags);
 
     // Handle selection by finding the object's index
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
-        scene.setActiveObjectId(objectId);
+        scene.setActiveObject(objectHandle);
     }
     
     // Drag & Drop Source
     if (ImGui::BeginDragDropSource()) {
-        ImGui::SetDragDropPayload("SCENE_OBJECT", &objectId, sizeof(objectId));
+        ImGui::SetDragDropPayload("SCENE_OBJECT", &objectHandle, sizeof(objectHandle));
         ImGui::Text("Reparent %s", node->getName().c_str());
         ImGui::EndDragDropSource();
     }
@@ -95,9 +96,9 @@ void SceneGraphPanel::drawNode(const std::shared_ptr<SceneObject>& node) {
     // Drag & Drop Target
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT")) {
-            IM_ASSERT(payload->DataSize == sizeof(uint64_t));
-            const uint64_t childId = *static_cast<const uint64_t*>(payload->Data);
-            scene.reparentObject(childId, objectId);
+            IM_ASSERT(payload->DataSize == sizeof(SceneObjectHandle));
+            scene.reparentObject(
+                *static_cast<const SceneObjectHandle*>(payload->Data), objectHandle);
         }
         ImGui::EndDragDropTarget();
     }

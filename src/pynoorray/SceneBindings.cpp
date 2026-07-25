@@ -28,24 +28,25 @@ void bindScene(nb::module_& module)
             nb::object pythonCamera = nb::find(camera.get());
             auto instance = std::make_unique<CameraInstance>(
                 std::move(camera), name, std::move(transform));
-            const uint64_t id = scene.add(std::move(instance));
+            const SceneObjectHandle handle = scene.add(std::move(instance));
             if (pythonCamera.is_valid())
                 nb::inst_set_state(pythonCamera, true, false);
-            return std::dynamic_pointer_cast<CameraInstance>(scene.getObjectPtr(id));
+            return std::dynamic_pointer_cast<CameraInstance>(scene.getObjectPtr(handle));
         }, "camera"_a, "name"_a = "Camera", "transform"_a = Transform{},
            nb::rv_policy::move)
         .def("add", [](Scene& scene, std::unique_ptr<MeshAsset> asset) {
             return scene.add(std::move(*asset));
         }, "asset"_a)
-        .def("add", [](Scene& scene, std::unique_ptr<Texture> texture) -> Texture& {
+        .def("add", [](Scene& scene, std::unique_ptr<Texture> texture) {
             return scene.add(std::move(*texture));
-        }, "texture"_a, nb::rv_policy::reference_internal)
-        .def("remove", &Scene::removeObject, "object_id"_a)
-        .def("reparent", &Scene::reparentObject, "object_id"_a, "new_parent_id"_a = 0)
-        .def("get_object", &Scene::getObjectPtr, "object_id"_a)
+        }, "texture"_a)
+        .def("remove", &Scene::removeObject, "handle"_a)
+        .def("reparent", &Scene::reparentObject, "handle"_a,
+            "new_parent"_a = SceneObjectHandle{})
+        .def("get_object", &Scene::getObjectPtr, "handle"_a)
         .def_prop_ro("objects", &Scene::getSceneObjects)
         .def_prop_ro("active_camera", &Scene::getActiveCameraPtr)
-        .def_prop_rw("active_object_id", &Scene::getActiveObjectId, &Scene::setActiveObjectId)
+        .def_prop_rw("active_object", &Scene::getActiveObjectHandle, &Scene::setActiveObject)
         .def_prop_ro("environment", nb::overload_cast<>(&Scene::getEnvironment), nb::rv_policy::reference_internal)
         .def_prop_ro("render_settings", nb::overload_cast<>(&Scene::getRenderSettings), nb::rv_policy::reference_internal)
         .def("set_active_camera", &Scene::setActiveCamera, "camera"_a);

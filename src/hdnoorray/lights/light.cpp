@@ -132,16 +132,15 @@ void HdNoorRayAnalyticLight::Sync(
     Scene& scene = param.session.scene;
 
     const int requestedType = NoorRayLightType(delegate);
-    if (objectId_ == 0 || requestedType != lightType_) {
-        if (objectId_ != 0)
-            scene.removeObject(objectId_);
+    if (!scene.isValid(object_) || requestedType != lightType_) {
+        scene.removeObject(object_);
         auto light = std::make_unique<LightInstance>(
             scene, GetId().GetString(), Transform(), requestedType);
-        objectId_ = scene.add(std::move(light));
+        object_ = scene.add(std::move(light));
         lightType_ = requestedType;
     }
 
-    auto* light = dynamic_cast<LightInstance*>(scene.getObject(objectId_));
+    auto* light = dynamic_cast<LightInstance*>(scene.getObject(object_));
     if (light == nullptr) {
         *dirtyBits = Clean;
         return;
@@ -167,9 +166,8 @@ void HdNoorRayAnalyticLight::Finalize(HdRenderParam* renderParam)
 {
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     std::scoped_lock lock(param.mutex);
-    if (objectId_ != 0) {
-        param.session.scene.removeObject(objectId_);
-        objectId_ = 0;
+    if (param.session.scene.removeObject(object_)) {
+        object_ = {};
         lightType_ = -1;
         param.MarkSceneDirty();
     }

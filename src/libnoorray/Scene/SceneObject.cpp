@@ -20,7 +20,7 @@ SceneObject::SceneObject(Scene& scene, const std::string& name, const Transform&
 }
 
 SceneObject::SceneObject(const SceneObject& other)
-    : id(0),
+    : handle(),
       name(other.name + " Copy"),
       scene(other.scene), visible(other.visible),
       transform(other.transform)

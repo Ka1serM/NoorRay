@@ -190,86 +190,8 @@ Raytracer::Raytracer(
         directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
         continuationStackSize, 3));
 
-    OptixPipelineCompileOptions trainingPipelineOptions = pipelineOptions;
-    trainingPipelineOptions.numPayloadValues = 2;
-    trainingPipelineOptions.pipelineLaunchParamsSizeInBytes =
-        sizeof(GaussianTrainingKernelParams);
-    logSize = log.size();
-    result = optixModuleCreate(
-        optixCtx, &moduleOptions, &trainingPipelineOptions,
-        reinterpret_cast<const char*>(noorRayTrainingOptixIr),
-        noorRayTrainingOptixIrLength,
-        log.data(), &logSize, optixTrainingModule.put());
-    if (result != OPTIX_SUCCESS)
-        throw std::runtime_error(
-            std::string("OptiX training module creation failed: ") + log.data());
-
-    optixTrainingExtendGroup.reset(makeRaygenGroup(
-        optixCtx, optixTrainingModule.get(), "__raygen__trainingPath"));
-    OptixProgramGroupDesc trainingGaussianDesc{};
-    trainingGaussianDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    trainingGaussianDesc.hitgroup.moduleAH = optixTrainingModule.get();
-    trainingGaussianDesc.hitgroup.entryFunctionNameAH = "__anyhit__trainingGaussian";
-    logSize = log.size();
-    NR_OPTIX_CHECK(optixProgramGroupCreate(
-        optixCtx, &trainingGaussianDesc, 1, &groupOptions,
-        log.data(), &logSize, optixTrainingGaussianHitGroup.put()));
-
-    const std::array trainingGroups{
-        optixTrainingExtendGroup.get(), optixTriangleGroup.get(),
-        optixTrainingGaussianHitGroup.get(), optixMissGroup.get()};
-    logSize = log.size();
-    result = optixPipelineCreate(
-        optixCtx, &trainingPipelineOptions, &linkOptions,
-        trainingGroups.data(), static_cast<unsigned int>(trainingGroups.size()),
-        log.data(), &logSize, optixTrainingPipeline.put());
-    if (result != OPTIX_SUCCESS)
-        throw std::runtime_error(
-            std::string("OptiX training pipeline creation failed: ") + log.data());
-
-    OptixStackSizes trainingStackSizes{};
-    for (const OptixProgramGroup group : trainingGroups)
-        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(
-            group, &trainingStackSizes, optixTrainingPipeline.get()));
-    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
-        &trainingStackSizes, linkOptions.maxTraceDepth, 0, 0,
-        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
-        &continuationStackSize));
-    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixTrainingPipeline.get(),
-        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
-        continuationStackSize, 3));
-
-    // Keep diagnostics in a separate pipeline. Its larger raygen program and
-    // stack requirements therefore cannot change normal-render occupancy.
-    const std::array proxyOverdrawGroups{
-        optixProxyOverdrawGroup.get(), optixTriangleGroup.get(),
-        optixProxyOverdrawHitGroup.get(), optixMissGroup.get()};
-    logSize = log.size();
-    result = optixPipelineCreate(
-        optixCtx, &pipelineOptions, &linkOptions,
-        proxyOverdrawGroups.data(), static_cast<unsigned int>(proxyOverdrawGroups.size()),
-        log.data(), &logSize, optixProxyOverdrawPipeline.put());
-    if (result != OPTIX_SUCCESS)
-        throw std::runtime_error(
-            std::string("OptiX proxy-overdraw pipeline creation failed: ") + log.data());
-
-    OptixStackSizes proxyOverdrawStackSizes{};
-    for (const OptixProgramGroup group : proxyOverdrawGroups)
-        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(
-            group, &proxyOverdrawStackSizes, optixProxyOverdrawPipeline.get()));
-    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
-        &proxyOverdrawStackSizes, linkOptions.maxTraceDepth, 0, 0,
-        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
-        &continuationStackSize));
-    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixProxyOverdrawPipeline.get(),
-        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
-        continuationStackSize, 3));
-
     optixPathTraceRecord = uploadRecord(optixPathTraceGroup.get());
     optixAovRecord = uploadRecord(optixAovGroup.get());
-    optixProxyOverdrawRecord = uploadRecord(optixProxyOverdrawGroup.get());
-    optixTrainingExtendRecord = uploadRecord(optixTrainingExtendGroup.get());
-
     // Upload two hitgroup records contiguously: mesh and Gaussian proxy.
     {
         SbtRecord<> meshSbt{};
@@ -296,30 +218,6 @@ Raytracer::Raytracer(
             sizeof(records), cudaMemcpyHostToDevice));
     }
 
-    {
-        SbtRecord<> meshSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
-        SbtRecord<> gaussianSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(
-            optixTrainingGaussianHitGroup.get(), &gaussianSbt));
-        const std::array records{meshSbt, gaussianSbt};
-        optixTrainingHitgroupRecord.allocate(sizeof(records));
-        NR_GPU_CHECK(cudaMemcpy(optixTrainingHitgroupRecord.get(),
-            records.data(), sizeof(records), cudaMemcpyHostToDevice));
-    }
-
-    // Diagnostic SBT: mesh instances retain an empty hit group while Gaussian
-    // instances use the counting any-hit program at their existing sbtOffset 1.
-    {
-        SbtRecord<> meshSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
-        SbtRecord<> gaussianSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixProxyOverdrawHitGroup.get(), &gaussianSbt));
-        const std::array records{meshSbt, gaussianSbt};
-        optixProxyOverdrawHitgroupRecord.allocate(sizeof(records));
-        NR_GPU_CHECK(cudaMemcpy(optixProxyOverdrawHitgroupRecord.get(), records.data(), sizeof(records), cudaMemcpyHostToDevice));
-    }
-
     optixMissRecord = uploadRecord(optixMissGroup.get());
 
     optixPathTraceSbt.raygenRecord = optixPathTraceRecord.devicePtr();
@@ -332,44 +230,11 @@ Raytracer::Raytracer(
     optixAovSbt = optixPathTraceSbt;
     optixAovSbt.raygenRecord = optixAovRecord.devicePtr();
     optixAovSbt.hitgroupRecordBase = optixAovHitgroupRecord.devicePtr();
-    optixProxyOverdrawSbt = optixPathTraceSbt;
-    optixProxyOverdrawSbt.raygenRecord = optixProxyOverdrawRecord.devicePtr();
-    optixProxyOverdrawSbt.hitgroupRecordBase = optixProxyOverdrawHitgroupRecord.devicePtr();
-    optixTrainingExtendSbt = optixPathTraceSbt;
-    optixTrainingExtendSbt.raygenRecord = optixTrainingExtendRecord.devicePtr();
-    optixTrainingExtendSbt.hitgroupRecordBase = optixTrainingHitgroupRecord.devicePtr();
 
     m_startEvent.create();
     m_stopEvent.create();
     NR_GPU_CHECK(cudaMallocHost(&m_noiseVarianceSumHost, sizeof(float)));
     *m_noiseVarianceSumHost = std::numeric_limits<float>::infinity();
-
-    auto createSemaphore = [&]() -> vk::UniqueSemaphore {
-        vk::ExportSemaphoreCreateInfo exportInfo{};
-        exportInfo.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
-        vk::SemaphoreTypeCreateInfo timelineInfo{};
-        timelineInfo.pNext = &exportInfo;
-        timelineInfo.semaphoreType = vk::SemaphoreType::eTimeline;
-        timelineInfo.initialValue = 0;
-        return context.getDevice().createSemaphoreUnique({vk::SemaphoreCreateFlags{}, &timelineInfo});
-    };
-    renderReady = createSemaphore();
-    bufferReleased = createSemaphore();
-
-    auto importSemaphore = [&](const vk::Semaphore sem) -> cudaExternalSemaphore_t {
-        vk::SemaphoreGetFdInfoKHR fdInfo{};
-        fdInfo.semaphore = sem;
-        fdInfo.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
-        const int fd = context.getDevice().getSemaphoreFdKHR(fdInfo);
-        cudaExternalSemaphoreHandleDesc desc{};
-        desc.type = cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
-        desc.handle.fd = fd;
-        cudaExternalSemaphore_t result{};
-        NR_GPU_CHECK(cudaImportExternalSemaphore(&result, &desc));
-        return result;
-    };
-    cudaRenderReady.reset(importSemaphore(renderReady.get()));
-    cudaBufferReleased.reset(importSemaphore(bufferReleased.get()));
 
     // Upload Jakob & Hanika sRGB-to-spectrum table once (9 MB coefficients + 64-element scale).
     constexpr size_t kScaleBytes = 64 * sizeof(float);
@@ -415,13 +280,191 @@ Raytracer::Raytracer(
             sizeof(KernelParams), sizeof(GaussianTrainingKernelParams)));
     }
 
-    auto* cam = scene.getRenderCamera();
-    auto* c = cam ? cam->getCamera() : nullptr;
-    auto res = c ? c->getSensor().resolution() : glm::uvec2(1280, 720);
-    resize(res.x, res.y);
-    updateLights();
-    updateTLAS();
     scene.setMutationBarrier([this] { waitForRender(); });
+}
+
+void Raytracer::ensureSemaphores()
+{
+    if (renderReady)
+        return;
+
+    auto createSemaphore = [&]() -> vk::UniqueSemaphore {
+        vk::ExportSemaphoreCreateInfo exportInfo{};
+        exportInfo.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
+        vk::SemaphoreTypeCreateInfo timelineInfo{};
+        timelineInfo.pNext = &exportInfo;
+        timelineInfo.semaphoreType = vk::SemaphoreType::eTimeline;
+        timelineInfo.initialValue = 0;
+        return context.getDevice().createSemaphoreUnique({vk::SemaphoreCreateFlags{}, &timelineInfo});
+    };
+    renderReady = createSemaphore();
+    bufferReleased = createSemaphore();
+
+    auto importSemaphore = [&](const vk::Semaphore sem) -> cudaExternalSemaphore_t {
+        vk::SemaphoreGetFdInfoKHR fdInfo{};
+        fdInfo.semaphore = sem;
+        fdInfo.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
+        const int fd = context.getDevice().getSemaphoreFdKHR(fdInfo);
+        cudaExternalSemaphoreHandleDesc desc{};
+        desc.type = cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
+        desc.handle.fd = fd;
+        cudaExternalSemaphore_t result{};
+        NR_GPU_CHECK(cudaImportExternalSemaphore(&result, &desc));
+        return result;
+    };
+    cudaRenderReady.reset(importSemaphore(renderReady.get()));
+    cudaBufferReleased.reset(importSemaphore(bufferReleased.get()));
+}
+
+void Raytracer::ensureTrainingResources()
+{
+    if (optixTrainingModule)
+        return;
+
+    OptixModuleCompileOptions moduleOptions{};
+    moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
+#if !defined(NDEBUG)
+    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MODERATE;
+#else
+    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#endif
+
+    OptixPipelineCompileOptions trainingPipelineOptions{};
+    trainingPipelineOptions.usesMotionBlur = false;
+    trainingPipelineOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
+    trainingPipelineOptions.numPayloadValues = 2;
+    trainingPipelineOptions.numAttributeValues = 2;
+    trainingPipelineOptions.pipelineLaunchParamsVariableName = "params";
+    trainingPipelineOptions.pipelineLaunchParamsSizeInBytes =
+        sizeof(GaussianTrainingKernelParams);
+    trainingPipelineOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
+
+    std::array<char, 8192> log{};
+    size_t logSize = log.size();
+    const OptixResult result = optixModuleCreate(
+        optixCtx, &moduleOptions, &trainingPipelineOptions,
+        reinterpret_cast<const char*>(noorRayTrainingOptixIr),
+        noorRayTrainingOptixIrLength,
+        log.data(), &logSize, optixTrainingModule.put());
+    if (result != OPTIX_SUCCESS)
+        throw std::runtime_error(
+            std::string("OptiX training module creation failed: ") + log.data());
+
+    optixTrainingExtendGroup.reset(makeRaygenGroup(
+        optixCtx, optixTrainingModule.get(), "__raygen__trainingPath"));
+    OptixProgramGroupOptions groupOptions{};
+    OptixProgramGroupDesc trainingGaussianDesc{};
+    trainingGaussianDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    trainingGaussianDesc.hitgroup.moduleAH = optixTrainingModule.get();
+    trainingGaussianDesc.hitgroup.entryFunctionNameAH = "__anyhit__trainingGaussian";
+    logSize = log.size();
+    NR_OPTIX_CHECK(optixProgramGroupCreate(
+        optixCtx, &trainingGaussianDesc, 1, &groupOptions,
+        log.data(), &logSize, optixTrainingGaussianHitGroup.put()));
+
+    OptixPipelineLinkOptions linkOptions{};
+    linkOptions.maxTraceDepth = 1;
+    const std::array trainingGroups{
+        optixTrainingExtendGroup.get(), optixTriangleGroup.get(),
+        optixTrainingGaussianHitGroup.get(), optixMissGroup.get()};
+    logSize = log.size();
+    const auto pipelineResult = optixPipelineCreate(
+        optixCtx, &trainingPipelineOptions, &linkOptions,
+        trainingGroups.data(), static_cast<unsigned int>(trainingGroups.size()),
+        log.data(), &logSize, optixTrainingPipeline.put());
+    if (pipelineResult != OPTIX_SUCCESS)
+        throw std::runtime_error(
+            std::string("OptiX training pipeline creation failed: ") + log.data());
+
+    OptixStackSizes stackSizes{};
+    for (const OptixProgramGroup group : trainingGroups)
+        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(
+            group, &stackSizes, optixTrainingPipeline.get()));
+    unsigned int directCallableStackSizeFromTraversal = 0;
+    unsigned int directCallableStackSizeFromState = 0;
+    unsigned int continuationStackSize = 0;
+    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
+        &stackSizes, linkOptions.maxTraceDepth, 0, 0,
+        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
+        &continuationStackSize));
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixTrainingPipeline.get(),
+        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
+        continuationStackSize, 3));
+
+    optixTrainingExtendRecord = uploadRecord(optixTrainingExtendGroup.get());
+    {
+        SbtRecord<> meshSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
+        SbtRecord<> gaussianSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(
+            optixTrainingGaussianHitGroup.get(), &gaussianSbt));
+        const std::array records{meshSbt, gaussianSbt};
+        optixTrainingHitgroupRecord.allocate(sizeof(records));
+        NR_GPU_CHECK(cudaMemcpy(optixTrainingHitgroupRecord.get(),
+            records.data(), sizeof(records), cudaMemcpyHostToDevice));
+    }
+    optixTrainingExtendSbt = optixPathTraceSbt;
+    optixTrainingExtendSbt.raygenRecord = optixTrainingExtendRecord.devicePtr();
+    optixTrainingExtendSbt.hitgroupRecordBase = optixTrainingHitgroupRecord.devicePtr();
+}
+
+void Raytracer::ensureProxyOverdrawResources()
+{
+    if (optixProxyOverdrawPipeline)
+        return;
+
+    OptixPipelineCompileOptions pipelineOptions{};
+    pipelineOptions.usesMotionBlur = false;
+    pipelineOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
+    pipelineOptions.numPayloadValues = 3;
+    pipelineOptions.numAttributeValues = 2;
+    pipelineOptions.pipelineLaunchParamsVariableName = "params";
+    pipelineOptions.pipelineLaunchParamsSizeInBytes = sizeof(KernelParams);
+    pipelineOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
+
+    OptixPipelineLinkOptions linkOptions{};
+    linkOptions.maxTraceDepth = 1;
+    const std::array proxyOverdrawGroups{
+        optixProxyOverdrawGroup.get(), optixTriangleGroup.get(),
+        optixProxyOverdrawHitGroup.get(), optixMissGroup.get()};
+    std::array<char, 8192> log{};
+    size_t logSize = log.size();
+    const auto result = optixPipelineCreate(
+        optixCtx, &pipelineOptions, &linkOptions,
+        proxyOverdrawGroups.data(), static_cast<unsigned int>(proxyOverdrawGroups.size()),
+        log.data(), &logSize, optixProxyOverdrawPipeline.put());
+    if (result != OPTIX_SUCCESS)
+        throw std::runtime_error(
+            std::string("OptiX proxy-overdraw pipeline creation failed: ") + log.data());
+
+    OptixStackSizes stackSizes{};
+    for (const OptixProgramGroup group : proxyOverdrawGroups)
+        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(
+            group, &stackSizes, optixProxyOverdrawPipeline.get()));
+    unsigned int directCallableStackSizeFromTraversal = 0;
+    unsigned int directCallableStackSizeFromState = 0;
+    unsigned int continuationStackSize = 0;
+    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
+        &stackSizes, linkOptions.maxTraceDepth, 0, 0,
+        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
+        &continuationStackSize));
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixProxyOverdrawPipeline.get(),
+        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
+        continuationStackSize, 3));
+
+    optixProxyOverdrawRecord = uploadRecord(optixProxyOverdrawGroup.get());
+    {
+        SbtRecord<> meshSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
+        SbtRecord<> gaussianSbt{};
+        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixProxyOverdrawHitGroup.get(), &gaussianSbt));
+        const std::array records{meshSbt, gaussianSbt};
+        optixProxyOverdrawHitgroupRecord.allocate(sizeof(records));
+        NR_GPU_CHECK(cudaMemcpy(optixProxyOverdrawHitgroupRecord.get(), records.data(), sizeof(records), cudaMemcpyHostToDevice));
+    }
+    optixProxyOverdrawSbt = optixPathTraceSbt;
+    optixProxyOverdrawSbt.raygenRecord = optixProxyOverdrawRecord.devicePtr();
+    optixProxyOverdrawSbt.hitgroupRecordBase = optixProxyOverdrawHitgroupRecord.devicePtr();
 }
 
 Raytracer::~Raytracer()
@@ -474,9 +517,21 @@ Raytracer::~Raytracer()
 
 void Raytracer::setAovEnabled(const bool enabled)
 {
-    if (enabled && !aovEnabled)
-        aovStale = true;
+    if (enabled == aovEnabled)
+        return;
     aovEnabled = enabled;
+    if (!enabled)
+    {
+        // The images stay allocated: a host that bound them into a descriptor
+        // set keeps that binding valid. Only the per-frame AOV launch stops.
+        aovAvailable = false;
+        aovStale = true;
+        return;
+    }
+    aovStale = true;
+    // Allocate up front when the frame size is already known, so a caller can
+    // bind the AOV images immediately after asking for them.
+    ensureAovImages();
 }
 
 bool Raytracer::getAovEnabled() const
@@ -497,30 +552,49 @@ void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     width = newWidth;
     height = newHeight;
+    aovImagesCreated = false;
     freeScratchBuffers();
     denoiser.reset();
     aovAvailable = false;
     aovStale = true;
 
-    auto createImages = [&](nr::cuda::UniqueSharedImage (&arr)[2], const vk::Format format)
-    {
-        for (auto& img : arr)
-            img.create(context, width, height, format);
-    };
-    createImages(color,        vk::Format::eR32G32B32A32Sfloat);
-    createImages(albedo,       vk::Format::eR8G8B8A8Unorm);
-    createImages(normal,       vk::Format::eR16G16B16A16Sfloat);
-    createImages(cryptomatte,  vk::Format::eR32Uint);
-    createImages(position,     vk::Format::eR16G16B16A16Sfloat);
+    color.create(context, width, height, vk::Format::eR32G32B32A32Sfloat);
+    // Drop AOV images that no longer match the frame. When AOVs are enabled
+    // they are rebuilt right away, so a host that bound them can rebind at the
+    // same point it rebinds the colour image.
+    releaseAovImages();
+    ensureAovImages();
 
     allocateScratchBuffers();
     updateTextures();
     updateMeshes();
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    nextBuffer = 0;
-    lastLaunched = 0;
     lastReadyValue = 0;
-    lastUseValue = {};
+}
+
+void Raytracer::ensureAovImages()
+{
+    // Only a host that explicitly asked for AOVs pays for them, and only once
+    // the frame size is known: renderFrame() sizes the raytracer from the
+    // active camera, so earlier callers can still see a zero-sized frame.
+    if (aovImagesCreated || !aovEnabled || width == 0 || height == 0)
+        return;
+    albedo.create(context, width, height, vk::Format::eR8G8B8A8Unorm);
+    normal.create(context, width, height, vk::Format::eR16G16B16A16Sfloat);
+    cryptomatte.create(context, width, height, vk::Format::eR32Uint);
+    position.create(context, width, height, vk::Format::eR16G16B16A16Sfloat);
+    aovImagesCreated = true;
+}
+
+void Raytracer::releaseAovImages() noexcept
+{
+    albedo.reset();
+    normal.reset();
+    cryptomatte.reset();
+    position.reset();
+    aovImagesCreated = false;
+    aovAvailable = false;
+    aovStale = true;
 }
 
 void Raytracer::allocateScratchBuffers()
@@ -568,8 +642,16 @@ void Raytracer::updateTextures()
 
     auto& cudaTextures = gpuCache.textures;
     cudaTextures.clear();
-    for (size_t i = 0; i < count; ++i)
+    for (size_t i = 0; i < count; ++i) {
+        // A released texture leaves an empty slot behind. It keeps its index so
+        // the live textures around it stay addressable, but there is nothing to
+        // upload and nothing left referencing it.
+        if (cpuTextures[i].getWidth() <= 0 || cpuTextures[i].getHeight() <= 0) {
+            cudaTextures.emplace_back();
+            continue;
+        }
         cudaTextures.emplace_back(cpuTextures[i].getPixels().data(), cpuTextures[i].getWidth(), cpuTextures[i].getHeight(), stream);
+    }
     gpuCache.data.textures = cudaTextures.data();
     gpuCache.data.textureCount = static_cast<uint32_t>(cpuTextures.size());
 
@@ -590,6 +672,8 @@ void Raytracer::updateEnvironmentCdf()
         return;
 
     const Texture& texture = textures[textureIndex];
+    if (texture.getWidth() <= 0 || texture.getHeight() <= 0)
+        return;
     env.cdfWidth = texture.getWidth();
     env.cdfHeight = texture.getHeight();
     double integral = 0.0;
@@ -880,6 +964,7 @@ void Raytracer::renderGaussianTrainForward(
     const GaussianTrainParams& trainParams,
     const uint32_t renderWidth, const uint32_t renderHeight)
 {
+    ensureTrainingResources();
     const size_t pixelCount = static_cast<size_t>(renderWidth) * renderHeight;
     if (pixelCount > scratchCapacity)
         throw std::runtime_error("Training image exceeds the scratch-buffer capacity");
@@ -912,6 +997,7 @@ void Raytracer::renderGaussianTrainBackward(
     const GaussianTrainParams& trainParams,
     const uint32_t renderWidth, const uint32_t renderHeight)
 {
+    ensureTrainingResources();
     const size_t pixelCount = static_cast<size_t>(renderWidth) * renderHeight;
     if (pixelCount > scratchCapacity)
         throw std::runtime_error("Training image exceeds the scratch-buffer capacity");
@@ -961,18 +1047,14 @@ void Raytracer::launchProxyOverdraw(
 void Raytracer::renderFrame(
     const uint32_t frameIndex, const uint32_t accumulatedSamples)
 {
-    // Refresh AOVs immediately whenever scene data changes so viewport guides,
-    // picking, outlines, and denoiser inputs stay aligned with moved cameras
-    // and objects. Unchanged progressive frames continue reusing the last AOVs.
-    const bool sceneAovEnabled = scene.getRenderSettings().aovEnabled;
+    // Synchronize the GPU stream once per frame if any mutation occurred since
+    // the last render. This replaces the old per-mutation waitForRender barrier
+    // with a single sync point, batching all Hydra Sync() calls together.
+    if (scene.consumeGpuSync())
+        NR_GPU_CHECK(cudaStreamSynchronize(stream));
+
     const bool sceneDirty = scene.isAnyDirty();
-    const bool useAovs = aovEnabled && sceneAovEnabled;
-    const bool renderAov = useAovs && (sceneDirty || aovStale);
-    if (!aovEnabled || !sceneAovEnabled)
-    {
-        aovAvailable = false;
-        aovStale = true;
-    }
+
     CameraInstance* activeCamera = scene.getRenderCamera();
     if (!activeCamera)
         return;
@@ -982,6 +1064,23 @@ void Raytracer::renderFrame(
         throw std::runtime_error("Cannot render with a zero-sized camera sensor");
     if (resolution.x != width || resolution.y != height)
         resize(resolution.x, resolution.y);
+
+    // AOVs are decided after the frame is sized: their images must match the
+    // resolution this frame renders at, and before the first resize there is no
+    // resolution to allocate them for.
+    //
+    // Refresh AOVs immediately whenever scene data changes so viewport guides,
+    // picking, outlines, and denoiser inputs stay aligned with moved cameras
+    // and objects. Unchanged progressive frames continue reusing the last AOVs.
+    const bool useAovs = aovEnabled && scene.getRenderSettings().aovEnabled;
+    if (useAovs)
+        ensureAovImages();
+    else
+    {
+        aovAvailable = false;
+        aovStale = true;
+    }
+    const bool renderAov = useAovs && aovImagesCreated && (sceneDirty || aovStale);
 
     if (scene.isDirty(Meshes)) updateMeshes();
     if (scene.isDirty(Textures)) updateTextures();
@@ -997,13 +1096,14 @@ void Raytracer::renderFrame(
         updateEnvironmentCdf();
 
     gpuCache.data.renderSettings = scene.getRenderSettings();
-    const uint32_t buffer = nextBuffer;
     const uint64_t frameValue = ++submittedFrame;
     const bool useViewportInterop = !context.isHeadless();
-    if (useViewportInterop && lastUseValue[buffer] != 0)
+    if (useViewportInterop)
+        ensureSemaphores();
+    if (useViewportInterop && lastReadyValue != 0)
     {
         cudaExternalSemaphoreWaitParams waitParams{};
-        waitParams.params.fence.value = lastUseValue[buffer];
+        waitParams.params.fence.value = lastReadyValue;
         cudaExternalSemaphore_t semaphore = cudaBufferReleased.get();
         NR_GPU_CHECK(cudaWaitExternalSemaphoresAsync(&semaphore, &waitParams, 1, stream));
     }
@@ -1013,19 +1113,11 @@ void Raytracer::renderFrame(
     params.scene.renderSettings = scene.getRenderSettings();
     params.scene.camera = activeCamera->getGpuCamera();
     params.output = {
-        color[buffer].getSurface(),
-        albedo[buffer].getSurface(),
-        normal[buffer].getSurface(),
-        cryptomatte[buffer].getSurface(),
-        position[buffer].getSurface(),
-        width, height};
-    const uint32_t alternateBuffer = 1 - buffer;
-    params.alternateAovOutput = {
-        0,
-        albedo[alternateBuffer].getSurface(),
-        normal[alternateBuffer].getSurface(),
-        cryptomatte[alternateBuffer].getSurface(),
-        position[alternateBuffer].getSurface(),
+        color.getSurface(),
+        albedo.getSurface(),
+        normal.getSurface(),
+        cryptomatte.getSurface(),
+        position.getSurface(),
         width, height};
     params.frame.width = width;
     params.frame.height = height;
@@ -1067,6 +1159,7 @@ void Raytracer::renderFrame(
 
     if (renderSettings.gaussianProxyOverdrawVisualization)
     {
+        ensureProxyOverdrawResources();
         kernelStats.time("ProxyOverdraw", stream,
             [&] { launchProxyOverdraw(params, stream); });
     }
@@ -1142,10 +1235,7 @@ void Raytracer::renderFrame(
         cudaExternalSemaphore_t semaphore = cudaRenderReady.get();
         NR_GPU_CHECK(cudaSignalExternalSemaphoresAsync(&semaphore, &signalParams, 1, stream));
     }
-    lastLaunched = buffer;
     lastReadyValue = frameValue;
-    lastUseValue[buffer] = frameValue;
-    nextBuffer = 1 - buffer;
     scene.clearDirtyFlags();
 }
 
@@ -1205,18 +1295,18 @@ void Raytracer::debugSave(const std::string& path) const
 
 InteropFrame Raytracer::getInteropFrame() const
 {
-    return {lastLaunched, lastReadyValue, renderReady.get(), bufferReleased.get()};
+    return {0, lastReadyValue, renderReady.get(), bufferReleased.get()};
 }
 
 bool Raytracer::isRenderInFlight() const
 {
-    return lastReadyValue != 0
+    return lastReadyValue != 0 && renderReady
         && context.getDevice().getSemaphoreCounterValue(renderReady.get()) < lastReadyValue;
 }
 
 bool Raytracer::isFrameReady() const
 {
-    return lastReadyValue != 0
+    return lastReadyValue != 0 && renderReady
         && context.getDevice().getSemaphoreCounterValue(renderReady.get()) >= lastReadyValue;
 }
 

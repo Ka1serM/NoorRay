@@ -81,6 +81,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
     // Load Materials
     std::vector<Material> globalMaterials;
+    // The materials below only carry texture slot indices. Holding a reference
+    // per imported texture keeps them alive until Scene::add(Material) takes
+    // over their ownership.
+    std::vector<TextureRef> importedTextures;
     for (const auto& mat : model.materials) {
         Material material{};
         const auto& pbr = mat.pbrMetallicRoughness;
@@ -124,8 +128,9 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             if (!image.uri.empty()) {
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
-                    scene.add(Texture(texturePath.string(), encoding));
-                    materialIndex = static_cast<int>(scene.getTextures().size() - 1);
+                    importedTextures.push_back(
+                        scene.add(Texture(texturePath.string(), encoding)));
+                    materialIndex = static_cast<int>(importedTextures.back().index());
                 } else {
                     LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
                 }
@@ -133,9 +138,9 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 const std::string texName = image.name.empty()
                     ? "texture_" + std::to_string(textureIndex)
                     : image.name;
-                scene.add(Texture(texName,
-                    image.image.data(), image.width, image.height, encoding));
-                materialIndex = static_cast<int>(scene.getTextures().size() - 1);
+                importedTextures.push_back(scene.add(Texture(texName,
+                    image.image.data(), image.width, image.height, encoding)));
+                materialIndex = static_cast<int>(importedTextures.back().index());
             } else {
                 LOG_ERROR("Warning: Embedded texture has no decoded data");
             }
@@ -156,7 +161,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         globalMaterials.emplace_back(); // Default material
 
     // Load Meshes
-    nr::rstd::vector<nr::rstd::vector<uint32_t>> loadedMeshAssets(model.meshes.size());
+    std::vector<std::vector<MeshAssetRef>> loadedMeshAssets(model.meshes.size());
     for (size_t i = 0; i < model.meshes.size(); ++i) {
         const auto& mesh = model.meshes[i];
         for (size_t j = 0; j < mesh.primitives.size(); ++j) {
@@ -211,9 +216,8 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             int materialID = (primitive.material < 0) ? 0 : primitive.material;
             std::string meshName = mesh.name.empty() ? (nameFromPath(filepath) + "_mesh" + std::to_string(i) + "_" + std::to_string(j)) : mesh.name;
 
-            const uint32_t meshIndex = scene.add(MeshAsset(scene, meshName, vertices, indices,
-                std::vector<Face>(indices.size() / 3), std::vector<Material>{globalMaterials[materialID]}));
-            loadedMeshAssets[i].push_back(meshIndex);
+            loadedMeshAssets[i].push_back(scene.add(MeshAsset(scene, meshName, vertices, indices,
+                std::vector<Face>(indices.size() / 3), std::vector<Material>{globalMaterials[materialID]})));
         }
     }
 
@@ -320,21 +324,19 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 // GPU instancing: one MeshInstance per entry
                 for (size_t inst = 0; inst < perInstanceTransforms.size(); ++inst) {
                     const mat4 finalWorld = worldTransforms[i] * perInstanceTransforms[inst];
-                    for (const uint32_t meshIndex : loadedMeshAssets[node.mesh]) {
-                        const MeshAsset& asset = scene.getMeshAsset(meshIndex);
+                    for (const MeshAssetRef& meshAsset : loadedMeshAssets[node.mesh]) {
                         auto instance = std::make_unique<MeshInstance>(
-                            scene, asset.getName() + "_inst_" + std::to_string(inst), meshIndex, Transform{finalWorld});
-                        const uint64_t instId = scene.add(std::move(instance));
-                        scene.reparentObject(instId, objPtr->getId());
+                            scene, meshAsset.get()->getName() + "_inst_" + std::to_string(inst), meshAsset, Transform{finalWorld});
+                        const SceneObjectHandle instHandle = scene.add(std::move(instance));
+                        scene.reparentObject(instHandle, objPtr->getHandle());
                     }
                 }
             } else {
                 // Single instance with the node's world transform
-                for (const uint32_t meshIndex : loadedMeshAssets[node.mesh]) {
-                    const MeshAsset& asset = scene.getMeshAsset(meshIndex);
-                    auto instance = std::make_unique<MeshInstance>(scene, asset.getName() + "_inst", meshIndex, Transform{worldTransforms[i]});
-                    const uint64_t instId = scene.add(std::move(instance));
-                    scene.reparentObject(instId, objPtr->getId());
+                for (const MeshAssetRef& meshAsset : loadedMeshAssets[node.mesh]) {
+                    auto instance = std::make_unique<MeshInstance>(scene, meshAsset.get()->getName() + "_inst", meshAsset, Transform{worldTransforms[i]});
+                    const SceneObjectHandle instHandle = scene.add(std::move(instance));
+                    scene.reparentObject(instHandle, objPtr->getHandle());
                 }
             }
         }
@@ -349,7 +351,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     const std::string gltfType = lowerPath(filePath.extension().string()) == ".glb" ? "glb" : "gltf";
     importRoot->setSource(gltfType, filePath.string());
     SceneObject* importRootPtr = importRoot.get();
-    const uint64_t rootId = scene.add(std::move(importRoot));
+    const SceneObjectHandle rootHandle = scene.add(std::move(importRoot));
 
     // Reparent nodes to build the glTF hierarchy
     for (size_t i = 0; i < model.nodes.size(); ++i) {
@@ -358,7 +360,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
         for (int childIndex : node.children) {
             if (nodeMap[childIndex])
-                scene.reparentObject(nodeMap[childIndex]->getId(), nodeMap[i]->getId());
+                scene.reparentObject(nodeMap[childIndex]->getHandle(), nodeMap[i]->getHandle());
         }
     }
 
@@ -366,9 +368,9 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     if (model.defaultScene >= 0)
         for (int rootNodeIndex : model.scenes[model.defaultScene].nodes)
             if (nodeMap[rootNodeIndex])
-                scene.reparentObject(nodeMap[rootNodeIndex]->getId(), rootId);
+                scene.reparentObject(nodeMap[rootNodeIndex]->getHandle(), rootHandle);
 
-    scene.setActiveObjectId(rootId);
+    scene.setActiveObject(rootHandle);
 }
 
 void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const Material* materialOverride)
@@ -396,6 +398,10 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
 
     // Load Global Materials from the MTL file (if it was found)
     std::vector<Material> globalMaterials;
+    // The materials below only carry texture slot indices. Holding a reference
+    // per imported texture keeps them alive until Scene::add(Material) takes
+    // over their ownership.
+    std::vector<TextureRef> importedTextures;
     for (const auto& mat : mats) {
         Material material{};
         material.albedo = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
@@ -418,8 +424,9 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                     encoding = TextureEncoding::Linear8;
                 const std::filesystem::path texturePath = objDir / texname;
                 if (std::filesystem::exists(texturePath)) {
-                    scene.add(Texture(texturePath.string(), encoding));
-                    index = static_cast<int>(scene.getTextures().size() - 1);
+                    importedTextures.push_back(
+                        scene.add(Texture(texturePath.string(), encoding)));
+                    index = static_cast<int>(importedTextures.back().index());
                 } else
                    LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
             }
@@ -452,7 +459,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     std::string parentName = nameFromPath(filepath);
     auto parentObject = std::make_unique<SceneObject>(scene, parentName, Transform{});
     parentObject->setSource("obj", filePath.string());
-    const uint64_t parentId = scene.add(std::move(parentObject));
+    const SceneObjectHandle parentHandle = scene.add(std::move(parentObject));
 
     for (const auto& shape : shapes) {
         if (shape.mesh.indices.empty())
@@ -572,16 +579,16 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
 
         // Create the final assets and instances for this shape
         std::string meshName = shape.name.empty() ? (parentName + "_shape") : shape.name;
-        const uint32_t meshIndex = scene.add(MeshAsset(scene, meshName, vertices, indices, faces, localMaterials));
+        const MeshAssetRef meshAsset = scene.add(MeshAsset(scene, meshName, vertices, indices, faces, localMaterials));
 
         Transform transform;
         transform.setPosition(center);
-        auto instance = std::make_unique<MeshInstance>(scene, meshName, meshIndex, transform);
-        const uint64_t instanceId = scene.add(std::move(instance));
-        scene.reparentObject(instanceId, parentId);
+        auto instance = std::make_unique<MeshInstance>(scene, meshName, meshAsset, transform);
+        const SceneObjectHandle instanceHandle = scene.add(std::move(instance));
+        scene.reparentObject(instanceHandle, parentHandle);
     }
 
-    scene.setActiveObjectId(parentId);
+    scene.setActiveObject(parentHandle);
 }
 
 std::string SceneImporter::nameFromPath(const std::string& path) {
@@ -661,9 +668,9 @@ void SceneImporter::ImportGaussianScene(Scene& scene, const std::string& filepat
         throw std::runtime_error("File not found: " + filepath);
 
     const std::string name = nameFromPath(filePath.filename().string());
-    const uint32_t assetIndex =
+    const GaussianAssetRef asset =
         scene.add(GaussianAsset::CreateFromFile(scene, name, filePath.string()));
-    auto instance = std::make_unique<GaussianInstance>(scene, name, assetIndex, Transform{});
+    auto instance = std::make_unique<GaussianInstance>(scene, name, asset, Transform{});
     instance->setSource("gaussian", filePath.string());
     scene.add(std::move(instance));
 }

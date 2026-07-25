@@ -53,8 +53,8 @@ std::vector<AccelInstanceInput> Tlas::buildInstanceInputs(
             const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
             const mat4 worldToObject = inverse(objectToWorld);
             const uint32_t meshIndex = instance.getMeshIndex();
-            const auto& asset = scene.getMeshAsset(meshIndex);
-            result[index] = {toOptixTransform(objectToWorld),
+            const MeshAsset& asset = instance.getMeshAsset();
+            result[index] = AccelInstanceInput{toOptixTransform(objectToWorld),
                 asset.getBlas().getTraversable(), static_cast<uint32_t>(index), 0,
                 MeshVisibility};
 
@@ -76,7 +76,16 @@ void Tlas::buildGaussianInstances(
 {
     const uint32_t gaussianCount = scene.getGaussianCount();
     if (gaussianCount == 0)
+    {
+        // Removing the last splat instance has to give the device memory back.
+        // The per-instance IAS holds one OptixInstance per Gaussian plus the
+        // built acceleration structure, which is the bulk of a splat scene's
+        // VRAM footprint, and the proxy BLAS is useless without them.
+        gaussianInstanceAccels.clear();
+        gaussianInstanceCount = 0;
+        proxyBlas.reset();
         return;
+    }
     const RenderSettings& rs = scene.getRenderSettings();
     const GaussianProxyType proxyType = rs.gaussianProxyType;
     const float cutoffSigma = rs.gaussianCutoffSigma;
@@ -101,7 +110,7 @@ void Tlas::buildGaussianInstances(
         const uint32_t count = instances[index]->getGaussianAsset().getGaussianCount();
         const GaussianAsset& asset = instances[index]->getGaussianAsset();
         GaussianInstanceAccel& accel = gaussianInstanceAccels[index];
-        if (proxyChanged || accel.objectId != instances[index]->getId()
+        if (proxyChanged || accel.objectHandle != instances[index]->getHandle()
             || accel.gaussianCount != count || accel.globalOffset != globalOffset
             || asset.isDirty())
         {
@@ -176,7 +185,7 @@ void Tlas::buildGaussianInstanceAccel(
         &destination.handle, nullptr, 0));
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     destination.instanceBuffer.reset();
-    destination.objectId = instance.getId();
+    destination.objectHandle = instance.getHandle();
     destination.gaussianCount = gaussianCount;
     destination.globalOffset = globalOffset;
 }
@@ -191,7 +200,6 @@ void Tlas::updateMeshInstanceInPlace(
     const mat4 objectToWorld = instance.getWorldTransform().getMatrix();
     const mat4 worldToObject = inverse(objectToWorld);
     const uint32_t meshIndex = instance.getMeshIndex();
-    const auto& asset = scene.getMeshAsset(meshIndex);
 
     GpuInstance gpuInstance{};
     gpuInstance.objectToWorld = objectToWorld;
@@ -209,7 +217,8 @@ void Tlas::updateMeshInstanceInPlace(
     destination.sbtOffset = 0;
     destination.visibilityMask = MeshVisibility;
     destination.flags = OPTIX_INSTANCE_FLAG_NONE;
-    destination.traversableHandle = asset.getBlas().getTraversable();
+    destination.traversableHandle =
+        instance.getMeshAsset().getBlas().getTraversable();
 }
 
 bool Tlas::tryPartialUpdate(

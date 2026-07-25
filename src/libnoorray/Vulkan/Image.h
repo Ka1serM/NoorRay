@@ -53,9 +53,9 @@ private:
     vk::UniqueImageView view;
     vk::DescriptorImageInfo descImageInfo;
 
-    vk::ImageLayout layout;
-    vk::Format format;
-    uint32_t width;
-    uint32_t height;
+    vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+    vk::Format format = vk::Format::eUndefined;
+    uint32_t width = 0;
+    uint32_t height = 0;
     cudaArray_t cudaArray{};
 };

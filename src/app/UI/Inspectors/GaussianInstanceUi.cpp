@@ -9,6 +9,8 @@ namespace
 {
 bool renderGaussianInstance(GaussianInstance& instance)
 {
+    if (!instance.hasGaussianAsset())
+        return false;
     const GaussianAsset& asset = instance.getGaussianAsset();
     ImGuiManager::tableRowLabel("Gaussian Count");
     ImGui::Text("%u", asset.getGaussianCount());

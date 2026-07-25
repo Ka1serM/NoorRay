@@ -71,7 +71,7 @@ public:
             cameraToWorld * glm::vec4(ray.origin(), 1.0f));
         const glm::vec3 direction = glm::normalize(glm::vec3(
             cameraToWorld * glm::vec4(ray.direction(), 0.0f)));
-        return Ray(origin, direction, ray.minDistance(), ray.maxDistance());
+        return Ray(origin, direction);
     }
 
     // A missing pinhole/fisheye sample means no sensor contribution. Optical

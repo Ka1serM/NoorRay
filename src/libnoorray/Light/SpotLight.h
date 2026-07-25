@@ -41,12 +41,13 @@ public:
     }
 
     NR_CPU_GPU LightHit intersect(
-        const Ray& ray, const SampledWavelengths& wl,
+        const Ray& ray, const float tMin, const float tMax,
+        const SampledWavelengths& wl,
         const float* spectrumScale, const float* spectrumCoeffs,
         const float* d65) const
     {
         LightHit hit{};
-        if (!intersectSphereLight(ray, position, softRadius, hit.distance))
+        if (!intersectSphereLight(ray, tMin, tMax, position, softRadius, hit.distance))
             return {};
         hit.pdf = sphereLightPdf(ray.origin(), position, softRadius);
         const glm::vec3 hitPosition = ray.at(hit.distance);

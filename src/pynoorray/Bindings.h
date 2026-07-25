@@ -2,6 +2,7 @@
 
 #include <nanobind/nanobind.h>
 
+void bindHandles(nanobind::module_& module);
 void bindVector3(nanobind::module_& module);
 void bindSellmeierCoefficients(nanobind::module_& module);
 void bindTransform(nanobind::module_& module);

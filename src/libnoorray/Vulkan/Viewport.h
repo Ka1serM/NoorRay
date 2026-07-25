@@ -29,17 +29,14 @@ constexpr float ViewportBillboardPixelRadius = 32.0f;
 class Viewport {
 public:
     Viewport(Context& context, uint32_t width, uint32_t height,
-               const Image& color0,    const Image& color1,
-               const Image& albedo0,   const Image& albedo1,
-               const Image& normal0,   const Image& normal1,
-               const Image& crypto0,   const Image& crypto1,
-               const Image& position0, const Image& position1,
-               vk::Format outputImageFormat);
+             const Image& color,    const Image& albedo,
+             const Image& normal,   const Image& crypto,
+             const Image& position,
+             vk::Format outputImageFormat);
     ~Viewport();
 
     void dispatch(
         vk::CommandBuffer commandBuffer,
-        uint32_t bufferIndex,
         uint32_t selectedCryptomatteId,
         const glm::mat4& viewProjection,
         float exposure,
@@ -50,11 +47,9 @@ public:
     // Calling this each frame is an O(1) revision check in the common case.
     void updateBillboards(const Scene& scene);
     void resize(uint32_t width, uint32_t height,
-                const Image& color0,    const Image& color1,
-                const Image& albedo0,   const Image& albedo1,
-                const Image& normal0,   const Image& normal1,
-                const Image& crypto0,   const Image& crypto1,
-                const Image& position0, const Image& position1,
+                const Image& color,    const Image& albedo,
+                const Image& normal,   const Image& crypto,
+                const Image& position,
                 vk::Format outputImageFormat);
     Image& getOutputImage() { return outputImage; }
 
@@ -67,7 +62,9 @@ private:
     vk::UniqueDescriptorSetLayout descriptorSetLayout;
     vk::UniquePipelineLayout pipelineLayout;
     vk::UniquePipeline pipeline;
-    std::array<vk::UniqueDescriptorSet, 2> descriptorSets;
+    std::array<vk::UniqueDescriptorSet, 1> descriptorSets;
+    // False until every storage image the compute pass binds exists.
+    bool descriptorsValid{};
 
     // Billboard overlay — a tiny raster pass (dynamic rendering, instanced quads)
     // drawn on top of the compute pass's output.
@@ -80,7 +77,7 @@ private:
     uint32_t billboardCount{};
     uint64_t observedLightRevision{};
 
-    void writeDescriptors(uint32_t bufferIndex,
+    void writeDescriptors(
         const Image& color, const Image& albedo, const Image& normal,
         const Image& crypto, const Image& position);
     void createBillboardPipeline();

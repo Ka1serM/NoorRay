@@ -175,18 +175,18 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
             root->setLocalTransform(transform);
     } else {
         Material material = object.material ? toMaterial(*object.material) : Material{};
-        uint32_t meshIndex;
+        MeshAssetRef meshAsset;
         if (object.type == "cube")
-            meshIndex = scene.add(MeshAsset::CreateCube(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreateCube(scene, object.name, material));
         else if (object.type == "plane")
-            meshIndex = scene.add(MeshAsset::CreatePlane(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreatePlane(scene, object.name, material));
         else if (object.type == "disk")
-            meshIndex = scene.add(MeshAsset::CreateDisk(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreateDisk(scene, object.name, material));
         else if (object.type == "sphere")
-            meshIndex = scene.add(MeshAsset::CreateSphere(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreateSphere(scene, object.name, material));
         else
             throw std::runtime_error("Unknown scene object type: " + object.type);
-        scene.add(std::make_unique<MeshInstance>(scene, object.name, meshIndex, transform));
+        scene.add(std::make_unique<MeshInstance>(scene, object.name, meshAsset, transform));
     }
 }
 

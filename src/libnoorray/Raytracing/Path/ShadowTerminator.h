@@ -26,16 +26,15 @@ struct ShadowTerminatorTriangle
     glm::mat3 objectToWorld{1.0f};
 };
 
-// Adapted from Blender Cycles' shadow_ray_smooth_surface_offset() and
-// shadow_ray_offset(), Copyright Blender Foundation, Apache-2.0. It builds a
-// parabolic approximation to the smooth surface represented by a flat
-// triangle and its vertex normals, then lifts a grazing shadow-ray origin onto
-// that approximation.
+// Implements the shadow terminator hack from "Hacking the Shadow Terminator",
+// Hanika, Ray Tracing Gems II, 2021, Listing 4-1. Projects the intersection
+// point onto the tangent planes at each vertex, then barycentrically blends
+// the results to produce a smooth offset direction.
 NR_CPU_GPU inline glm::vec3 shadowRaySmoothSurfaceOffset(
     const ShadowTerminatorTriangle& triangle,
     const float barycentricU,
     const float barycentricV,
-    const glm::vec3 geometricNormal)
+    const glm::vec3 /*geometricNormal*/)
 {
     const glm::vec3* V = triangle.vertices;
     const glm::vec3* N = triangle.normals;
@@ -43,47 +42,16 @@ NR_CPU_GPU inline glm::vec3 shadowRaySmoothSurfaceOffset(
     const float v = barycentricU;
     const float w = barycentricV;
     const glm::vec3 P = V[0] * u + V[1] * v + V[2] * w;
-    glm::vec3 n = N[0] * u + N[1] * v + N[2] * w;
 
-    const float a = glm::dot(N[2] - N[0], V[0] - V[2]);
-    const float b = glm::dot(N[2] - N[1], V[1] - V[2]);
-    const float c = glm::dot(N[1] - N[0], V[1] - V[0]);
-    float h = a * u * (u - 1.0f) + (a + b + c) * u * v
-        + b * v * (v - 1.0f);
+    glm::vec3 tmpu = P - V[0];
+    glm::vec3 tmpv = P - V[1];
+    glm::vec3 tmpw = P - V[2];
 
-    // Cycles computes the envelope in object space, then transforms the
-    // displacement as a direction. This also preserves its non-uniform-scale
-    // behavior.
-    n = triangle.objectToWorld * n;
+    tmpu -= fminf(0.0f, glm::dot(tmpu, N[0])) * N[0];
+    tmpv -= fminf(0.0f, glm::dot(tmpv, N[1])) * N[1];
+    tmpw -= fminf(0.0f, glm::dot(tmpw, N[2])) * N[2];
 
-    if (glm::dot(n, geometricNormal) > 0.0f)
-    {
-        float h0 = fmaxf(fmaxf(
-            glm::dot(V[1] - V[0], N[0]), glm::dot(V[2] - V[0], N[0])), 0.0f);
-        float h1 = fmaxf(fmaxf(
-            glm::dot(V[0] - V[1], N[1]), glm::dot(V[2] - V[1], N[1])), 0.0f);
-        float h2 = fmaxf(fmaxf(
-            glm::dot(V[0] - V[2], N[2]), glm::dot(V[1] - V[2], N[2])), 0.0f);
-        h0 = fmaxf(glm::dot(V[0] - P, N[0]) + h0, 0.0f);
-        h1 = fmaxf(glm::dot(V[1] - P, N[1]) + h1, 0.0f);
-        h2 = fmaxf(glm::dot(V[2] - P, N[2]) + h2, 0.0f);
-        h = fmaxf(fminf(fminf(h0, h1), h2), h * 0.5f);
-    }
-    else
-    {
-        float h0 = fmaxf(fmaxf(
-            glm::dot(V[0] - V[1], N[0]), glm::dot(V[0] - V[2], N[0])), 0.0f);
-        float h1 = fmaxf(fmaxf(
-            glm::dot(V[1] - V[0], N[1]), glm::dot(V[1] - V[2], N[1])), 0.0f);
-        float h2 = fmaxf(fmaxf(
-            glm::dot(V[2] - V[0], N[2]), glm::dot(V[2] - V[1], N[2])), 0.0f);
-        h0 = fmaxf(glm::dot(P - V[0], N[0]) + h0, 0.0f);
-        h1 = fmaxf(glm::dot(P - V[1], N[1]) + h1, 0.0f);
-        h2 = fmaxf(glm::dot(P - V[2], N[2]) + h2, 0.0f);
-        h = fminf(-fminf(fminf(h0, h1), h2), h * 0.5f);
-    }
-
-    return n * h;
+    return triangle.objectToWorld * (u * tmpu + v * tmpv + w * tmpw);
 }
 
 NR_CPU_GPU inline float shadowTerminatorOffsetAmount(

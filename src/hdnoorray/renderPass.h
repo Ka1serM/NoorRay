@@ -3,6 +3,7 @@
 #include "api.h"
 
 #include <pxr/base/gf/matrix4d.h>
+#include <pxr/imaging/hd/aov.h>
 #include <pxr/imaging/hd/renderPass.h>
 
 #include <cstdint>
@@ -29,9 +30,17 @@ protected:
     void _MarkCollectionDirty() override;
 
 private:
+    // The body of _Execute(), which wraps it so that no exception reaches the
+    // host across the Hydra callback boundary.
+    void _Render(const HdRenderPassStateSharedPtr& renderPassState);
+    static void SetBuffersConverged(
+        const HdRenderPassAovBindingVector& bindings, bool converged);
+
     HdNoorRayRenderParam& renderParam_;
     uint64_t observedSceneVersion_{};
     unsigned int accumulatedSamples_{};
+    unsigned int targetWidth_{};
+    unsigned int targetHeight_{};
     bool converged_{};
     bool collectionDirty_{true};
     GfMatrix4d cameraTransform_;

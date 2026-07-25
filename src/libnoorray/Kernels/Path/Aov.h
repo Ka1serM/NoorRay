@@ -59,10 +59,10 @@ extern "C" __global__ void __raygen__aov()
     if (gaussianSampleIndex == OpaqueAovGaussianSample)
         gaussianSampleIndex = 0u;
     const RayHit hit = cameraSample
-        ? integrator.intersect(cameraSample->ray, gaussianSampleIndex)
+        ? integrator.intersect(cameraSample->ray, Ray::DefaultMinDistance, Ray::DefaultMaxDistance, gaussianSampleIndex)
         : RayHit{};
     const RayHit cryptomatteHit = cameraSample
-        ? integrator.intersect(cameraSample->ray, OpaqueAovGaussianSample)
+        ? integrator.intersect(cameraSample->ray, Ray::DefaultMinDistance, Ray::DefaultMaxDistance, OpaqueAovGaussianSample)
         : RayHit{};
     const bool valid = cameraSample.has_value() && hit.instanceIndex != InvalidIndex;
     const bool gaussianHit = valid && hit.primitiveIndex == InvalidIndex;
@@ -110,12 +110,4 @@ extern "C" __global__ void __raygen__aov()
     surf2Dwrite(packedNormal, params.output.normal, x * sizeof(ushort4), y);
     surf2Dwrite(packedPosition, params.output.position, x * sizeof(ushort4), y);
     surf2Dwrite(objectId, params.output.cryptomatte, x * sizeof(uint32_t), y);
-    surf2Dwrite(packedAlbedo, params.alternateAovOutput.albedo,
-        x * sizeof(uchar4), y);
-    surf2Dwrite(packedNormal, params.alternateAovOutput.normal,
-        x * sizeof(ushort4), y);
-    surf2Dwrite(packedPosition, params.alternateAovOutput.position,
-        x * sizeof(ushort4), y);
-    surf2Dwrite(objectId, params.alternateAovOutput.cryptomatte,
-        x * sizeof(uint32_t), y);
 }

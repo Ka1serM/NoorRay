@@ -53,7 +53,10 @@ extern "C" __global__ void __raygen__gaussianProxyOverdraw()
     SampledWavelengths wavelengths = SampledWavelengths::sampleVisible(0.5f);
     const nr::rstd::optional<CameraSample> cameraSample = params.scene.camera->Dispatch(
         [&](const auto* camera) {
-            return camera->generateRay(nx, ny, glm::vec2(0.5f), pixel,
+            const float filmY =
+                camera->getSensor().origin() == SensorOrigin::LowerLeft
+                ? -ny : ny;
+            return camera->generateRay(nx, filmY, glm::vec2(0.5f), pixel,
                 wavelengths, true);
         });
     if (!cameraSample)
@@ -69,7 +72,7 @@ extern "C" __global__ void __raygen__gaussianProxyOverdraw()
         params.scene.tlasHandle,
         make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
         make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
-        ray.minDistance(), ray.maxDistance(), 0.0f,
+        Ray::DefaultMinDistance, Ray::DefaultMaxDistance, 0.0f,
         GaussianVisibility,
         OPTIX_RAY_FLAG_NONE,
         0, 1, 0,

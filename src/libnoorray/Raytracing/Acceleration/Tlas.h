@@ -16,6 +16,7 @@
 #include "Raytracing/Gpu/Types.h"
 
 #include "Scene/GpuInstance.h"
+#include "Scene/Handle.h"
 
 class Scene;
 class MeshInstance;
@@ -83,7 +84,7 @@ private:
 
     struct GaussianInstanceAccel
     {
-        uint64_t objectId{};
+        SceneObjectHandle objectHandle;
         uint32_t gaussianCount{};
         uint32_t globalOffset{};
         nr::cuda::UniqueManagedBuffer instanceBuffer;

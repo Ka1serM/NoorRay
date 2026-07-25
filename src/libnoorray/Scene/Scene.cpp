@@ -32,8 +32,18 @@ Scene::~Scene() = default;
 
 void Scene::synchronizeBeforeMutation()
 {
-    if (mutationBarrier)
-        mutationBarrier();
+    gpuSyncPending_.store(true, std::memory_order_relaxed);
+    reclaimUnusedResources();
+}
+
+void Scene::reclaimUnusedResources()
+{
+    // A mesh asset releasing its material references reclaims those materials
+    // inside the registry, without the Scene being told. Dropping the matching
+    // texture references here is what lets the texture memory go too.
+    for (uint32_t slot = 0; slot < materialTextures.size(); ++slot)
+        if (!materials.isLiveSlot(slot))
+            materialTextures[slot].clear();
 }
 
 void Scene::load(const std::string& path)
@@ -66,10 +76,36 @@ void Scene::notifyGeometryChanged() {
 
 // ── Internal registration ─────────────────────────────────────────────────────
 
+SceneObjectHandle Scene::allocateObjectSlot(const uint32_t denseIndex) {
+    if (freeObjectSlots.empty()) {
+        objectSlots.push_back({denseIndex, 0});
+        return {static_cast<uint32_t>(objectSlots.size() - 1), 0};
+    }
+    const uint32_t slot = freeObjectSlots.back();
+    freeObjectSlots.pop_back();
+    objectSlots[slot].denseIndex = denseIndex;
+    return {slot, objectSlots[slot].generation};
+}
+
+void Scene::releaseObjectSlot(const SceneObjectHandle handle) {
+    if (!isValid(handle))
+        return;
+    objectSlots[handle.index()].denseIndex = ~0u;
+    // Bumping the generation is what makes a handle to the removed object
+    // resolve as stale rather than aliasing whatever reuses the slot.
+    ++objectSlots[handle.index()].generation;
+    freeObjectSlots.push_back(handle.index());
+}
+
+bool Scene::isValid(const SceneObjectHandle handle) const {
+    return handle.index() < objectSlots.size()
+        && objectSlots[handle.index()].denseIndex != ~0u
+        && objectSlots[handle.index()].generation == handle.generation();
+}
+
 uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     sceneObject->scene = this;
     std::shared_ptr<SceneObject> sharedObject(std::move(sceneObject));
-    sharedObject->setId(nextObjectId++);
 
     // Adding another camera must not unexpectedly change the rendered view.
     // The first camera is selected as a useful default; later changes are explicit.
@@ -84,15 +120,19 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
         setDirtyFlag(GaussianData);
 
     notifyGeometryChanged();
+    // The slot is published only once the object is reachable through the dense
+    // array, so a handle never points at a gap.
+    const uint32_t denseIndex = static_cast<uint32_t>(sceneObjects.size());
+    sharedObject->setHandle(allocateObjectSlot(denseIndex));
     sceneObjects.push_back(std::move(sharedObject));
-    if (gaussianInstance)
+    if (gaussianInstance && gaussianInstance->hasGaussianAsset())
     {
         gaussianInstance->sceneInstanceIndex = static_cast<uint32_t>(gaussianInstances.size());
         gaussianCount += gaussianInstance->getGaussianAsset().getGaussianCount();
         gaussianInstances.push_back(gaussianInstance);
         dirtyGaussianInstanceFlags.push_back(0);
     }
-    return static_cast<uint32_t>(sceneObjects.size() - 1);
+    return denseIndex;
 }
 
 void Scene::rebuildGaussianInstanceCache()
@@ -103,6 +143,10 @@ void Scene::rebuildGaussianInstanceCache()
     {
         if (auto instance = std::dynamic_pointer_cast<GaussianInstance>(object))
         {
+            // An instance whose asset was reclaimed has nothing to render, so
+            // it stays out of the flattened splat data and the TLAS.
+            if (!instance->hasGaussianAsset())
+                continue;
             instance->sceneInstanceIndex = static_cast<uint32_t>(gaussianInstances.size());
             gaussianCount += instance->getGaussianAsset().getGaussianCount();
             gaussianInstances.push_back(std::move(instance));
@@ -119,14 +163,27 @@ void Scene::clear() {
     // Switch rendering to the persistent viewport camera before scene-owned
     // cameras are destroyed.
     activateCamera(nullptr);
+    copiedObject.reset();
+    // Objects own asset references, so they go first: by the time the
+    // registries are cleared almost everything has already been reclaimed.
     sceneObjects.clear();
+    // Retire the slots rather than dropping the table, so handles that outlive
+    // the clear stay detectably stale instead of aliasing a future object.
+    for (uint32_t slot = 0; slot < objectSlots.size(); ++slot) {
+        if (objectSlots[slot].denseIndex == ~0u)
+            continue;
+        objectSlots[slot].denseIndex = ~0u;
+        ++objectSlots[slot].generation;
+        freeObjectSlots.push_back(slot);
+    }
     gaussianInstances.clear();
     gaussianCount = 0;
+    environmentTexture.reset();
+    materialTextures.clear();
     meshAssets.clear();
     materials.clear();
     gaussianAssets.clear();
     textures.clear();
-    textureNames.clear();
     pointLights.clear();
     spotLights.clear();
     rectLights.clear();
@@ -137,9 +194,7 @@ void Scene::clear() {
     gaussianOpacities.clear();
     gaussianShCoeffs.clear();
     gaussianInstanceOffsets.clear();
-    copiedObject.reset();
-    activeObjectId = 0;
-    nextObjectId = 1;
+    activeObject = {};
     renderSettings = {};
     environment->destroyCdf();
     environment->textureIndex = -1;
@@ -154,57 +209,106 @@ void Scene::clear() {
     ++lightRevision;
 }
 
-uint64_t Scene::add(std::unique_ptr<SceneObject> sceneObject) {
+SceneObjectHandle Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     synchronizeBeforeMutation();
     const uint32_t index = registerObject(std::move(sceneObject));
-    return sceneObjects[index]->getId();
+    return sceneObjects[index]->getHandle();
 }
 
-uint32_t Scene::add(MeshAsset meshAsset) {
+MeshAssetRef Scene::add(MeshAsset meshAsset) {
     synchronizeBeforeMutation();
-    const uint32_t index = static_cast<uint32_t>(meshAssets.size());
-    meshAsset.setMeshIndex(index);
-    meshAssets.push_back(std::move(meshAsset));
+    const MeshAssetHandle handle = meshAssets.emplace(std::move(meshAsset));
+    // The asset caches its own slot index; the shading kernels read it back
+    // out of the mesh when they resolve a hit.
+    meshAssets[handle].setMeshIndex(handle.index());
     setDirtyFlag(Meshes);
-    return index;
+    return {meshAssets, handle};
 }
 
-uint32_t Scene::add(Material material) {
+MaterialRef Scene::add(Material material) {
     synchronizeBeforeMutation();
-    const uint32_t index = static_cast<uint32_t>(materials.size());
-    materials.push_back(material);
-    // The managed vector may have reallocated, so refresh the GPU pointer.
+    const MaterialHandle handle = materials.emplace(material);
+    retainMaterialTextures(handle, material);
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
-    return index;
+    return {materials, handle};
 }
 
 void Scene::updateMaterial(
-    const uint32_t materialId, const Material& material)
+    const MaterialHandle handle, const Material& material)
 {
-    if (materialId >= materials.size())
+    if (!materials.isValid(handle))
         return;
     synchronizeBeforeMutation();
-    materials[materialId] = material;
+    materials[handle] = material;
+    retainMaterialTextures(handle, material);
     setDirtyFlag(Accumulation);
 }
 
-uint32_t Scene::add(GaussianAsset gaussianAsset) {
-    synchronizeBeforeMutation();
-    const uint32_t index = static_cast<uint32_t>(gaussianAssets.size());
-    gaussianAssets.push_back(std::move(gaussianAsset));
-    setDirtyFlag(TLAS);
-    setDirtyFlag(GaussianData);
-    return index;
+void Scene::retainMaterialTextures(
+    const MaterialHandle handle, const Material& material)
+{
+    if (handle.index() >= materialTextures.size())
+        materialTextures.resize(handle.index() + 1);
+
+    std::vector<TextureRef> retained;
+    for (const int slot : {material.albedoIndex, material.specularIndex,
+             material.metallicIndex, material.roughnessIndex,
+             material.normalIndex, material.emissionIndex,
+             material.transmissionIndex, material.opacityIndex}) {
+        if (slot < 0)
+            continue;
+        const TextureHandle texture = textures.handleAt(static_cast<uint32_t>(slot));
+        if (texture.isValid())
+            retained.emplace_back(textures, texture);
+    }
+    // The new references are taken before the old ones are dropped, so a
+    // texture both materials sample is never reclaimed in between.
+    materialTextures[handle.index()] = std::move(retained);
 }
 
-Texture& Scene::add(Texture&& texture) {
+GaussianAssetRef Scene::add(GaussianAsset gaussianAsset) {
     synchronizeBeforeMutation();
-    texture.sceneIndex = static_cast<int>(textures.size());
-    textureNames.push_back(texture.getName());
-    textures.push_back(std::move(texture));
+    const GaussianAssetHandle handle =
+        gaussianAssets.emplace(std::move(gaussianAsset));
+    setDirtyFlag(TLAS);
+    setDirtyFlag(GaussianData);
+    return {gaussianAssets, handle};
+}
+
+TextureRef Scene::add(Texture texture) {
+    synchronizeBeforeMutation();
+    const TextureHandle handle = textures.emplace(std::move(texture));
+    textures[handle].sceneIndex = static_cast<int>(handle.index());
     setDirtyFlag(Textures);
-    return textures.back();
+    return {textures, handle};
+}
+
+std::vector<std::string> Scene::getTextureNames() const {
+    std::vector<std::string> names;
+    names.reserve(textures.storage().size());
+    for (const Texture& texture : textures.storage())
+        names.push_back(texture.getName());
+    return names;
+}
+
+void Scene::setEnvironmentTexture(const TextureRef& texture) {
+    const Texture* resolved = texture.get();
+    if (resolved == nullptr) {
+        clearEnvironmentTexture();
+        return;
+    }
+    environmentTexture = texture;
+    environment->setHdriTexture(*resolved);
+    setDirtyFlag(EnvironmentCdf);
+    setDirtyFlag(Accumulation);
+}
+
+void Scene::clearEnvironmentTexture() {
+    environmentTexture.reset();
+    environment->clearHdriTexture();
+    setDirtyFlag(EnvironmentCdf);
+    setDirtyFlag(Accumulation);
 }
 
 bool Scene::remove(SceneObject* objToRemove) {
@@ -232,8 +336,8 @@ bool Scene::remove(SceneObject* objToRemove) {
     if (it == sceneObjects.end())
         return false;
 
-    if (activeObjectId == (*it)->getId())
-        activeObjectId = 0;
+    if (activeObject == (*it)->getHandle())
+        activeObject = {};
     if (objToRemove == getActiveCamera()) {
         const auto replacement = std::ranges::find_if(sceneObjects,
             [objToRemove](const std::shared_ptr<SceneObject>& object) {
@@ -244,16 +348,22 @@ bool Scene::remove(SceneObject* objToRemove) {
             ? std::static_pointer_cast<CameraInstance>(*replacement) : nullptr);
     }
 
+    releaseObjectSlot(objToRemove->getHandle());
     objToRemove->scene = nullptr;
-    sceneObjects.erase(it);
+    const auto erased = sceneObjects.erase(it);
+    // Erasing shifts everything behind the hole down by one; the slot table is
+    // the only thing that knows where an object lives, so it follows along.
+    for (auto follower = erased; follower != sceneObjects.end(); ++follower)
+        objectSlots[(*follower)->getHandle().index()].denseIndex =
+            static_cast<uint32_t>(std::distance(sceneObjects.begin(), follower));
     rebuildGaussianInstanceCache();
     notifyGeometryChanged();
     return true;
 }
 
-bool Scene::removeObject(const uint64_t objectId) {
+bool Scene::removeObject(const SceneObjectHandle handle) {
     synchronizeBeforeMutation();
-    return remove(findObjectPtr(objectId).get());
+    return remove(findObjectPtr(handle).get());
 }
 
 bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject) {
@@ -287,7 +397,9 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 
     std::shared_ptr<SceneObject> newShared(std::move(newObject));
     newShared->scene = this;
-    newShared->setId(oldObject->getId());
+    // The replacement takes over the slot, so handles held elsewhere keep
+    // resolving -- that is the point of replacing rather than remove + add.
+    newShared->setHandle(oldObject->getHandle());
 
     if (auto* newLight = dynamic_cast<LightInstance*>(newShared.get()))
         registerLight(*newLight);
@@ -454,11 +566,12 @@ void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {
     }
 }
 
-bool Scene::reparentObject(const uint64_t objectId, const uint64_t newParentId) {
+bool Scene::reparentObject(
+    const SceneObjectHandle handle, const SceneObjectHandle newParentHandle) {
     synchronizeBeforeMutation();
-    const auto objectToMove = findObjectPtr(objectId);
-    const auto newParent = newParentId != 0 ? findObjectPtr(newParentId) : nullptr;
-    if (!objectToMove || (newParentId != 0 && !newParent))
+    const auto objectToMove = findObjectPtr(handle);
+    const auto newParent = findObjectPtr(newParentHandle);
+    if (!objectToMove || (newParentHandle.isValid() && !newParent))
         return false;
 
     reparent(objectToMove.get(), newParent.get());
@@ -467,8 +580,8 @@ bool Scene::reparentObject(const uint64_t objectId, const uint64_t newParentId) 
 
 // ── Clipboard ────────────────────────────────────────────────────────────────
 
-void Scene::copyObject(const uint64_t objectId) {
-    copiedObject = findObjectPtr(objectId);
+void Scene::copyObject(const SceneObjectHandle handle) {
+    copiedObject = findObjectPtr(handle);
 }
 
 std::shared_ptr<SceneObject> Scene::cloneHierarchy(const SceneObject* source) {
@@ -493,7 +606,7 @@ void Scene::paste() {
         targetParent = active->getParent();
 
     reparent(newObject.get(), targetParent);
-    setActiveObjectId(newObject->getId());
+    setActiveObject(newObject->getHandle());
 }
 
 // ── Queries ───────────────────────────────────────────────────────────────────
@@ -509,7 +622,7 @@ std::vector<std::shared_ptr<SceneObject>> Scene::getRootObjects() const {
 std::vector<std::shared_ptr<MeshInstance>> Scene::getMeshInstances() const {
     std::vector<std::shared_ptr<MeshInstance>> result;
     for (const auto& obj : sceneObjects)
-        if (auto mi = std::dynamic_pointer_cast<MeshInstance>(obj))
+        if (auto mi = std::dynamic_pointer_cast<MeshInstance>(obj); mi && mi->hasMeshAsset())
             result.push_back(mi);
     return result;
 }
@@ -524,7 +637,10 @@ void Scene::markMeshInstanceTransformDirty(const uint32_t instanceIndex) {
 uint32_t Scene::getMeshInstanceIndex(const SceneObject* object) const {
     uint32_t instanceIndex = 0;
     for (const auto& obj : sceneObjects) {
-        if (!std::dynamic_pointer_cast<MeshInstance>(obj))
+        // Must skip exactly what getMeshInstances() skips: this index addresses
+        // the list that builds the TLAS.
+        const auto mesh = std::dynamic_pointer_cast<MeshInstance>(obj);
+        if (!mesh || !mesh->hasMeshAsset())
             continue;
         if (obj.get() == object)
             return instanceIndex;
@@ -564,14 +680,21 @@ void Scene::buildGaussianRenderData()
         total += static_cast<uint32_t>(gaussians.size());
     }
 
-    gaussianOpacities.resize(total);
     const uint32_t coefficientsPerGaussian = sphericalHarmonicsCoefficientCount(
         renderSettings.gaussianRenderSphericalHarmonics);
     gaussianShCoefficientCount = coefficientsPerGaussian;
+    if (total == 0)
+    {
+        // The packed SH array is the largest managed allocation in a splat
+        // scene. resize(0) would keep its capacity, so hand the memory back.
+        gaussianOpacities = nr::rstd::vector<float>{};
+        gaussianShCoeffs = nr::rstd::vector<__half>{};
+        gaussianInstanceOffsets = nr::rstd::vector<uint32_t>{};
+        return;
+    }
+    gaussianOpacities.resize(total);
     gaussianShCoeffs.resize(static_cast<size_t>(total)
         * coefficientsPerGaussian * SphericalHarmonicsChannelCount);
-    if (total == 0)
-        return;
 
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, total, 1024),
         [&](const tbb::blocked_range<uint32_t>& range)
@@ -608,9 +731,12 @@ void Scene::buildGaussianRenderData()
 
 uint32_t Scene::getActiveCryptomatteId(const uint32_t selectedGaussianIndex) const
 {
+    // Cryptomatte ids follow the same ordering as the TLAS, so instances whose
+    // asset has been reclaimed are skipped here exactly as they are there.
     uint32_t meshInstanceCount = 0;
     for (const auto& object : sceneObjects)
-        if (std::dynamic_pointer_cast<MeshInstance>(object))
+        if (const auto mesh = std::dynamic_pointer_cast<MeshInstance>(object);
+            mesh && mesh->hasMeshAsset())
             ++meshInstanceCount;
 
     uint32_t meshIndex = 0;
@@ -619,13 +745,17 @@ uint32_t Scene::getActiveCryptomatteId(const uint32_t selectedGaussianIndex) con
     {
         if (auto mesh = std::dynamic_pointer_cast<MeshInstance>(object))
         {
-            if (object->getId() == activeObjectId)
+            if (!mesh->hasMeshAsset())
+                continue;
+            if (object->getHandle() == activeObject)
                 return meshIndex;
             ++meshIndex;
         }
         else if (auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object))
         {
-            if (object->getId() == activeObjectId)
+            if (!gaussian->hasGaussianAsset())
+                continue;
+            if (object->getHandle() == activeObject)
             {
                 const uint32_t gaussianCount = gaussian->getGaussianAsset().getGaussianCount();
                 // The picker and transform gizmo use flattened Gaussian
@@ -643,18 +773,11 @@ uint32_t Scene::getActiveCryptomatteId(const uint32_t selectedGaussianIndex) con
     return ~0u;
 }
 
-MeshAsset* Scene::getMeshAsset(const std::string& name) {
-    for (auto& asset : meshAssets)
-        if (asset.getPath() == name)
-            return &asset;
-    return nullptr;
-}
-
-const MeshAsset* Scene::getMeshAsset(const std::string& name) const {
-    for (const auto& asset : meshAssets)
-        if (asset.getPath() == name)
-            return &asset;
-    return nullptr;
+MeshAssetHandle Scene::findMeshAsset(const std::string& path) const {
+    for (uint32_t slot = 0; slot < meshAssets.slotCount(); ++slot)
+        if (meshAssets.isLiveSlot(slot) && meshAssets.storage()[slot].getPath() == path)
+            return meshAssets.handleAt(slot);
+    return {};
 }
 
 // ── Lookups ───────────────────────────────────────────────────────────────────
@@ -667,10 +790,8 @@ std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObject* object) con
     return it != sceneObjects.end() ? *it : nullptr;
 }
 
-std::shared_ptr<SceneObject> Scene::findObjectPtr(const uint64_t objectId) const {
-    if (objectId == 0) return nullptr;
-    const auto it = std::ranges::find_if(sceneObjects, [objectId](const auto& ptr) {
-        return ptr->getId() == objectId;
-    });
-    return it != sceneObjects.end() ? *it : nullptr;
+std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObjectHandle handle) const {
+    if (!isValid(handle))
+        return nullptr;
+    return sceneObjects[objectSlots[handle.index()].denseIndex];
 }

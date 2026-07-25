@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <numbers>
 
+#include "CUDA/Checks.h"
 #include "glm/gtc/type_ptr.inl"
 
 MeshAsset MeshAsset::CreateCube(Scene& scene, const std::string& name, const Material& material) {
@@ -235,12 +236,14 @@ MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Mat
 }
 
 MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
-    : scene(scene), path(std::move(name)),
+    : scene(&scene), path(std::move(name)),
       vertices(vertices.begin(), vertices.end()), indices(indices.begin(), indices.end()),
       faces(faces.begin(), faces.end())
 {
-    for (const Material& material : materials)
-        materialIds.push_back(scene.add(material));
+    for (const Material& material : materials) {
+        materialRefs.push_back(scene.add(material));
+        materialIds.push_back(materialRefs.back().index());
+    }
     scene.synchronizeBeforeMutation();
     const auto& ctx = scene.getContext();
     if (ctx.getOptixContext() != nullptr && ctx.getCudaStream() != nullptr)
@@ -254,8 +257,38 @@ MeshAsset::MeshAsset(MeshAsset&& other) noexcept
     : scene(other.scene), path(std::move(other.path)), index(other.index),
       vertices(std::move(other.vertices)), indices(std::move(other.indices)),
       faces(std::move(other.faces)), materialIds(std::move(other.materialIds)),
-      blas(std::move(other.blas))
+      materialRefs(std::move(other.materialRefs)), blas(std::move(other.blas))
 {
+}
+
+MeshAsset& MeshAsset::operator=(MeshAsset&& other) noexcept
+{
+    if (this != &other) {
+        scene = other.scene;
+        path = std::move(other.path);
+        index = other.index;
+        vertices = std::move(other.vertices);
+        indices = std::move(other.indices);
+        faces = std::move(other.faces);
+        materialIds = std::move(other.materialIds);
+        materialRefs = std::move(other.materialRefs);
+        blas = std::move(other.blas);
+    }
+    return *this;
+}
+
+void MeshAsset::releaseResources()
+{
+    path.clear();
+    index = ~0u;
+    // Move-assign from an empty vector: clear() would keep the managed
+    // allocation alive, and freeing it is the entire point here.
+    vertices = nr::rstd::vector<Vertex>{};
+    indices = nr::rstd::vector<uint32_t>{};
+    faces = nr::rstd::vector<Face>{};
+    materialIds = nr::rstd::vector<uint32_t>{};
+    materialRefs.clear();
+    blas.reset();
 }
 
 uint32_t MeshAsset::getMeshIndex() const {
@@ -266,47 +299,115 @@ void MeshAsset::setMeshIndex(uint32_t newIndex) {
     index = newIndex;
 }
 
+void MeshAsset::updatePositions(const std::vector<glm::vec3>& positions)
+{
+    if (positions.size() != vertices.size())
+        return;
+
+    scene->synchronizeBeforeMutation();
+    for (size_t i = 0; i < positions.size(); ++i)
+        vertices[i].position = positions[i];
+
+    const auto& context = scene->getContext();
+    if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
+        blas.refit(context.getOptixContext(), context.getCudaStream(),
+            vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
+            indices.data(), static_cast<uint32_t>(indices.size() / 3));
+
+    scene->setDirtyFlag(Meshes);
+    scene->setDirtyFlag(TLAS);
+    scene->setDirtyFlag(Accumulation);
+}
+
+void MeshAsset::updateVertexData(const std::vector<Vertex>& newVertices)
+{
+    if (newVertices.size() != vertices.size())
+        return;
+
+    scene->synchronizeBeforeMutation();
+    for (size_t i = 0; i < newVertices.size(); ++i)
+        vertices[i] = newVertices[i];
+
+    const auto& context = scene->getContext();
+    if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
+        blas.refit(context.getOptixContext(), context.getCudaStream(),
+            vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
+            indices.data(), static_cast<uint32_t>(indices.size() / 3));
+
+    scene->setDirtyFlag(Meshes);
+    scene->setDirtyFlag(TLAS);
+    scene->setDirtyFlag(Accumulation);
+}
+
+void MeshAsset::updatePositionsDevice(CUdeviceptr devicePositions,
+    const uint32_t count, cudaStream_t stream)
+{
+    if (count != vertices.size())
+        return;
+
+    scene->synchronizeBeforeMutation();
+
+    const size_t bytes = count * sizeof(glm::vec3);
+    NR_GPU_CHECK(cudaMemcpyAsync(vertices.data(), reinterpret_cast<const void*>(devicePositions),
+        bytes, cudaMemcpyDeviceToHost, stream));
+
+    const auto& context = scene->getContext();
+    if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
+        blas.refit(context.getOptixContext(), stream,
+            vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
+            indices.data(), static_cast<uint32_t>(indices.size() / 3));
+
+    scene->setDirtyFlag(Meshes);
+    scene->setDirtyFlag(TLAS);
+    scene->setDirtyFlag(Accumulation);
+}
+
 void MeshAsset::replaceGeometry(const std::vector<Vertex>& newVertices,
     const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces)
 {
-    scene.synchronizeBeforeMutation();
+    scene->synchronizeBeforeMutation();
     vertices = nr::rstd::vector<Vertex>(newVertices.begin(), newVertices.end());
     indices = nr::rstd::vector<uint32_t>(newIndices.begin(), newIndices.end());
     faces = nr::rstd::vector<Face>(newFaces.begin(), newFaces.end());
-    const auto& context = scene.getContext();
+    const auto& context = scene->getContext();
     if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
         blas.build(context.getOptixContext(), context.getCudaStream(),
             vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
             indices.data(), static_cast<uint32_t>(indices.size() / 3));
-    scene.setDirtyFlag(Meshes);
-    scene.setDirtyFlag(TLAS);
-    scene.setDirtyFlag(Accumulation);
+    scene->setDirtyFlag(Meshes);
+    scene->setDirtyFlag(TLAS);
+    scene->setDirtyFlag(Accumulation);
 }
 
 void MeshAsset::setMaterial(const uint32_t materialIndex, const Material& material)
 {
-    if (materialIndex < materialIds.size())
-        scene.updateMaterial(materialIds[materialIndex], material);
+    if (materialIndex < materialRefs.size())
+        scene->updateMaterial(materialRefs[materialIndex].handle(), material);
 }
 
-void MeshAsset::setMaterialId(
-    const uint32_t materialSlot, const uint32_t materialId)
+void MeshAsset::setMaterial(
+    const uint32_t materialSlot, const MaterialRef& material)
 {
-    if (materialSlot >= materialIds.size()
-        || materialId >= scene.getMaterials().size())
+    if (materialSlot >= materialIds.size() || !material.isValid())
         return;
-    scene.synchronizeBeforeMutation();
-    materialIds[materialSlot] = materialId;
+    scene->synchronizeBeforeMutation();
+    materialRefs[materialSlot] = material;
+    materialIds[materialSlot] = material.index();
     notifyMaterialsChanged();
 }
 
 const Material& MeshAsset::getMaterial(const uint32_t slot) const
 {
-    return scene.getMaterial(materialIds[slot]);
+    return scene->getMaterial(materialRefs[slot].handle());
+}
+
+MaterialHandle MeshAsset::getMaterialHandle(const uint32_t slot) const
+{
+    return slot < materialRefs.size() ? materialRefs[slot].handle() : MaterialHandle();
 }
 
 void MeshAsset::notifyMaterialsChanged()
 {
-    scene.setDirtyFlag(Meshes);
-    scene.setDirtyFlag(Accumulation);
+    scene->setDirtyFlag(Meshes);
+    scene->setDirtyFlag(Accumulation);
 }

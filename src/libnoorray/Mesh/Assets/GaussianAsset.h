@@ -41,8 +41,12 @@ public:
     GaussianAsset(GaussianAsset&& other) noexcept = default;
     GaussianAsset(const GaussianAsset&) = delete;
     GaussianAsset& operator=(const GaussianAsset&) = delete;
-    GaussianAsset& operator=(GaussianAsset&&) = delete;
+    GaussianAsset& operator=(GaussianAsset&& other) noexcept = default;
     ~GaussianAsset() = default;
+
+    // Frees the splat data, which is by far the largest resource in a scene.
+    // Called by the registry once no instance refers to this asset any more.
+    void releaseResources();
 
     const std::string& getName() const override { return name; }
     std::string getType() const override { return "Gaussian Asset"; }
@@ -64,7 +68,7 @@ public:
     void clearDirtyFlag() { dirty = false; }
 
 private:
-    Scene& scene;
+    Scene* scene;
     std::string name;
     std::string path;
     bool dirty = false;

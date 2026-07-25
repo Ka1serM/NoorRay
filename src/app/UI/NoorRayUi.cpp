@@ -40,13 +40,22 @@ NoorRayUi::NoorRayUi(std::string scenePath, const uint32_t windowWidth, const ui
         scene.load(scenePath);
     Raytracer& raytracer = *session.raytracer;
     Renderer* renderer = session.renderer.get();
+    // The editor always needs the AOVs: the viewport compute pass samples
+    // albedo, normal and cryptomatte, and picking reads back cryptomatte and
+    // position. Ask for them (and for the frame they are sized against) before
+    // anything binds those images.
+    raytracer.setAovEnabled(true);
+    if (CameraInstance* camera = scene.getRenderCamera()) {
+        const glm::uvec2 resolution = camera->getCamera()->getSensor().resolution();
+        raytracer.resize(resolution.x, resolution.y);
+    }
     viewport = std::make_unique<Viewport>(
         context, raytracer.getWidth(), raytracer.getHeight(),
-        raytracer.getOutputColor(0), raytracer.getOutputColor(1),
-        raytracer.getOutputAlbedo(0), raytracer.getOutputAlbedo(1),
-        raytracer.getOutputNormal(0), raytracer.getOutputNormal(1),
-        raytracer.getOutputCrypto(0), raytracer.getOutputCrypto(1),
-        raytracer.getOutputPosition(0), raytracer.getOutputPosition(1),
+        raytracer.getOutputColor(),
+        raytracer.getOutputAlbedo(),
+        raytracer.getOutputNormal(),
+        raytracer.getOutputCrypto(),
+        raytracer.getOutputPosition(),
         renderer->getColorImageFormat());
     Viewport* viewport = this->viewport.get();
     imGuiManager = std::make_unique<ImGuiManager>(
@@ -90,7 +99,6 @@ void NoorRayUi::run() {
     int submittedSamples = 0;
     bool renderComplete = false;
     uint64_t displayedRenderValue = 0;
-    uint32_t displayedBufferIndex = 0;
     uint32_t displayedCryptomatteId = ~0u;
     InteropFrame pendingDisplayFrame{};
     bool isRunning = true, isFullscreen = false, firstFrame = true;
@@ -134,11 +142,9 @@ void NoorRayUi::run() {
                 raytracer->resize(resolution.x, resolution.y);
                 viewport->resize(
                     raytracer->getWidth(), raytracer->getHeight(),
-                    raytracer->getOutputColor(0),    raytracer->getOutputColor(1),
-                    raytracer->getOutputAlbedo(0),   raytracer->getOutputAlbedo(1),
-                    raytracer->getOutputNormal(0),   raytracer->getOutputNormal(1),
-                    raytracer->getOutputCrypto(0),   raytracer->getOutputCrypto(1),
-                    raytracer->getOutputPosition(0), raytracer->getOutputPosition(1),
+                    raytracer->getOutputColor(),    raytracer->getOutputAlbedo(),
+                    raytracer->getOutputNormal(),   raytracer->getOutputCrypto(),
+                    raytracer->getOutputPosition(),
                     renderer->getColorImageFormat());
                 viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(),
                                       viewport->getOutputImage().getFormat());
@@ -221,7 +227,7 @@ void NoorRayUi::run() {
 
         if (renderer->beginFrame()) {
             const vk::CommandBuffer cmd = renderer->getCurrentCommandBuffer();
-            const auto dispatchViewportOverlay = [&](const uint32_t bufferIndex)
+            const auto dispatchViewportOverlay = [&]()
             {
                 const RenderSettings& renderSettings = scene.getRenderSettings();
                 const float cameraExposure = viewportCamera
@@ -237,7 +243,7 @@ void NoorRayUi::run() {
                 if (viewportPanel->showOverlays())
                     viewport->updateBillboards(scene);
                 viewport->dispatch(
-                    cmd, bufferIndex, selectedCryptomatteId,
+                    cmd, selectedCryptomatteId,
                     viewProjection,
                     proxyOverdraw ? 0.0f : cameraExposure,
                     proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
@@ -249,11 +255,10 @@ void NoorRayUi::run() {
 
             if (pendingDisplayFrame.readyValue != 0) {
                 displayedRenderValue = pendingDisplayFrame.readyValue;
-                displayedBufferIndex = pendingDisplayFrame.bufferIndex;
-                dispatchViewportOverlay(displayedBufferIndex);
+                dispatchViewportOverlay();
                 viewportPanel->setAovImages(
-                    raytracer->getOutputCrypto(displayedBufferIndex),
-                    raytracer->getOutputPosition(displayedBufferIndex));
+                    raytracer->getOutputCrypto(),
+                    raytracer->getOutputPosition());
                 renderer->setExternalFrameSync(
                     pendingDisplayFrame.renderReadySemaphore,
                     pendingDisplayFrame.bufferReleasedSemaphore,
@@ -264,7 +269,7 @@ void NoorRayUi::run() {
                         viewportPanel->getSelectedGaussianIndex())
                     != displayedCryptomatteId)
             {
-                dispatchViewportOverlay(displayedBufferIndex);
+                dispatchViewportOverlay();
             }
 
             imGuiManager->renderDrawData(cmd, renderer->getCurrentColorImageView(), renderer->getSwapchainExtent());

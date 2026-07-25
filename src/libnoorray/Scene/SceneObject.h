@@ -15,7 +15,7 @@ class SceneObject : public Inspectable, public std::enable_shared_from_this<Scen
     friend class Scene;
 
 protected:
-    uint64_t id = 0;
+    SceneObjectHandle handle;
     std::string name;
     Transform transform;
     Scene* scene{};
@@ -34,7 +34,7 @@ public:
     virtual std::unique_ptr<SceneObject> clone() const;
     virtual void accept(SceneObjectVisitor& visitor);
 
-    uint64_t getId() const { return id; }
+    SceneObjectHandle getHandle() const { return handle; }
     Scene* getScene() const { return scene; }
     const std::string& getName() const override { return name; }
     std::string getType() const override { return "Scene Object"; }
@@ -90,5 +90,5 @@ public:
     Transform getWorldTransform() const;
 
 private:
-    void setId(const uint64_t newId) { id = newId; }
+    void setHandle(const SceneObjectHandle newHandle) { handle = newHandle; }
 };

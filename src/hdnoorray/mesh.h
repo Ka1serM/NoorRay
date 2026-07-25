@@ -8,7 +8,14 @@
 #include <string>
 #include <vector>
 
+#include "Scene/Handle.h"
+#include "Scene/SceneResources.h"
+
+class Scene;
+
 PXR_NAMESPACE_OPEN_SCOPE
+
+class HdNoorRayRenderParam;
 
 class HDNOORRAY_API HdNoorRayMesh final : public HdMesh
 {
@@ -29,11 +36,20 @@ protected:
     void _InitRepr(const TfToken& reprToken, HdDirtyBits* dirtyBits) override;
 
 private:
-    uint32_t meshIndex_{~0u};
-    std::vector<uint64_t> objectIds_;
-    SdfPath boundMaterialId_;
+    // The prim owns its asset and its instances. Everything it holds is given
+    // up in Finalize (or when the prim switches between mesh and splat), which
+    // is what releases the geometry and splat data from device memory.
+    void ReleaseInstances(Scene& scene);
+    void ReleaseAll(HdNoorRayRenderParam& param);
 
-    uint64_t gaussianAssetIndex_{~0u};
+    // Cached mapping from expanded vertex index → source point index, used
+    // by the position-only update path to avoid re-running BuildTriangleMesh.
+    std::vector<uint32_t> vertexToPointIndex_;
+
+    MeshAssetRef meshAsset_;
+    GaussianAssetRef gaussianAsset_;
+    std::vector<SceneObjectHandle> objects_;
+    SdfPath boundMaterialId_;
     std::string splatPath_;
 };
 

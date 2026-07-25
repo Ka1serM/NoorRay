@@ -73,8 +73,8 @@ void TrainingPanel::reconstructAndBegin()
                 (reconstruction.colors[i] - glm::vec3(0.5f)) / SphericalHarmonicsC0);
             gaussian.sphericalHarmonics.count = 1;
         }
-        const uint32_t assetIndex = scene.add(GaussianAsset(scene, "COLMAP sparse points", std::move(gaussians)));
-        scene.add(std::make_unique<GaussianInstance>(scene, "Trained Gaussians", assetIndex, Transform{}));
+        const GaussianAssetRef asset = scene.add(GaussianAsset(scene, "COLMAP sparse points", std::move(gaussians)));
+        scene.add(std::make_unique<GaussianInstance>(scene, "Trained Gaussians", asset, Transform{}));
         trainRenderer = std::make_unique<GaussianTrainRenderer>(raytracer, scene);
         trainer = std::make_unique<noorray::GaussianTrainer>(*trainRenderer, scene, config);
         for (const auto& view : reconstruction.views)

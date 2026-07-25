@@ -5,6 +5,7 @@ namespace nb = nanobind;
 
 NB_MODULE(_pynoorray, module)
 {
+    bindHandles(module);
     bindVector3(module);
     bindSellmeierCoefficients(module);
     bindTransform(module);

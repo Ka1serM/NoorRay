@@ -26,8 +26,11 @@ bool renderMeshAsset(MeshAsset& asset)
     auto textureCombo = [&](const char* label, int& textureIndex, const int materialIndex,
                             bool& materialChanged) {
         ImGuiManager::tableRowLabel(label);
+        // Reclaimed textures keep their slot but lose their name, so an empty
+        // entry is a hole in the list rather than a choice.
         const bool validIndex = textureIndex >= 0
-            && textureIndex < static_cast<int>(textureNames.size());
+            && textureIndex < static_cast<int>(textureNames.size())
+            && !textureNames[textureIndex].empty();
         if (!validIndex)
             textureIndex = -1;
         const char* preview = validIndex ? textureNames[textureIndex].c_str() : "No Texture";
@@ -38,11 +41,14 @@ bool renderMeshAsset(MeshAsset& asset)
             textureIndex = -1;
             materialChanged = true;
         }
-        for (int index = 0; index < static_cast<int>(textureNames.size()); ++index)
+        for (int index = 0; index < static_cast<int>(textureNames.size()); ++index) {
+            if (textureNames[index].empty())
+                continue;
             if (ImGui::Selectable(textureNames[index].c_str(), textureIndex == index)) {
                 textureIndex = index;
                 materialChanged = true;
             }
+        }
         ImGui::EndCombo();
     };
 
@@ -108,7 +114,7 @@ bool renderMeshInstance(MeshInstance& instance)
     if (!ImGuiManager::accordionRow("Mesh Asset###MeshProperties"))
         return false;
 
-    return renderMeshAsset(instance.getMeshAsset());
+    return instance.hasMeshAsset() && renderMeshAsset(instance.getMeshAsset());
 }
 
 }

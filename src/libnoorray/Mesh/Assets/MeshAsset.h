@@ -3,9 +3,12 @@
 #include <string>
 #include <vector>
 
+#include <cuda.h>
+
 #include "CUDA/rstd/Vector.h"
 #include "Raytracing/Acceleration/Blas.h"
 #include "Scene/Inspectable.h"
+#include "Scene/MaterialRegistry.h"
 #include "Shading/Material.h"
 
 #include <glm/vec2.hpp>
@@ -42,8 +45,13 @@ public:
     MeshAsset(MeshAsset&& other) noexcept;
     MeshAsset(const MeshAsset&) = delete;
     MeshAsset& operator=(const MeshAsset&) = delete;
-    MeshAsset& operator=(MeshAsset&&) = delete;
+    MeshAsset& operator=(MeshAsset&& other) noexcept;
     ~MeshAsset() = default;
+
+    // Frees the geometry and its acceleration structure and gives up the
+    // material references, leaving an empty asset behind. Called by the
+    // registry once nothing refers to this mesh any more.
+    void releaseResources();
 
     const Blas& getBlas() const { return blas; }
 
@@ -63,21 +71,37 @@ public:
     }
     size_t getMaterialCount() const { return materialIds.size(); }
     const Material& getMaterial(uint32_t slot) const;
-    Scene& getScene() const { return scene; }
+    MaterialHandle getMaterialHandle(uint32_t slot) const;
+    Scene& getScene() const { return *scene; }
+    // Incremental updates for real-time editing. These update vertex data
+    // in-place and refit the BLAS (much cheaper than replaceGeometry).
+    // Topology (indices + faces) and material count must stay the same.
+    void updatePositions(const std::vector<glm::vec3>& positions);
+    void updateVertexData(const std::vector<Vertex>& newVertices);
+
+    // GPU-direct position upload. Copies positions from a device pointer into
+    // the vertex buffer and refits the BLAS — no CPU staging required.
+    void updatePositionsDevice(CUdeviceptr devicePositions, uint32_t count,
+        cudaStream_t stream);
+
     void replaceGeometry(const std::vector<Vertex>& newVertices,
         const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces);
     void setMaterial(uint32_t materialIndex, const Material& material);
-    void setMaterialId(uint32_t materialSlot, uint32_t materialId);
+    void setMaterial(uint32_t materialSlot, const MaterialRef& material);
     void notifyMaterialsChanged();
 
 private:
-    Scene& scene;
+    Scene* scene;
     std::string path;
     uint32_t index = ~0u;
     nr::rstd::vector<Vertex> vertices;
     nr::rstd::vector<uint32_t> indices;
     nr::rstd::vector<Face> faces;
+    // Slot indices of the materials this mesh uses, read directly by the
+    // shading kernels. materialRefs holds the matching ownership so a material
+    // outlives every mesh that points at it.
     nr::rstd::vector<uint32_t> materialIds;
+    std::vector<MaterialRef> materialRefs;
 
     Blas blas;
 

@@ -4,11 +4,13 @@
 #include "renderParam.h"
 
 #include <pxr/base/gf/vec3f.h>
+#include <pxr/base/tf/diagnostic.h>
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/renderPassState.h>
 #include <pxr/imaging/hd/tokens.h>
 
 #include <algorithm>
+#include <exception>
 #include <mutex>
 
 #define GL_GLEXT_PROTOTYPES
@@ -135,6 +137,14 @@ HdNoorRayRenderPass::HdNoorRayRenderPass(
 
 HdNoorRayRenderPass::~HdNoorRayRenderPass() = default;
 
+void HdNoorRayRenderPass::SetBuffersConverged(
+    const HdRenderPassAovBindingVector& bindings, const bool converged)
+{
+    for (const HdRenderPassAovBinding& binding : bindings)
+        if (HdNoorRayRenderBuffer* buffer = GetBuffer(binding))
+            buffer->SetConverged(converged);
+}
+
 bool HdNoorRayRenderPass::IsConverged() const
 {
     return converged_;
@@ -149,15 +159,36 @@ void HdNoorRayRenderPass::_Execute(
     const HdRenderPassStateSharedPtr& renderPassState,
     const TfTokenVector&)
 {
+    // Hydra calls this from the host's render loop, and an exception thrown
+    // through that boundary terminates the host (Blender) outright. Anything
+    // the renderer can fail on — a GPU allocation, an OptiX launch, a scene
+    // that cannot be sized — is contained here instead.
+    try {
+        _Render(renderPassState);
+    } catch (const std::exception& error) {
+        TF_RUNTIME_ERROR(
+            "hdNoorRay could not render the frame: %s", error.what());
+        // Report convergence so the host stops asking for a frame that this
+        // pass cannot produce. A later scene or camera change clears it and
+        // the renderer gets another attempt.
+        converged_ = true;
+        SetBuffersConverged(renderPassState->GetAovBindings(), true);
+    } catch (...) {
+        TF_RUNTIME_ERROR("hdNoorRay could not render the frame");
+        converged_ = true;
+        SetBuffersConverged(renderPassState->GetAovBindings(), true);
+    }
+}
+
+void HdNoorRayRenderPass::_Render(
+    const HdRenderPassStateSharedPtr& renderPassState)
+{
     const HdRenderPassAovBindingVector& bindings =
         renderPassState->GetAovBindings();
     HdNoorRayRenderBuffer* colorBuffer = nullptr;
-    bool depthRequested = false;
     for (const HdRenderPassAovBinding& binding : bindings) {
         if (binding.aovName == HdAovTokens->color)
             colorBuffer = GetBuffer(binding);
-        else if (binding.aovName == HdAovTokens->depth)
-            depthRequested = GetBuffer(binding) != nullptr;
     }
     GLuint glColorTexture = 0;
     unsigned int width = colorBuffer != nullptr ? colorBuffer->GetWidth() : 0;
@@ -169,6 +200,13 @@ void HdNoorRayRenderPass::_Execute(
 
     std::scoped_lock lock(renderParam_.mutex);
     Scene& scene = renderParam_.session.scene;
+    if (renderParam_.session.raytracer == nullptr) {
+        // No usable GPU context. Report convergence so the host stops asking
+        // for frames instead of spinning on a pass that can never finish.
+        converged_ = true;
+        SetBuffersConverged(bindings, true);
+        return;
+    }
     Raytracer& raytracer = *renderParam_.session.raytracer;
 
     HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
@@ -181,12 +219,17 @@ void HdNoorRayRenderPass::_Execute(
     const bool cameraChanged = cameraTransform_ != newCameraTransform
         || projectionMatrix_ != newProjection;
 
-    const bool reset = collectionDirty_ || cameraChanged
+    // A resized target has to reach the sensor even when the camera itself did
+    // not move, or the renderer keeps producing frames at the previous
+    // resolution and the copy back into the render buffer reads the wrong size.
+    const bool sizeChanged = width != targetWidth_ || height != targetHeight_;
+    const bool reset = collectionDirty_ || cameraChanged || sizeChanged
         || renderParam_.ConsumeRenderSettingsChanged()
         || observedSceneVersion_ != sceneVersion;
     if (reset) {
         accumulatedSamples_ = 0;
         converged_ = false;
+        renderParam_.ResetClock();
     }
 
     CameraInstance* cameraInstance = scene.getRenderCamera();
@@ -274,12 +317,11 @@ void HdNoorRayRenderPass::_Execute(
     rs.russianRouletteStartBounce = std::clamp(
         delegate->GetRenderSetting<int>(TfToken("russianRouletteStartBounce"), 3),
         0, 65);
-    rs.tonemappingEnabled = delegate->GetRenderSetting<int>(
-        TfToken("tonemappingEnabled"), 0) != 0;
+    // The delegate hands Blender scene-linear radiance and lets its colour
+    // management own the display transform, so the renderer never tonemaps.
+    rs.tonemappingEnabled = false;
     rs.transparentBackground = delegate->GetRenderSetting<int>(
         TfToken("transparentBackground"), 0) != 0;
-    rs.bufferVisualization = static_cast<BufferVisualization>(
-        delegate->GetRenderSetting<int>(TfToken("bufferVisualization"), 0));
     rs.gaussianCutoffSigma = std::max(
         0.1f, delegate->GetRenderSetting<float>(TfToken("gaussianCutoffSigma"), 3.0f));
     rs.gaussianProxyType = static_cast<GaussianProxyType>(
@@ -288,27 +330,18 @@ void HdNoorRayRenderPass::_Execute(
         delegate->GetRenderSetting<int>(TfToken("gaussianShadingMode"), 1));
     rs.gaussianRenderSphericalHarmonics = static_cast<SphericalHarmonicsOrder>(
         std::clamp(delegate->GetRenderSetting<int>(TfToken("gaussianRenderSphericalHarmonics"), 3), 0, 3));
-    const bool bufferVisActive = rs.bufferVisualization != BufferVisualization::Beauty;
-    rs.aovEnabled = depthRequested || bufferVisActive;
-    raytracer.setAovEnabled(rs.aovEnabled);
-
+    rs.gaussianProxyOverdrawVisualization = delegate->GetRenderSetting<int>(
+        TfToken("gaussianProxyOverdrawVisualization"), 0) != 0;
+    // hdNoorRay only ever hands Hydra a colour buffer, so the denoiser's
+    // albedo and normal guides are the sole use it has for AOVs. Asking for
+    // them here is what allocates their images; with the denoiser off nothing
+    // does, and the AOV raygen never launches.
+    raytracer.setAovEnabled(rs.optixDenoiserEnabled);
     raytracer.renderFrame(accumulatedSamples_, accumulatedSamples_);
     raytracer.waitForRender();
+    renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
 
     const Image* outputImage = &raytracer.getOutputColor();
-    switch (rs.bufferVisualization) {
-    case BufferVisualization::Albedo:
-        outputImage = &raytracer.getOutputAlbedo();
-        break;
-    case BufferVisualization::Normal:
-        outputImage = &raytracer.getOutputNormal();
-        break;
-    case BufferVisualization::Position:
-        outputImage = &raytracer.getOutputPosition();
-        break;
-    default:
-        break;
-    }
     bool copied = directViewport && CopyToOpenGlTexture(
         glColorTexture, outputImage->getCudaArray(), width, height);
     if (!copied && colorBuffer != nullptr)
@@ -325,39 +358,22 @@ void HdNoorRayRenderPass::_Execute(
         }
     }
 
-    if (depthRequested) {
-        const Bitmap position = raytracer.getOutputPosition().toBitmap();
-        const GfMatrix4d view = renderPassState->GetWorldToViewMatrix();
-        for (const HdRenderPassAovBinding& binding : bindings) {
-            if (binding.aovName != HdAovTokens->depth)
-                continue;
-            HdNoorRayRenderBuffer* depthBuffer = GetBuffer(binding);
-            if (depthBuffer == nullptr)
-                continue;
-            for (size_t pixel = 0; pixel < position.pixels().size(); ++pixel) {
-                float depth = 1.0f;
-                const glm::vec4& world = position.pixels()[pixel];
-                if (world.w > 0.0f) {
-                    GfVec3d point(world.x, world.y, world.z);
-                    point = view.Transform(point);
-                    point = newProjection.Transform(point);
-                    depth = std::clamp(
-                        static_cast<float>((point[2] + 1.0) * 0.5), 0.0f, 1.0f);
-                }
-                depthBuffer->WriteFloatPixel(pixel, &depth, 1);
-            }
-        }
-    }
-
     ++accumulatedSamples_;
     converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples);
-    for (const HdRenderPassAovBinding& binding : bindings)
-        if (HdNoorRayRenderBuffer* buffer = GetBuffer(binding))
-            buffer->SetConverged(converged_);
+    // Defer non-zero progress until after the first frame so Blender's
+    // viewport engine can initialize its wall-clock time baseline (it only
+    // does so when percentDone == 0, checked after engine_->Execute()).
+    if (accumulatedSamples_ > 1) {
+        renderParam_.SetProgress(
+            static_cast<double>(accumulatedSamples_) / targetSamples);
+    }
+    SetBuffersConverged(bindings, converged_);
 
     observedSceneVersion_ = sceneVersion;
     cameraTransform_ = newCameraTransform;
     projectionMatrix_ = newProjection;
+    targetWidth_ = width;
+    targetHeight_ = height;
     collectionDirty_ = false;
 }
 

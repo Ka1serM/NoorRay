@@ -41,7 +41,7 @@ void GaussianTrainRenderer::syncScene(
     const auto& instances = scene.getGaussianInstances();
     if (instances.size() != 1 || scene.getGaussianAssets().size() != 1)
         throw std::runtime_error("Gaussian training requires exactly one Gaussian instance and asset");
-    GaussianAsset& asset = scene.getGaussianAsset(instances.front()->getGaussianAssetIndex());
+    GaussianAsset& asset = instances.front()->getGaussianAsset();
 
     std::vector<glm::vec3> positions(gaussianCount), logScales(gaussianCount), colors(gaussianCount);
     std::vector<glm::vec4> rotations(gaussianCount);
@@ -83,7 +83,7 @@ void GaussianTrainRenderer::bakeTransformsAndUpdateTlas(
             "GaussianTrainRenderer v1 only supports a scene with exactly one "
             "Gaussian instance/asset");
     }
-    GaussianAsset& asset = scene.getGaussianAsset(instances.front()->getGaussianAssetIndex());
+    GaussianAsset& asset = instances.front()->getGaussianAsset();
     std::vector<glm::vec3> position(gaussianCount);
     std::vector<glm::vec3> logScale(gaussianCount);
     std::vector<glm::vec4> rotation(gaussianCount);

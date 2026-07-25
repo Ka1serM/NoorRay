@@ -43,6 +43,8 @@ struct CameraSettings
 PXR_NAMESPACE_CLOSE_SCOPE
 
 #include "NoorRaySession.h"
+#include "Scene/MaterialRegistry.h"
+#include "Scene/SceneResources.h"
 #include "Scene/Texture.h"
 #include "Shading/Material.h"
 
@@ -60,24 +62,45 @@ public:
     void MarkSceneDirty();
     void MarkRenderSettingsChanged();
     bool ConsumeRenderSettingsChanged();
-    uint64_t GetSceneVersion() const;
+    // Returns the scene version and bumps it if a sync is pending, so that
+    // multiple MarkSceneDirty() calls within a single Hydra commit produce
+    // exactly one scene version bump visible to the render loop.
+    uint64_t GetSceneVersion();
+    void SetProgress(double progress);
+    double GetProgress() const;
+    void AccumulateGpuTimeMs(float ms);
+    double GetTotalClockTime() const;
+    void ResetClock();
 
-    int GetOrCreateTexture(
+    // Textures are shared between the materials that name the same file. The
+    // returned reference owns its share; dropping every one of them frees the
+    // texture. Returns an empty reference when the file cannot be loaded.
+    TextureRef GetOrCreateTexture(
         const std::string& filePath, TextureEncoding encoding);
     void PublishMaterial(const SdfPath& id, const Material& material);
-    void BindMaterial(const SdfPath& id, uint32_t meshIndex);
-    void UnbindMaterial(const SdfPath& id, uint32_t meshIndex);
+    void ReleaseMaterial(const SdfPath& id);
+    // Binds the material a mesh prim asked for. Meshes are addressed by handle
+    // because the asset storage is a managed vector that moves its elements
+    // when it grows.
+    void BindMaterial(const SdfPath& id, MeshAssetHandle mesh);
+    void UnbindMaterial(const SdfPath& id, MeshAssetHandle mesh);
+
     CameraSettings cameraSettings;
 
     mutable std::mutex mutex;
     noorray::NoorRaySession session;
 
 private:
+    void PruneTextureCache();
+
     std::atomic<uint64_t> sceneVersion_{1};
+    std::atomic<bool> sceneNeedsUpdate_{false};
     std::atomic<bool> renderSettingsChanged_{true};
-    std::map<SdfPath, uint32_t> materials_;
-    std::map<SdfPath, std::vector<uint32_t>> materialBindings_;
-    std::map<std::string, int> textureCache_;
+    std::atomic<double> progress_{};
+    std::atomic<double> cumulativeGpuTimeSeconds_{};
+    std::map<SdfPath, MaterialRef> materials_;
+    std::map<SdfPath, std::vector<MeshAssetHandle>> materialBindings_;
+    std::map<std::string, TextureRef> textureCache_;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

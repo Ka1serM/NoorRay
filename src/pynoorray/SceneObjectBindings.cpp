@@ -10,7 +10,7 @@ namespace nb = nanobind;
 void bindSceneObject(nb::module_& module)
 {
     nb::class_<SceneObject>(module, "SceneObject")
-        .def_prop_ro("id", &SceneObject::getId)
+        .def_prop_ro("handle", &SceneObject::getHandle)
         .def_prop_ro("name", &SceneObject::getName)
         .def_prop_rw("visible", &SceneObject::isVisible, &SceneObject::setVisible)
         .def_prop_rw("position", &SceneObject::getPosition, &SceneObject::setPosition)

@@ -28,6 +28,9 @@
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 
+#include <pxr/base/tf/diagnostic.h>
+#include <exception>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 namespace
@@ -100,7 +103,8 @@ void BuildTriangleMesh(
     HdSceneDelegate* delegate, const SdfPath& id,
     const HdMeshTopology& topology, const std::vector<glm::vec3>& positions,
     std::vector<Vertex>& vertices, std::vector<uint32_t>& indices,
-    std::vector<Face>& faces)
+    std::vector<Face>& faces,
+    std::vector<uint32_t>* vertexToPointIndex = nullptr)
 {
     const std::vector<glm::vec3> normals =
         Vec3Values(delegate->Get(id, HdTokens->normals));
@@ -159,10 +163,14 @@ void BuildTriangleMesh(
             const glm::vec3 tangent = std::abs(determinant) > 1e-8f
                 ? glm::normalize((edge1 * duv2.y - edge2 * duv1.y) / determinant)
                 : glm::normalize(edge1);
-            for (Vertex& vertex : triangle) {
+            for (int c = 0; c < 3; ++c) {
+                Vertex& vertex = triangle[c];
                 vertex.tangent = tangent;
                 indices.push_back(static_cast<uint32_t>(vertices.size()));
                 vertices.push_back(vertex);
+                if (vertexToPointIndex)
+                    vertexToPointIndex->push_back(
+                        static_cast<uint32_t>(pointIndices[c]));
             }
             faces.push_back({0});
         }
@@ -247,6 +255,24 @@ void HdNoorRayMesh::_InitRepr(const TfToken& reprToken, HdDirtyBits*)
         _reprs.emplace_back(reprToken, HdReprSharedPtr());
 }
 
+void HdNoorRayMesh::ReleaseInstances(Scene& scene)
+{
+    for (const SceneObjectHandle object : objects_)
+        scene.removeObject(object);
+    objects_.clear();
+}
+
+void HdNoorRayMesh::ReleaseAll(HdNoorRayRenderParam& param)
+{
+    ReleaseInstances(param.session.scene);
+    param.UnbindMaterial(boundMaterialId_, meshAsset_.handle());
+    boundMaterialId_ = SdfPath();
+    // Dropping the asset references is what actually frees the geometry, the
+    // acceleration structure and the splat data.
+    meshAsset_.reset();
+    gaussianAsset_.reset();
+}
+
 void HdNoorRayMesh::Sync(
     HdSceneDelegate* delegate, HdRenderParam* renderParam,
     HdDirtyBits* dirtyBits, const TfToken&)
@@ -262,18 +288,15 @@ void HdNoorRayMesh::Sync(
         const auto decodedPath = DecodeSplatPath(st);
         if (decodedPath) {
             if (*decodedPath != splatPath_) {
-                // Path changed — remove old instances so we reload below.
-                for (const uint64_t oid : objectIds_)
-                    scene.removeObject(oid);
-                objectIds_.clear();
-                gaussianAssetIndex_ = ~0u;
+                // Path changed — drop the old instances and asset so the new
+                // file is loaded below and the old splat data is freed.
+                ReleaseInstances(scene);
+                gaussianAsset_.reset();
                 splatPath_ = *decodedPath;
             }
         } else if (!splatPath_.empty()) {
-            for (const uint64_t oid : objectIds_)
-                scene.removeObject(oid);
-            objectIds_.clear();
-            gaussianAssetIndex_ = ~0u;
+            ReleaseInstances(scene);
+            gaussianAsset_.reset();
             splatPath_.clear();
         }
     }
@@ -281,21 +304,31 @@ void HdNoorRayMesh::Sync(
     const bool isGaussian = !splatPath_.empty();
 
     if (isGaussian) {
-        if (meshIndex_ != ~0u) {
-            param.UnbindMaterial(boundMaterialId_, meshIndex_);
+        if (meshAsset_.isValid()) {
+            param.UnbindMaterial(boundMaterialId_, meshAsset_.handle());
             boundMaterialId_ = SdfPath();
-            for (const uint64_t oid : objectIds_)
-                scene.removeObject(oid);
-            objectIds_.clear();
-            meshIndex_ = ~0u;
+            ReleaseInstances(scene);
+            meshAsset_.reset();
         }
 
-        if (gaussianAssetIndex_ == ~0u) {
-            gaussianAssetIndex_ = scene.add(
-                GaussianAsset::CreateFromFile(scene, primName, splatPath_));
+        if (!gaussianAsset_.isValid()) {
+            try {
+                gaussianAsset_ = scene.add(
+                    GaussianAsset::CreateFromFile(scene, primName, splatPath_));
+            } catch (const std::exception& error) {
+                // A missing or malformed splat file is a scene authoring
+                // mistake, not a reason to take the host process down.
+                TF_WARN("hdNoorRay could not load Gaussian splat '%s': %s",
+                    splatPath_.c_str(), error.what());
+                splatPath_.clear();
+                UpdateRenderTag(delegate, renderParam);
+                param.MarkSceneDirty();
+                *dirtyBits = HdChangeTracker::Clean;
+                return;
+            }
         }
 
-        const bool instancesDirty = objectIds_.empty()
+        const bool instancesDirty = objects_.empty()
             || (*dirtyBits & (HdChangeTracker::DirtyTransform
                 | HdChangeTracker::DirtyInstancer)) != 0;
         if (instancesDirty) {
@@ -318,30 +351,29 @@ void HdNoorRayMesh::Sync(
             }
 
             // Resize gaussian instance list to match the number of transforms.
-            while (objectIds_.size() > transforms.size()) {
-                scene.removeObject(objectIds_.back());
-                objectIds_.pop_back();
+            while (objects_.size() > transforms.size()) {
+                scene.removeObject(objects_.back());
+                objects_.pop_back();
             }
-            while (objectIds_.size() < transforms.size()) {
+            while (objects_.size() < transforms.size()) {
                 auto instance = std::make_unique<GaussianInstance>(
-                    scene, SplatNameFromPath(splatPath_),
-                    static_cast<uint32_t>(gaussianAssetIndex_),
+                    scene, SplatNameFromPath(splatPath_), gaussianAsset_,
                     Transform{});
-                objectIds_.push_back(scene.add(std::move(instance)));
+                objects_.push_back(scene.add(std::move(instance)));
             }
             for (size_t i = 0; i < transforms.size(); ++i)
-                if (SceneObject* object = scene.getObject(objectIds_[i]))
+                if (SceneObject* object = scene.getObject(objects_[i]))
                     object->setWorldTransformFromMatrix(ToGlm(transforms[i]));
         }
 
         if (*dirtyBits & HdChangeTracker::DirtyVisibility) {
             const bool visible = delegate->GetVisible(GetId());
-            for (const uint64_t oid : objectIds_)
-                if (SceneObject* object = scene.getObject(oid))
-                    object->setVisible(visible);
+            for (const SceneObjectHandle object : objects_)
+                if (SceneObject* resolved = scene.getObject(object))
+                    resolved->setVisible(visible);
         }
 
-        if (!objectIds_.empty()) {
+        if (!objects_.empty()) {
             scene.setDirtyFlag(TLAS);
             scene.setDirtyFlag(Accumulation);
         }
@@ -357,44 +389,84 @@ void HdNoorRayMesh::Sync(
     const SdfPath requestedMaterialId = delegate->GetMaterialId(GetId());
     SetMaterialId(requestedMaterialId);
 
-    const bool geometryDirty =
-        (*dirtyBits & (HdChangeTracker::DirtyPoints
-            | HdChangeTracker::DirtyTopology
-            | HdChangeTracker::DirtyPrimvar)) != 0;
+    const bool pointsDirty = (*dirtyBits & HdChangeTracker::DirtyPoints) != 0;
+    const bool topologyDirty = (*dirtyBits & HdChangeTracker::DirtyTopology) != 0;
+    const bool primvarsDirty = (*dirtyBits & HdChangeTracker::DirtyPrimvar) != 0;
+    const bool geometryDirty = pointsDirty || topologyDirty || primvarsDirty;
+
     if (geometryDirty) {
-        const std::vector<glm::vec3> positions =
-            Vec3Values(delegate->Get(GetId(), HdTokens->points));
-        std::vector<Vertex> vertices;
-        std::vector<uint32_t> indices;
-        std::vector<Face> faces;
-        BuildTriangleMesh(
-            delegate, GetId(), GetMeshTopology(delegate), positions,
-            vertices, indices, faces);
-        if (!vertices.empty() && !indices.empty()) {
-            Material material;
-            material.albedo = glm::vec3(0.8f);
-            material.roughness = 0.5f;
-            if (meshIndex_ == ~0u) {
-                meshIndex_ = scene.add(MeshAsset(
-                    scene, GetId().GetString(), vertices, indices, faces,
-                    {material}));
-            } else {
-                scene.getMeshAsset(meshIndex_).replaceGeometry(
-                    vertices, indices, faces);
+        MeshAsset* asset = meshAsset_.get();
+
+        // Position-only fast path: reuse cached topology mapping to update
+        // expanded vertex positions without re-running BuildTriangleMesh.
+        if (asset && pointsDirty && !topologyDirty && !primvarsDirty
+            && !vertexToPointIndex_.empty())
+        {
+            const std::vector<glm::vec3> positions =
+                Vec3Values(delegate->Get(GetId(), HdTokens->points));
+            std::vector<glm::vec3> newExpandedPositions(vertexToPointIndex_.size());
+            for (size_t i = 0; i < vertexToPointIndex_.size(); ++i)
+            {
+                const uint32_t pointIdx = vertexToPointIndex_[i];
+                newExpandedPositions[i] = pointIdx < positions.size()
+                    ? positions[pointIdx] : glm::vec3(0.0f);
+            }
+            asset->updatePositions(newExpandedPositions);
+        }
+        else if (asset && geometryDirty && !topologyDirty)
+        {
+            // Vertex data changed but topology is the same — rebuild vertex
+            // array and use updateVertexData for a BLAS refit instead of
+            // a full rebuild.
+            const std::vector<glm::vec3> positions =
+                Vec3Values(delegate->Get(GetId(), HdTokens->points));
+            std::vector<Vertex> vertices;
+            std::vector<uint32_t> indices;
+            std::vector<Face> faces;
+            vertexToPointIndex_.clear();
+            BuildTriangleMesh(
+                delegate, GetId(), GetMeshTopology(delegate), positions,
+                vertices, indices, faces, &vertexToPointIndex_);
+            if (!vertices.empty() && !indices.empty())
+                asset->updateVertexData(vertices);
+        }
+        else
+        {
+            // Topology changed or first sync — full rebuild.
+            const std::vector<glm::vec3> positions =
+                Vec3Values(delegate->Get(GetId(), HdTokens->points));
+            std::vector<Vertex> vertices;
+            std::vector<uint32_t> indices;
+            std::vector<Face> faces;
+            vertexToPointIndex_.clear();
+            BuildTriangleMesh(
+                delegate, GetId(), GetMeshTopology(delegate), positions,
+                vertices, indices, faces, &vertexToPointIndex_);
+            if (!vertices.empty() && !indices.empty()) {
+                Material material;
+                material.albedo = glm::vec3(0.8f);
+                material.roughness = 0.5f;
+                if (asset) {
+                    asset->replaceGeometry(vertices, indices, faces);
+                } else {
+                    meshAsset_ = scene.add(MeshAsset(
+                        scene, GetId().GetString(), vertices, indices, faces,
+                        {material}));
+                }
             }
         }
     }
 
-    if (meshIndex_ != ~0u && boundMaterialId_ != requestedMaterialId) {
-        param.UnbindMaterial(boundMaterialId_, meshIndex_);
+    if (meshAsset_.isValid() && boundMaterialId_ != requestedMaterialId) {
+        param.UnbindMaterial(boundMaterialId_, meshAsset_.handle());
         boundMaterialId_ = requestedMaterialId;
-        param.BindMaterial(boundMaterialId_, meshIndex_);
+        param.BindMaterial(boundMaterialId_, meshAsset_.handle());
     }
 
-    const bool instancesDirty = objectIds_.empty()
+    const bool instancesDirty = objects_.empty()
         || (*dirtyBits & (HdChangeTracker::DirtyTransform
             | HdChangeTracker::DirtyInstancer)) != 0;
-    if (meshIndex_ != ~0u && instancesDirty) {
+    if (meshAsset_.isValid() && instancesDirty) {
         VtMatrix4dArray transforms;
         if (GetInstancerId().IsEmpty()) {
             transforms.push_back(delegate->GetTransform(GetId()));
@@ -409,25 +481,25 @@ void HdNoorRayMesh::Sync(
             for (GfMatrix4d& transform : transforms)
                 transform = prototypeTransform * transform;
         }
-        while (objectIds_.size() > transforms.size()) {
-            scene.removeObject(objectIds_.back());
-            objectIds_.pop_back();
+        while (objects_.size() > transforms.size()) {
+            scene.removeObject(objects_.back());
+            objects_.pop_back();
         }
-        while (objectIds_.size() < transforms.size()) {
+        while (objects_.size() < transforms.size()) {
             auto instance = std::make_unique<MeshInstance>(
-                scene, GetId().GetString(), meshIndex_, Transform());
-            objectIds_.push_back(scene.add(std::move(instance)));
+                scene, GetId().GetString(), meshAsset_, Transform());
+            objects_.push_back(scene.add(std::move(instance)));
         }
         for (size_t i = 0; i < transforms.size(); ++i)
-            if (SceneObject* object = scene.getObject(objectIds_[i]))
+            if (SceneObject* object = scene.getObject(objects_[i]))
                 object->setWorldTransformFromMatrix(ToGlm(transforms[i]));
     }
 
     if (*dirtyBits & HdChangeTracker::DirtyVisibility) {
         const bool visible = delegate->GetVisible(GetId());
-        for (const uint64_t objectId : objectIds_)
-            if (SceneObject* object = scene.getObject(objectId))
-                object->setVisible(visible);
+        for (const SceneObjectHandle object : objects_)
+            if (SceneObject* resolved = scene.getObject(object))
+                resolved->setVisible(visible);
         scene.setDirtyFlag(TLAS);
         scene.setDirtyFlag(Accumulation);
     }
@@ -440,14 +512,7 @@ void HdNoorRayMesh::Finalize(HdRenderParam* renderParam)
 {
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     std::scoped_lock lock(param.mutex);
-    Scene& scene = param.session.scene;
-    if (meshIndex_ != ~0u)
-        param.UnbindMaterial(boundMaterialId_, meshIndex_);
-    boundMaterialId_ = SdfPath();
-    for (const uint64_t oid : objectIds_)
-        scene.removeObject(oid);
-    objectIds_.clear();
-    gaussianAssetIndex_ = ~0u;
+    ReleaseAll(param);
     splatPath_.clear();
     param.MarkSceneDirty();
 }

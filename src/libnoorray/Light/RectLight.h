@@ -73,7 +73,8 @@ public:
     }
 
     NR_CPU_GPU LightHit intersect(
-        const Ray& ray, const SampledWavelengths& wl,
+        const Ray& ray, const float tMin, const float tMax,
+        const SampledWavelengths& wl,
         const float* spectrumScale, const float* spectrumCoeffs,
         const float* d65) const
     {
@@ -89,8 +90,7 @@ public:
             return hit;
 
         hit.distance = glm::dot(position - ray.origin(), normal) / denominator;
-        if (hit.distance < ray.minDistance()
-            || hit.distance > ray.maxDistance())
+        if (hit.distance < tMin || hit.distance > tMax)
             return {};
 
         const glm::vec3 hitPosition = ray.at(hit.distance);

@@ -5,10 +5,8 @@
 
 #include "CUDA/Annotations.h"
 
-// Geometric ray shared by camera generation, path tracing, shadow queries,
-// diagnostics, and training shaders. The traversal interval belongs to the
-// ray so callers cannot accidentally separate an origin/direction pair from
-// the bounds that define the intended query.
+// Geometric ray: only origin and direction. Traversal bounds are passed
+// explicitly to intersection functions.
 class Ray
 {
 public:
@@ -20,19 +18,13 @@ public:
 
     NR_CPU_GPU Ray(
         const glm::vec3& origin,
-        const glm::vec3& direction,
-        const float minDistance = DefaultMinDistance,
-        const float maxDistance = DefaultMaxDistance)
+        const glm::vec3& direction)
         : rayOrigin(origin),
-          rayDirection(direction),
-          minimumDistance(minDistance),
-          maximumDistance(maxDistance)
+          rayDirection(direction)
     {}
 
     NR_CPU_GPU const glm::vec3& origin() const { return rayOrigin; }
     NR_CPU_GPU const glm::vec3& direction() const { return rayDirection; }
-    NR_CPU_GPU float minDistance() const { return minimumDistance; }
-    NR_CPU_GPU float maxDistance() const { return maximumDistance; }
 
     NR_CPU_GPU glm::vec3 at(const float distance) const
     {
@@ -44,44 +36,23 @@ public:
         const float directionLengthSquared = glm::dot(rayDirection, rayDirection);
         return directionLengthSquared > 0.0f
             ? glm::dot(point - rayOrigin, rayDirection) / directionLengthSquared
-            : minimumDistance;
-    }
-
-    NR_CPU_GPU bool hasTraversalInterval() const
-    {
-        return maximumDistance > minimumDistance
-            && glm::dot(rayDirection, rayDirection) > 0.0f;
-    }
-
-    NR_CPU_GPU Ray withBounds(
-        const float minDistance, const float maxDistance) const
-    {
-        return Ray(rayOrigin, rayDirection, minDistance, maxDistance);
-    }
-
-    NR_CPU_GPU Ray withMinDistance(const float minDistance) const
-    {
-        return withBounds(minDistance, maximumDistance);
+            : 0.0f;
     }
 
     NR_CPU_GPU static Ray fromOffset(
         const glm::vec3& point,
         const glm::vec3& direction,
-        const float offset,
-        const float minDistance = DefaultMinDistance,
-        const float maxDistance = DefaultMaxDistance)
+        const float offset)
     {
-        return Ray(point + direction * offset, direction, minDistance, maxDistance);
+        return Ray(point + direction * offset, direction);
     }
 
     NR_CPU_GPU static Ray invalid()
     {
-        return Ray(glm::vec3(0.0f), glm::vec3(0.0f), 1.0f, 0.0f);
+        return Ray(glm::vec3(0.0f), glm::vec3(0.0f));
     }
 
 private:
     glm::vec3 rayOrigin{};
     glm::vec3 rayDirection{};
-    float minimumDistance{DefaultMinDistance};
-    float maximumDistance{DefaultMaxDistance};
 };

@@ -167,6 +167,8 @@ Image::Image(Context& context, uint32_t w, uint32_t h, vk::Format format, vk::Im
       width(w),
       height(h)
 {
+    if (width == 0 || height == 0)
+        return;
     // Create Final Image with VMA (No staging buffer needed)
     vk::ImageCreateInfo imageInfo;
     imageInfo.setImageType(vk::ImageType::e2D)
@@ -208,6 +210,8 @@ Image::Image(
       width(w),
       height(h)
 {
+    if (width == 0 || height == 0)
+        return;
     vk::ExternalMemoryImageCreateInfo externalImageInfo{};
     externalImageInfo.handleTypes = externalHandleType;
 

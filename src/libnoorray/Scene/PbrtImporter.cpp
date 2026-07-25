@@ -271,17 +271,17 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
     const std::string name = type + "_" + std::to_string(index);
     Material material = shape.material;
     glm::mat4 transform = shape.transform;
-    uint32_t meshIndex = ~0u;
+    MeshAssetRef meshAsset;
 
     if (type == "sphere") {
         const float radius = scalar(shape.command, "radius", 1.f);
         transform *= glm::scale(glm::mat4(1.f), glm::vec3(radius * 2.f));
-        meshIndex = scene.add(MeshAsset::CreateSphere(scene, name, material));
+        meshAsset = scene.add(MeshAsset::CreateSphere(scene, name, material));
     } else if (type == "disk") {
         const float radius = scalar(shape.command, "radius", 1.f);
         transform *= glm::rotate(glm::mat4(1.f), glm::half_pi<float>(), glm::vec3(1, 0, 0));
         transform *= glm::scale(glm::mat4(1.f), glm::vec3(radius * 2.f));
-        meshIndex = scene.add(MeshAsset::CreateDisk(scene, name, material));
+        meshAsset = scene.add(MeshAsset::CreateDisk(scene, name, material));
     } else if (type == "plymesh") {
         const std::string filename = relativeAssetPath(shape.command, "filename");
         if (filename.empty())
@@ -305,7 +305,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
         }
 
         const std::string meshName = std::filesystem::path(filename).stem().string();
-        meshIndex = scene.add(MeshAsset(scene,
+        meshAsset = scene.add(MeshAsset(scene,
             meshName.empty() ? name : meshName,
             mesh.vertices, mesh.indices,
             std::vector<Face>(mesh.indices.size() / 3, Face{0}),
@@ -353,7 +353,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
                 vertices[i].tangent = glm::normalize(glm::cross(helper, vertices[i].normal));
             }
         } else computeMissingNormals(vertices, indices);
-        meshIndex = scene.add(MeshAsset(scene, name, vertices, indices,
+        meshAsset = scene.add(MeshAsset(scene, name, vertices, indices,
             std::vector<Face>(indices.size() / 3, Face{0}), std::vector<Material>{material}));
     } else {
         LOG_ERROR("PBRT shape '" << type << "' is not supported; skipping "
@@ -361,7 +361,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
         return;
     }
 
-    auto instance = std::make_unique<MeshInstance>(scene, name, meshIndex, Transform(transform));
+    auto instance = std::make_unique<MeshInstance>(scene, name, meshAsset, Transform(transform));
     instance->setSource("pbrt", shape.command.source.string());
     scene.add(std::move(instance));
 }
@@ -387,6 +387,9 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
     std::unordered_map<std::string, glm::mat4> coordinateSystems;
     std::unordered_map<std::string, Material> namedMaterials;
     std::unordered_map<std::string, int> textures;
+    // Materials carry bare texture slot indices, so the importer holds a
+    // reference per texture until the materials using them reach the scene.
+    std::vector<TextureRef> importedTextures;
     std::unordered_map<std::string, std::vector<ShapeRecord>> objectDefinitions;
     std::vector<ShapeRecord> shapes;
     std::vector<ShapeRecord>* shapeTarget = &shapes;
@@ -445,9 +448,10 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                         LOG_WARN("PBRT texture not found; skipping: " << texturePath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
-                        Texture& texture = scene.add(Texture(
-                            texturePath.string(), TextureEncoding::Srgb8));
-                        textures[command.arguments[0]] = texture.getSceneIndex();
+                        importedTextures.push_back(scene.add(Texture(
+                            texturePath.string(), TextureEncoding::Srgb8)));
+                        textures[command.arguments[0]] =
+                            static_cast<int>(importedTextures.back().index());
                     }
                 }
             }
@@ -518,8 +522,8 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                         LOG_WARN("PBRT HDRI not found; skipping: " << hdriPath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
-                        Texture& texture = scene.add(Texture(hdriPath.string()));
-                        environment.setHdriTexture(texture);
+                        scene.setEnvironmentTexture(
+                            scene.add(Texture(hdriPath.string())));
                         environment.setEqualAreaMapping(glm::mat3(glm::inverse(state.transform)));
                     }
                 }

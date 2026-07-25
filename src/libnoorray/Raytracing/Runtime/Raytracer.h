@@ -52,8 +52,13 @@ public:
     void resize(uint32_t width, uint32_t height);
     void renderFrame(uint32_t frameIndex = 0, uint32_t accumulatedSamples = 0);
 
+    // Turns the surface AOVs (albedo, normal, cryptomatte, position) on. Their
+    // images are allocated here, so a host that binds them (the app viewport)
+    // must enable AOVs before it reads getOutputAlbedo() and friends.
     void setAovEnabled(bool enabled);
     bool getAovEnabled() const;
+    // True once the AOV images exist and can be bound or read back.
+    bool hasAovImages() const { return aovImagesCreated; }
     void setStatsEnabled(bool enabled) { kernelStats.setEnabled(enabled); }
     void setTimingEnabled(bool enabled) { m_timingEnabled = enabled; }
     void harvestKernelStats() { kernelStats.harvestFrame(); }
@@ -85,34 +90,32 @@ public:
     uint32_t getHeight() const { return height; }
     uint32_t getScratchCapacity() const { return scratchCapacity; }
     void debugSave(const std::string& path) const;
-    Image& getOutputColor() { return color[lastLaunched].getImage(); }
-    Image& getOutputAlbedo() { return albedo[lastLaunched].getImage(); }
-    Image& getOutputNormal() { return normal[lastLaunched].getImage(); }
-    Image& getOutputCrypto() { return cryptomatte[lastLaunched].getImage(); }
-    Image& getOutputPosition() { return position[lastLaunched].getImage(); }
-
-    Image& getOutputColor(uint32_t bufferIndex) { return color[bufferIndex].getImage(); }
-    Image& getOutputAlbedo(uint32_t bufferIndex) { return albedo[bufferIndex].getImage(); }
-    Image& getOutputNormal(uint32_t bufferIndex) { return normal[bufferIndex].getImage(); }
-    Image& getOutputCrypto(uint32_t bufferIndex) { return cryptomatte[bufferIndex].getImage(); }
-    Image& getOutputPosition(uint32_t bufferIndex) { return position[bufferIndex].getImage(); }
+    Image& getOutputColor() { return color.getImage(); }
+    Image& getOutputAlbedo() { return albedo.getImage(); }
+    Image& getOutputNormal() { return normal.getImage(); }
+    Image& getOutputCrypto() { return cryptomatte.getImage(); }
+    Image& getOutputPosition() { return position.getImage(); }
 
 private:
     static constexpr uint32_t MaxBounces = 66;
 
     Context& context;
     Scene& scene;
-    bool aovEnabled{true};
+    // AOVs are opt-in: their four images cost VRAM and their raygen costs a
+    // launch, and a host that only wants beauty (hdNoorRay, the CLI) never
+    // reads them. Nothing allocates them until setAovEnabled(true).
+    bool aovEnabled{false};
     bool aovAvailable{};
     bool aovStale{true};
     uint32_t width{};
     uint32_t height{};
     cudaStream_t stream{};
-    nr::cuda::UniqueSharedImage color[2];
-    nr::cuda::UniqueSharedImage albedo[2];
-    nr::cuda::UniqueSharedImage normal[2];
-    nr::cuda::UniqueSharedImage cryptomatte[2];
-    nr::cuda::UniqueSharedImage position[2];
+    nr::cuda::UniqueSharedImage color;
+    nr::cuda::UniqueSharedImage albedo;
+    nr::cuda::UniqueSharedImage normal;
+    nr::cuda::UniqueSharedImage cryptomatte;
+    nr::cuda::UniqueSharedImage position;
+    bool aovImagesCreated{};
     vk::UniqueSemaphore renderReady;
     vk::UniqueSemaphore bufferReleased;
     nr::cuda::UniqueExternalSemaphore cudaRenderReady;
@@ -134,11 +137,8 @@ private:
     nr::cuda::UniqueDeviceBuffer cieZDevice;
     nr::cuda::UniqueDeviceBuffer analyticLightAliasDevice;
     GpuSceneCache gpuCache;
-    uint32_t nextBuffer{};
-    uint32_t lastLaunched{};
     uint64_t lastReadyValue{};
     uint64_t submittedFrame{};
-    std::array<uint64_t, 2> lastUseValue{};
     nr::cuda::UniqueEvent m_startEvent;
     nr::cuda::UniqueEvent m_stopEvent;
     float m_gpuTimeMs = 0.0f;
@@ -191,6 +191,11 @@ private:
     void launchDenoiser(
         const KernelParams& params, cudaStream_t stream, bool useAovGuides);
     void prepareSensorFrame(Sensor& sensor, KernelParams& params, bool resetAccumulation);
+    void ensureTrainingResources();
+    void ensureProxyOverdrawResources();
+    void ensureSemaphores();
+    void ensureAovImages();
+    void releaseAovImages() noexcept;
     void launchGaussianTrainPath(
         const GaussianTrainingKernelParams& params,
         uint32_t launchCount, cudaStream_t stream) const;

@@ -593,7 +593,7 @@ bool ViewportPanel::handleBillboardPicking() const {
     if (!closest)
         return false;
 
-    scene.setActiveObjectId(closest->getId());
+    scene.setActiveObject(closest->getHandle());
     return true;
 }
 
@@ -623,7 +623,7 @@ void ViewportPanel::handleObjectPicking() {
     const auto meshInstances = scene.getMeshInstances();
     if (instanceId != ~0u && instanceId < meshInstances.size()) {
         selectedGaussianIndex = ~0u;
-        scene.setActiveObjectId(meshInstances[instanceId]->getId());
+        scene.setActiveObject(meshInstances[instanceId]->getHandle());
     }
     else if (instanceId != ~0u && instanceId >= meshInstances.size()) {
         const uint32_t gaussianInstanceIndex = instanceId
@@ -634,7 +634,7 @@ void ViewportPanel::handleObjectPicking() {
             const uint32_t count = gaussian->getGaussianAsset().getGaussianCount();
             if (gaussianInstanceIndex < offset + count) {
                 selectedGaussianIndex = gaussianInstanceIndex;
-                scene.setActiveObjectId(gaussian->getId());
+                scene.setActiveObject(gaussian->getHandle());
                 return;
             }
             offset += count;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -9,7 +10,9 @@
 #include "CUDA/rstd/Vector.h"
 #include "CUDA/rstd/UniquePtr.h"
 #include "CUDA/Unique/SharedVector.h"
+#include "Scene/Handle.h"
 #include "Scene/RenderSettings.h"
+#include "Scene/SceneResources.h"
 #include "Mesh/Assets/MeshAsset.h"
 #include "Mesh/Assets/GaussianAsset.h"
 #include "Light/PointLight.h"
@@ -66,11 +69,24 @@ class Scene {
     friend class LightInstance;
     Context& context;
 
-    std::vector<Texture> textures;
-    std::vector<std::string> textureNames;
-    nr::rstd::vector<MeshAsset> meshAssets;
-    nr::rstd::vector<Material> materials;
-    nr::rstd::vector<GaussianAsset> gaussianAssets;
+    // Every resource is reference counted: Scene::add hands out an owning
+    // reference, instances and assets keep the references they use alive, and
+    // the moment the last one is dropped the resource releases its device
+    // memory and its slot is recycled. Slot indices stay stable while a
+    // resource lives, which is what lets GPU-side data address them by index.
+    //
+    // Declaration order is destruction order reversed, and references must not
+    // outlive the registry they point into: textures are referenced by
+    // materials, materials by mesh assets, and all of them by scene objects
+    // (declared further down), so each holder is declared after its target.
+    TextureRegistry textures;
+    MaterialRegistry materials;
+    // Textures sampled by each material slot. Materials are plain GPU structs
+    // holding bare texture indices, so the Scene carries their ownership.
+    std::vector<std::vector<TextureRef>> materialTextures;
+    TextureRef environmentTexture;
+    MeshAssetRegistry meshAssets;
+    GaussianAssetRegistry gaussianAssets;
     nr::rstd::unique_ptr<Environment> environment;
     RenderSettings renderSettings{};
 
@@ -89,7 +105,17 @@ class Scene {
     nr::rstd::vector<uint32_t> gaussianInstanceOffsets;
     uint32_t gaussianShCoefficientCount{MaxSphericalHarmonicsCoefficientCount};
 
+    // Objects live in a dense array so iteration and the TLAS build stay
+    // cache friendly; the sparse slot table beside it gives every object a
+    // stable, generation-checked handle and O(1) lookup.
+    struct ObjectSlot
+    {
+        uint32_t denseIndex{~0u};
+        uint32_t generation{};
+    };
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
+    std::vector<ObjectSlot> objectSlots;
+    std::vector<uint32_t> freeObjectSlots;
     std::vector<std::shared_ptr<GaussianInstance>> gaussianInstances;
     uint32_t gaussianCount{};
 
@@ -97,8 +123,7 @@ class Scene {
     std::weak_ptr<CameraInstance> activeCamera;
     uint64_t activeCameraRevision{};
     uint64_t lightRevision{1};
-    uint64_t activeObjectId = 0;
-    uint64_t nextObjectId = 1;
+    SceneObjectHandle activeObject;
     uint8_t dirtyFlags = 0;
     std::vector<uint32_t> dirtyMeshInstanceIndices;
     std::vector<uint32_t> dirtyGaussianInstanceIndices;
@@ -106,13 +131,17 @@ class Scene {
 
     std::weak_ptr<SceneObject> copiedObject;
     std::function<void()> mutationBarrier;
+    std::atomic<bool> gpuSyncPending_{false};
 
     std::shared_ptr<SceneObject> findObjectPtr(const SceneObject* object) const;
-    std::shared_ptr<SceneObject> findObjectPtr(uint64_t objectId) const;
+    std::shared_ptr<SceneObject> findObjectPtr(SceneObjectHandle handle) const;
     void activateCamera(const std::shared_ptr<CameraInstance>& camera);
 
+    SceneObjectHandle allocateObjectSlot(uint32_t denseIndex);
+    void releaseObjectSlot(SceneObjectHandle handle);
     uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
     void rebuildGaussianInstanceCache();
+    void retainMaterialTextures(MaterialHandle handle, const Material& material);
     bool remove(SceneObject* objToRemove);
     void reparent(SceneObject* objectToMove, SceneObject* newParent);
     std::shared_ptr<SceneObject> cloneHierarchy(const SceneObject* source);
@@ -125,6 +154,13 @@ public:
         mutationBarrier = std::move(barrier);
     }
     void synchronizeBeforeMutation();
+    // Returns true if a GPU sync is needed before the next render frame.
+    // The caller (render thread) should sync its stream when this is true.
+    bool consumeGpuSync() { return gpuSyncPending_.exchange(false); }
+    // Drops the Scene-held references of resources that other resources
+    // reclaimed on their own. Runs before every mutation; exposed so callers
+    // that want the memory back at a specific point can ask for it.
+    void reclaimUnusedResources();
 
     void load(const std::string& path);
     void importFile(const std::string& path);
@@ -132,44 +168,51 @@ public:
 
     // Object lifetime
     void clear();
-    uint64_t add(std::unique_ptr<SceneObject> sceneObject);
-    uint32_t add(MeshAsset meshAsset);
-    uint32_t add(Material material);
-    void updateMaterial(uint32_t materialId, const Material& material);
-    uint32_t add(GaussianAsset gaussianAsset);
-    Texture& add(Texture&& texture);
-    bool removeObject(uint64_t objectId);
+    SceneObjectHandle add(std::unique_ptr<SceneObject> sceneObject);
+    bool removeObject(SceneObjectHandle handle);
     bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
 
+    // Resource lifetime. The returned reference owns the resource: it stays
+    // alive for as long as any reference to it does, and releases its GPU
+    // memory as soon as the last one is dropped.
+    MeshAssetRef add(MeshAsset meshAsset);
+    MaterialRef add(Material material);
+    GaussianAssetRef add(GaussianAsset gaussianAsset);
+    TextureRef add(Texture texture);
+    void updateMaterial(MaterialHandle handle, const Material& material);
+
     // Hierarchy
-    bool reparentObject(uint64_t objectId, uint64_t newParentId = 0);
+    bool reparentObject(SceneObjectHandle handle, SceneObjectHandle newParent = {});
 
     // Clipboard
-    void copyObject(uint64_t objectId);
+    void copyObject(SceneObjectHandle handle);
     void paste();
 
     // Lookup
-    SceneObject* getObject(uint64_t objectId) const { return findObjectPtr(objectId).get(); }
-    std::shared_ptr<SceneObject> getObjectPtr(uint64_t objectId) const { return findObjectPtr(objectId); }
+    bool isValid(SceneObjectHandle handle) const;
+    SceneObject* getObject(SceneObjectHandle handle) const { return findObjectPtr(handle).get(); }
+    std::shared_ptr<SceneObject> getObjectPtr(SceneObjectHandle handle) const { return findObjectPtr(handle); }
     const std::vector<std::shared_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
     std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
     std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
     uint32_t getActiveCryptomatteId(uint32_t selectedGaussianIndex) const;
-    MeshAsset* getMeshAsset(const std::string& name);
-    const MeshAsset* getMeshAsset(const std::string& name) const;
-    MeshAsset& getMeshAsset(uint32_t index) { return meshAssets[index]; }
-    const MeshAsset& getMeshAsset(uint32_t index) const { return meshAssets[index]; }
-    const nr::rstd::vector<MeshAsset>& getMeshAssets() const { return meshAssets; }
-    nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets; }
-    const nr::rstd::vector<Material>& getMaterials() const { return materials; }
-    nr::rstd::vector<Material>& getMaterials() { return materials; }
-    const Material& getMaterial(uint32_t id) const { return materials[id]; }
-    Material& getMaterial(uint32_t id) { return materials[id]; }
+    MeshAssetHandle findMeshAsset(const std::string& path) const;
+    MeshAsset* getMeshAsset(MeshAssetHandle handle) { return meshAssets.find(handle); }
+    const MeshAsset* getMeshAsset(MeshAssetHandle handle) const { return meshAssets.find(handle); }
+    MeshAssetRef getMeshAssetRef(MeshAssetHandle handle) { return {meshAssets, handle}; }
+    const nr::rstd::vector<MeshAsset>& getMeshAssets() const { return meshAssets.storage(); }
+    nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets.storage(); }
+    const nr::rstd::vector<Material>& getMaterials() const { return materials.storage(); }
+    nr::rstd::vector<Material>& getMaterials() { return materials.storage(); }
+    const Material& getMaterial(MaterialHandle handle) const { return materials[handle]; }
+    Material& getMaterial(MaterialHandle handle) { return materials[handle]; }
     // Gaussian assets
-    GaussianAsset& getGaussianAsset(uint32_t index) { return gaussianAssets[index]; }
-    const GaussianAsset& getGaussianAsset(uint32_t index) const { return gaussianAssets[index]; }
-    const nr::rstd::vector<GaussianAsset>& getGaussianAssets() const { return gaussianAssets; }
-    nr::rstd::vector<GaussianAsset>& getGaussianAssets() { return gaussianAssets; }
+    GaussianAsset* getGaussianAsset(GaussianAssetHandle handle) { return gaussianAssets.find(handle); }
+    const GaussianAsset* getGaussianAsset(GaussianAssetHandle handle) const { return gaussianAssets.find(handle); }
+    GaussianAssetRef getGaussianAssetRef(GaussianAssetHandle handle) { return {gaussianAssets, handle}; }
+    const nr::rstd::vector<GaussianAsset>& getGaussianAssets() const { return gaussianAssets.storage(); }
+    nr::rstd::vector<GaussianAsset>& getGaussianAssets() { return gaussianAssets.storage(); }
+    const GaussianAssetRegistry& getGaussianAssetRegistry() const { return gaussianAssets; }
     const std::vector<std::shared_ptr<GaussianInstance>>& getGaussianInstances() const {
         return gaussianInstances;
     }
@@ -179,15 +222,20 @@ public:
     const __half* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
     const uint32_t* getGaussianInstanceOffsets() const { return gaussianInstanceOffsets.data(); }
     uint32_t getGaussianShCoefficientCount() const { return gaussianShCoefficientCount; }
-    const std::vector<Texture>& getTextures() const { return textures; }
-    std::vector<std::string> getTextureNames() const { return textureNames; }
+    const std::vector<Texture>& getTextures() const { return textures.storage(); }
+    const TextureRegistry& getTextureRegistry() const { return textures; }
+    const Texture* getTexture(TextureHandle handle) const { return textures.find(handle); }
+    // One entry per texture slot; released slots read as empty names.
+    std::vector<std::string> getTextureNames() const;
+    void setEnvironmentTexture(const TextureRef& texture);
+    void clearEnvironmentTexture();
 
     // Active object
-    void setActiveObjectId(uint64_t objectId) { activeObjectId = objectId; }
-    void clearActiveObject() { activeObjectId = 0; }
-    uint64_t getActiveObjectId() const { return activeObjectId; }
-    SceneObject* getActiveObject() const { return findObjectPtr(activeObjectId).get(); }
-    std::shared_ptr<SceneObject> getActiveObjectPtr() const { return findObjectPtr(activeObjectId); }
+    void setActiveObject(SceneObjectHandle handle) { activeObject = handle; }
+    void clearActiveObject() { activeObject = {}; }
+    SceneObjectHandle getActiveObjectHandle() const { return activeObject; }
+    SceneObject* getActiveObject() const { return findObjectPtr(activeObject).get(); }
+    std::shared_ptr<SceneObject> getActiveObjectPtr() const { return findObjectPtr(activeObject); }
 
     // Camera
     CameraInstance* getActiveCamera() const { return activeCamera.lock().get(); }

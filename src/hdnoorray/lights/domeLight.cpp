@@ -50,19 +50,18 @@ void HdNoorRayDomeLight::Sync(
     const std::string texturePath = AssetPathParam(
         delegate, GetId(), HdLightTokens->textureFile);
     if (texturePath.empty()) {
-        environment.clearHdriTexture();
+        scene.clearEnvironmentTexture();
         texturePath_.clear();
     } else if (texturePath != texturePath_) {
         try {
-            Texture& texture = scene.add(
-                Texture(texturePath, TextureEncoding::Srgb8));
-            environment.setHdriTexture(texture);
+            scene.setEnvironmentTexture(
+                scene.add(Texture(texturePath, TextureEncoding::Srgb8)));
             texturePath_ = texturePath;
         } catch (const std::exception& error) {
             TF_WARN(
                 "hdNoorRay could not load dome texture '%s': %s",
                 texturePath.c_str(), error.what());
-            environment.clearHdriTexture();
+            scene.clearEnvironmentTexture();
             texturePath_.clear();
         }
     }
@@ -84,7 +83,7 @@ void HdNoorRayDomeLight::Finalize(HdRenderParam* renderParam)
     Scene& scene = param.session.scene;
     scene.synchronizeBeforeMutation();
     Environment& environment = scene.getEnvironment();
-    environment.clearHdriTexture();
+    scene.clearEnvironmentTexture();
     environment.color = glm::vec3(0.0f);
     environment.lightingExposure = 0.0f;
     environment.visibleExposure = 0.0f;

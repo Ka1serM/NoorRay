@@ -62,6 +62,15 @@ Texture::Texture(const std::string& filepath, const TextureEncoding encoding)
     name = SceneImporter::nameFromPath(filepath);
 }
 
+void Texture::releaseResources()
+{
+    name.clear();
+    width = 0;
+    height = 0;
+    sceneIndex = -1;
+    pixels = std::vector<float>{};
+}
+
 Texture::Texture(std::string textureName, const void* data,
     const int textureWidth, const int textureHeight, const TextureEncoding encoding)
     : name(std::move(textureName)), width(textureWidth), height(textureHeight)

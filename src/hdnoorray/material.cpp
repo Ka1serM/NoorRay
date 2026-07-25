@@ -141,6 +141,10 @@ void HdNoorRayMaterial::Sync(
     parsed.albedo = glm::vec3(0.8f);
     parsed.roughness = 0.5f;
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
+    // Texture loading mutates the scene, so the whole parse runs under the
+    // render lock rather than only the publish at the end.
+    std::scoped_lock lock(param.mutex);
+    std::vector<TextureRef> parsedTextures;
     if (resource.IsHolding<HdMaterialNetworkMap>()) {
         const HdMaterialNetworkMap& networks =
             resource.UncheckedGet<HdMaterialNetworkMap>();
@@ -168,14 +172,12 @@ void HdNoorRayMaterial::Sync(
             const std::string filePath = TextureFilePath(fileIt->second);
             if (filePath.empty())
                 continue;
-            try {
-                const int texIndex = param.GetOrCreateTexture(
-                    filePath, TextureEncoding::Linear8);
-                textureNodeIndices[path] = texIndex;
-            } catch (const std::exception& e) {
-                TF_WARN("Failed to load texture '%s': %s",
-                    filePath.c_str(), e.what());
-            }
+            TextureRef texture = param.GetOrCreateTexture(
+                filePath, TextureEncoding::Linear8);
+            if (!texture.isValid())
+                continue;
+            textureNodeIndices[path] = static_cast<int>(texture.index());
+            parsedTextures.push_back(std::move(texture));
         }
 
         // Second pass: process UsdPreviewSurface and wire up textures.
@@ -196,9 +198,19 @@ void HdNoorRayMaterial::Sync(
         }
     }
     material_ = parsed;
-    std::scoped_lock lock(param.mutex);
+    // Swapping after the parse means textures shared with the previous
+    // revision are never released and reloaded in between.
+    textures_ = std::move(parsedTextures);
     param.PublishMaterial(GetId(), material_);
     *dirtyBits = Clean;
+}
+
+void HdNoorRayMaterial::Finalize(HdRenderParam* renderParam)
+{
+    auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
+    std::scoped_lock lock(param.mutex);
+    textures_.clear();
+    param.ReleaseMaterial(GetId());
 }
 
 HdDirtyBits HdNoorRayMaterial::GetInitialDirtyBitsMask() const

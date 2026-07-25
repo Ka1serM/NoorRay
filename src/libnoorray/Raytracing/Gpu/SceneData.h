@@ -88,7 +88,6 @@ struct KernelParams
 {
     GpuSceneData scene;
     OutputSurfaces output;
-    OutputSurfaces alternateAovOutput;
     GpuFrameSettings frame;
     glm::vec4* accumulation{};
     glm::vec2* noiseMoments{}; // Per-pixel luminance mean and Welford M2.

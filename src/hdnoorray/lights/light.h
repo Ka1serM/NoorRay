@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <string>
 
+#include "Scene/Handle.h"
+
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
@@ -53,7 +55,7 @@ protected:
         float& intensity) const = 0;
 
 private:
-    uint64_t objectId_{};
+    SceneObjectHandle object_;
     int lightType_{-1};
 };
 

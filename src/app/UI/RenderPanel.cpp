@@ -190,9 +190,12 @@ void RenderPanel::executeSave() {
 
     addJob(beautyFilenameBuffer, ".png", [&]()->const Image& { return viewport.getOutputImage(); });
     addJob(rawFilenameBuffer, ".exr", [&]()->const Image& { return raytracer.getOutputColor(); });
-    addJob(albedoFilenameBuffer, ".png", [&]()->const Image& { return raytracer.getOutputAlbedo(); });
-    addJob(normalFilenameBuffer, ".exr", [&]()->const Image& { return raytracer.getOutputNormal(); });
-    addJob(cryptoFilenameBuffer, ".bin", [&]()->const Image& { return raytracer.getOutputCrypto(); });
+    // The AOV passes only exist for a raytracer that was asked for them.
+    if (raytracer.hasAovImages()) {
+        addJob(albedoFilenameBuffer, ".png", [&]()->const Image& { return raytracer.getOutputAlbedo(); });
+        addJob(normalFilenameBuffer, ".exr", [&]()->const Image& { return raytracer.getOutputNormal(); });
+        addJob(cryptoFilenameBuffer, ".bin", [&]()->const Image& { return raytracer.getOutputCrypto(); });
+    }
 
     if (!m_saveJobs.empty())
         m_saveState = SaveState::COPY_PENDING;

@@ -9,12 +9,7 @@ import uuid
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 from bpy.types import Camera, Operator, Panel, PropertyGroup
-from bl_ui import properties_data_light, properties_world
-try:
-    from bl_ui.properties_render import RENDER_PT_color_management
-    _CM_PANEL = RENDER_PT_color_management
-except Exception:
-    _CM_PANEL = None
+from bl_ui import properties_data_light, properties_output, properties_render, properties_world
 
 MAGIC = b"GSPLAT\x00"
 PROXY_SIZE = 1.0e-5
@@ -108,26 +103,10 @@ class NoorRaySettings(PropertyGroup):
         min=1,
         max=1_000_000,
     )
-    tonemapping_enabled: BoolProperty(
-        name="Tonemapping",
-        description="Apply Reinhard tonemapping to the output",
-        default=False,
-    )
     transparent_background: BoolProperty(
         name="Transparent Background",
         description="Render the background as transparent instead of solid color",
         default=False,
-    )
-    buffer_visualization: EnumProperty(
-        name="Display Buffer",
-        description="Which render buffer to visualize in the viewport",
-        items=[
-            ("BEAUTY", "Beauty", "Full shading result"),
-            ("ALBEDO", "Albedo", "Base diffuse color"),
-            ("NORMAL", "Normal", "Shading normal"),
-            ("POSITION", "Position", "World-space position"),
-        ],
-        default="BEAUTY",
     )
     gaussian_cutoff_sigma: FloatProperty(
         name="Gaussian Cutoff",
@@ -156,6 +135,11 @@ class NoorRaySettings(PropertyGroup):
         ],
         default="DIRECT",
     )
+    gaussian_proxy_overdraw: BoolProperty(
+        name="Proxy Overdraw",
+        description="Visualize Gaussian proxy overdraw count",
+        default=False,
+    )
     gaussian_sh_degree: EnumProperty(
         name="Gaussian SH Degree",
         description="Spherical harmonics degree for Gaussian splats",
@@ -179,44 +163,12 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
     bl_use_materialx = False
     bl_delegate_id = "HdNoorRayRendererPlugin"
 
-    @staticmethod
-    def _cm_setup(scene):
-        if not scene:
-            return
-        try:
-            vs = scene.view_settings
-            if vs.view_transform == "Raw":
-                return
-            if "hdnoorray_prev_vt" not in scene:
-                scene["hdnoorray_prev_vt"] = vs.view_transform
-            vs.view_transform = "Raw"
-        except Exception:
-            pass
-
-    @staticmethod
-    def _cm_restore(scene):
-        if not scene:
-            return
-        try:
-            prev = scene.get("hdnoorray_prev_vt")
-            if prev:
-                scene.view_settings.view_transform = prev
-                del scene["hdnoorray_prev_vt"]
-        except Exception:
-            pass
-
-    def __del__(self):
-        try:
-            self._cm_restore(bpy.context.scene)
-        except (AttributeError, ReferenceError, RuntimeError):
-            pass
-
     def get_render_settings(self, engine_type):
+        # The delegate hands Blender scene-linear data and leaves display
+        # transform, exposure, look and curves to the scene's own colour
+        # management, which the panels below expose unmodified.
         scene = bpy.context.scene
-        self._cm_scene = scene.name
-        self._cm_setup(scene)
         settings = scene.hdnoorray
-        vis = settings.buffer_visualization
         gauss = settings.gaussian_proxy_type
         shading = settings.gaussian_shading_mode
         result = {
@@ -227,12 +179,11 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             "optixDenoiserEnabled": int(settings.optix_denoiser_enabled),
             "optixDenoiserMinSamples": settings.optix_denoiser_min_samples,
             "russianRouletteStartBounce": settings.russian_roulette_start_bounce,
-            "tonemappingEnabled": int(settings.tonemapping_enabled),
             "transparentBackground": int(settings.transparent_background),
-            "bufferVisualization": ["BEAUTY", "ALBEDO", "NORMAL", "POSITION"].index(vis),
             "gaussianCutoffSigma": settings.gaussian_cutoff_sigma,
             "gaussianProxyType": ["ICOSPHERE", "OCTAHEDRON", "ICOSAHEDRON", "ICOSPHERE_L2"].index(gauss),
             "gaussianShadingMode": ["GI", "DIRECT"].index(shading),
+            "gaussianProxyOverdrawVisualization": int(settings.gaussian_proxy_overdraw),
             "gaussianRenderSphericalHarmonics": int(settings.gaussian_sh_degree),
         }
 
@@ -262,18 +213,13 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
         if engine_type != "VIEWPORT":
             result |= {
                 "aovToken:Combined": "color",
-                "aovToken:Depth": "depth",
             }
         return result
 
     def update_render_passes(self, scene, render_layer):
-        self._cm_setup(scene)
         if render_layer.use_pass_combined:
             self.register_pass(
                 scene, render_layer, "Combined", 4, "RGBA", "COLOR")
-        if render_layer.use_pass_z:
-            self.register_pass(
-                scene, render_layer, "Depth", 1, "Z", "VALUE")
 
 
 class NOORRAY_PT_sampling(Panel):
@@ -357,8 +303,6 @@ class NOORRAY_PT_output(Panel):
         layout.use_property_split = True
         layout.use_property_decorate = False
         settings = context.scene.hdnoorray
-        layout.prop(settings, "buffer_visualization")
-        layout.prop(settings, "tonemapping_enabled")
         layout.prop(settings, "transparent_background")
 
 
@@ -381,6 +325,7 @@ class NOORRAY_PT_gaussians(Panel):
         layout.prop(settings, "gaussian_cutoff_sigma")
         layout.prop(settings, "gaussian_proxy_type")
         layout.prop(settings, "gaussian_shading_mode")
+        layout.prop(settings, "gaussian_proxy_overdraw")
         layout.prop(settings, "gaussian_sh_degree")
 
 
@@ -591,20 +536,64 @@ _CLASSES = (
     NOORRAY_PT_gaussian_splat_object,
 )
 
+# Blender's own panels that work as-is with this engine. The color management
+# ones are listed by name because the exact set of subpanels differs between
+# Blender versions, and a missing one must not break registration.
+_COMPATIBLE_PANEL_NAMES = (
+    (properties_data_light, (
+        "DATA_PT_context_light",
+        "DATA_PT_preview",
+        "DATA_PT_EEVEE_light",
+        "DATA_PT_spot",
+        "DATA_PT_light_animation",
+        "DATA_PT_custom_props_light",
+    )),
+    (properties_world, (
+        "WORLD_PT_context_world",
+        "EEVEE_WORLD_PT_surface",
+        "WORLD_PT_animation",
+        "WORLD_PT_custom_props",
+    )),
+    # The engine outputs scene-linear data, so the full color management stack
+    # applies to it unchanged.
+    (properties_render, (
+        "RENDER_PT_color_management",
+        "RENDER_PT_color_management_working_space",
+        "RENDER_PT_color_management_white_balance",
+        "RENDER_PT_color_management_curves",
+        "RENDER_PT_color_management_advanced",
+    )),
+    # Without these the Output tab is empty for this engine, leaving no way to
+    # set resolution, frame range or the output path.
+    (properties_output, (
+        "RENDER_PT_format",
+        "RENDER_PT_frame_range",
+        "RENDER_PT_time_stretching",
+        "RENDER_PT_stereoscopy",
+        "RENDER_PT_output",
+        "RENDER_PT_output_views",
+        "RENDER_PT_output_color_management",
+        "RENDER_PT_encoding",
+        "RENDER_PT_encoding_video",
+        "RENDER_PT_encoding_audio",
+        "RENDER_PT_post_processing",
+        "RENDER_PT_stamp",
+        "RENDER_PT_stamp_note",
+        "RENDER_PT_stamp_burn",
+    )),
+)
+
 _COMPATIBLE_PANELS = [
-    properties_data_light.DATA_PT_context_light,
-    properties_data_light.DATA_PT_preview,
-    properties_data_light.DATA_PT_EEVEE_light,
-    properties_data_light.DATA_PT_spot,
-    properties_data_light.DATA_PT_light_animation,
-    properties_data_light.DATA_PT_custom_props_light,
-    properties_world.WORLD_PT_context_world,
-    properties_world.EEVEE_WORLD_PT_surface,
-    properties_world.WORLD_PT_animation,
-    properties_world.WORLD_PT_custom_props,
+    panel
+    for module, names in _COMPATIBLE_PANEL_NAMES
+    for panel in (getattr(module, name, None) for name in names)
+    if panel is not None
 ]
-if _CM_PANEL is not None:
-    _COMPATIBLE_PANELS.append(_CM_PANEL)
+
+
+@bpy.app.handlers.persistent
+def _on_load_post(_dummy):
+    _restore_forced_view_transform()
 
 
 def _set_panel_compatibility(enabled: bool):
@@ -614,6 +603,27 @@ def _set_panel_compatibility(enabled: bool):
             panel.COMPAT_ENGINES.add(engine_id)
         else:
             panel.COMPAT_ENGINES.discard(engine_id)
+
+
+def _restore_forced_view_transform():
+    # Earlier versions forced the view transform to Raw and stashed the previous
+    # value on the scene. Hand it back, once, so upgrading does not leave a
+    # scene stuck on Raw with a stray custom property.
+    #
+    # register() runs while Blender still restricts bpy.data (during startup and
+    # in background mode), where there is nothing to restore yet — the load_post
+    # handler covers those scenes once the file is open.
+    if not hasattr(bpy.data, "scenes"):
+        return
+    for scene in bpy.data.scenes:
+        previous = scene.get("hdnoorray_prev_vt")
+        if not previous:
+            continue
+        try:
+            scene.view_settings.view_transform = previous
+        except (TypeError, AttributeError):
+            pass
+        del scene["hdnoorray_prev_vt"]
 
 
 def register():
@@ -633,10 +643,14 @@ def register():
     bpy.types.Camera.hdnoorray = PointerProperty(type=NoorRayCameraSettings)
     bpy.types.VIEW3D_MT_add.append(_add_menu_entry)
     _set_panel_compatibility(True)
+    bpy.app.handlers.load_post.append(_on_load_post)
+    _restore_forced_view_transform()
 
 
 def unregister():
     _set_panel_compatibility(False)
+    if _on_load_post in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_on_load_post)
     bpy.types.VIEW3D_MT_add.remove(_add_menu_entry)
     if hasattr(bpy.types.Camera, "hdnoorray"):
         del bpy.types.Camera.hdnoorray

@@ -38,7 +38,7 @@ def main():
     session.scene.render_settings.samples = 32
     session.scene.render_settings.max_bounces = 64
 
-    target = session.scene.get_object(session.scene.active_object_id)
+    target = session.scene.get_object(session.scene.active_object)
     if target is None or camera_instance is None:
         raise RuntimeError("The imported target and camera are required")
     camera_instance.position = nr.Vector3(0.0, 0.0, 10.09)

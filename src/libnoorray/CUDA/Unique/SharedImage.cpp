@@ -28,6 +28,11 @@ void nr::cuda::UniqueSharedImage::create(
     const vk::Format format)
 {
     reset();
+    // A zero-sized request leaves an empty image rather than reaching CUDA,
+    // which rejects a zero extent with an exception that would otherwise cross
+    // a host boundary (a Hydra callback, for instance).
+    if (width == 0 || height == 0)
+        return;
 
     constexpr vk::ImageUsageFlags usage =
         vk::ImageUsageFlagBits::eStorage |
@@ -75,6 +80,12 @@ void nr::cuda::UniqueSharedImage::reset() noexcept
 {
     if (surface != 0)
         cudaDestroySurfaceObject(surface);
+    // The mipmapped array mapped onto the imported memory has to go first and
+    // explicitly: cudaDestroyExternalMemory() does not free it, and while it
+    // lives it holds a reference to the Vulkan allocation, so freeing the image
+    // below would not actually give the memory back.
+    if (cudaMipmappedArray != nullptr)
+        cudaFreeMipmappedArray(cudaMipmappedArray);
     if (cudaMemory != nullptr)
         cudaDestroyExternalMemory(cudaMemory);
     image = Image{};

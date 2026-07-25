@@ -62,14 +62,15 @@ extern "C" __global__ void __anyhit__gaussian()
     const float3 optixDirection = optixGetObjectRayDirection();
     const Ray ray(
         glm::vec3(optixOrigin.x, optixOrigin.y, optixOrigin.z),
-        glm::vec3(optixDirection.x, optixDirection.y, optixDirection.z),
-        optixGetRayTmin(), __uint_as_float(optixGetPayload_1()));
+        glm::vec3(optixDirection.x, optixDirection.y, optixDirection.z));
+    const float tMin = optixGetRayTmin();
+    const float tMax = __uint_as_float(optixGetPayload_1());
     const float tClosest = ray.closestDistanceTo(glm::vec3(0.0f));
     // OptiX does not normalize the object-space ray direction, so this t is
     // numerically identical to the world-space ray parameter — usable as the
     // shading hit distance without any extra transform.
-    const float hitT = fmaxf(tClosest, ray.minDistance());
-    if (hitT >= ray.maxDistance())
+    const float hitT = fmaxf(tClosest, tMin);
+    if (hitT >= tMax)
     {
         optixIgnoreIntersection();
         return;

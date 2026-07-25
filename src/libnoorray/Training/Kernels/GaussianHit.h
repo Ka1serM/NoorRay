@@ -33,11 +33,12 @@ extern "C" __global__ void __anyhit__trainingGaussian()
     const float3 optixDirection = optixGetObjectRayDirection();
     const Ray ray(
         glm::vec3(optixOrigin.x, optixOrigin.y, optixOrigin.z),
-        glm::vec3(optixDirection.x, optixDirection.y, optixDirection.z),
-        optixGetRayTmin(), __uint_as_float(optixGetPayload_1()));
+        glm::vec3(optixDirection.x, optixDirection.y, optixDirection.z));
+    const float tMin = optixGetRayTmin();
+    const float tMax = __uint_as_float(optixGetPayload_1());
     const float hitT = fmaxf(
-        ray.closestDistanceTo(glm::vec3(0.0f)), ray.minDistance());
-    if (hitT >= ray.maxDistance())
+        ray.closestDistanceTo(glm::vec3(0.0f)), tMin);
+    if (hitT >= tMax)
     {
         optixIgnoreIntersection();
         return;
@@ -76,8 +77,8 @@ extern "C" __global__ void __anyhit__trainingGaussian()
 }
 
 NR_GPU inline RayHit intersectTrainingRay(
-    const TlasHandle accel, const Ray& ray, const uint32_t sampleIndex,
-    const bool meshVisibilityBoundEnabled)
+    const TlasHandle accel, const Ray& ray, const float tMin, const float tMax,
+    const uint32_t sampleIndex, const bool meshVisibilityBoundEnabled)
 {
     RayHit hit{};
     RayHit meshHit{};
@@ -86,7 +87,7 @@ NR_GPU inline RayHit intersectTrainingRay(
         optixTraverse(accel,
             make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
             make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
-            ray.minDistance(), ray.maxDistance(), 0.0f,
+            tMin, tMax, 0.0f,
             MeshVisibility, OPTIX_RAY_FLAG_DISABLE_ANYHIT, 0, 1, 0);
         if (optixHitObjectIsHit())
         {
@@ -99,13 +100,13 @@ NR_GPU inline RayHit intersectTrainingRay(
     }
 
     const float gaussianTMax = meshHit.instanceIndex != InvalidIndex
-        ? meshHit.t : ray.maxDistance();
+        ? meshHit.t : tMax;
     uint32_t payload0 = sampleIndex;
     uint32_t payload1 = __float_as_uint(gaussianTMax);
     optixTraverse(accel,
         make_float3(ray.origin().x, ray.origin().y, ray.origin().z),
         make_float3(ray.direction().x, ray.direction().y, ray.direction().z),
-        ray.minDistance(), gaussianTMax, 0.0f,
+        tMin, gaussianTMax, 0.0f,
         GaussianVisibility, OPTIX_RAY_FLAG_NONE, 0, 1, 0, payload0, payload1);
 
     const float gaussianT = __uint_as_float(payload1);
@@ -156,6 +157,7 @@ extern "C" __global__ void __raygen__trainingPath()
 
     const Ray ray = makeTrainingRay(params, pixel);
     const RayHit hit = intersectTrainingRay(params.train.tlas, ray,
+        Ray::DefaultMinDistance, Ray::DefaultMaxDistance,
         pixel, params.scene.meshInstanceCount > 0);
     if (hit.instanceIndex == InvalidIndex || hit.primitiveIndex != InvalidIndex)
         return;

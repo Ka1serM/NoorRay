@@ -28,6 +28,7 @@ struct RayHit
     float v{};
     uint32_t instanceIndex{InvalidIndex};
     uint32_t primitiveIndex{InvalidIndex};
+
 };
 
 struct CameraSample

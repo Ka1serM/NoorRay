@@ -40,10 +40,15 @@ void Scene::reclaimUnusedResources()
 {
     // A mesh asset releasing its material references reclaims those materials
     // inside the registry, without the Scene being told. Dropping the matching
-    // texture references here is what lets the texture memory go too.
-    for (uint32_t slot = 0; slot < materialTextures.size(); ++slot)
-        if (!materials.isLiveSlot(slot))
-            materialTextures[slot].clear();
+    // texture references here is what lets the texture memory go too. Consume
+    // only release events instead of walking the complete material high-water
+    // mark before every Scene mutation.
+    materials.consumeReleasedSlots([this](const uint32_t slot) {
+        if (slot < materialxSourcePaths.size())
+            materialxSourcePaths[slot].clear();
+        if (slot < materialxDocuments.size())
+            materialxDocuments[slot].reset();
+    });
 }
 
 void Scene::load(const std::string& path)
@@ -179,7 +184,7 @@ void Scene::clear() {
     gaussianInstances.clear();
     gaussianCount = 0;
     environmentTexture.reset();
-    materialTextures.clear();
+    materialOwners.clear();
     meshAssets.clear();
     materials.clear();
     gaussianAssets.clear();
@@ -194,6 +199,9 @@ void Scene::clear() {
     gaussianOpacities.clear();
     gaussianShCoeffs.clear();
     gaussianInstanceOffsets.clear();
+    materialxSourcePaths.clear();
+    materialxDocuments.clear();
+    importedFileRoots_.clear();
     activeObject = {};
     renderSettings = {};
     environment->destroyCdf();
@@ -228,10 +236,33 @@ MeshAssetRef Scene::add(MeshAsset meshAsset) {
 MaterialRef Scene::add(Material material) {
     synchronizeBeforeMutation();
     const MaterialHandle handle = materials.emplace(material);
-    retainMaterialTextures(handle, material);
+    materialxSourcePaths.emplace_back();
+    materialxDocuments.emplace_back();
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
     return {materials, handle};
+}
+
+MaterialRef Scene::addMaterial(MaterialX::DocumentPtr material) {
+    MaterialRef ref = add(Material{});
+    materialOwners.push_back(ref);
+    materialxDocuments[ref.index()] = std::move(material);
+    return ref;
+}
+
+void Scene::updateMaterialDocument(
+    const MaterialHandle handle, MaterialX::DocumentPtr document)
+{
+    if (!materials.isValid(handle))
+        return;
+    synchronizeBeforeMutation();
+    if (handle.index() >= materialxDocuments.size())
+        materialxDocuments.resize(handle.index() + 1);
+    materialxDocuments[handle.index()] = std::move(document);
+    if (handle.index() < materialxSourcePaths.size())
+        materialxSourcePaths[handle.index()].clear();
+    setDirtyFlag(Meshes);
+    setDirtyFlag(Accumulation);
 }
 
 void Scene::updateMaterial(
@@ -241,30 +272,25 @@ void Scene::updateMaterial(
         return;
     synchronizeBeforeMutation();
     materials[handle] = material;
-    retainMaterialTextures(handle, material);
+    // GpuSceneData::materials points straight at this same storage (see
+    // Raytracer::updateMeshes), but Meshes must still be marked dirty so the
+    // pointer/count are refreshed after materials.emplace() might have
+    // reallocated, even though mesh topology itself is unchanged.
+    setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
 }
 
-void Scene::retainMaterialTextures(
-    const MaterialHandle handle, const Material& material)
+void Scene::invalidateMaterial(const MaterialHandle handle)
 {
-    if (handle.index() >= materialTextures.size())
-        materialTextures.resize(handle.index() + 1);
-
-    std::vector<TextureRef> retained;
-    for (const int slot : {material.albedoIndex, material.specularIndex,
-             material.metallicIndex, material.roughnessIndex,
-             material.normalIndex, material.emissionIndex,
-             material.transmissionIndex, material.opacityIndex}) {
-        if (slot < 0)
-            continue;
-        const TextureHandle texture = textures.handleAt(static_cast<uint32_t>(slot));
-        if (texture.isValid())
-            retained.emplace_back(textures, texture);
-    }
-    // The new references are taken before the old ones are dropped, so a
-    // texture both materials sample is never reclaimed in between.
-    materialTextures[handle.index()] = std::move(retained);
+    if (!materials.isValid(handle))
+        return;
+    synchronizeBeforeMutation();
+    materials[handle].svmBytecodeOffset = 0;
+    materials[handle].svmBytecodeLength = 0;
+    materials[handle].svmTextureOffset = 0;
+    materials[handle].svmTextureCount = 0;
+    setDirtyFlag(Meshes);
+    setDirtyFlag(Accumulation);
 }
 
 GaussianAssetRef Scene::add(GaussianAsset gaussianAsset) {
@@ -282,6 +308,18 @@ TextureRef Scene::add(Texture texture) {
     textures[handle].sceneIndex = static_cast<int>(handle.index());
     setDirtyFlag(Textures);
     return {textures, handle};
+}
+
+void Scene::reserveForImport(
+    const size_t meshCount, const size_t materialCount, const size_t objectCount)
+{
+    synchronizeBeforeMutation();
+    meshAssets.reserveAdditional(meshCount);
+    materials.reserveAdditional(materialCount);
+    materialxSourcePaths.reserve(materialxSourcePaths.size() + materialCount);
+    materialxDocuments.reserve(materialxDocuments.size() + materialCount);
+    sceneObjects.reserve(sceneObjects.size() + objectCount);
+    objectSlots.reserve(objectSlots.size() + objectCount);
 }
 
 std::vector<std::string> Scene::getTextureNames() const {
@@ -778,6 +816,19 @@ MeshAssetHandle Scene::findMeshAsset(const std::string& path) const {
         if (meshAssets.isLiveSlot(slot) && meshAssets.storage()[slot].getPath() == path)
             return meshAssets.handleAt(slot);
     return {};
+}
+
+SceneObjectHandle Scene::findImportedFileRoot(const std::string& resolvedPath) const {
+    const auto found = importedFileRoots_.find(resolvedPath);
+    if (found == importedFileRoots_.end() || !isValid(found->second))
+        return {};
+    return found->second;
+}
+
+void Scene::registerImportedFileRoot(
+    const std::string& resolvedPath, const SceneObjectHandle handle)
+{
+    importedFileRoots_[resolvedPath] = handle;
 }
 
 // ── Lookups ───────────────────────────────────────────────────────────────────

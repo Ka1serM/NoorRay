@@ -1,5 +1,7 @@
 #include "NoorRayUi.h"
+#include "MaterialXSceneRuntime.h"
 #include "NoorRaySession.h"
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -17,6 +19,7 @@
 #include "UI/RenderSettingsPanel.h"
 #include "UI/LensViewerPanel.h"
 #include "UI/TrainingPanel.h"
+#include "UI/MaterialXNodeEditorPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "stb_image_write.h"
@@ -39,6 +42,9 @@ NoorRayUi::NoorRayUi(std::string scenePath, const uint32_t windowWidth, const ui
     if (!scenePath.empty())
         scene.load(scenePath);
     Raytracer& raytracer = *session.raytracer;
+    materialxRuntime = std::make_unique<MaterialXSceneRuntime>();
+    materialxRuntime->compilePending(scene, raytracer,
+        std::filesystem::path(scenePath).parent_path().string());
     Renderer* renderer = session.renderer.get();
     // The editor always needs the AOVs: the viewport compute pass samples
     // albedo, normal and cryptomatte, and picking reads back cryptomatte and
@@ -70,9 +76,10 @@ NoorRayUi::NoorRayUi(std::string scenePath, const uint32_t windowWidth, const ui
     imGuiManager->addComponent<RenderPanel>("Render", context, raytracer, *renderer, *viewport);
     imGuiManager->addComponent<LensViewerPanel>("Lens Viewer", scene);
     imGuiManager->addComponent<TrainingPanel>("Training", scene, raytracer);
+    imGuiManager->addComponent<MaterialXNodeEditorPanel>("MaterialX Node Editor", scene);
     imGuiManager->addComponent<ViewportPanel>("Viewport", window, context, scene,
-        viewport->getOutputImage(), raytracer.getOutputCrypto(), raytracer.getOutputPosition(),
-        raytracer.getWidth(), raytracer.getHeight());
+        raytracer, viewport->getOutputImage(), raytracer.getOutputCrypto(),
+        raytracer.getOutputPosition(), raytracer.getWidth(), raytracer.getHeight());
 }
 
 NoorRayUi::~NoorRayUi()
@@ -89,6 +96,7 @@ void NoorRayUi::run() {
     Renderer* renderer = session.renderer.get();
     Viewport* viewport = this->viewport.get();
     auto* debugPanel       = dynamic_cast<DebugPanel*>(imGuiManager->getComponent("Timings"));
+    auto* mainMenuBar      = dynamic_cast<MainMenuBar*>(imGuiManager->getComponent("Menu"));
     auto* viewportPanel    = dynamic_cast<ViewportPanel*>(imGuiManager->getComponent("Viewport"));
     auto* renderPanel      = dynamic_cast<RenderPanel*>(imGuiManager->getComponent("Render"));
     auto* trainingPanel    = dynamic_cast<TrainingPanel*>(imGuiManager->getComponent("Training"));
@@ -132,9 +140,20 @@ void NoorRayUi::run() {
         // swapchain acquisition can block, so it happens only after the next
         // OptiX frame has been queued and can run concurrently with that wait.
         imGuiManager->updateUi();
+        // Finish the one frame that may have been submitted before this UI
+        // edit. OptiX module creation and a launch on the same device context
+        // otherwise serialize inside the driver and can strand the Vulkan
+        // interop handoff, making the whole window appear frozen.
+        if (materialxRuntime->needsCompilation(scene))
+            raytracer->waitForRender();
+        materialxRuntime->compilePending(scene, *raytracer,
+            std::filesystem::path(mainMenuBar->getCurrentScenePath())
+                .parent_path().string());
+        const bool materialCompilationPending =
+            materialxRuntime->hasPendingCompilations();
 
         CameraInstance* viewportCamera = scene.getRenderCamera();
-        if (viewportCamera) {
+        if (viewportCamera && !materialCompilationPending) {
             const glm::uvec2 resolution =
                 viewportCamera->getCamera()->getSensor().resolution();
             if (resolution.x != raytracer->getWidth() || resolution.y != raytracer->getHeight()) {
@@ -155,6 +174,14 @@ void NoorRayUi::run() {
 
         const bool displayHandoffPending = pendingDisplayFrame.readyValue != 0;
         if (!viewportCamera) {
+            frameIndex = 0;
+            firstFrame = true;
+        } else if (materialCompilationPending) {
+            // OptiX serializes module creation and launches on a device
+            // context. Calling any render/resize operation here would block
+            // this UI thread behind the background material compiler. Keep
+            // presenting the last completed viewport image until the prepared
+            // callable is ready to install.
             frameIndex = 0;
             firstFrame = true;
         } else if (renderPanel->isSaveRequested()) {

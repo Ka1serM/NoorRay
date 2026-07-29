@@ -6,8 +6,6 @@
 #include <pxr/imaging/hd/aov.h>
 #include <pxr/imaging/hd/renderPass.h>
 
-#include <cstdint>
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 class HdNoorRayRenderParam;
@@ -37,7 +35,8 @@ private:
         const HdRenderPassAovBindingVector& bindings, bool converged);
 
     HdNoorRayRenderParam& renderParam_;
-    uint64_t observedSceneVersion_{};
+    unsigned int observedSceneVersion_{};
+    unsigned int observedRenderSettingsVersion_{};
     unsigned int accumulatedSamples_{};
     unsigned int targetWidth_{};
     unsigned int targetHeight_{};

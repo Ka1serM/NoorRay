@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -16,6 +17,7 @@
 #include <cuda_runtime.h>
 #include <optix_stack_size.h>
 #include <optix_stubs.h>
+#include <nvtx3/nvToolsExt.h>
 
 #include "Camera/CameraInstance.h"
 #include "CUDA/Checks.h"
@@ -34,12 +36,12 @@ extern const float sRGBToSpectrumTable_Data[3][64][64][64][3];
 namespace
 {
 constexpr unsigned char noorRayOptixIr[] = {
-    #embed "../../../../build/generated/NoorRayOptix.ptx"
+    #embed "../../../../build/generated/NoorRayOptixIr.ptx"
 };
 constexpr std::size_t noorRayOptixIrLength = sizeof(noorRayOptixIr);
 
 constexpr unsigned char noorRayTrainingOptixIr[] = {
-    #embed "../../../../build/generated/NoorRayTrainingOptix.ptx"
+    #embed "../../../../build/generated/NoorRayTrainingOptixIr.ptx"
 };
 constexpr std::size_t noorRayTrainingOptixIrLength = sizeof(noorRayTrainingOptixIr);
 
@@ -79,6 +81,39 @@ nr::cuda::UniqueDeviceBuffer uploadRecord(const OptixProgramGroup group)
     return deviceRecord;
 }
 
+OptixModuleCompileOptions makeModuleCompileOptions()
+{
+    OptixModuleCompileOptions options{};
+    options.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
+#if !defined(NDEBUG)
+    options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MODERATE;
+#else
+    options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#endif
+    // The fixed SVM interpreter deliberately puts all MaterialX node families
+    // in one OptiX module.  Leaving the driver compiler unconstrained makes
+    // it try to retain the entire switch dispatch graph in registers; on the
+    // Ada driver this has produced a multi-thousand-register raygen and an
+    // abort inside libnvidia-gpucomp while creating the module.  128 is the
+    // occupancy/per-thread-state balance for this interpreter.  A runtime
+    // override remains available for profiling particular scenes.
+    options.maxRegisterCount = 128;
+    if (const char* value = std::getenv("NR_OPTIX_MAX_REGISTERS")) {
+        const long parsed = std::strtol(value, nullptr, 10);
+        if (parsed > 0)
+            options.maxRegisterCount =
+                static_cast<int>(std::clamp(parsed, 32L, 255L));
+    }
+    return options;
+}
+
+class NvtxRange
+{
+public:
+    explicit NvtxRange(const char* name) { nvtxRangePushA(name); }
+    ~NvtxRange() { nvtxRangePop(); }
+};
+
 }
 
 extern NR_GPU_KERNEL void postProcessKernel(KernelParams, float*, uint32_t);
@@ -97,22 +132,20 @@ Raytracer::Raytracer(
     if (stream == nullptr || optixCtx == nullptr)
         throw std::runtime_error("CUDA/OptiX not initialized in Context");
 
-    OptixModuleCompileOptions moduleOptions{};
-    moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
-#if !defined(NDEBUG)
-    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MODERATE;
-#else
-    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
-#endif
+    OptixModuleCompileOptions moduleOptions = makeModuleCompileOptions();
+    // OSL has already specialized the graph, and OptiX's final optimization
+    // substantially reduces both the callable and its eventual pipeline-link
+    // work. Runtime compilation is performed off the UI/render thread.
+    pipelineCompileOptions = {};
+    pipelineCompileOptions.usesMotionBlur = false;
+    pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
+    pipelineCompileOptions.numPayloadValues = 3;
+    pipelineCompileOptions.numAttributeValues = 2;
+    pipelineCompileOptions.pipelineLaunchParamsVariableName = "params";
+    pipelineCompileOptions.pipelineLaunchParamsSizeInBytes = sizeof(KernelParams);
+    pipelineCompileOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
 
-    OptixPipelineCompileOptions pipelineOptions{};
-    pipelineOptions.usesMotionBlur = false;
-    pipelineOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
-    pipelineOptions.numPayloadValues = 3;
-    pipelineOptions.numAttributeValues = 2;
-    pipelineOptions.pipelineLaunchParamsVariableName = "params";
-    pipelineOptions.pipelineLaunchParamsSizeInBytes = sizeof(KernelParams);
-    pipelineOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
+    const OptixPipelineCompileOptions& pipelineOptions = pipelineCompileOptions;
 
     std::array<char, 8192> log{};
     size_t logSize = log.size();
@@ -163,73 +196,21 @@ Raytracer::Raytracer(
     NR_OPTIX_CHECK(optixProgramGroupCreate(
         optixCtx, &missDesc, 1, &groupOptions, log.data(), &logSize, optixMissGroup.put()));
 
-    const std::array groups{
-        optixPathTraceGroup.get(), optixAovGroup.get(), optixTriangleGroup.get(),
-        optixGaussianHitGroup.get(), optixMissGroup.get()};
-    OptixPipelineLinkOptions linkOptions{};
-    linkOptions.maxTraceDepth = 1;
-    logSize = log.size();
-    result = optixPipelineCreate(
-        optixCtx, &pipelineOptions, &linkOptions,
-        groups.data(), static_cast<unsigned int>(groups.size()),
-        log.data(), &logSize, optixPipeline.put());
-    if (result != OPTIX_SUCCESS)
-        throw std::runtime_error(std::string("OptiX pipeline creation failed: ") + log.data());
 
-    OptixStackSizes stackSizes{};
-    for (const OptixProgramGroup group : groups)
-        NR_OPTIX_CHECK(optixUtilAccumulateStackSizes(group, &stackSizes, optixPipeline.get()));
-    unsigned int directCallableStackSizeFromTraversal = 0;
-    unsigned int directCallableStackSizeFromState = 0;
-    unsigned int continuationStackSize = 0;
-    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
-        &stackSizes, linkOptions.maxTraceDepth, 0, 0,
-        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
-        &continuationStackSize));
-    NR_OPTIX_CHECK(optixPipelineSetStackSize(optixPipeline.get(),
-        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
-        continuationStackSize, 3));
+
+    rebuildPipeline();
 
     optixPathTraceRecord = uploadRecord(optixPathTraceGroup.get());
     optixAovRecord = uploadRecord(optixAovGroup.get());
-    // Upload two hitgroup records contiguously: mesh and Gaussian proxy.
-    {
-        SbtRecord<> meshSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
-        SbtRecord<> gaussianSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixGaussianHitGroup.get(), &gaussianSbt));
-        const std::array records{meshSbt, gaussianSbt};
-        optixHitgroupRecord.allocate(sizeof(records));
-        NR_GPU_CHECK(cudaMemcpy(optixHitgroupRecord.get(), records.data(), sizeof(records), cudaMemcpyHostToDevice));
-    }
-
-    {
-        SbtRecord<> meshSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshSbt));
-        SbtRecord<> gaussianSbt{};
-        NR_OPTIX_CHECK(optixSbtRecordPackHeader(
-            optixGaussianHitGroup.get(), &gaussianSbt));
-        // AOV queries use the ordinary mesh and Gaussian records. The Gaussian
-        // any-hit program selects transparent versus full-opacity behavior from
-        // the query payload, avoiding a second ray type/SBT layout.
-        const std::array records{meshSbt, gaussianSbt};
-        optixAovHitgroupRecord.allocate(sizeof(records));
-        NR_GPU_CHECK(cudaMemcpy(optixAovHitgroupRecord.get(), records.data(),
-            sizeof(records), cudaMemcpyHostToDevice));
-    }
-
+    rebuildMeshHitgroupSbt();
     optixMissRecord = uploadRecord(optixMissGroup.get());
 
     optixPathTraceSbt.raygenRecord = optixPathTraceRecord.devicePtr();
     optixPathTraceSbt.missRecordBase = optixMissRecord.devicePtr();
     optixPathTraceSbt.missRecordStrideInBytes = sizeof(SbtRecord<>);
     optixPathTraceSbt.missRecordCount = 1;
-    optixPathTraceSbt.hitgroupRecordBase = optixHitgroupRecord.devicePtr();
-    optixPathTraceSbt.hitgroupRecordStrideInBytes = sizeof(SbtRecord<>);
-    optixPathTraceSbt.hitgroupRecordCount = 2;
     optixAovSbt = optixPathTraceSbt;
     optixAovSbt.raygenRecord = optixAovRecord.devicePtr();
-    optixAovSbt.hitgroupRecordBase = optixAovHitgroupRecord.devicePtr();
 
     m_startEvent.create();
     m_stopEvent.create();
@@ -321,13 +302,7 @@ void Raytracer::ensureTrainingResources()
     if (optixTrainingModule)
         return;
 
-    OptixModuleCompileOptions moduleOptions{};
-    moduleOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
-#if !defined(NDEBUG)
-    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MODERATE;
-#else
-    moduleOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
-#endif
+    OptixModuleCompileOptions moduleOptions = makeModuleCompileOptions();
 
     OptixPipelineCompileOptions trainingPipelineOptions{};
     trainingPipelineOptions.usesMotionBlur = false;
@@ -406,6 +381,12 @@ void Raytracer::ensureTrainingResources()
     optixTrainingExtendSbt = optixPathTraceSbt;
     optixTrainingExtendSbt.raygenRecord = optixTrainingExtendRecord.devicePtr();
     optixTrainingExtendSbt.hitgroupRecordBase = optixTrainingHitgroupRecord.devicePtr();
+    // Training links its own pipeline without the material callable, so it must
+    // not inherit a callables table describing a program group that pipeline
+    // never saw.
+    optixTrainingExtendSbt.callablesRecordBase = 0;
+    optixTrainingExtendSbt.callablesRecordStrideInBytes = 0;
+    optixTrainingExtendSbt.callablesRecordCount = 0;
 }
 
 void Raytracer::ensureProxyOverdrawResources()
@@ -465,6 +446,170 @@ void Raytracer::ensureProxyOverdrawResources()
     optixProxyOverdrawSbt = optixPathTraceSbt;
     optixProxyOverdrawSbt.raygenRecord = optixProxyOverdrawRecord.devicePtr();
     optixProxyOverdrawSbt.hitgroupRecordBase = optixProxyOverdrawHitgroupRecord.devicePtr();
+    // As for training: a separate pipeline without the material callable.
+    optixProxyOverdrawSbt.callablesRecordBase = 0;
+    optixProxyOverdrawSbt.callablesRecordStrideInBytes = 0;
+    optixProxyOverdrawSbt.callablesRecordCount = 0;
+}
+
+nr::cuda::UniqueOptixPipeline Raytracer::prepareSvmPipeline() const
+{
+    std::array<char, 8192> log{};
+    size_t logSize = log.size();
+
+    // Collect all program groups for the pipeline.
+    std::vector<OptixProgramGroup> allGroups;
+    allGroups.reserve(32);
+    allGroups.push_back(optixPathTraceGroup.get());
+    allGroups.push_back(optixAovGroup.get());
+    allGroups.push_back(optixTriangleGroup.get());
+    allGroups.push_back(optixGaussianHitGroup.get());
+    allGroups.push_back(optixMissGroup.get());
+
+    nr::cuda::UniqueOptixPipeline pipeline;
+    OptixPipelineLinkOptions linkOptions{};
+    linkOptions.maxTraceDepth = 1;
+    logSize = log.size();
+    OptixResult result = optixPipelineCreate(
+        optixCtx, &pipelineCompileOptions, &linkOptions,
+        allGroups.data(), static_cast<unsigned int>(allGroups.size()),
+        log.data(), &logSize, pipeline.put());
+    if (result != OPTIX_SUCCESS)
+        throw std::runtime_error(
+            std::string("OptiX pipeline creation failed: ") + log.data());
+
+    OptixStackSizes stackSizes{};
+    for (const OptixProgramGroup group : allGroups)
+        NR_OPTIX_CHECK(
+            optixUtilAccumulateStackSizes(group, &stackSizes, pipeline.get()));
+
+    const unsigned int maxDirectCallableDepth = 0;
+    unsigned int directCallableStackSizeFromTraversal = 0;
+    unsigned int directCallableStackSizeFromState = 0;
+    unsigned int continuationStackSize = 0;
+    NR_OPTIX_CHECK(optixUtilComputeStackSizes(
+        &stackSizes, linkOptions.maxTraceDepth,
+        0, maxDirectCallableDepth,
+        &directCallableStackSizeFromTraversal, &directCallableStackSizeFromState,
+        &continuationStackSize));
+    NR_OPTIX_CHECK(optixPipelineSetStackSize(pipeline.get(),
+        directCallableStackSizeFromTraversal, directCallableStackSizeFromState,
+        continuationStackSize, 3));
+
+    if (std::getenv("NR_OPTIX_LOG_LEVEL") != nullptr)
+    {
+        LOG_INFO("Path-trace pipeline stack: dcFromTraversal="
+            << directCallableStackSizeFromTraversal
+            << " dcFromState=" << directCallableStackSizeFromState
+            << " continuation=" << continuationStackSize
+            << " (accumulated cssRG=" << stackSizes.cssRG
+            << " cssCH=" << stackSizes.cssCH
+            << " cssAH=" << stackSizes.cssAH
+            << " dssDC=" << stackSizes.dssDC << ')');
+    }
+    return pipeline;
+}
+
+void Raytracer::rebuildMeshHitgroupSbt()
+{
+    // SVM has one fixed hitgroup. Per-face material selection is carried by
+    // Surface::material->materialxProgramIndex and indexes the global SVM
+    // program table, so the SBT only routes geometry to this common program.
+    SbtRecord<> meshRecord{};
+    NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixTriangleGroup.get(), &meshRecord));
+    constexpr uint32_t meshRecordCount = 1;
+    std::vector<SbtRecord<>> records(meshRecordCount + 1, meshRecord);
+
+    SbtRecord<> gaussianRecord{};
+    NR_OPTIX_CHECK(optixSbtRecordPackHeader(optixGaussianHitGroup.get(), &gaussianRecord));
+    records[meshRecordCount] = gaussianRecord;
+
+    const size_t recordBytes = records.size() * sizeof(SbtRecord<>);
+    meshHitgroupRecordBase.allocate(recordBytes);
+    NR_GPU_CHECK(cudaMemcpy(meshHitgroupRecordBase.get(), records.data(),
+        recordBytes, cudaMemcpyHostToDevice));
+
+    optixPathTraceSbt.hitgroupRecordBase = meshHitgroupRecordBase.devicePtr();
+    optixPathTraceSbt.hitgroupRecordStrideInBytes = sizeof(SbtRecord<>);
+    optixPathTraceSbt.hitgroupRecordCount = static_cast<uint32_t>(records.size());
+    optixAovSbt.hitgroupRecordBase = optixPathTraceSbt.hitgroupRecordBase;
+    optixAovSbt.hitgroupRecordStrideInBytes = optixPathTraceSbt.hitgroupRecordStrideInBytes;
+    optixAovSbt.hitgroupRecordCount = optixPathTraceSbt.hitgroupRecordCount;
+
+    optixPathTraceSbt.callablesRecordBase = 0;
+    optixPathTraceSbt.callablesRecordStrideInBytes = 0;
+    optixPathTraceSbt.callablesRecordCount = 0;
+    optixAovSbt.callablesRecordBase = 0;
+    optixAovSbt.callablesRecordStrideInBytes = 0;
+    optixAovSbt.callablesRecordCount = 0;
+}
+
+void Raytracer::installSvmPipeline(
+    nr::cuda::UniqueOptixPipeline pipeline)
+{
+    // The old pipeline may still be referenced by the last launch.
+    NR_GPU_CHECK(cudaStreamSynchronize(stream));
+    optixPipeline = std::move(pipeline);
+    rebuildMeshHitgroupSbt();
+}
+
+void Raytracer::rebuildPipeline()
+{
+    installSvmPipeline(prepareSvmPipeline());
+}
+
+void Raytracer::uploadSvmPrograms()
+{
+    const auto upload = [](nr::cuda::UniqueDeviceBuffer& device,
+                            const auto& host) {
+        using Element = typename std::remove_reference_t<decltype(host)>::value_type;
+        if (host.empty()) {
+            device.reset();
+            return;
+        }
+        device.allocate(sizeof(Element) * host.size());
+        NR_GPU_CHECK(cudaMemcpy(device.get(), host.data(),
+            sizeof(Element) * host.size(), cudaMemcpyHostToDevice));
+    };
+
+    upload(svmWordsDevice, materialxPrograms.words());
+    upload(svmTextureIndicesDevice, materialxPrograms.textureIndices());
+    gpuCache.data.svmWords = static_cast<const std::uint32_t*>(svmWordsDevice.get());
+    gpuCache.data.svmTextureIndices = static_cast<const std::uint32_t*>(
+        svmTextureIndicesDevice.get());
+}
+
+nr::svm::SvmProgramRecord Raytracer::registerMaterialXProgram(
+    const nr::svm::CompiledSvmProgram& program)
+{
+    const uint32_t index = materialxPrograms.append(program);
+    const nr::svm::SvmProgramRecord record = materialxPrograms.records()[index];
+    uploadSvmPrograms();
+    return record;
+}
+
+nr::svm::SvmProgramRecord Raytracer::replaceMaterialXProgram(
+    const nr::svm::CompiledSvmProgram& program)
+{
+    const uint32_t index = materialxPrograms.append(program);
+    const nr::svm::SvmProgramRecord record = materialxPrograms.records()[index];
+    uploadSvmPrograms();
+    return record;
+}
+
+void Raytracer::releaseMaterialXProgram(const uint32_t index)
+{
+    // Program slots are material indices stored in GPU-resident Material
+    // records. They stay stable for a scene lifetime, just as Cycles' shader
+    // table offsets do; clearMaterialXPrograms() reclaims the table wholesale.
+    if (index >= materialxPrograms.records().size())
+        return;
+}
+
+void Raytracer::clearMaterialXPrograms()
+{
+    materialxPrograms.clear();
+    uploadSvmPrograms();
 }
 
 Raytracer::~Raytracer()
@@ -490,11 +635,12 @@ Raytracer::~Raytracer()
     optixAovRecord.reset();
     optixProxyOverdrawRecord.reset();
     optixTrainingExtendRecord.reset();
-    optixHitgroupRecord.reset();
-    optixAovHitgroupRecord.reset();
+    meshHitgroupRecordBase.reset();
     optixTrainingHitgroupRecord.reset();
     optixProxyOverdrawHitgroupRecord.reset();
     optixMissRecord.reset();
+    clearMaterialXPrograms();
+
     optixPipeline.reset();
     optixProxyOverdrawPipeline.reset();
     optixTrainingPipeline.reset();
@@ -566,8 +712,10 @@ void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
     ensureAovImages();
 
     allocateScratchBuffers();
-    updateTextures();
-    updateMeshes();
+    // Scene textures, mesh buffers, and their GPU cache entries do not depend
+    // on framebuffer dimensions. Re-uploading them here made every viewport
+    // resize recreate every CUDA texture (multiple gigabytes in large Blender
+    // scenes). Dirty scene resources are handled once below in renderFrame().
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     lastReadyValue = 0;
 }
@@ -602,7 +750,6 @@ void Raytracer::allocateScratchBuffers()
     scratchCapacity = width * height;
     accumulationBuffer.allocate(sizeof(glm::vec4) * static_cast<size_t>(width) * height, stream);
     noiseVarianceSumBuffer.allocate(sizeof(float), stream);
-
     NR_GPU_CHECK(cudaMemsetAsync(
         accumulationBuffer.get(), 0, sizeof(glm::vec4) * width * height, stream));
 }
@@ -633,29 +780,73 @@ void Raytracer::freeSceneData() noexcept
 
 void Raytracer::updateTextures()
 {
-    // Texture objects and arrays are destroyed on the host below, so prior
-    // launches must have released them before the cache is replaced.
-    NR_GPU_CHECK(cudaStreamSynchronize(stream));
-
     const auto& cpuTextures = scene.getTextures();
+    const auto& registry = scene.getTextureRegistry();
     const size_t count = cpuTextures.size();
-
     auto& cudaTextures = gpuCache.textures;
-    cudaTextures.clear();
+    auto& mirroredHandles = gpuCache.textureHandles;
+
+    bool changed =
+        cudaTextures.size() != count || mirroredHandles.size() != count;
+    const size_t commonCount = std::min(mirroredHandles.size(), count);
+    for (size_t i = 0; i < commonCount && !changed; ++i)
+        changed = mirroredHandles[i] != registry.handleAt(
+            static_cast<uint32_t>(i));
+
+    if (!changed) {
+        gpuCache.textureRegistryRevision = registry.revision();
+        return;
+    }
+
+    // Resize can relocate the managed wrapper array, and changed slots can
+    // destroy CUDA texture objects. Batch that lifetime boundary into one
+    // synchronization, then leave every unchanged texture array intact.
+    NR_GPU_CHECK(cudaStreamSynchronize(stream));
+    cudaTextures.resize(count);
+    mirroredHandles.resize(count);
+
     for (size_t i = 0; i < count; ++i) {
+        const TextureHandle current =
+            registry.handleAt(static_cast<uint32_t>(i));
+        if (mirroredHandles[i] == current)
+            continue;
+
+        cudaTextures[i].reset();
+        mirroredHandles[i] = current;
         // A released texture leaves an empty slot behind. It keeps its index so
         // the live textures around it stay addressable, but there is nothing to
         // upload and nothing left referencing it.
-        if (cpuTextures[i].getWidth() <= 0 || cpuTextures[i].getHeight() <= 0) {
-            cudaTextures.emplace_back();
+        if (!current.isValid() || cpuTextures[i].getWidth() <= 0
+            || cpuTextures[i].getHeight() <= 0) {
             continue;
         }
-        cudaTextures.emplace_back(cpuTextures[i].getPixels().data(), cpuTextures[i].getWidth(), cpuTextures[i].getHeight(), stream);
+        if (cpuTextures[i].usesByteStorage()) {
+            cudaTextures[i] =
+                nr::cuda::UniqueTexture::uploadNormalizedUInt8x4(
+                    cpuTextures[i].getBytePixels().data(),
+                    cpuTextures[i].getWidth(), cpuTextures[i].getHeight(),
+                    stream,
+                    cpuTextures[i].getEncoding()
+                        == TextureEncoding::Srgb8);
+        } else if (cpuTextures[i].usesHalfStorage()) {
+            cudaTextures[i] = nr::cuda::UniqueTexture::uploadHalf4(
+                cpuTextures[i].getHalfPixels().data(),
+                cpuTextures[i].getWidth(), cpuTextures[i].getHeight(),
+                stream);
+        } else {
+            cudaTextures[i] = nr::cuda::UniqueTexture(
+                cpuTextures[i].getPixels().data(),
+                cpuTextures[i].getWidth(), cpuTextures[i].getHeight(),
+                stream);
+        }
     }
     gpuCache.data.textures = cudaTextures.data();
     gpuCache.data.textureCount = static_cast<uint32_t>(cpuTextures.size());
+    gpuCache.textureRegistryRevision = registry.revision();
 
-    updateEnvironmentCdf();
+    // SVM instructions store scene texture indices, not CUDA texture objects.
+    // Reloading therefore only updates the scene texture array above; no
+    // material program or OptiX pipeline needs rebuilding.
 }
 
 void Raytracer::updateEnvironmentCdf()
@@ -710,7 +901,17 @@ void Raytracer::updateEnvironmentCdf()
 void Raytracer::updateMeshes()
 {
     gpuCache.data.meshes = scene.getMeshAssets().data();
-    gpuCache.data.materials = scene.getMaterials().data();
+    gpuCache.materials = scene.getMaterials();
+    gpuCache.data.materials = gpuCache.materials.data();
+    // Mesh/material *bindings* (which program a given mesh slot points at)
+    // can change without a new program ever being compiled (setMaterial()
+    // reusing an already-registered index, a mesh gaining slots via
+    // replaceGeometry(), ...) -- those changes only set the Meshes dirty
+    // flag, not materialxSbtDirty (registerMaterialXProgram/
+    // replaceMaterialXProgram's own flag, for when the *pipeline* itself
+    // needs relinking). Rebuild the hitgroup SBT here too so bindings never
+    // go stale waiting for an unrelated program compile.
+    rebuildMeshHitgroupSbt();
 }
 
 void Raytracer::updateTLAS()
@@ -943,6 +1144,7 @@ void Raytracer::launchGaussianTrainPath(
 void Raytracer::launchPathTrace(
     const KernelParams& params, const cudaStream_t stream) const
 {
+    const NvtxRange profileRange("NoorRay/PathTrace");
     NR_GPU_CHECK(cudaMemcpyAsync(optixLaunchParamsDevice.get(),
         &params, sizeof(params), cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
@@ -1053,7 +1255,10 @@ void Raytracer::renderFrame(
     if (scene.consumeGpuSync())
         NR_GPU_CHECK(cudaStreamSynchronize(stream));
 
-    const bool sceneDirty = scene.isAnyDirty();
+    const bool textureRegistryChanged =
+        gpuCache.textureRegistryRevision
+        != scene.getTextureRegistry().revision();
+    const bool sceneDirty = scene.isAnyDirty() || textureRegistryChanged;
 
     CameraInstance* activeCamera = scene.getRenderCamera();
     if (!activeCamera)
@@ -1083,8 +1288,10 @@ void Raytracer::renderFrame(
     const bool renderAov = useAovs && aovImagesCreated && (sceneDirty || aovStale);
 
     if (scene.isDirty(Meshes)) updateMeshes();
-    if (scene.isDirty(Textures)) updateTextures();
-    else if (scene.isDirty(EnvironmentCdf)) updateEnvironmentCdf();
+    if (scene.isDirty(Textures) || textureRegistryChanged)
+        updateTextures();
+    if (scene.isDirty(EnvironmentCdf))
+        updateEnvironmentCdf();
     if (scene.isDirty(Lights)) updateLights();
     if (scene.isDirty(TLAS) || scene.isDirty(GaussianData)) updateTLAS();
     if (scene.isDirty(CameraState)) activeCamera->rebuildCamera();

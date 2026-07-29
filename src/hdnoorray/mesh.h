@@ -4,7 +4,6 @@
 
 #include <pxr/imaging/hd/mesh.h>
 
-#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -36,20 +35,18 @@ protected:
     void _InitRepr(const TfToken& reprToken, HdDirtyBits* dirtyBits) override;
 
 private:
-    // The prim owns its asset and its instances. Everything it holds is given
-    // up in Finalize (or when the prim switches between mesh and splat), which
-    // is what releases the geometry and splat data from device memory.
     void ReleaseInstances(Scene& scene);
     void ReleaseAll(HdNoorRayRenderParam& param);
-
-    // Cached mapping from expanded vertex index → source point index, used
-    // by the position-only update path to avoid re-running BuildTriangleMesh.
-    std::vector<uint32_t> vertexToPointIndex_;
+    void UnbindAllMaterials(HdNoorRayRenderParam& param);
 
     MeshAssetRef meshAsset_;
     GaussianAssetRef gaussianAsset_;
     std::vector<SceneObjectHandle> objects_;
-    SdfPath boundMaterialId_;
+    // One entry per material slot this mesh currently has bound (slot 0 is
+    // always the Rprim's own GetMaterialId(); slots 1+ come from HdGeomSubset
+    // material bindings, see BuildTriangleMesh's own comment). Index-parallel
+    // with MeshAsset::getMaterialIds().
+    std::vector<SdfPath> boundMaterialIds_;
     std::string splatPath_;
 };
 

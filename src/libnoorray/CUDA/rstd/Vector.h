@@ -5,12 +5,14 @@
 #include "CUDA/rstd/Allocator.h"
 
 #include <cstddef>
+#include <cstring>
 #include <initializer_list>
+#include <iterator>
+#include <memory>
 #include <type_traits>
 #include <utility>
 
 #if !defined(NR_BACKEND_CUDA)
-#include <memory>
 #include <vector>
 #endif
 
@@ -41,6 +43,30 @@ public:
     template <typename It, typename = std::enable_if_t<!std::is_integral_v<It>>>
     vector(It first, It last, const Alloc& alloc = Alloc{}) : alloc_(alloc)
     {
+        // Mesh data arrives through std::vector iterators, so its final size
+        // is already known. Reserve once instead of growing 4, 8, 16, ...
+        // through cudaMallocManaged and copying the complete prefix on every
+        // step. Preserve single-pass input-iterator support by only measuring
+        // multipass ranges.
+        if constexpr (std::forward_iterator<It>) {
+            const auto count =
+                static_cast<std::size_t>(std::distance(first, last));
+            reserve(count);
+            // cudaMallocManaged returns suitably aligned raw storage. For an
+            // implicit-lifetime, trivially copyable value type, memcpy starts
+            // the destination objects' lifetimes and replaces thousands of
+            // placement-new calls with one checked-size bulk transfer.
+            if constexpr (std::contiguous_iterator<It>
+                && std::is_same_v<
+                    std::remove_cv_t<std::iter_value_t<It>>, T>
+                && std::is_trivially_copyable_v<T>) {
+                if (count != 0)
+                    std::memcpy(ptr_, std::to_address(first),
+                        count * sizeof(T));
+                size_ = count;
+                return;
+            }
+        }
         for (; first != last; ++first)
             push_back(*first);
     }

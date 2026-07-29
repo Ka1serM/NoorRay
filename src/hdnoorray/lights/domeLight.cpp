@@ -2,11 +2,9 @@
 
 #include "../renderParam.h"
 
-#include <pxr/base/tf/diagnostic.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 #include <pxr/imaging/hd/tokens.h>
 
-#include <exception>
 #include <mutex>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -27,14 +25,22 @@ void HdNoorRayDomeLight::Sync(
     HdDirtyBits* dirtyBits)
 {
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
+    const glm::vec3 color = LightColor(delegate, GetId());
+    const float exposure = delegate->GetVisible(GetId())
+        ? LightIntensity(delegate, GetId()) : 0.0f;
+    const std::string texturePath = AssetPathParam(
+        delegate, GetId(), HdLightTokens->textureFile);
+    const TextureRef texture = texturePath.empty()
+        ? TextureRef{}
+        : param.GetOrCreateTexture(texturePath, TextureEncoding::Srgb8);
+
     std::scoped_lock lock(param.mutex);
     Scene& scene = param.session.scene;
     scene.synchronizeBeforeMutation();
     Environment& environment = scene.getEnvironment();
 
-    environment.color = LightColor(delegate, GetId());
-    environment.lightingExposure = delegate->GetVisible(GetId())
-        ? LightIntensity(delegate, GetId()) : 0.0f;
+    environment.color = color;
+    environment.lightingExposure = exposure;
     environment.visibleExposure = 0.0f;
     environment.rotation = 0.0f;
 
@@ -47,29 +53,14 @@ void HdNoorRayDomeLight::Sync(
         glm::vec3(1.0f, 0.0f, 0.0f)));
     environment.setEquirectangularMapping(blenderWorldToNoorRay);
 
-    const std::string texturePath = AssetPathParam(
-        delegate, GetId(), HdLightTokens->textureFile);
-    if (texturePath.empty()) {
+    if (!texture.isValid())
         scene.clearEnvironmentTexture();
-        texturePath_.clear();
-    } else if (texturePath != texturePath_) {
-        try {
-            scene.setEnvironmentTexture(
-                scene.add(Texture(texturePath, TextureEncoding::Srgb8)));
-            texturePath_ = texturePath;
-        } catch (const std::exception& error) {
-            TF_WARN(
-                "hdNoorRay could not load dome texture '%s': %s",
-                texturePath.c_str(), error.what());
-            scene.clearEnvironmentTexture();
-            texturePath_.clear();
-        }
-    }
+    else
+        scene.setEnvironmentTexture(texture);
     environment.updateDerivedSettings();
     active_ = true;
     scene.setDirtyFlag(EnvironmentCdf);
     scene.setDirtyFlag(Accumulation);
-    param.MarkSceneDirty();
     *dirtyBits = Clean;
 }
 
@@ -92,9 +83,7 @@ void HdNoorRayDomeLight::Finalize(HdRenderParam* renderParam)
     environment.updateDerivedSettings();
     scene.setDirtyFlag(EnvironmentCdf);
     scene.setDirtyFlag(Accumulation);
-    texturePath_.clear();
     active_ = false;
-    param.MarkSceneDirty();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

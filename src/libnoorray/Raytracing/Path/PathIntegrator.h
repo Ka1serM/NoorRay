@@ -8,7 +8,9 @@
 #include "Raytracing/Path/MisHeuristic.h"
 #include "Raytracing/Path/ShadowTerminator.h"
 #include "Samplers/OwenSobolSampler.h"
-#include "Shading/Bsdf.h"
+#include "Shading/CompositeBsdf.h"
+#include "Shading/MaterialEvaluation.h"
+#include "SVM/SvmEval.h"
 
 // PathIntegrator owns transport policy: path continuation, direct-light
 // selection, visibility, MIS, and termination. Persistent domain objects own
@@ -59,15 +61,35 @@ public:
 
     // The integrator owns the query needed by its transport estimators. AOVs
     // reuse this exact query rather than giving the scene a renderer-specific API.
+    // reorder: whether to call optixReorder() after this traversal. SER
+    // reordering has a real, roughly fixed per-call cost that is only worth
+    // paying once per thread per path segment, for the ray whose hit
+    // determines what (potentially divergent) material gets shaded next --
+    // the main continuation ray in trace(). Shadow rays in shadowOccluded()
+    // never reach a shading callable (they only ever check opacity), so
+    // reordering for them earns nothing and, worse, reordering the same
+    // thread a second time is not merely wasted but actively pathological:
+    // measured on an RTX 4070, a single redundant intersect() call with
+    // reorder enabled turned a 452ms render into 8469ms (~19x) on a trivial
+    // one-sphere scene. Callers that trace more than one ray per thread per
+    // segment (shadowOccluded's blocker loop) must pass false here.
     NR_GPU RayHit intersect(
         const Ray& ray,
         const float tMin,
         const float tMax,
         const uint32_t sampleIndex,
         const uint32_t excludedGaussianId = InvalidIndex,
-        const bool terminateOnFirstGaussianHit = false) const
+        const bool terminateOnFirstGaussianHit = false,
+        const bool reorder = true) const
     {
         RayHit hit{};
+        // Any-hit is disabled for the main continuation ray's own traversal
+        // (deferred CH shading below handles that material fully); shadow
+        // rays (reorder == false, see this function's own comment) need it
+        // enabled instead, for the SVM opacity path's cutout testing -- the only way a shadow ray, which never
+        // invokes closesthit, can still respect per-material opacity.
+        const unsigned int anyHitFlags =
+            reorder ? OPTIX_RAY_FLAG_DISABLE_ANYHIT : OPTIX_RAY_FLAG_NONE;
         const bool gaussian = gaussianEnabled();
         if (gaussian)
         {
@@ -82,10 +104,23 @@ public:
                     tMax,
                     0.0f,
                     MeshVisibility,
-                    OPTIX_RAY_FLAG_DISABLE_ANYHIT,
+                    anyHitFlags,
                     0,
                     1,
                     0);
+                // Deferred shading (optixHitObjectIsHit/Get*) only defers
+                // choosing what to run next; without this, threads that
+                // scattered onto unrelated materials and directions after
+                // the first bounce stay locked to whatever lane they
+                // started in, so the OSL callable below serializes across
+                // every distinct material a warp's rays landed on. Bounce 0
+                // stays coherent for free (adjacent pixels start off hitting
+                // similar geometry); every bounce past that is where this
+                // actually earns its keep. See this function's reorder
+                // parameter comment for why this must not run for shadow
+                // rays.
+                if (reorder)
+                    optixReorder();
                 if (optixHitObjectIsHit())
                 {
                     meshHit.t = optixHitObjectGetRayTmax();
@@ -143,10 +178,18 @@ public:
                 tMax,
                 0.0f,
                 MeshVisibility,
-                OPTIX_RAY_FLAG_DISABLE_ANYHIT,
+                anyHitFlags,
                 0,
                 1,
                 0);
+            // See the mesh-hit branch above: reorders lanes by hit outcome
+            // before the OSL material callable runs, which is what keeps
+            // later bounces (post-scatter, no longer screen-coherent) from
+            // serializing one material at a time per warp. Also see this
+            // function's reorder parameter comment for why this must not
+            // run for shadow rays.
+            if (reorder)
+                optixReorder();
             if (optixHitObjectIsHit())
             {
                 hit.t = optixHitObjectGetRayTmax();
@@ -402,6 +445,7 @@ private:
         const float tMin,
         const float tMax,
         const uint32_t excludedGaussianId,
+        const SampledWavelengths& wavelengths,
         RandomState& rng) const
     {
         const bool gaussian = gaussianEnabled();
@@ -410,23 +454,74 @@ private:
         {
             const uint32_t gaussianSampleIndex = gaussian ? randomUint(rng) : 0;
             const RayHit hit = intersect(ray, rayMin, tMax, gaussianSampleIndex,
-                excludedGaussianId, true);
+                excludedGaussianId, true, false);
             if (hit.instanceIndex == InvalidIndex)
                 return false;
             if (hit.primitiveIndex == InvalidIndex)
                 return true;
-            const ShadowSurface blocker = ShadowSurface::fromHit(params.scene, hit);
-            if (blocker.material->blocksShadowRay(params.scene.textures, blocker.uv, rng))
+            const Surface blocker = Surface::fromHit(params.scene, hit);
+            const bool hasSvmProgram = blocker.material->svmBytecodeLength != 0;
+
+            float blockProbability;
+            if (!hasSvmProgram)
+            {
+                // No compiled SVM program: shade natively from the
+                // material's plain fields instead of assuming fully opaque
+                // (see NativeMaterialEvaluation.h). Native materials have no
+                // any-hit program on their hitgroup (see Raytracer's
+                // fallback hitgroup), so this is the only opacity test they
+                // get.
+                blockProbability = 1.0f;
+            }
+            else
+            {
+                MaterialEvaluation evaluation{};
+                nr::shading::NoorRayCompositeBsdf bsdf(
+                    blocker.geometricNormal, blocker.normal, -ray.direction());
+                MaterialShadingContext shadingContext{};
+                shadingContext.position = blocker.position;
+                shadingContext.geometricNormal = blocker.geometricNormal;
+                shadingContext.interpolatedNormal = blocker.normal;
+                shadingContext.tangent = blocker.tangent;
+                shadingContext.bitangent = glm::cross(blocker.normal, blocker.tangent)
+                    * blocker.tangentSign;
+                shadingContext.uv = blocker.uv;
+                shadingContext.vertexColor = blocker.color;
+                shadingContext.viewDirection = -ray.direction();
+                shadingContext.primitiveId = blocker.primitiveIndex;
+                const bool exiting = glm::dot(
+                    -ray.direction(), blocker.geometricNormal) < 0.0f;
+                if (!nr::svm::svmEvalNodes(params.scene,
+                    blocker.material->svmBytecodeOffset, blocker.material->svmBytecodeLength,
+                    blocker.material->svmTextureOffset, blocker.material->svmTextureCount,
+                    shadingContext, wavelengths,
+                    exiting, evaluation, bsdf))
+                {
+                    // A stale material slot is handled exactly like a native
+                    // material, rather than turning the surface opaque.
+                    evaluation.opacity = 1.0f;
+                    bsdf.prepare();
+                }
+                blockProbability = fminf(fmaxf(
+                    evaluation.opacity * blocker.color.a
+                    * (1.0f - bsdf.transmissionEstimate()), 0.0f), 1.0f);
+            }
+            if (blockProbability >= 1.0f
+                || randomFloat(rng) < blockProbability)
                 return true;
             rayMin = hit.t + fmaxf(1e-4f, fabsf(hit.t) * 1e-6f);
         }
         return false;
     }
 
+    // Template param works identically for any BSDF type that exposes
+    // evaluate()/sample()/cosine()/shadingNormal() -- the compiler
+    // instantiates and inlines a separate copy per type at no cost.
+    template <typename BsdfT>
     NR_GPU SampledSpectrum estimateDirect(
         const Surface& surface,
         const glm::vec3& geometricNormal,
-        const Bsdf& bsdf,
+        const BsdfT& bsdf,
         const SampledWavelengths& wavelengths,
         RandomState& lightRng,
         RandomState& shadowRng) const
@@ -443,7 +538,8 @@ private:
             shadowTMin, shadowTMax);
         if (glm::dot(shadowRay.direction(), shadowRay.direction()) <= 0.0f
             || shadowTMax <= shadowTMin
-            || shadowOccluded(shadowRay, shadowTMin, shadowTMax, InvalidIndex, shadowRng))
+            || shadowOccluded(shadowRay, shadowTMin, shadowTMax,
+                InvalidIndex, wavelengths, shadowRng))
             return SampledSpectrum(0.0f);
         const BsdfEvaluation evaluation = bsdf.evaluate(light.direction);
         if (environmentPdf > 0.0f)
@@ -474,7 +570,8 @@ private:
         const float shadowTMax = light.distance - 2.0f * RayOffset;
         if (glm::dot(shadowRay.direction(), shadowRay.direction()) <= 0.0f
             || shadowTMax <= shadowTMin
-            || shadowOccluded(shadowRay, shadowTMin, shadowTMax, gaussianId, shadowRng))
+            || shadowOccluded(shadowRay, shadowTMin, shadowTMax,
+                gaussianId, wavelengths, shadowRng))
             return SampledSpectrum(0.0f);
         if (environmentPdf > 0.0f)
             light.radiance *= powerHeuristic(environmentPdf, Inv4Pi)
@@ -597,8 +694,38 @@ private:
             PathRandomStreams randoms = state.nextRandomStreams(
                 pixel, params.frame.totalAccumulated);
             const glm::vec3 geometricNormal = orientedNormal(surface, ray);
-            if (!surface.material->acceptsRayHit(
-                    params.scene.textures, surface.uv, randoms.opacity))
+
+            MaterialEvaluation evaluation{};
+            nr::shading::NoorRayCompositeBsdf bsdf(
+                geometricNormal, surface.normal, -ray.direction());
+            const bool exiting = glm::dot(-ray.direction(), geometricNormal) < 0.0f;
+            bool svmEvaluated = false;
+            if (surface.material->svmBytecodeLength != 0) {
+                MaterialShadingContext shadingContext{};
+                shadingContext.position = surface.position;
+                shadingContext.geometricNormal = geometricNormal;
+                shadingContext.interpolatedNormal = surface.normal;
+                shadingContext.tangent = surface.tangent;
+                shadingContext.bitangent = glm::cross(surface.normal, surface.tangent)
+                    * surface.tangentSign;
+                shadingContext.uv = surface.uv;
+                shadingContext.vertexColor = surface.color;
+                shadingContext.viewDirection = -ray.direction();
+                shadingContext.primitiveId = surface.primitiveIndex;
+                svmEvaluated = nr::svm::svmEvalNodes(params.scene,
+                    surface.material->svmBytecodeOffset, surface.material->svmBytecodeLength,
+                    surface.material->svmTextureOffset, surface.material->svmTextureCount,
+                    shadingContext,
+                    state.wl, exiting, evaluation, bsdf);
+            }
+            if (!svmEvaluated) {
+                evaluation.opacity = 1.0f;
+                bsdf.prepare();
+            }
+
+            const float opacity = fminf(fmaxf(
+                evaluation.opacity * surface.color.a, 0.0f), 1.0f);
+            if (randomFloat(randoms.opacity) > opacity)
             {
                 ray = spawnSurfaceRay(surface, ray.direction(), geometricNormal);
                 tMin = Ray::DefaultMinDistance;
@@ -606,33 +733,39 @@ private:
                 continue;
             }
 
-            // A dispersive BSDF has wavelength-dependent branch probabilities,
-            // refractive half-vectors, Jacobians, and PDFs. Collapse the packet
-            // before evaluating direct lighting so every quantity belongs to the
-            // same hero wavelength. Constant-IOR glass can retain the packet.
-            if (surface.material->sampleTransmission(
-                    params.scene.textures, surface.uv) > 0.0f
-                && surface.material->hasDispersiveIor(state.wl))
-                state.wl.terminateSecondary();
+            const SampledSpectrum emission =
+                evaluation.has(MaterialEvaluationFlags::HasEmission)
+                ? rgbIlluminantToSpectrum(
+                    evaluation.emission * evaluation.emissionStrength,
+                    state.wl, params.scene.spectrumTableScale,
+                    params.scene.spectrumTableCoeffs, params.scene.d65)
+                : SampledSpectrum(0.0f);
 
-            const Bsdf bsdf(*surface.material, surface, params.scene,
-                ray, state.wl);
-            state.alpha = 1.0f;
-            state.radiance += state.throughput * surface.material->emissionSpectral(
-                params.scene.textures, surface.uv, state.wl, params.scene.spectrumTableScale,
-                params.scene.spectrumTableCoeffs, params.scene.d65);
-            state.radiance += state.throughput * estimateDirect(surface, geometricNormal,
-                bsdf, state.wl, randoms.light, randoms.shadow);
-            const BsdfSample bsdfSample = bsdf.sample(randoms.bsdf);
-            if (bsdfSample.event == BsdfEvent::Transmission)
-                state.transmit(bsdfSample.eta);
-            state.scatter(bsdfSample.weight,
-                bsdfSample.singular ? 0.0f : bsdfSample.pdf);
-            if (!survivesRussianRoulette(state, randoms.roulette))
+            // Shared post-BSDF-construction shading: emission, direct lighting,
+            // one scattering sample, Russian roulette, and the next ray.
+            // Returns false when the path should terminate here.
+            const auto shadeWithBsdf = [&](const auto& bsdf) -> bool
+            {
+                state.alpha = 1.0f;
+                state.radiance += state.throughput * emission;
+                state.radiance += state.throughput * estimateDirect(surface, geometricNormal,
+                    bsdf, state.wl, randoms.light, randoms.shadow);
+                const BsdfSample bsdfSample = bsdf.sample(randoms.bsdf);
+                if (bsdfSample.event == BsdfEvent::Transmission)
+                    state.transmit(bsdfSample.eta);
+                state.scatter(bsdfSample.weight,
+                    bsdfSample.singular ? 0.0f : bsdfSample.pdf);
+                if (!survivesRussianRoulette(state, randoms.roulette))
+                    return false;
+                ray = spawnSurfaceRay(surface, bsdfSample.direction, geometricNormal);
+                tMin = Ray::DefaultMinDistance;
+                tMax = Ray::DefaultMaxDistance;
+                return true;
+            };
+
+            if (!shadeWithBsdf(bsdf))
                 return;
-            ray = spawnSurfaceRay(surface, bsdfSample.direction, geometricNormal);
-            tMin = Ray::DefaultMinDistance;
-            tMax = Ray::DefaultMaxDistance;
+            continue;
         }
     }
 

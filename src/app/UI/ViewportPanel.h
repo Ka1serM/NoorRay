@@ -11,6 +11,7 @@
 #include <SDL3/SDL_events.h>
 
 class Window;
+class Raytracer;
 
 class ViewportPanel : public ImGuiComponent {
 public:
@@ -31,14 +32,21 @@ public:
     uint32_t getSelectedGaussianIndex() const { return selectedGaussianIndex; }
 
     ViewportPanel(const std::string& name, Window& window, Context& context, Scene& scene,
-        const Image& outputColor, Image& outputCrypto, Image& outputPosition,
-        uint32_t width, uint32_t height);
+        Raytracer& raytracer, const Image& outputColor, Image& outputCrypto,
+        Image& outputPosition, uint32_t width, uint32_t height);
     void updateLayout();
 
 private:
+    // Reads an AOV texel back through a blocking one-time submit. Returns false
+    // when the image is unavailable or the copy region would leave its extent.
+    bool readbackAovTexel(Image* image, const Buffer& staging) const;
+
     Window& window;
     Context& context;
     Scene& scene;
+    // AOV images are Vulkan/CUDA interop images. Readbacks transition their
+    // layout, so they must not overlap an OptiX launch writing to them.
+    Raytracer& raytracer;
     Image* outputCrypto;
     Image* outputPosition;
     

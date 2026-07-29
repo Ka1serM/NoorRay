@@ -1,0 +1,8 @@
+{
+  "objects": [
+    {"type":"camera", "name":"Camera", "position":[0,0,5], "rotation_euler":[0,0,0], "scale":[1,1,1],
+     "camera":{"projection":"thinlens", "active":true, "focal_length_mm":50, "focus_distance_cm":500, "aperture_diameter_mm":0, "sensor_width_mm":41.421, "sensor_height_mm":41.421, "resolution":[256,256]}},
+    {"type":"sphere", "name":"Sphere", "position":[0,0,0], "rotation_euler":[0,0,0], "scale":[2,2,2],
+     "material":{"materialx_path":"materialx/validator/open_pbr_default.mtlx"}}
+  ]
+}

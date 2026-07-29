@@ -1,8 +1,12 @@
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <filesystem>
+#include <thread>
+#include "MaterialXSceneRuntime.h"
 #include "NoorRaySession.h"
 #include "UI/NoorRayUi.h"
 #include "Camera/CameraInstance.h"
@@ -163,6 +167,14 @@ void runCli(const CliOptions& options)
     }
 
     Raytracer& raytracer = *session.raytracer;
+    MaterialXSceneRuntime materialx;
+    const std::string sceneDirectory =
+        std::filesystem::path(options.scenePath).parent_path().string();
+    do {
+        materialx.compilePending(session.scene, raytracer, sceneDirectory);
+        if (materialx.hasPendingCompilations())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (materialx.hasPendingCompilations());
     raytracer.setAovEnabled(options.aovEnabled);
     raytracer.setStatsEnabled(options.statsEnabled);
     raytracer.setTimingEnabled(options.statsEnabled);

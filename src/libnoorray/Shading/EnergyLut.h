@@ -331,4 +331,18 @@ NR_CPU_GPU inline float glassAverageAlbedo(
     return glassAverageAlbedo(&textures, roughness, relativeIor);
 }
 
+// Kulla-Conty multi-scatter compensation: the energy a single-scatter GGX
+// evaluation misses at high roughness, redistributed as an isotropic term.
+// Shared by every microfacet lobe (Shading/Lobes/) that needs its own
+// independent energy compensation -- factored out of what was previously a
+// private helper in Bsdf.h so lobes can use it without depending on Bsdf.
+NR_CPU_GPU inline float multipleScatterFresnel(
+    const float averageFresnel, const float averageAlbedo)
+{
+    const float fresnel = clampUnit(averageFresnel);
+    const float albedo = clampUnit(averageAlbedo);
+    return fresnel * fresnel * albedo
+        / fmaxf(1.0f - fresnel * (1.0f - albedo), 1.0e-6f);
+}
+
 }

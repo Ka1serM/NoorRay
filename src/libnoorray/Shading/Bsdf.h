@@ -811,7 +811,8 @@ NR_GPU inline Bsdf::Bsdf(
 
     const SampledSpectrum albedoSpec = material.sampleDiffuse(
         scene.textures, surface.uv, wavelengths,
-        scene.spectrumTableScale, scene.spectrumTableCoeffs);
+        scene.spectrumTableScale, scene.spectrumTableCoeffs,
+        glm::vec3(surface.color));
     const float met = material.sampleMetallic(scene.textures, surface.uv);
     const float rough = material.sampleRoughness(scene.textures, surface.uv);
     const float trans = material.sampleTransmission(scene.textures, surface.uv);

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <standard_surface name="s" type="surfaceshader">
+    <input name="base_color" type="color3" value="1.0, 0.0, 0.0" />
+    <input name="metalness" type="float" value="0.0" />
+    <input name="specular" type="float" value="1.0" />
+    <input name="specular_roughness" type="float" value="0.5" />
+    <input name="specular_IOR" type="float" value="1.5" />
+    <input name="opacity" type="color3" value="1.0, 1.0, 1.0" />
+  </standard_surface>
+  <surfacematerial name="M" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="s" />
+  </surfacematerial>
+</materialx>

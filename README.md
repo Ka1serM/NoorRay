@@ -32,11 +32,16 @@ My personal path tracer for exploring graphics programming and testing out new r
 - **OptiX SDK:** OptiX 9.1 installed at `$HOME/Programs/OptixSDK`, with headers
   under `$HOME/Programs/OptixSDK/include`.
 - **CMake:** Version 3.25 or newer.
-- **Compiler:** GCC/G++ 15 with C++23 support. CUDA compilation also uses G++ 15
-  as its host compiler.
+- **Compiler:** clang/clang++ 22 with C++23 support, passed once as
+  `CMAKE_CXX_COMPILER` (CMake requires it explicitly rather than defaulting).
+  It is also used as the CUDA host compiler automatically.
 - **Python bindings:** `uv` and Python 3.12.
 - **Hydra delegate (optional):** `python3.13-devel` for the vendored USD
   Python headers, and Blender 5.2 installed (see `src/hdnoorray/README.md`).
+- **MaterialX/OSL:** `llvm22-devel`, `clang22-devel`,
+  `OpenImageIO-devel`, `pugixml-devel`, `flex`, and `bison`. NoorRay always
+  builds its vendored OSL 1.15.5 with OptiX/NVPTX support against the same
+  LLVM 22 and CUDA 13 toolchain as NoorRay itself (see `docs/MaterialX.md`).
 
 
 #### Clone the Repository
@@ -74,11 +79,9 @@ and RTX 40-series (`sm_89`) GPUs:
 
 ```bash
 cmake -S . -B build/release \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
   -DNR_CUDA_ROOT=/usr/local/cuda \
   -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
-  -DCMAKE_C_COMPILER=/usr/bin/gcc-15 \
-  -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 \
-  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
   -DPython_EXECUTABLE="$PWD/.venv/bin/python" \
   -DCMAKE_BUILD_TYPE=Release \
   -DNR_CUDA_ARCH='86;89' \
@@ -113,6 +116,7 @@ Build and run the test suite:
 
 ```bash
 cmake -S . -B build/release \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
   -DNR_CUDA_ROOT=/usr/local/cuda \
   -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
   -DNR_BUILD_TESTS=ON
@@ -129,20 +133,18 @@ See `src/hdnoorray/README.md` for full details. Quick build:
 ```bash
 cmake -S . -B build/hdnoorray \
   -DNR_BUILD_HYDRA=ON \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
   -DNR_CUDA_ROOT=/usr/local/cuda \
   -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
-  -DCMAKE_C_COMPILER=/usr/bin/gcc-15 \
-  -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 \
-  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DNR_CUDA_ARCH='86;89' \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build build/hdnoorray --target hdNoorRay -j"$(nproc)"
+cmake --build build/hdnoorray --target hdnoorray -j"$(nproc)"
 ```
 
 This requires `python3.13-devel` for the vendored USD Python headers. The
-plugin is built at `build/hdnoorray/hdnoorray/plugin/hdNoorRay.so` and bundled
-as a Blender extension at `build/hdnoorray/hdnoorray/blender_extension/`.
+plugin is built at `build/hdnoorray/hdnoorray/plugin/libhdnoorray.so` and
+bundled as a Blender extension at `build/hdnoorray/hdnoorray/blender_extension/`.
 
 
 ### Shader Compilation

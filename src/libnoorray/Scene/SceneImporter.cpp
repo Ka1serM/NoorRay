@@ -2,8 +2,16 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <fstream>
+#include <functional>
+#include <map>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#include <tbb/task_arena.h>
 #include "Camera/CameraInstance.h"
 #include "Scene/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
@@ -16,6 +24,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include "Log.h"
+#include "MaterialX/MaterialXCompiler.h"
 #include "MeshInstance.h"
 #include "glm/gtx/matrix_decompose.hpp"
 #include "glm/gtx/norm.hpp"
@@ -26,9 +35,30 @@
 #include "Scene/CoordinateSystem.h"
 #include "Scene/GaussianInstance.h"
 #include "Scene/SceneReader.h"
-#include <functional>
 
 namespace {
+template<class Function>
+void boundedParallelFor(const size_t count, Function&& function)
+{
+    if (count == 0)
+        return;
+    // Mesh preparation is memory-bandwidth and allocation heavy. Four workers
+    // overlap accessor decoding well without allowing one import to consume
+    // the application's complete TBB pool or issue dozens of concurrent
+    // cudaMallocManaged calls.
+    constexpr size_t MaxMeshPreparationWorkers = 4;
+    const int concurrency = static_cast<int>(
+        std::min(count, MaxMeshPreparationWorkers));
+    tbb::task_arena arena(concurrency);
+    arena.execute([&] {
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, 1),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t index = range.begin(); index != range.end(); ++index)
+                    function(index);
+            });
+    });
+}
+
 std::string lowerPath(std::string value)
 {
     std::ranges::transform(value, value.begin(), [](const unsigned char c) {
@@ -51,6 +81,120 @@ std::filesystem::path resolveAssetPath(const std::string& filepath)
         return fallback;
     return direct;
 }
+
+float gltfColorComponent(const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor, const size_t vertex,
+    const size_t component)
+{
+    if (accessor.bufferView < 0
+        || static_cast<size_t>(accessor.bufferView) >= model.bufferViews.size())
+        return component == 3 ? 1.0f : 0.0f;
+    const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
+    if (view.buffer < 0
+        || static_cast<size_t>(view.buffer) >= model.buffers.size())
+        return component == 3 ? 1.0f : 0.0f;
+    const int componentSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+    const int stride = accessor.ByteStride(view);
+    if (componentSize <= 0 || stride <= 0)
+        return component == 3 ? 1.0f : 0.0f;
+    const tinygltf::Buffer& buffer = model.buffers[view.buffer];
+    const size_t offset = view.byteOffset + accessor.byteOffset
+        + vertex * static_cast<size_t>(stride)
+        + component * static_cast<size_t>(componentSize);
+    if (offset + static_cast<size_t>(componentSize) > buffer.data.size())
+        return component == 3 ? 1.0f : 0.0f;
+    const unsigned char* data = buffer.data.data() + offset;
+    switch (accessor.componentType)
+    {
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+        return static_cast<float>(*data) / 255.0f;
+    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+    {
+        uint16_t value{};
+        std::memcpy(&value, data, sizeof(value));
+        return static_cast<float>(value) / 65535.0f;
+    }
+    case TINYGLTF_COMPONENT_TYPE_FLOAT:
+    {
+        float value{};
+        std::memcpy(&value, data, sizeof(value));
+        return value;
+    }
+    default:
+        return component == 3 ? 1.0f : 0.0f;
+    }
+}
+
+glm::vec4 gltfVertexColor(const tinygltf::Model& model,
+    const tinygltf::Accessor& accessor, const size_t vertex)
+{
+    const int components = tinygltf::GetNumComponentsInType(accessor.type);
+    if (components != 3 && components != 4)
+        return glm::vec4(1.0f);
+    return glm::vec4(
+        gltfColorComponent(model, accessor, vertex, 0),
+        gltfColorComponent(model, accessor, vertex, 1),
+        gltfColorComponent(model, accessor, vertex, 2),
+        components == 4
+            ? gltfColorComponent(model, accessor, vertex, 3) : 1.0f);
+}
+
+struct GltfFloatAccessor
+{
+    const unsigned char* data{};
+    size_t stride{};
+    size_t count{};
+    int components{};
+
+    explicit operator bool() const { return data != nullptr; }
+
+    float component(const size_t element, const size_t index) const
+    {
+        float value{};
+        std::memcpy(&value,
+            data + element * stride + index * sizeof(float), sizeof(value));
+        return value;
+    }
+};
+
+GltfFloatAccessor gltfFloatAccessor(const tinygltf::Model& model,
+    const tinygltf::Primitive& primitive, const char* attribute,
+    const int requiredComponents)
+{
+    const auto found = primitive.attributes.find(attribute);
+    if (found == primitive.attributes.end() || found->second < 0
+        || static_cast<size_t>(found->second) >= model.accessors.size())
+        return {};
+    const tinygltf::Accessor& accessor = model.accessors[found->second];
+    if (accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT
+        || accessor.bufferView < 0
+        || static_cast<size_t>(accessor.bufferView) >= model.bufferViews.size())
+        return {};
+    const int components = tinygltf::GetNumComponentsInType(accessor.type);
+    const tinygltf::BufferView& view = model.bufferViews[accessor.bufferView];
+    const int stride = accessor.ByteStride(view);
+    if (components < requiredComponents || stride <= 0 || view.buffer < 0
+        || static_cast<size_t>(view.buffer) >= model.buffers.size())
+        return {};
+    const tinygltf::Buffer& buffer = model.buffers[view.buffer];
+    const size_t offset = view.byteOffset + accessor.byteOffset;
+    const size_t elementBytes =
+        static_cast<size_t>(requiredComponents) * sizeof(float);
+    if (offset > buffer.data.size())
+        return {};
+    const size_t available = buffer.data.size() - offset;
+    if (accessor.count != 0
+        && (elementBytes > available
+            || accessor.count - 1
+                > (available - elementBytes) / static_cast<size_t>(stride)))
+        return {};
+    return {
+        buffer.data.data() + offset,
+        static_cast<size_t>(stride),
+        accessor.count,
+        components,
+    };
+}
 }
 
 void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
@@ -62,6 +206,22 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
     const std::filesystem::path gltfDir = filePath.parent_path();
     const std::string resolvedFilepath = filePath.string();
+
+    // A second import of the same file (e.g. two scene-graph entries
+    // pointing at the same asset) clones the hierarchy this call already
+    // built instead of re-parsing the glTF and re-uploading every mesh and
+    // texture. Cloning shares the underlying MeshAssetRef/TextureRef/etc --
+    // see Scene::cloneHierarchy -- so this is a genuine dedup, not a copy.
+    if (const SceneObjectHandle cached = scene.findImportedFileRoot(resolvedFilepath);
+        cached.isValid())
+    {
+        if (SceneObject* cachedRoot = scene.getObject(cached)) {
+            const auto clone = scene.cloneHierarchy(cachedRoot);
+            scene.setActiveObject(clone->getHandle());
+            return;
+        }
+    }
+
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
     std::string warn, err;
@@ -80,13 +240,17 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     // STEP 1: Import all unique assets (meshes and materials)
 
     // Load Materials
-    std::vector<Material> globalMaterials;
+    std::vector<MaterialAuthoring> globalMaterials;
     // The materials below only carry texture slot indices. Holding a reference
     // per imported texture keeps them alive until Scene::add(Material) takes
     // over their ownership.
     std::vector<TextureRef> importedTextures;
+    // Keyed by (glTF image index, encoding) so two materials that sample the
+    // same source image (a common texture-atlas pattern) upload it once
+    // instead of decoding and uploading a duplicate copy per material.
+    std::map<std::pair<int, int>, TextureRef> imageTextureCache;
     for (const auto& mat : model.materials) {
-        Material material{};
+        MaterialAuthoring material{};
         const auto& pbr = mat.pbrMetallicRoughness;
         material.albedo = glm::make_vec3(pbr.baseColorFactor.data());
         material.metallic = static_cast<float>(pbr.metallicFactor);
@@ -125,12 +289,21 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                  image.uri.find("_linear")   != std::string::npos))
                 encoding = TextureEncoding::Linear8;
 
+            const std::pair<int, int> cacheKey{tex.source, static_cast<int>(encoding)};
+            if (const auto cached = imageTextureCache.find(cacheKey);
+                cached != imageTextureCache.end())
+            {
+                materialIndex = static_cast<int>(cached->second.index());
+                return;
+            }
+
             if (!image.uri.empty()) {
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
                     importedTextures.push_back(
                         scene.add(Texture(texturePath.string(), encoding)));
                     materialIndex = static_cast<int>(importedTextures.back().index());
+                    imageTextureCache[cacheKey] = importedTextures.back();
                 } else {
                     LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
                 }
@@ -141,6 +314,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 importedTextures.push_back(scene.add(Texture(texName,
                     image.image.data(), image.width, image.height, encoding)));
                 materialIndex = static_cast<int>(importedTextures.back().index());
+                imageTextureCache[cacheKey] = importedTextures.back();
             } else {
                 LOG_ERROR("Warning: Embedded texture has no decoded data");
             }
@@ -160,65 +334,213 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     if (globalMaterials.empty())
         globalMaterials.emplace_back(); // Default material
 
-    // Load Meshes
-    std::vector<std::vector<MeshAssetRef>> loadedMeshAssets(model.meshes.size());
-    for (size_t i = 0; i < model.meshes.size(); ++i) {
-        const auto& mesh = model.meshes[i];
-        for (size_t j = 0; j < mesh.primitives.size(); ++j) {
-            const auto& primitive = mesh.primitives[j];
-            std::vector<Vertex> vertices;
-            std::vector<uint32_t> indices;
+    // Phase 1: decode every primitive into its final managed payload. The
+    // tinygltf model is immutable here and each worker owns one output slot,
+    // so no worker mutates Scene or shares writable geometry.
+    struct PrimitiveLocation
+    {
+        size_t meshIndex;
+        size_t primitiveIndex;
+    };
+    struct PreparedPrimitive
+    {
+        MeshGeometry geometry;
+        std::string name;
+        size_t meshIndex{};
+        size_t materialIndex{};
+        bool ready{};
+    };
 
-            const float* positions = nullptr;
-            const float* normals = nullptr;
-            const float* tangents = nullptr;
-            const float* texcoords = nullptr;
-            size_t vertexCount = 0;
+    std::vector<PrimitiveLocation> locations;
+    for (size_t meshIndex = 0; meshIndex < model.meshes.size(); ++meshIndex)
+        for (size_t primitiveIndex = 0;
+            primitiveIndex < model.meshes[meshIndex].primitives.size();
+            ++primitiveIndex)
+            locations.push_back({meshIndex, primitiveIndex});
 
-            auto getBuffer = [&](const char* attribute) -> const float* {
-                const auto it = primitive.attributes.find(attribute);
-                if (it == primitive.attributes.end()) return nullptr;
-                const auto& accessor = model.accessors[it->second];
-                const auto& bufferView = model.bufferViews[accessor.bufferView];
-                const auto& buffer = model.buffers[bufferView.buffer];
-                if (vertexCount == 0) vertexCount = accessor.count;
-                return reinterpret_cast<const float*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-            };
+    const std::string fallbackMeshName = nameFromPath(filepath);
+    std::vector<PreparedPrimitive> prepared(locations.size());
+    boundedParallelFor(locations.size(), [&](const size_t jobIndex) {
+        const PrimitiveLocation location = locations[jobIndex];
+        const tinygltf::Mesh& mesh = model.meshes[location.meshIndex];
+        const tinygltf::Primitive& primitive =
+            mesh.primitives[location.primitiveIndex];
+        PreparedPrimitive& output = prepared[jobIndex];
 
-            positions = getBuffer("POSITION");
-            if (!positions) continue;
-            normals = getBuffer("NORMAL");
-            tangents = getBuffer("TANGENT");
-            texcoords = getBuffer("TEXCOORD_0");
+        // The renderer currently consumes triangles. glTF's default primitive
+        // mode is TRIANGLES when mode is omitted.
+        if (primitive.mode != -1
+            && primitive.mode != TINYGLTF_MODE_TRIANGLES)
+            return;
 
-            vertices.resize(vertexCount);
-            for (size_t v = 0; v < vertexCount; ++v) {
-                vertices[v].position    = nr::coords::toOpenGlVector(glm::make_vec3(&positions[v * 3]), nr::coords::OpenGlSpace);
-                vertices[v].normal      = normals ? normalize(nr::coords::toOpenGlVector(glm::make_vec3(&normals[v * 3]), nr::coords::OpenGlSpace)) : vec3(0, 1, 0);
-                vertices[v].uv          = texcoords ? vec2(texcoords[v * 2], 1.0f - texcoords[v * 2 + 1]) : vec2(0);
-                vertices[v].tangent     = tangents ? normalize(nr::coords::toOpenGlVector(vec3(glm::make_vec3(&tangents[v * 4])), nr::coords::OpenGlSpace)) : vec3(1, 0, 0);
-                vertices[v].tangentSign = tangents ? tangents[v * 4 + 3] : 1.0f;
-            }
+        const GltfFloatAccessor positions =
+            gltfFloatAccessor(model, primitive, "POSITION", 3);
+        const GltfFloatAccessor normals =
+            gltfFloatAccessor(model, primitive, "NORMAL", 3);
+        const GltfFloatAccessor tangents =
+            gltfFloatAccessor(model, primitive, "TANGENT", 4);
+        const GltfFloatAccessor texcoords =
+            gltfFloatAccessor(model, primitive, "TEXCOORD_0", 2);
+        const tinygltf::Accessor* colors = nullptr;
+        if (!positions)
+            return;
+        const size_t vertexCount = positions.count;
+        if (const auto colorIt = primitive.attributes.find("COLOR_0");
+            colorIt != primitive.attributes.end()
+            && colorIt->second >= 0
+            && static_cast<size_t>(colorIt->second) < model.accessors.size()
+            && model.accessors[colorIt->second].count >= vertexCount)
+            colors = &model.accessors[colorIt->second];
 
-            const auto& indexAccessor = model.accessors[primitive.indices];
-            indices.reserve(indexAccessor.count);
-            const auto& indexBufferView = model.bufferViews[indexAccessor.bufferView];
-            const auto& indexBuffer = model.buffers[indexBufferView.buffer];
-            const void* dataPtr = &(indexBuffer.data[indexBufferView.byteOffset + indexAccessor.byteOffset]);
-
-            switch (indexAccessor.componentType) {
-                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:  for (size_t k = 0; k < indexAccessor.count; ++k) indices.push_back(static_cast<const uint8_t*>(dataPtr)[k]); break;
-                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: for (size_t k = 0; k < indexAccessor.count; ++k) indices.push_back(static_cast<const uint16_t*>(dataPtr)[k]); break;
-                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:   for (size_t k = 0; k < indexAccessor.count; ++k) indices.push_back(static_cast<const uint32_t*>(dataPtr)[k]); break;
-                default: continue;
-            }
-
-            int materialID = (primitive.material < 0) ? 0 : primitive.material;
-            std::string meshName = mesh.name.empty() ? (nameFromPath(filepath) + "_mesh" + std::to_string(i) + "_" + std::to_string(j)) : mesh.name;
-
-            loadedMeshAssets[i].push_back(scene.add(MeshAsset(scene, meshName, vertices, indices,
-                std::vector<Face>(indices.size() / 3), std::vector<Material>{globalMaterials[materialID]})));
+        output.geometry.vertices.reserve(vertexCount);
+        for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
+            Vertex vertex{};
+            vertex.position = nr::coords::toOpenGlVector(
+                vec3(positions.component(vertexIndex, 0),
+                    positions.component(vertexIndex, 1),
+                    positions.component(vertexIndex, 2)),
+                nr::coords::OpenGlSpace);
+            vertex.normal = normals && normals.count > vertexIndex
+                ? normalize(nr::coords::toOpenGlVector(
+                    vec3(normals.component(vertexIndex, 0),
+                        normals.component(vertexIndex, 1),
+                        normals.component(vertexIndex, 2)),
+                    nr::coords::OpenGlSpace))
+                : vec3(0, 1, 0);
+            vertex.uv = texcoords && texcoords.count > vertexIndex
+                ? vec2(texcoords.component(vertexIndex, 0),
+                    1.0f - texcoords.component(vertexIndex, 1))
+                : vec2(0);
+            vertex.tangent = tangents && tangents.count > vertexIndex
+                ? normalize(nr::coords::toOpenGlVector(
+                    vec3(tangents.component(vertexIndex, 0),
+                        tangents.component(vertexIndex, 1),
+                        tangents.component(vertexIndex, 2)),
+                    nr::coords::OpenGlSpace))
+                : vec3(1, 0, 0);
+            vertex.tangentSign = tangents && tangents.count > vertexIndex
+                ? tangents.component(vertexIndex, 3) : 1.0f;
+            if (colors)
+                vertex.color = nr::vertex_color::packLinear(
+                    gltfVertexColor(model, *colors, vertexIndex));
+            output.geometry.vertices.push_back(vertex);
         }
+
+        if (primitive.indices < 0) {
+            // Device traversal still expects an explicit index buffer. Fill it
+            // directly in final storage; this is the only remaining work for
+            // a glTF primitive whose source indices are implicit.
+            output.geometry.indices.reserve(vertexCount);
+            for (size_t index = 0; index < vertexCount; ++index)
+                output.geometry.indices.push_back(
+                    static_cast<uint32_t>(index));
+        } else {
+            if (static_cast<size_t>(primitive.indices)
+                >= model.accessors.size())
+                return;
+            const tinygltf::Accessor& indexAccessor =
+                model.accessors[primitive.indices];
+            if (indexAccessor.bufferView < 0
+                || static_cast<size_t>(indexAccessor.bufferView)
+                    >= model.bufferViews.size())
+                return;
+            const tinygltf::BufferView& indexBufferView =
+                model.bufferViews[indexAccessor.bufferView];
+            if (indexBufferView.buffer < 0
+                || static_cast<size_t>(indexBufferView.buffer)
+                    >= model.buffers.size())
+                return;
+            const tinygltf::Buffer& indexBuffer =
+                model.buffers[indexBufferView.buffer];
+            const size_t offset =
+                indexBufferView.byteOffset + indexAccessor.byteOffset;
+            const int componentBytes = tinygltf::GetComponentSizeInBytes(
+                indexAccessor.componentType);
+            const int stride = indexAccessor.ByteStride(indexBufferView);
+            if (offset > indexBuffer.data.size() || componentBytes <= 0
+                || stride < componentBytes)
+                return;
+            const size_t available = indexBuffer.data.size() - offset;
+            if (indexAccessor.count != 0
+                && (static_cast<size_t>(componentBytes) > available
+                    || indexAccessor.count - 1
+                        > (available - static_cast<size_t>(componentBytes))
+                            / static_cast<size_t>(stride)))
+                return;
+            const unsigned char* dataPtr =
+                indexBuffer.data.data() + offset;
+            output.geometry.indices.reserve(indexAccessor.count);
+            for (size_t index = 0; index < indexAccessor.count; ++index) {
+                const unsigned char* source =
+                    dataPtr + index * static_cast<size_t>(stride);
+                switch (indexAccessor.componentType) {
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+                    output.geometry.indices.push_back(
+                        static_cast<uint32_t>(*source));
+                    break;
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+                {
+                    uint16_t value{};
+                    std::memcpy(&value, source, sizeof(value));
+                    output.geometry.indices.push_back(value);
+                    break;
+                }
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+                {
+                    uint32_t value{};
+                    std::memcpy(&value, source, sizeof(value));
+                    output.geometry.indices.push_back(
+                        value);
+                    break;
+                }
+                default:
+                    return;
+                }
+            }
+        }
+
+        output.geometry.faces.reserve(output.geometry.indices.size() / 3);
+        for (size_t face = 0; face < output.geometry.indices.size() / 3; ++face)
+            output.geometry.faces.push_back(Face{0});
+        const int material = primitive.material < 0 ? 0 : primitive.material;
+        output.materialIndex =
+            static_cast<size_t>(material) < globalMaterials.size()
+            ? static_cast<size_t>(material) : 0;
+        output.meshIndex = location.meshIndex;
+        output.name = mesh.name.empty()
+            ? fallbackMeshName + "_mesh"
+                + std::to_string(location.meshIndex) + "_"
+                + std::to_string(location.primitiveIndex)
+            : mesh.name;
+        output.ready = !output.geometry.vertices.empty()
+            && output.geometry.indices.size() >= 3;
+    });
+
+    const size_t preparedMeshCount = static_cast<size_t>(std::ranges::count_if(
+        prepared, [](const PreparedPrimitive& primitive) {
+            return primitive.ready;
+        }));
+    scene.reserveForImport(preparedMeshCount, globalMaterials.size(),
+        model.nodes.size() + preparedMeshCount + 1);
+
+    // Phase 2: publish shared materials and prepared meshes in source order.
+    // Registry and Scene mutation stays on this thread; BLAS builds are
+    // enqueued only after a complete immutable CPU payload exists.
+    std::vector<MaterialRef> globalMaterialRefs;
+    globalMaterialRefs.reserve(globalMaterials.size());
+    for (const MaterialAuthoring& material : globalMaterials)
+        globalMaterialRefs.push_back(
+            scene.addMaterial(nr::materialx::documentFromAuthoring(material)));
+
+    std::vector<std::vector<MeshAssetRef>> loadedMeshAssets(model.meshes.size());
+    for (PreparedPrimitive& primitive : prepared) {
+        if (!primitive.ready)
+            continue;
+        std::vector<MaterialRef> materials;
+        materials.push_back(globalMaterialRefs[primitive.materialIndex]);
+        loadedMeshAssets[primitive.meshIndex].push_back(scene.add(MeshAsset(
+            scene, std::move(primitive.name), std::move(primitive.geometry),
+            std::move(materials))));
     }
 
     // STEP 2: Import nodes with final world transforms
@@ -371,9 +693,14 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 scene.reparentObject(nodeMap[rootNodeIndex]->getHandle(), rootHandle);
 
     scene.setActiveObject(rootHandle);
+    scene.registerImportedFileRoot(resolvedFilepath, rootHandle);
+    loadedMeshAssets.clear();
+    globalMaterialRefs.clear();
+    importedTextures.clear();
+    scene.reclaimUnusedResources();
 }
 
-void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const Material* materialOverride)
+void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const MaterialAuthoring* materialOverride)
 {
     const std::filesystem::path filePath = resolveAssetPath(filepath);
     if (!std::filesystem::exists(filePath))
@@ -382,6 +709,24 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     // The directory containing the .obj file, used for finding .mtl and textures
     const std::filesystem::path objDir = filePath.has_parent_path() ? filePath.parent_path() : ".";
     const std::string resolvedFilepath = filePath.string();
+
+    // Same rationale as ImportGltfScene's cache: a repeat import of the same
+    // path clones the previously built hierarchy instead of re-parsing the
+    // OBJ and re-uploading its meshes/textures. Skipped when a material
+    // override is given, since the override isn't part of the cache key and
+    // could otherwise apply the wrong material to a cloned hierarchy built
+    // under a different (or no) override.
+    if (materialOverride == nullptr) {
+        if (const SceneObjectHandle cached = scene.findImportedFileRoot(resolvedFilepath);
+            cached.isValid())
+        {
+            if (SceneObject* cachedRoot = scene.getObject(cached)) {
+                const auto clone = scene.cloneHierarchy(cachedRoot);
+                scene.setActiveObject(clone->getHandle());
+                return;
+            }
+        }
+    }
 
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
@@ -397,13 +742,17 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
        LOG_ERROR("TinyObjLoader Info/Error: " << err);
 
     // Load Global Materials from the MTL file (if it was found)
-    std::vector<Material> globalMaterials;
+    std::vector<MaterialAuthoring> globalMaterials;
     // The materials below only carry texture slot indices. Holding a reference
     // per imported texture keeps them alive until Scene::add(Material) takes
     // over their ownership.
     std::vector<TextureRef> importedTextures;
+    // Keyed by (resolved texture path, encoding) so multiple materials that
+    // reuse the same texture file upload it once instead of decoding and
+    // uploading a duplicate copy per material.
+    std::map<std::pair<std::string, int>, TextureRef> imageTextureCache;
     for (const auto& mat : mats) {
-        Material material{};
+        MaterialAuthoring material{};
         material.albedo = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
         material.specular = mat.specular[0];
         material.metallic = mat.metallic;
@@ -423,10 +772,20 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                     texname.find("_linear") != std::string::npos)
                     encoding = TextureEncoding::Linear8;
                 const std::filesystem::path texturePath = objDir / texname;
+                const std::string resolvedTexturePath = texturePath.string();
+                const std::pair<std::string, int> cacheKey{
+                    resolvedTexturePath, static_cast<int>(encoding)};
+                if (const auto cached = imageTextureCache.find(cacheKey);
+                    cached != imageTextureCache.end())
+                {
+                    index = static_cast<int>(cached->second.index());
+                    return;
+                }
                 if (std::filesystem::exists(texturePath)) {
                     importedTextures.push_back(
-                        scene.add(Texture(texturePath.string(), encoding)));
+                        scene.add(Texture(resolvedTexturePath, encoding)));
                     index = static_cast<int>(importedTextures.back().index());
+                    imageTextureCache[cacheKey] = importedTextures.back();
                 } else
                    LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
             }
@@ -452,143 +811,217 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
         globalMaterials.emplace_back(); // Adds a default-constructed Material if the .mtl was missing
 
     if (materialOverride != nullptr)
-        for (auto& mat : globalMaterials)
-            mat = *materialOverride;
+        globalMaterials.assign(1, *materialOverride);
 
-    // Create a parent object for this entire OBJ file to keep the scene organized
-    std::string parentName = nameFromPath(filepath);
-    auto parentObject = std::make_unique<SceneObject>(scene, parentName, Transform{});
+    struct PreparedObjShape
+    {
+        MeshGeometry geometry;
+        std::vector<size_t> globalMaterialIndices;
+        std::string name;
+        vec3 center{};
+        bool ready{};
+    };
+
+    // Phase 1: every worker reads immutable tinyobj arrays and writes only its
+    // own final managed payload. Material IDs are kept as indices into the
+    // shared global material table; Scene references are created later.
+    const std::string parentName = nameFromPath(filepath);
+    std::vector<PreparedObjShape> prepared(shapes.size());
+    boundedParallelFor(shapes.size(), [&](const size_t shapeIndex) {
+        const tinyobj::shape_t& shape = shapes[shapeIndex];
+        PreparedObjShape& output = prepared[shapeIndex];
+        if (shape.mesh.indices.empty())
+            return;
+
+        output.geometry.vertices.reserve(shape.mesh.indices.size());
+        output.geometry.indices.reserve(shape.mesh.indices.size());
+        output.geometry.faces.reserve(shape.mesh.num_face_vertices.size());
+
+        std::unordered_map<int, int> materialRemap;
+        auto localMaterialIndex = [&](const int globalMaterialId) {
+            const int sanitized = globalMaterialId < 0
+                || static_cast<size_t>(globalMaterialId)
+                    >= globalMaterials.size()
+                ? 0 : globalMaterialId;
+            if (const auto found = materialRemap.find(sanitized);
+                found != materialRemap.end())
+                return found->second;
+            const int local = static_cast<int>(
+                output.globalMaterialIndices.size());
+            output.globalMaterialIndices.push_back(
+                static_cast<size_t>(sanitized));
+            materialRemap.emplace(sanitized, local);
+            return local;
+        };
+
+        size_t indexOffset = 0;
+        for (size_t faceIndex = 0;
+            faceIndex < shape.mesh.num_face_vertices.size(); ++faceIndex) {
+            const unsigned int vertexCount =
+                shape.mesh.num_face_vertices[faceIndex];
+            if (vertexCount != 3
+                || indexOffset + vertexCount > shape.mesh.indices.size()) {
+                indexOffset += vertexCount;
+                continue;
+            }
+
+            const int sourceMaterial =
+                faceIndex < shape.mesh.material_ids.size()
+                ? shape.mesh.material_ids[faceIndex] : -1;
+            const Face face{localMaterialIndex(sourceMaterial)};
+
+            uint32_t triangleIndices[3];
+            bool validTriangle = true;
+            Vertex triangleVertices[3]{};
+            for (unsigned int corner = 0; corner < 3; ++corner) {
+                const tinyobj::index_t& sourceIndex =
+                    shape.mesh.indices[indexOffset + corner];
+                if (sourceIndex.vertex_index < 0
+                    || static_cast<size_t>(
+                        sourceIndex.vertex_index * 3 + 2)
+                        >= attrib.vertices.size()) {
+                    validTriangle = false;
+                    break;
+                }
+                Vertex& vertex = triangleVertices[corner];
+                vertex.position = nr::coords::toOpenGlVector({
+                    attrib.vertices[3 * sourceIndex.vertex_index],
+                    attrib.vertices[3 * sourceIndex.vertex_index + 1],
+                    attrib.vertices[3 * sourceIndex.vertex_index + 2],
+                }, nr::coords::OpenGlSpace);
+                vertex.normal = vec3(0.0f, 1.0f, 0.0f);
+                if (sourceIndex.normal_index >= 0
+                    && static_cast<size_t>(
+                        sourceIndex.normal_index * 3 + 2)
+                        < attrib.normals.size())
+                    vertex.normal = nr::coords::toOpenGlVector({
+                        attrib.normals[3 * sourceIndex.normal_index],
+                        attrib.normals[3 * sourceIndex.normal_index + 1],
+                        attrib.normals[3 * sourceIndex.normal_index + 2],
+                    }, nr::coords::OpenGlSpace);
+                vertex.uv = vec2(0.0f);
+                if (sourceIndex.texcoord_index >= 0
+                    && static_cast<size_t>(
+                        sourceIndex.texcoord_index * 2 + 1)
+                        < attrib.texcoords.size())
+                    vertex.uv = {
+                        attrib.texcoords[2 * sourceIndex.texcoord_index],
+                        1.0f - attrib.texcoords[
+                            2 * sourceIndex.texcoord_index + 1],
+                    };
+                vertex.tangent = vec3(0.0f);
+                if (static_cast<size_t>(
+                        sourceIndex.vertex_index * 3 + 2)
+                    < attrib.colors.size())
+                    vertex.color = nr::vertex_color::packLinear(glm::vec4(
+                        attrib.colors[3 * sourceIndex.vertex_index],
+                        attrib.colors[3 * sourceIndex.vertex_index + 1],
+                        attrib.colors[3 * sourceIndex.vertex_index + 2],
+                        1.0f));
+            }
+            indexOffset += vertexCount;
+            if (!validTriangle)
+                continue;
+
+            const vec3 edge1 =
+                triangleVertices[1].position - triangleVertices[0].position;
+            const vec3 edge2 =
+                triangleVertices[2].position - triangleVertices[0].position;
+            const vec2 deltaUv1 =
+                triangleVertices[1].uv - triangleVertices[0].uv;
+            const vec2 deltaUv2 =
+                triangleVertices[2].uv - triangleVertices[0].uv;
+            const float determinant =
+                deltaUv1.x * deltaUv2.y - deltaUv2.x * deltaUv1.y;
+            const vec3 tangent = std::fabs(determinant) < 1e-8f
+                ? vec3(1.0f, 0.0f, 0.0f)
+                : (1.0f / determinant)
+                    * (deltaUv2.y * edge1 - deltaUv1.y * edge2);
+
+            for (unsigned int corner = 0; corner < 3; ++corner) {
+                Vertex& vertex = triangleVertices[corner];
+                vertex.tangent += tangent;
+                if (length2(vertex.tangent) > 1e-8f)
+                    vertex.tangent = normalize(vertex.tangent
+                        - vertex.normal
+                            * dot(vertex.normal, vertex.tangent));
+                else {
+                    const vec3 first =
+                        cross(vertex.normal, vec3(0.0f, 0.0f, 1.0f));
+                    const vec3 second =
+                        cross(vertex.normal, vec3(0.0f, 1.0f, 0.0f));
+                    vertex.tangent = normalize(
+                        length2(first) > length2(second) ? first : second);
+                }
+                vertex.tangentSign = 1.0f;
+                triangleIndices[corner] = static_cast<uint32_t>(
+                    output.geometry.vertices.size());
+                output.geometry.vertices.push_back(vertex);
+                output.geometry.indices.push_back(triangleIndices[corner]);
+            }
+            output.geometry.faces.push_back(face);
+        }
+
+        if (output.geometry.vertices.empty())
+            return;
+        vec3 minimum = output.geometry.vertices.front().position;
+        vec3 maximum = minimum;
+        for (const Vertex& vertex : output.geometry.vertices) {
+            minimum = min(minimum, vertex.position);
+            maximum = max(maximum, vertex.position);
+        }
+        output.center = (minimum + maximum) * 0.5f;
+        for (Vertex& vertex : output.geometry.vertices)
+            vertex.position -= output.center;
+        output.name = shape.name.empty()
+            ? parentName + "_shape" : shape.name;
+        output.ready = true;
+    });
+
+    const size_t preparedMeshCount = static_cast<size_t>(std::ranges::count_if(
+        prepared, [](const PreparedObjShape& shape) { return shape.ready; }));
+    scene.reserveForImport(preparedMeshCount, globalMaterials.size(),
+        preparedMeshCount + 1);
+
+    std::vector<MaterialRef> globalMaterialRefs;
+    globalMaterialRefs.reserve(globalMaterials.size());
+    for (const MaterialAuthoring& material : globalMaterials)
+        globalMaterialRefs.push_back(
+            scene.addMaterial(nr::materialx::documentFromAuthoring(material)));
+
+    // Phase 2: publish in OBJ shape order and assemble the hierarchy serially.
+    auto parentObject =
+        std::make_unique<SceneObject>(scene, parentName, Transform{});
     parentObject->setSource("obj", filePath.string());
     const SceneObjectHandle parentHandle = scene.add(std::move(parentObject));
 
-    for (const auto& shape : shapes) {
-        if (shape.mesh.indices.empty())
-            continue; // Skip empty shapes that have no geometry data.
+    for (PreparedObjShape& shape : prepared) {
+        if (!shape.ready)
+            continue;
+        std::vector<MaterialRef> localMaterials;
+        localMaterials.reserve(shape.globalMaterialIndices.size());
+        for (const size_t materialIndex : shape.globalMaterialIndices)
+            localMaterials.push_back(globalMaterialRefs[materialIndex]);
 
-        std::vector<Vertex> vertices;
-        std::vector<uint32_t> indices;
-        std::vector<Face> faces;
-
-        // Collect and remap materials used ONLY by this shape
-        std::unordered_map<int, int> matRemap; // Global material index -> Local material index
-        std::vector<Material> localMaterials;
-
-        // **Robustness Step 2**: Build a local material list for this shape,
-        // safely handling any invalid material IDs from the OBJ data.
-        auto getLocalMaterialIndex = [&](int globalMatId) {
-            // Sanitize: if ID is out of bounds or negative, map it to the first global material (our default).
-            const int sanitizedGlobalId = (globalMatId < 0 || static_cast<size_t>(globalMatId) >= globalMaterials.size()) ? 0 : globalMatId;
-
-            if (const auto it = matRemap.find(sanitizedGlobalId); it != matRemap.end())
-                return it->second;
-
-            int localIndex = static_cast<int>(localMaterials.size());
-            localMaterials.push_back(globalMaterials[sanitizedGlobalId]);
-            matRemap[sanitizedGlobalId] = localIndex;
-            return localIndex;
-        };
-
-        // Load vertex and face data for the current shape
-        size_t indexOffset = 0;
-        for (size_t faceIndex = 0; faceIndex < shape.mesh.num_face_vertices.size(); ++faceIndex) {
-            // Because we enabled triangulation, 'fv' will always be 3.
-            const unsigned int fv = shape.mesh.num_face_vertices[faceIndex];
-
-            Face face{};
-            face.materialIndex = getLocalMaterialIndex(shape.mesh.material_ids[faceIndex]);
-
-            uint32_t triIndices[3];
-            for (unsigned int v = 0; v < fv; ++v) {
-                const auto& idx = shape.mesh.indices[indexOffset + v];
-                Vertex vertex{};
-
-                vertex.position = nr::coords::toOpenGlVector({
-                    attrib.vertices[3 * idx.vertex_index + 0],
-                    attrib.vertices[3 * idx.vertex_index + 1],
-                    attrib.vertices[3 * idx.vertex_index + 2],
-                }, nr::coords::OpenGlSpace);
-
-                // Normal, checking for existence
-                if (idx.normal_index >= 0) {
-                    vertex.normal = nr::coords::toOpenGlVector({
-                        attrib.normals[3 * idx.normal_index + 0],
-                        attrib.normals[3 * idx.normal_index + 1],
-                        attrib.normals[3 * idx.normal_index + 2],
-                    }, nr::coords::OpenGlSpace);
-                } else
-                    vertex.normal = vec3(0.0f, 1.0f, 0.0f); // Default normal
-
-                // UV, checking for existence
-                if (idx.texcoord_index >= 0) {
-                    vertex.uv = vec2(
-                        attrib.texcoords[2 * idx.texcoord_index + 0],
-                        1.0f - attrib.texcoords[2 * idx.texcoord_index + 1] // Flip V coordinate for many formats
-                    );
-                } else
-                    vertex.uv = vec2(0.0f); // Default UV
-
-                vertices.push_back(vertex);
-                triIndices[v] = static_cast<uint32_t>(vertices.size() - 1);
-                indices.push_back(triIndices[v]);
-            }
-
-            // Accumulate tangent data for later averaging
-            Vertex& v0 = vertices[triIndices[0]];
-            Vertex& v1 = vertices[triIndices[1]];
-            Vertex& v2 = vertices[triIndices[2]];
-
-            vec3 edge1 = v1.position - v0.position;
-            vec3 edge2 = v2.position - v0.position;
-            vec2 deltaUV1 = v1.uv - v0.uv;
-            vec2 deltaUV2 = v2.uv - v0.uv;
-
-            float f = deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y;
-            vec3 tangent = (std::fabs(f) < 1e-8f)  ? vec3(1.0f, 0.0f, 0.0f)  : (1.0f / f) * (deltaUV2.y * edge1 - deltaUV1.y * edge2);
-
-            v0.tangent += tangent;
-            v1.tangent += tangent;
-            v2.tangent += tangent;
-
-            faces.push_back(face);
-            indexOffset += fv;
-        }
-
-        // Finalize vertices by normalizing the accumulated tangents
-        for (auto& v : vertices) {
-            if (length2(v.tangent) > 1e-8f) {
-                v.tangent = normalize(v.tangent - v.normal * dot(v.normal, v.tangent));
-            } else {
-                vec3 t1 = cross(v.normal, vec3(0.0, 0.0, 1.0));
-                vec3 t2 = cross(v.normal, vec3(0.0, 1.0, 0.0));
-                v.tangent = normalize((length2(t1) > length2(t2)) ? t1 : t2);
-            }
-            v.tangentSign = 1.0f;
-        }
-
-        // Compute mesh pivot and center the vertex positions
-        vec3 minPos = vertices[0].position;
-        vec3 maxPos = vertices[0].position;
-        for (const auto& v : vertices) {
-            minPos = min(minPos, v.position);
-            maxPos = max(maxPos, v.position);
-        }
-        vec3 center = (minPos + maxPos) * 0.5f;
-
-        for (auto& v : vertices)
-            v.position -= center;
-
-        // Create the final assets and instances for this shape
-        std::string meshName = shape.name.empty() ? (parentName + "_shape") : shape.name;
-        const MeshAssetRef meshAsset = scene.add(MeshAsset(scene, meshName, vertices, indices, faces, localMaterials));
-
+        const std::string instanceName = shape.name;
+        const MeshAssetRef meshAsset = scene.add(MeshAsset(scene,
+            std::move(shape.name), std::move(shape.geometry),
+            std::move(localMaterials)));
         Transform transform;
-        transform.setPosition(center);
-        auto instance = std::make_unique<MeshInstance>(scene, meshName, meshAsset, transform);
-        const SceneObjectHandle instanceHandle = scene.add(std::move(instance));
+        transform.setPosition(shape.center);
+        auto instance = std::make_unique<MeshInstance>(
+            scene, instanceName, meshAsset, transform);
+        const SceneObjectHandle instanceHandle =
+            scene.add(std::move(instance));
         scene.reparentObject(instanceHandle, parentHandle);
     }
 
     scene.setActiveObject(parentHandle);
+    if (materialOverride == nullptr)
+        scene.registerImportedFileRoot(resolvedFilepath, parentHandle);
+    globalMaterialRefs.clear();
+    importedTextures.clear();
+    scene.reclaimUnusedResources();
 }
 
 std::string SceneImporter::nameFromPath(const std::string& path) {

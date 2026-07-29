@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <string>
 #include "CUDA/rstd/Vector.h"
@@ -27,6 +28,13 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
+
+namespace MaterialX_v1_39_4
+{
+class Document;
+using DocumentPtr = std::shared_ptr<Document>;
+}
+namespace MaterialX = MaterialX_v1_39_4;
 
 using glm::ivec2;
 using glm::mat4;
@@ -81,12 +89,26 @@ class Scene {
     // (declared further down), so each holder is declared after its target.
     TextureRegistry textures;
     MaterialRegistry materials;
-    // Textures sampled by each material slot. Materials are plain GPU structs
-    // holding bare texture indices, so the Scene carries their ownership.
-    std::vector<std::vector<TextureRef>> materialTextures;
+    // Scene ownership keeps materials available in the global material list
+    // even when no mesh slot currently references them.
+    std::vector<MaterialRef> materialOwners;
     TextureRef environmentTexture;
     MeshAssetRegistry meshAssets;
     GaussianAssetRegistry gaussianAssets;
+
+    // Per-material MaterialX source file paths. Parallel to the materials
+    // vector: entry i is the .mtlx path for materials[i]. Empty means the
+    // material's document is held in memory (materialxDocuments[i]) instead.
+    std::vector<std::string> materialxSourcePaths;
+    // In-memory MaterialX documents, one per material slot (parallel to the
+    // materials vector). MaterialX XML is only ever parsed to a Document here
+    // (import) or serialized back to XML (export); the document itself is
+    // what lives in the app. Null entries mean the material is either backed
+    // by materialxSourcePaths[i] or is an un-authored slot whose document is
+    // lowered on demand from the default material.
+    std::vector<MaterialX::DocumentPtr> materialxDocuments;
+    uint32_t selectedMaterialSlot{0};
+
     nr::rstd::unique_ptr<Environment> environment;
     RenderSettings renderSettings{};
 
@@ -133,6 +155,13 @@ class Scene {
     std::function<void()> mutationBarrier;
     std::atomic<bool> gpuSyncPending_{false};
 
+    // Resolved file path -> root object of the hierarchy built the first time
+    // SceneImporter imported that path. A repeat import of the same path
+    // clones this hierarchy (see cloneHierarchy) instead of re-parsing the
+    // file and re-uploading its meshes/textures. Keyed by the fully resolved
+    // path so relative-vs-absolute spellings of the same file still collide.
+    std::unordered_map<std::string, SceneObjectHandle> importedFileRoots_;
+
     std::shared_ptr<SceneObject> findObjectPtr(const SceneObject* object) const;
     std::shared_ptr<SceneObject> findObjectPtr(SceneObjectHandle handle) const;
     void activateCamera(const std::shared_ptr<CameraInstance>& camera);
@@ -141,10 +170,8 @@ class Scene {
     void releaseObjectSlot(SceneObjectHandle handle);
     uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
     void rebuildGaussianInstanceCache();
-    void retainMaterialTextures(MaterialHandle handle, const Material& material);
     bool remove(SceneObject* objToRemove);
     void reparent(SceneObject* objectToMove, SceneObject* newParent);
-    std::shared_ptr<SceneObject> cloneHierarchy(const SceneObject* source);
     void notifyGeometryChanged();
 public:
     Scene(Context& context);
@@ -177,9 +204,29 @@ public:
     // memory as soon as the last one is dropped.
     MeshAssetRef add(MeshAsset meshAsset);
     MaterialRef add(Material material);
+    // Adds a native material. Importers that only carry the simple authoring
+    // record lower it to a canonical MaterialX document first
+    // (nr::materialx::documentFromAuthoring) and pass the resulting document
+    // here, so every material compiles through the same MaterialX -> SVM
+    // pipeline as authored graphs. A null document is allowed: it means an
+    // un-authored slot whose document is lowered on demand from the default
+    // material.
+    MaterialRef addMaterial(MaterialX::DocumentPtr material);
+    // Replaces the document of an existing material slot in place, leaving the
+    // slot's compiled program untouched. Used by live-editing paths (Hydra)
+    // that republish a document while a replacement compiles in the background.
+    // A null document clears the slot's authored graph (the default MaterialX
+    // material is lowered on demand).
+    void updateMaterialDocument(MaterialHandle handle, MaterialX::DocumentPtr document);
     GaussianAssetRef add(GaussianAsset gaussianAsset);
     TextureRef add(Texture texture);
     void updateMaterial(MaterialHandle handle, const Material& material);
+    void invalidateMaterial(MaterialHandle handle);
+    // Pre-allocates the registries and dense object arrays used by an import
+    // batch. Call this after parsing/preparing payloads and before publishing
+    // them serially to avoid managed-storage relocation for every asset.
+    void reserveForImport(
+        size_t meshCount, size_t materialCount, size_t objectCount = 0);
 
     // Hierarchy
     bool reparentObject(SceneObjectHandle handle, SceneObjectHandle newParent = {});
@@ -187,6 +234,12 @@ public:
     // Clipboard
     void copyObject(SceneObjectHandle handle);
     void paste();
+    // Deep-copies source and its children, sharing (not duplicating) every
+    // mesh/material/texture/Gaussian resource the originals reference -- the
+    // clones are new SceneObjects/MeshInstances, not new GPU uploads. Used by
+    // paste() and by SceneImporter's file-level import cache to instance a
+    // previously imported file without re-parsing or re-uploading it.
+    std::shared_ptr<SceneObject> cloneHierarchy(const SceneObject* source);
 
     // Lookup
     bool isValid(SceneObjectHandle handle) const;
@@ -197,6 +250,12 @@ public:
     std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
     uint32_t getActiveCryptomatteId(uint32_t selectedGaussianIndex) const;
     MeshAssetHandle findMeshAsset(const std::string& path) const;
+    // Returns the root of a previously imported file's hierarchy (see
+    // importedFileRoots_), or an invalid handle if this path has never been
+    // imported or that hierarchy was since removed.
+    SceneObjectHandle findImportedFileRoot(const std::string& resolvedPath) const;
+    void registerImportedFileRoot(
+        const std::string& resolvedPath, SceneObjectHandle handle);
     MeshAsset* getMeshAsset(MeshAssetHandle handle) { return meshAssets.find(handle); }
     const MeshAsset* getMeshAsset(MeshAssetHandle handle) const { return meshAssets.find(handle); }
     MeshAssetRef getMeshAssetRef(MeshAssetHandle handle) { return {meshAssets, handle}; }
@@ -204,6 +263,8 @@ public:
     nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets.storage(); }
     const nr::rstd::vector<Material>& getMaterials() const { return materials.storage(); }
     nr::rstd::vector<Material>& getMaterials() { return materials.storage(); }
+    const MaterialRegistry& getMaterialRegistry() const { return materials; }
+    MaterialRef getMaterialRef(const MaterialHandle handle) { return {materials, handle}; }
     const Material& getMaterial(MaterialHandle handle) const { return materials[handle]; }
     Material& getMaterial(MaterialHandle handle) { return materials[handle]; }
     // Gaussian assets
@@ -225,6 +286,9 @@ public:
     const std::vector<Texture>& getTextures() const { return textures.storage(); }
     const TextureRegistry& getTextureRegistry() const { return textures; }
     const Texture* getTexture(TextureHandle handle) const { return textures.find(handle); }
+    TextureRef getTextureRef(TextureHandle handle) {
+        return textures.isValid(handle) ? TextureRef(textures, handle) : TextureRef{};
+    }
     // One entry per texture slot; released slots read as empty names.
     std::vector<std::string> getTextureNames() const;
     void setEnvironmentTexture(const TextureRef& texture);
@@ -268,6 +332,13 @@ public:
     // Light registration (called by Scene internals)
     uint32_t registerLight(LightInstance& light);
     void unregisterLight(LightInstance& light);
+
+    const std::vector<std::string>& getMaterialXSourcePaths() const { return materialxSourcePaths; }
+    std::vector<std::string>& getMaterialXSourcePaths() { return materialxSourcePaths; }
+    const std::vector<MaterialX::DocumentPtr>& getMaterialXDocuments() const { return materialxDocuments; }
+    std::vector<MaterialX::DocumentPtr>& getMaterialXDocuments() { return materialxDocuments; }
+    uint32_t getSelectedMaterialSlot() const { return selectedMaterialSlot; }
+    void setSelectedMaterialSlot(const uint32_t slot) { selectedMaterialSlot = slot; }
 
     // Context
     Context& getContext() const { return context; }

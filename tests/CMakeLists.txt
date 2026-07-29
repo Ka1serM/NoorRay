@@ -41,6 +41,15 @@ target_compile_definitions(ply_mesh_loader_test PRIVATE
 target_link_libraries(ply_mesh_loader_test PRIVATE
     tinyply glm Vulkan::Vulkan CUDA::cudart)
 
+add_noorray_test(vertex_color_test unit/scene/VertexColorTest.cpp vertex-color)
+target_link_libraries(vertex_color_test PRIVATE glm)
+
+add_noorray_test(texture_storage_test
+    unit/scene/TextureStorageTest.cpp texture)
+target_link_libraries(texture_storage_test PRIVATE
+    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
+    CUDA::cudart_static)
+
 add_noorray_test(opaque_bsdf_test unit/shading/OpaqueBsdfTest.cpp bsdf)
 target_link_libraries(opaque_bsdf_test PRIVATE glm CUDA::cudart)
 
@@ -49,6 +58,9 @@ target_link_libraries(ggx_bsdf_test PRIVATE glm CUDA::cudart)
 
 add_noorray_test(dielectric_bsdf_test unit/shading/DielectricBsdfTest.cpp bsdf)
 target_link_libraries(dielectric_bsdf_test PRIVATE glm CUDA::cudart)
+
+add_noorray_test(diffuse_lobe_test unit/shading/DiffuseLobeTest.cpp bsdf)
+target_link_libraries(diffuse_lobe_test PRIVATE glm CUDA::cudart)
 
 add_noorray_test(light_sampling_test unit/shading/LightSamplingTest.cpp light)
 target_link_libraries(light_sampling_test PRIVATE glm CUDA::cudart)
@@ -64,8 +76,45 @@ add_noorray_test(imgui_math_input_test
 target_include_directories(imgui_math_input_test PRIVATE "${CMAKE_SOURCE_DIR}/src/app")
 target_link_libraries(imgui_math_input_test PRIVATE imgui)
 
+add_noorray_test(materialx_node_catalog_test
+    "unit/ui/MaterialXNodeCatalogTest.cpp;${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodeCatalog.cpp" ui)
+target_include_directories(materialx_node_catalog_test PRIVATE "${CMAKE_SOURCE_DIR}/src/app")
+target_compile_definitions(materialx_node_catalog_test PRIVATE
+    NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
+target_link_libraries(materialx_node_catalog_test PRIVATE NoorRayMaterialXCompiler)
+
+# Every node class file is listed: they register themselves at start-up and are
+# not referenced from anywhere, so the test only covers what it links.
+add_noorray_test(materialx_graph_node_registry_test
+    "unit/ui/MaterialXGraphNodeRegistryTest.cpp;\
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXGraphNode.cpp;\
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXGraphNodeRegistry.cpp;\
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXImageGraphNode.cpp;\
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXConstantGraphNode.cpp;\
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXShaderGraphNode.cpp;\
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXMathGraphNode.cpp" ui)
+target_include_directories(materialx_graph_node_registry_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/app")
+target_link_libraries(materialx_graph_node_registry_test PRIVATE
+    imgui imnodeflow MaterialXCore)
+
+add_noorray_test(materialx_graph_layout_test
+    "unit/ui/MaterialXGraphLayoutTest.cpp;${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXGraphLayout.cpp" ui)
+target_include_directories(materialx_graph_layout_test PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/app")
+
 add_noorray_test(scene_lifetime_test unit/scene/SceneLifetimeTest.cpp scene)
 target_link_libraries(scene_lifetime_test PRIVATE
+    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
+    CUDA::cudart_static)
+
+add_noorray_test(resource_registry_test
+    unit/scene/ResourceRegistryTest.cpp scene)
+
+add_noorray_test(scene_importer_cache_test unit/scene/SceneImporterCacheTest.cpp scene)
+target_compile_definitions(scene_importer_cache_test PRIVATE
+    TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+target_link_libraries(scene_importer_cache_test PRIVATE
     "$<LINK_GROUP:RESCAN,libnoorray,NoorRayCuda,NoorRayIO,libross>"
     CUDA::cudart_static)
 
@@ -81,3 +130,13 @@ endfunction()
 
 add_noorray_render_test(render_smoke_test e2e/RenderSmokeTest.cpp)
 add_noorray_render_test(white_furnace_test e2e/WhiteFurnaceTest.cpp)
+
+add_noorray_render_test(materialx_fidelity_test e2e/MaterialXFidelityTest.cpp)
+set(MATERIALXVIEW_EXECUTABLE
+    "${CMAKE_BINARY_DIR}/../materialxview/bin/MaterialXView"
+    CACHE FILEPATH "MaterialXView executable used by the C++ fidelity test")
+target_compile_definitions(materialx_fidelity_test PRIVATE
+    TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    MATERIALXVIEW_EXECUTABLE="${MATERIALXVIEW_EXECUTABLE}"
+    MATERIALX_RESOURCE_DIR="${CMAKE_SOURCE_DIR}/external/materialx/resources"
+    MATERIALX_SOURCE_DIR="${CMAKE_SOURCE_DIR}/external/materialx")

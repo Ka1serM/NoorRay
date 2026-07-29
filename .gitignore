@@ -21,3 +21,4 @@ __pycache__/
 *.py[cod]
 /imgui.ini
 /external/blender-usd
+/.cache

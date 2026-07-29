@@ -66,3 +66,9 @@
 [submodule "external/OpenUSD"]
 	path = external/OpenUSD
 	url = https://github.com/PixarAnimationStudios/OpenUSD.git
+[submodule "external/materialx"]
+	path = external/materialx
+	url = https://github.com/AcademySoftwareFoundation/MaterialX.git
+[submodule "external/ImNodeFlow"]
+	path = external/ImNodeFlow
+	url = https://github.com/Fattorino/ImNodeFlow.git

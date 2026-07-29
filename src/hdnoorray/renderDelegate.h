@@ -39,11 +39,25 @@ public:
     HdBprim* CreateFallbackBprim(const TfToken& typeId) override;
     void DestroyBprim(HdBprim* bprim) override;
 
-    void SetRenderSetting(const TfToken& key, const VtValue& value) override;
     void CommitResources(HdChangeTracker* tracker) override;
+    void SetRenderSetting(
+        const TfToken& key, const VtValue& value) override;
     HdRenderSettingDescriptorList GetRenderSettingDescriptors() const override;
     HdAovDescriptor GetDefaultAovDescriptor(const TfToken& name) const override;
     VtDictionary GetRenderStats() const override;
+    bool IsParallelSyncEnabled(const TfToken& primType) const override;
+
+    // Without this, Hydra hands HdNoorRayMaterial::Sync the *auto-derived*
+    // UsdPreviewSurface fallback USD's own material-adapter machinery
+    // synthesizes for any consumer that doesn't ask for the real MaterialX
+    // network (see docs/MaterialX.md's "Defects fixed" section) -- never
+    // the actual node graph, no matter what Blender's own
+    // bl_use_materialx export produced. "mtlx" is the standard token
+    // Hydra/USD render delegates use to request that network (matching
+    // Storm, RenderMan's HdPrman, Arnold's HdArnold, ...); the trailing
+    // empty token keeps the universal/preview network as a fallback for
+    // materials that have no MaterialX network at all.
+    TfTokenVector GetMaterialRenderContexts() const override;
 
 private:
     std::unique_ptr<HdNoorRayRenderParam> renderParam_;

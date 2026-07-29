@@ -2,8 +2,6 @@
 
 #include "light.h"
 
-#include <string>
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 class HDNOORRAY_API HdNoorRayDomeLight final : public HdNoorRayLight
@@ -16,7 +14,6 @@ public:
     void Finalize(HdRenderParam*) override;
 
 private:
-    std::string texturePath_;
     bool active_{};
 };
 

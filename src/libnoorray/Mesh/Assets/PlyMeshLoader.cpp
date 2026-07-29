@@ -40,6 +40,17 @@ double numberAt(const PlyData& data, const size_t index)
     throw std::runtime_error("PLY property has an invalid numeric type");
 }
 
+float colorAt(const PlyData& data, const size_t index)
+{
+    const double value = numberAt(data, index);
+    switch (data.t) {
+    case Type::UINT8: return static_cast<float>(value / 255.0);
+    case Type::UINT16: return static_cast<float>(value / 65535.0);
+    case Type::UINT32: return static_cast<float>(value / 4294967295.0);
+    default: return static_cast<float>(value);
+    }
+}
+
 bool hasProperties(const tinyply::PlyElement& element, const std::initializer_list<const char*> names)
 {
     for (const char* name : names) {
@@ -132,6 +143,17 @@ PlyMeshData PlyMeshLoader::Load(const std::filesystem::path& path)
     std::vector<std::string> uvNames;
     if (hasProperties(*vertexElement, {"u", "v"})) uvNames = {"u", "v"};
     else if (hasProperties(*vertexElement, {"s", "t"})) uvNames = {"s", "t"};
+    std::vector<std::string> colorNames;
+    if (hasProperties(*vertexElement, {"red", "green", "blue"}))
+        colorNames = {"red", "green", "blue"};
+    else if (hasProperties(*vertexElement, {"r", "g", "b"}))
+        colorNames = {"r", "g", "b"};
+    if (!colorNames.empty()) {
+        const char* alphaName = hasProperties(*vertexElement, {"alpha"})
+            ? "alpha" : hasProperties(*vertexElement, {"a"}) ? "a" : nullptr;
+        if (alphaName)
+            colorNames.emplace_back(alphaName);
+    }
 
     const std::string faceProperty = hasProperties(*faceElement, {"vertex_indices"})
         ? "vertex_indices" : hasProperties(*faceElement, {"vertex_index"})
@@ -145,6 +167,8 @@ PlyMeshData PlyMeshLoader::Load(const std::filesystem::path& path)
         ? file.request_properties_from_element("vertex", {"nx", "ny", "nz"}) : nullptr;
     const std::shared_ptr<PlyData> uvs = !uvNames.empty()
         ? file.request_properties_from_element("vertex", uvNames) : nullptr;
+    const std::shared_ptr<PlyData> colors = !colorNames.empty()
+        ? file.request_properties_from_element("vertex", colorNames) : nullptr;
     const std::shared_ptr<PlyData> faces =
         file.request_properties_from_element("face", {faceProperty}, 0);
     file.read(stream);
@@ -160,6 +184,14 @@ PlyMeshData PlyMeshLoader::Load(const std::filesystem::path& path)
                 numberAt(*normals, i * 3), numberAt(*normals, i * 3 + 1), numberAt(*normals, i * 3 + 2));
         if (uvs)
             vertex.uv = glm::vec2(numberAt(*uvs, i * 2), 1.0 - numberAt(*uvs, i * 2 + 1));
+        if (colors) {
+            const size_t channels = colorNames.size();
+            vertex.color = nr::vertex_color::packSrgb(glm::vec4(
+                colorAt(*colors, i * channels),
+                colorAt(*colors, i * channels + 1),
+                colorAt(*colors, i * channels + 2),
+                channels == 4 ? colorAt(*colors, i * channels + 3) : 1.0f));
+        }
     }
 
     const size_t scalarSize = tinyply::PropertyTable.at(faces->t).stride;

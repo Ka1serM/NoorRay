@@ -21,24 +21,26 @@ automatically vendors the USD SDK from Blender's dependency package when
   `pyconfig.h`; the rest are pulled from the system's Python 3.13
 - NVIDIA CUDA Toolkit 13.x at `/usr/local/cuda`
 - OptiX 9.1 at `$HOME/Programs/OptixSDK`
-- GCC/G++ 15 with C++23 support
+- clang/clang++ 22 with C++23 support, passed as `CMAKE_CXX_COMPILER` (also
+  used as the CUDA host compiler automatically)
 - Vulkan SDK (set `VULKAN_SDK`)
+- MaterialX ingestion (always enabled): see the root
+  `README.md`'s MaterialX/OSL prerequisite; OSL uses LLVM/clang 22 and the
+  same CUDA 13 toolkit as NoorRay
 
 ## Build
 
 ```sh
 cmake -S . -B build/hdnoorray \
   -DNR_BUILD_HYDRA=ON \
+  -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
   -DNR_CUDA_ROOT=/usr/local/cuda \
   -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
-  -DCMAKE_C_COMPILER=/usr/bin/gcc-15 \
-  -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 \
-  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-15 \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DNR_CUDA_ARCH='86;89' \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-cmake --build build/hdnoorray --target hdNoorRay -j"$(nproc)"
+cmake --build build/hdnoorray --target hdnoorray -j"$(nproc)"
 ```
 
 The vendored USD SDK is automatically fetched from Blender's
@@ -59,7 +61,23 @@ Restart Blender and select **NoorRay** from the render-engine dropdown.
 
 ## Status
 
-The first viewport implementation supports polygon meshes (fan-triangulated),
-object transforms, perspective/orthographic cameras, a default diffuse
-material, and color/depth AOVs. Material networks, authored normals/UVs,
-textures, lights, and Hydra instancing remain follow-up work.
+The Blender delegate supports polygon meshes and instancing, generated or
+authored normals/UVs, MaterialX surface graphs and textures, analytic and dome
+lights, progressive viewport rendering, offline Combined output, and NoorRay's
+camera and Gaussian-splat extensions.
+
+## Texture transport
+
+Hydra gives render delegates asset paths, not Blender `ImBuf` pointers.
+hdNoorRay opens those assets through OpenUSD Hio and copies the decoded pixels
+straight into NoorRay-owned memory. Loads are shared for one Hydra sync batch;
+materials and the environment then retain only the textures they actually use.
+This batch lifetime is important because Blender can rewrite a generated image
+at the same cache path during interactive edits.
+
+External image files that Hio supports are passed through at their existing
+path. Blender itself writes generated images, packed images, and formats it must
+convert to a session cache before building the Hydra material network. Avoiding
+that upstream cache would require a Blender image-memory/resolver hook; the
+public `HydraRenderEngine` interface currently exposes only filename-based
+assets.

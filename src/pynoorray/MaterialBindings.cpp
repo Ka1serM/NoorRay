@@ -8,14 +8,8 @@ void bindMaterial(nb::module_& module)
 {
     nb::class_<Material>(module, "Material")
         .def(nb::init<>())
-        .def_rw("albedo", &Material::albedo)
-        .def_rw("specular", &Material::specular)
-        .def_rw("metallic", &Material::metallic)
-        .def_rw("roughness", &Material::roughness)
-        .def_rw("sellmeier", &Material::sellmeier)
-        .def_rw("transmission_color", &Material::transmissionColor)
-        .def_rw("transmission", &Material::transmission)
-        .def_rw("emission", &Material::emission)
-        .def_rw("emission_strength", &Material::emissionStrength)
-        .def_rw("opacity", &Material::opacity);
+        .def_rw("svm_bytecode_offset", &Material::svmBytecodeOffset)
+        .def_rw("svm_bytecode_length", &Material::svmBytecodeLength)
+        .def_rw("svm_texture_offset", &Material::svmTextureOffset)
+        .def_rw("svm_texture_count", &Material::svmTextureCount);
 }

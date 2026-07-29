@@ -36,6 +36,82 @@ nr::cuda::UniqueTexture nr::cuda::UniqueTexture::uploadFloat4(
     description.mipmapFilterMode = filterMode;
 
     NR_GPU_CHECK(cudaCreateTextureObject(&result.object_, &resource, &description, nullptr));
+    cudaTextureDesc nearest = description;
+    nearest.filterMode = cudaFilterModePoint;
+    nearest.mipmapFilterMode = cudaFilterModePoint;
+    NR_GPU_CHECK(cudaCreateTextureObject(&result.nearestObject_, &resource, &nearest, nullptr));
+    return result;
+}
+
+nr::cuda::UniqueTexture nr::cuda::UniqueTexture::uploadNormalizedUInt8x4(
+    const uint8_t* pixels,
+    const int width,
+    const int height,
+    const cudaStream_t stream,
+    const bool srgb)
+{
+    UniqueTexture result;
+    const cudaChannelFormatDesc format = cudaCreateChannelDesc<uchar4>();
+    NR_GPU_CHECK(cudaMallocArray(&result.array_, &format, width, height));
+    NR_GPU_CHECK(cudaMemcpy2DToArrayAsync(
+        result.array_, 0, 0, pixels, width * sizeof(uchar4),
+        width * sizeof(uchar4), height, cudaMemcpyHostToDevice, stream));
+
+    cudaResourceDesc resource{};
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = result.array_;
+
+    cudaTextureDesc description{};
+    description.addressMode[0] = cudaAddressModeWrap;
+    description.addressMode[1] = cudaAddressModeWrap;
+    description.filterMode = cudaFilterModeLinear;
+    description.readMode = cudaReadModeNormalizedFloat;
+    description.sRGB = srgb ? 1 : 0;
+    description.normalizedCoords = 1;
+    description.mipmapFilterMode = cudaFilterModeLinear;
+
+    NR_GPU_CHECK(cudaCreateTextureObject(
+        &result.object_, &resource, &description, nullptr));
+    cudaTextureDesc nearest = description;
+    nearest.filterMode = cudaFilterModePoint;
+    nearest.mipmapFilterMode = cudaFilterModePoint;
+    NR_GPU_CHECK(cudaCreateTextureObject(&result.nearestObject_, &resource, &nearest, nullptr));
+    return result;
+}
+
+nr::cuda::UniqueTexture nr::cuda::UniqueTexture::uploadHalf4(
+    const uint16_t* pixels,
+    const int width,
+    const int height,
+    const cudaStream_t stream)
+{
+    UniqueTexture result;
+    const cudaChannelFormatDesc format = cudaCreateChannelDescHalf4();
+    NR_GPU_CHECK(cudaMallocArray(&result.array_, &format, width, height));
+    NR_GPU_CHECK(cudaMemcpy2DToArrayAsync(
+        result.array_, 0, 0, pixels, width * 4 * sizeof(uint16_t),
+        width * 4 * sizeof(uint16_t), height, cudaMemcpyHostToDevice, stream));
+
+    cudaResourceDesc resource{};
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = result.array_;
+
+    cudaTextureDesc description{};
+    description.addressMode[0] = cudaAddressModeWrap;
+    description.addressMode[1] = cudaAddressModeWrap;
+    description.filterMode = cudaFilterModeLinear;
+    // Half channels are converted to float by tex2D<float4> while preserving
+    // their full HDR range; normalized integer read mode is not applicable.
+    description.readMode = cudaReadModeElementType;
+    description.normalizedCoords = 1;
+    description.mipmapFilterMode = cudaFilterModeLinear;
+
+    NR_GPU_CHECK(cudaCreateTextureObject(
+        &result.object_, &resource, &description, nullptr));
+    cudaTextureDesc nearest = description;
+    nearest.filterMode = cudaFilterModePoint;
+    nearest.mipmapFilterMode = cudaFilterModePoint;
+    NR_GPU_CHECK(cudaCreateTextureObject(&result.nearestObject_, &resource, &nearest, nullptr));
     return result;
 }
 

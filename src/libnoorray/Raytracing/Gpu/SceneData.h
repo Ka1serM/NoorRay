@@ -6,8 +6,10 @@
 #include <cuda_fp16.h>
 
 #include "CUDA/Unique/Texture.h"
+#include "SVM/SvmTypes.h"
 #include "Raytracing/Gpu/Output.h"
 #include "Shading/EnergyLut.h"
+#include "Shading/Material.h"
 #include "Shading/SphericalHarmonics.h"
 #include "Raytracing/Gpu/Types.h"
 #include "Scene/GpuInstance.h"
@@ -42,6 +44,8 @@ struct GpuSceneData
     const DirectionalLight* directionalLights{};
     const AnalyticLightAliasEntry* analyticLightAliases{};
     const nr::cuda::UniqueTexture* textures{};
+    const std::uint32_t* svmWords{};
+    const std::uint32_t* svmTextureIndices{};
     TlasHandle tlasHandle{};
     RenderSettings renderSettings{};
     const Environment* environment{};

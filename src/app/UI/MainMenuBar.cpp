@@ -11,6 +11,7 @@
 #include "Scene/SceneWriter.h"
 #include <memory>
 #include <filesystem>
+#include <fstream>
 
 #include "ImGuiManager.h"
 
@@ -29,7 +30,7 @@ void MainMenuBar::renderUi() {
     }
 }
 
-void MainMenuBar::renderAddMenu() const {
+void MainMenuBar::renderAddMenu() {
     if (ImGui::BeginMenu("Add")) {
         if (ImGui::BeginMenu("Primitives")) {
             if (ImGui::MenuItem("Cube")) {
@@ -83,12 +84,41 @@ void MainMenuBar::renderAddMenu() const {
     }
 }
 
+void MainMenuBar::handleMaterialXImport(const std::string& filePath)
+{
+    if (filePath.empty())
+        return;
+    try {
+        const std::filesystem::path absolute = std::filesystem::absolute(filePath);
+        if (!std::filesystem::is_regular_file(absolute))
+            throw std::runtime_error("MaterialX file not found: " + filePath);
+        const MaterialRef material = scene.addMaterial(MaterialX::DocumentPtr{});
+        auto& paths = scene.getMaterialXSourcePaths();
+        auto& documents = scene.getMaterialXDocuments();
+        if (paths.size() <= material.index()) paths.resize(material.index() + 1);
+        if (documents.size() <= material.index()) documents.resize(material.index() + 1);
+        // The path is the source of truth for a disk-backed material: its XML
+        // is read at compile time (import), never retained in memory.
+        paths[material.index()] = absolute.string();
+        documents[material.index()] = nullptr;
+        scene.invalidateMaterial(material.handle());
+    } catch (const std::exception& error) {
+        LOG_ERROR("MaterialX import failed: " << error.what());
+    }
+}
+
 void MainMenuBar::handleFileImport(const std::string& filePath)
 {
     if (filePath.empty())
         return;
 
-    if (std::filesystem::path(filePath).extension() == ".pbrt") {
+    const auto extension = std::filesystem::path(filePath).extension().string();
+    if (extension == ".mtx" || extension == ".mtlx") {
+        handleMaterialXImport(filePath);
+        return;
+    }
+
+    if (extension == ".pbrt") {
         openScene(filePath);
         return;
     }
@@ -157,7 +187,7 @@ void MainMenuBar::renderFileMenu() {
 
     if (ImGui::BeginMenu("File"))
     {
-        const bool dialogOpen = static_cast<bool>(openDialog)
+            const bool dialogOpen = static_cast<bool>(openDialog)
             || static_cast<bool>(sceneOpenDialog)
             || static_cast<bool>(sceneSaveDialog);
 
@@ -189,11 +219,13 @@ void MainMenuBar::renderFileMenu() {
                 ".",
                 std::vector<std::string>{
                     "Supported Assets",
-                    "*.obj *.gltf *.glb *.ply *.compressed.ply *.splat *.ksplat *.spz *.sog *.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
+                    "*.obj *.gltf *.glb *.mtx *.mtlx *.ply *.compressed.ply *.splat *.ksplat *.spz *.sog *.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
                     "Gaussian Splats",
                     "*.ply *.compressed.ply *.splat *.ksplat *.spz *.sog",
                     "Meshes",
                     "*.obj *.gltf *.glb",
+                    "MaterialX",
+                    "*.mtx *.mtlx",
                     "Images",
                     "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
                     "All Files",

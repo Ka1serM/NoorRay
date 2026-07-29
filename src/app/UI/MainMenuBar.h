@@ -14,12 +14,14 @@ public:
     MainMenuBar(std::string name, Context& context, Scene& scene,
         ImGuiManager& manager, std::string currentScenePath = {});
     void renderUi() override;
+    const std::string& getCurrentScenePath() const { return currentScenePath; }
 
 private:
     void renderFileMenu();
     void renderViewMenu() const;
-    void renderAddMenu() const;
+    void renderAddMenu();
     void handleFileImport(const std::string& filePath);
+    void handleMaterialXImport(const std::string& filePath);
     void openScene(const std::string& filePath);
     void saveScene(const std::string& filePath);
 

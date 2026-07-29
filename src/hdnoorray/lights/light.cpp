@@ -158,7 +158,6 @@ void HdNoorRayAnalyticLight::Sync(
     Configure(delegate, hydraTransform, *light, intensity);
     light->setPhotometry(LightColor(delegate, GetId()), intensity);
     light->commitLightChanges();
-    param.MarkSceneDirty();
     *dirtyBits = Clean;
 }
 
@@ -169,7 +168,6 @@ void HdNoorRayAnalyticLight::Finalize(HdRenderParam* renderParam)
     if (param.session.scene.removeObject(object_)) {
         object_ = {};
         lightType_ = -1;
-        param.MarkSceneDirty();
     }
 }
 

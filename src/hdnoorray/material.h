@@ -4,12 +4,23 @@
 
 #include <pxr/imaging/hd/material.h>
 
-#include <vector>
+#include <cstdint>
+#include <memory>
 
-#include "Scene/SceneResources.h"
-#include "Shading/Material.h"
+namespace MaterialX_v1_39_4
+{
+class Document;
+using DocumentPtr = std::shared_ptr<Document>;
+}
+namespace MaterialX = MaterialX_v1_39_4;
 
 PXR_NAMESPACE_OPEN_SCOPE
+
+// Shared native grey fallback document (open_pbr_surface, albedo 0.8,
+// roughness 0.5), used by every path that needs a visible material where none
+// is authored. Static storage is immutable after first construction; callers
+// must never mutate it (setDataLibrary from a compile is idempotent).
+const MaterialX::DocumentPtr& GetSharedNativeFallbackMaterial();
 
 class HDNOORRAY_API HdNoorRayMaterial final : public HdMaterial
 {
@@ -20,13 +31,13 @@ public:
     void Finalize(HdRenderParam*) override;
     HdDirtyBits GetInitialDirtyBitsMask() const override;
 
-    const Material& GetMaterial() const { return material_; }
-
 private:
-    Material material_;
-    // The material struct stores bare texture slot indices, so the prim holds
-    // the ownership of the textures it samples for as long as it exists.
-    std::vector<TextureRef> textures_;
+    // A material Sprim can be dirtied for reasons unrelated to its custom
+    // XML transport setting. Remember the last queued immutable snapshot so
+    // an identical document never gets parsed or compiled twice.
+    bool usingCustomDocument_{};
+    uint64_t customDocumentHash_{};
+    uint64_t customDocumentRevision_{};
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

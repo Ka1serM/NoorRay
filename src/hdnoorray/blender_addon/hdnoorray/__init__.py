@@ -11,6 +11,12 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, Po
 from bpy.types import Camera, Operator, Panel, PropertyGroup
 from bl_ui import properties_data_light, properties_output, properties_render, properties_world
 
+from .materialx_sync import (
+    MaterialXRenderSettingsSync,
+    register_handlers as _register_materialx_handlers,
+    unregister_handlers as _unregister_materialx_handlers,
+)
+
 MAGIC = b"GSPLAT\x00"
 PROXY_SIZE = 1.0e-5
 
@@ -160,8 +166,46 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
 
     bl_use_preview = True
     bl_use_gpu_context = True
+    # NoorRay translates Blender's evaluated node trees itself and transports
+    # compact documents as render settings.  Disabling Blender's exporter
+    # avoids building a second, slower and less compatible MaterialX graph.
     bl_use_materialx = False
     bl_delegate_id = "HdNoorRayRendererPlugin"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._materialx_sync = MaterialXRenderSettingsSync()
+        self._settings_depsgraph = None
+
+    def _engine_update(self, engine_type, depsgraph, context):
+        import _bpy_hydra
+
+        if not self.engine_ptr:
+            self.engine_ptr = _bpy_hydra.engine_create(
+                self, engine_type, self.bl_delegate_id)
+        if not self.engine_ptr:
+            return
+
+        # Blender's base HydraRenderEngine applies settings after
+        # engine_update().  Material documents must arrive first so the
+        # material Sprim's initial Sync can consume them without forcing a
+        # redundant second scene update.
+        self._settings_depsgraph = depsgraph
+        try:
+            render_settings = self.get_render_settings(engine_type)
+        finally:
+            self._settings_depsgraph = None
+        for key, value in render_settings.items():
+            _bpy_hydra.engine_set_render_setting(self.engine_ptr, key, value)
+        _bpy_hydra.engine_update(self.engine_ptr, depsgraph, context)
+
+    def update(self, data, depsgraph):
+        del data
+        self._engine_update(
+            "PREVIEW" if self.is_preview else "FINAL", depsgraph, None)
+
+    def view_update(self, context, depsgraph):
+        self._engine_update("VIEWPORT", depsgraph, context)
 
     def get_render_settings(self, engine_type):
         # The delegate hands Blender scene-linear data and leaves display
@@ -186,6 +230,10 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             "gaussianProxyOverdrawVisualization": int(settings.gaussian_proxy_overdraw),
             "gaussianRenderSphericalHarmonics": int(settings.gaussian_sh_degree),
         }
+        depsgraph = self._settings_depsgraph
+        if depsgraph is not None:
+            scene_eval = getattr(depsgraph, "scene_eval", scene)
+            result.update(self._materialx_sync.collect(depsgraph, scene_eval))
 
         # Per-camera settings
         cam = bpy.context.scene.camera
@@ -643,12 +691,14 @@ def register():
     bpy.types.Camera.hdnoorray = PointerProperty(type=NoorRayCameraSettings)
     bpy.types.VIEW3D_MT_add.append(_add_menu_entry)
     _set_panel_compatibility(True)
+    _register_materialx_handlers()
     bpy.app.handlers.load_post.append(_on_load_post)
     _restore_forced_view_transform()
 
 
 def unregister():
     _set_panel_compatibility(False)
+    _unregister_materialx_handlers()
     if _on_load_post in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_on_load_post)
     bpy.types.VIEW3D_MT_add.remove(_add_menu_entry)

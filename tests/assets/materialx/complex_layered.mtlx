@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <nodegraph name="NG_layered">
+    <input name="scale" type="float" value="5.0" />
+    <input name="low" type="color3" value="0.02, 0.08, 0.2" />
+    <input name="high" type="color3" value="0.8, 0.25, 0.03" />
+    <position name="position" type="vector3">
+      <input name="space" type="string" value="object" />
+    </position>
+    <multiply name="scaled_position" type="vector3">
+      <input name="in1" type="vector3" nodename="position" />
+      <input name="in2" type="float" interfacename="scale" />
+    </multiply>
+    <noise3d name="noise" type="float">
+      <input name="position" type="vector3" nodename="scaled_position" />
+      <input name="amplitude" type="float" value="0.5" />
+      <input name="pivot" type="float" value="0.5" />
+    </noise3d>
+    <mix name="layer_mix" type="color3">
+      <input name="bg" type="color3" interfacename="low" />
+      <input name="fg" type="color3" interfacename="high" />
+      <input name="mix" type="float" nodename="noise" />
+    </mix>
+    <output name="base_color" type="color3" nodename="layer_mix" />
+    <output name="roughness" type="float" nodename="noise" />
+  </nodegraph>
+  <standard_surface name="layered_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_layered" output="base_color" />
+    <input name="metalness" type="float" value="0.15" />
+    <input name="specular" type="float" value="1.0" />
+    <input name="specular_roughness" type="float" nodegraph="NG_layered" output="roughness" />
+    <input name="specular_IOR" type="float" value="1.5" />
+    <input name="opacity" type="color3" value="1.0, 1.0, 1.0" />
+  </standard_surface>
+  <surfacematerial name="LayeredMaterial" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="layered_surface" />
+  </surfacematerial>
+</materialx>

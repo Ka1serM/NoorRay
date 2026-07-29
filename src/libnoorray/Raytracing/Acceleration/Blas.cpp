@@ -6,6 +6,16 @@
 #include <optix_stubs.h>
 
 #include "CUDA/Checks.h"
+namespace
+{
+// SVM selects the material from the face record in Geometry.h.  The OptiX
+// hitgroup is therefore independent of material slots: every triangle uses
+// the one shared mesh hitgroup record.
+void setMaterialRouting(OptixBuildInput& buildInput)
+{
+    buildInput.triangleArray.numSbtRecords = 1;
+}
+}
 
 Blas::Blas(Blas&& other) noexcept
     : handle(std::exchange(other.handle, {})),
@@ -39,7 +49,10 @@ void Blas::build(
     const uint32_t vertexCount,
     const uint32_t vertexStride,
     const uint32_t* indices,
-    const uint32_t triangleCount)
+    const uint32_t triangleCount,
+    const int* materialIndices,
+    const uint32_t materialIndexStride,
+    const uint32_t materialSlotCount)
 {
     reset();
 
@@ -54,9 +67,9 @@ void Blas::build(
     buildInput.triangleArray.indexStrideInBytes = sizeof(uint32_t) * 3;
     buildInput.triangleArray.numIndexTriplets = triangleCount;
     buildInput.triangleArray.indexBuffer = reinterpret_cast<CUdeviceptr>(indices);
-    static constexpr unsigned int geometryFlags = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT;
-    buildInput.triangleArray.flags = &geometryFlags;
-    buildInput.triangleArray.numSbtRecords = 1;
+    static constexpr unsigned int geometryFlags[] = {OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT};
+    buildInput.triangleArray.flags = geometryFlags;
+    setMaterialRouting(buildInput);
 
     OptixAccelBuildOptions options{};
     options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE
@@ -86,12 +99,16 @@ void Blas::refit(
     const uint32_t vertexCount,
     const uint32_t vertexStride,
     const uint32_t* indices,
-    const uint32_t triangleCount)
+    const uint32_t triangleCount,
+    const int* materialIndices,
+    const uint32_t materialIndexStride,
+    const uint32_t materialSlotCount)
 {
     if (handle == 0 || vertexCount != vertexCount_ || triangleCount != triangleCount_
         || vertexStride != vertexStride_)
     {
-        build(context, stream, vertices, vertexCount, vertexStride, indices, triangleCount);
+        build(context, stream, vertices, vertexCount, vertexStride, indices, triangleCount,
+            materialIndices, materialIndexStride, materialSlotCount);
         return;
     }
 
@@ -108,9 +125,9 @@ void Blas::refit(
     buildInput.triangleArray.indexStrideInBytes = sizeof(uint32_t) * 3;
     buildInput.triangleArray.numIndexTriplets = triangleCount;
     buildInput.triangleArray.indexBuffer = reinterpret_cast<CUdeviceptr>(indices);
-    static constexpr unsigned int geometryFlags = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT;
-    buildInput.triangleArray.flags = &geometryFlags;
-    buildInput.triangleArray.numSbtRecords = 1;
+    static constexpr unsigned int geometryFlags[] = {OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT};
+    buildInput.triangleArray.flags = geometryFlags;
+    setMaterialRouting(buildInput);
 
     OptixAccelBuildOptions options{};
     options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE

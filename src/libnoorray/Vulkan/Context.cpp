@@ -17,10 +17,27 @@
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
+// OptiX reports per-entry-function register counts and pipeline statistics at
+// callback level 4. That output is far too noisy for normal rendering, so it
+// stays opt-in through NR_OPTIX_LOG_LEVEL for shader performance work.
+static unsigned int optixLogLevel()
+{
+    static const unsigned int level = [] {
+        const char* requested = std::getenv("NR_OPTIX_LOG_LEVEL");
+        if (requested == nullptr)
+            return 3u;
+        const int parsed = std::atoi(requested);
+        return static_cast<unsigned int>(std::clamp(parsed, 0, 4));
+    }();
+    return level;
+}
+
 static void optixLogCallback(unsigned int level, const char* tag, const char* message, void*)
 {
     if (level <= 2)
         LOG_ERROR("OptiX[" << tag << "] " << message);
+    else if (level <= optixLogLevel())
+        LOG_INFO("OptiX[" << tag << "] " << message);
 }
 
 static int selectCudaDeviceForVulkan(const vk::PhysicalDevice physicalDevice)

@@ -24,6 +24,9 @@
 
 #include <pxr/base/gf/vec4f.h>
 
+#include <string_view>
+#include <vector>
+
 #if PXR_VERSION < 2508 || PXR_VERSION > 2603
 #error "hdNoorRay supports the OpenUSD 25.08 and 26.03 ABIs used by Blender 5.2"
 #endif
@@ -43,6 +46,26 @@ const TfTokenVector SprimTypes{
     HdPrimTypeTokens->domeLight,
 };
 const TfTokenVector BprimTypes{HdPrimTypeTokens->renderBuffer};
+
+constexpr std::string_view MaterialXSettingPrefix = "noorray:materialx:";
+
+std::string_view MaterialXMaterialLeaf(const TfToken& key)
+{
+    const std::string& text = key.GetString();
+    if (!std::string_view(text).starts_with(MaterialXSettingPrefix))
+        return {};
+    return std::string_view(text).substr(MaterialXSettingPrefix.size());
+}
+
+bool StoreMaterialXSetting(HdNoorRayRenderParam& param,
+    const TfToken& key, const VtValue& value)
+{
+    const std::string_view materialLeaf = MaterialXMaterialLeaf(key);
+    if (materialLeaf.empty() || !value.IsHolding<std::string>())
+        return false;
+    return param.SetMaterialXDocument(
+        std::string(materialLeaf), value.UncheckedGet<std::string>());
+}
 }
 
 HdNoorRayRenderDelegate::HdNoorRayRenderDelegate()
@@ -57,6 +80,19 @@ HdNoorRayRenderDelegate::HdNoorRayRenderDelegate(
     , renderParam_(std::make_unique<HdNoorRayRenderParam>())
     , resourceRegistry_(std::make_shared<HdResourceRegistry>())
 {
+    // Construction-time settings bypass the virtual SetRenderSetting path.
+    // Extract transport documents once, then remove the large XML values from
+    // HdRenderDelegate's generic settings map so thousands of materials do
+    // not remain stored twice for the delegate lifetime.
+    std::vector<TfToken> materialXKeys;
+    for (const auto& [key, value] : settingsMap) {
+        if (!MaterialXMaterialLeaf(key).empty()) {
+            StoreMaterialXSetting(*renderParam_, key, value);
+            materialXKeys.push_back(key);
+        }
+    }
+    for (const TfToken& key : materialXKeys)
+        _settingsMap.erase(key);
 }
 
 HdNoorRayRenderDelegate::~HdNoorRayRenderDelegate() = default;
@@ -182,88 +218,24 @@ void HdNoorRayRenderDelegate::DestroyBprim(HdBprim* bprim)
     delete bprim;
 }
 
-namespace
-{
-// Render settings arrive from Python, where the value type is whatever the host
-// happened to pass. Reading them defensively keeps a mistyped setting from
-// throwing out of a Hydra callback and taking the host down with it.
-int IntSetting(const VtValue& value, const int fallback)
-{
-    if (value.IsHolding<int>())
-        return value.UncheckedGet<int>();
-    if (value.IsHolding<bool>())
-        return value.UncheckedGet<bool>() ? 1 : 0;
-    if (value.IsHolding<float>())
-        return static_cast<int>(value.UncheckedGet<float>());
-    if (value.IsHolding<double>())
-        return static_cast<int>(value.UncheckedGet<double>());
-    return fallback;
-}
-
-float FloatSetting(const VtValue& value, const float fallback)
-{
-    if (value.IsHolding<float>())
-        return value.UncheckedGet<float>();
-    if (value.IsHolding<double>())
-        return static_cast<float>(value.UncheckedGet<double>());
-    if (value.IsHolding<int>())
-        return static_cast<float>(value.UncheckedGet<int>());
-    return fallback;
-}
-
-std::string StringSetting(const VtValue& value, const std::string& fallback)
-{
-    if (value.IsHolding<std::string>())
-        return value.UncheckedGet<std::string>();
-    return fallback;
-}
-}
-
 void HdNoorRayRenderDelegate::SetRenderSetting(
     const TfToken& key, const VtValue& value)
 {
-    // Intercept camera-specific settings and store on renderParam directly.
-    CameraSettings cs = renderParam_->cameraSettings;
-    bool isCamera = true;
-    if (key == TfToken("cameraProjection"))
-        cs.projectionType = IntSetting(value, cs.projectionType);
-    else if (key == TfToken("cameraApertureDiameter"))
-        cs.apertureDiameterMm = FloatSetting(value, cs.apertureDiameterMm);
-    else if (key == TfToken("cameraBokehBias"))
-        cs.bokehBias = FloatSetting(value, cs.bokehBias);
-    else if (key == TfToken("cameraLensPath"))
-        cs.lensPath = StringSetting(value, cs.lensPath);
-    else if (key == TfToken("cameraGlassCatalogs"))
-        cs.glassCatalogs = StringSetting(value, cs.glassCatalogs);
-    else if (key == TfToken("cameraRayLutPath"))
-        cs.rayLutPath = StringSetting(value, cs.rayLutPath);
-    else if (key == TfToken("cameraSensorType"))
-        cs.sensorType = IntSetting(value, cs.sensorType);
-    else if (key == TfToken("cameraSensorPath"))
-        cs.sensorPath = StringSetting(value, cs.sensorPath);
-    else if (key == TfToken("cameraPsfPath"))
-        cs.psfPath = StringSetting(value, cs.psfPath);
-    else
-        isCamera = false;
-
-    if (isCamera) {
-        if (renderParam_->cameraSettings != cs) {
-            renderParam_->cameraSettings = cs;
-            renderParam_->MarkRenderSettingsChanged();
-        }
+    if (!MaterialXMaterialLeaf(key).empty()) {
+        // These dynamic settings are a high-volume transport channel rather
+        // than renderer UI settings. Keep only the immutable snapshot in the
+        // render param instead of retaining another XML copy in _settingsMap.
+        if (StoreMaterialXSetting(*renderParam_, key, value))
+            ++_settingsVersion;
         return;
     }
-
-    // Regular render setting
-    if (GetRenderSetting(key) == value)
-        return;
     HdRenderDelegate::SetRenderSetting(key, value);
-    renderParam_->MarkRenderSettingsChanged();
 }
 
 void HdNoorRayRenderDelegate::CommitResources(HdChangeTracker*)
 {
     resourceRegistry_->Commit();
+    renderParam_->PruneTextureCache();
 }
 
 HdRenderSettingDescriptorList
@@ -302,6 +274,22 @@ VtDictionary HdNoorRayRenderDelegate::GetRenderStats() const
         {"percentDone", VtValue(renderParam_->GetProgress() * 100.0)},
         {"totalClockTime", VtValue(renderParam_->GetTotalClockTime())},
     };
+}
+
+TfTokenVector HdNoorRayRenderDelegate::GetMaterialRenderContexts() const
+{
+    return {TfToken("mtlx"), TfToken()};
+}
+
+bool HdNoorRayRenderDelegate::IsParallelSyncEnabled(
+    const TfToken& primType) const
+{
+    // Mesh conversion operates on Hydra-owned inputs and local buffers
+    // outside the render-param lock; scene registry mutations are serialized.
+    // Material Sync is independently bounded in the render param so parallel
+    // Hio work cannot create an unbounded decoded-image memory wave.
+    return primType == HdPrimTypeTokens->mesh
+        || primType == HdPrimTypeTokens->material;
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

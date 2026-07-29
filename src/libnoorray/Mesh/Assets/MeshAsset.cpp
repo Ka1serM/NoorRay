@@ -1,4 +1,6 @@
 ﻿#include "MeshAsset.h"
+#include <cstring>
+#include <type_traits>
 #include <utility>
 #include "Scene/Scene.h"
 #include <vector>
@@ -9,13 +11,44 @@
 #include <numbers>
 
 #include "CUDA/Checks.h"
+#include "MaterialX/MaterialXCompiler.h"
 #include "glm/gtc/type_ptr.inl"
 
-MeshAsset MeshAsset::CreateCube(Scene& scene, const std::string& name, const Material& material) {
+#include <MaterialXCore/Document.h>
+#include <MaterialXCore/Types.h>
+
+namespace {
+MeshGeometry copyGeometry(const std::vector<Vertex>& vertices,
+    const std::vector<uint32_t>& indices, const std::vector<Face>& faces)
+{
+    MeshGeometry geometry;
+    geometry.vertices =
+        nr::rstd::vector<Vertex>(vertices.begin(), vertices.end());
+    geometry.indices =
+        nr::rstd::vector<uint32_t>(indices.begin(), indices.end());
+    geometry.faces = nr::rstd::vector<Face>(faces.begin(), faces.end());
+    return geometry;
+}
+
+MaterialX::DocumentPtr greyMaterial()
+{
+    MaterialX::DocumentPtr document = MaterialX::createDocument();
+    const MaterialX::NodePtr shader = document->addNode(
+        "open_pbr_surface", "nr_synthetic_open_pbr", "surfaceshader");
+    shader->setInputValue("base_color", MaterialX::Color3(0.8f, 0.8f, 0.8f));
+    shader->setInputValue("specular_roughness", 0.5f);
+    const MaterialX::NodePtr surfaceMaterial = document->addNode(
+        "surfacematerial", "nr_synthetic_material", "material");
+    surfaceMaterial->setConnectedNode("surfaceshader", shader);
+    return document;
+}
+}
+
+MeshAsset MeshAsset::CreateCube(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
-    std::vector<Material> materials;
+    std::vector<MaterialX::DocumentPtr> materials;
 
     float h = 0.5f;
     materials.push_back(material);
@@ -76,11 +109,11 @@ MeshAsset MeshAsset::CreateCube(Scene& scene, const std::string& name, const Mat
     return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
-MeshAsset MeshAsset::CreatePlane(Scene& scene, const std::string& name, const Material& material) {
+MeshAsset MeshAsset::CreatePlane(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
     std::vector<Face> faces;
-    std::vector<Material> materials;
+    std::vector<MaterialX::DocumentPtr> materials;
 
     float halfSize = 0.5f;
     vec3 normal = {0.0f, 1.0f, 0.0f};
@@ -113,7 +146,7 @@ MeshAsset MeshAsset::CreatePlane(Scene& scene, const std::string& name, const Ma
     return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
-MeshAsset MeshAsset::CreateSphere(Scene& scene, const std::string& name, const Material& material, uint32_t latSeg, uint32_t lonSeg) {
+MeshAsset MeshAsset::CreateSphere(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t latSeg, uint32_t lonSeg) {
     // Ensure the sphere has enough segments to be properly formed.
     if (latSeg < 2 || lonSeg < 3)
         throw std::runtime_error("Sphere segments too low. Use at least 2 latitude and 3 longitude segments.");
@@ -121,7 +154,7 @@ MeshAsset MeshAsset::CreateSphere(Scene& scene, const std::string& name, const M
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
-    std::vector<Material> materials;
+    std::vector<MaterialX::DocumentPtr> materials;
 
     constexpr float radius = 0.5f;
 
@@ -188,14 +221,14 @@ MeshAsset MeshAsset::CreateSphere(Scene& scene, const std::string& name, const M
     return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
-MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments) {
+MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t segments) {
     if (segments < 3)
         throw std::runtime_error("Disk requires at least 3 segments");
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;
-    std::vector<Material> materials;
+    std::vector<MaterialX::DocumentPtr> materials;
 
     float radius = 0.5f;
     vec3 normal = {0.0f, 1.0f, 0.0f};
@@ -235,22 +268,70 @@ MeshAsset MeshAsset::CreateDisk(Scene& scene, const std::string& name, const Mat
     return MeshAsset(scene, name, vertices, indices, faces, materials);
 }
 
-MeshAsset::MeshAsset(Scene& scene, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials)
-    : scene(&scene), path(std::move(name)),
-      vertices(vertices.begin(), vertices.end()), indices(indices.begin(), indices.end()),
-      faces(faces.begin(), faces.end())
+MeshAsset::MeshAsset(Scene& scene, std::string name,
+    const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
+    const std::vector<Face>& faces, const std::vector<MaterialX::DocumentPtr>& materials)
+    : MeshAsset(scene, std::move(name),
+        copyGeometry(vertices, indices, faces), materials)
 {
-    for (const Material& material : materials) {
-        materialRefs.push_back(scene.add(material));
-        materialIds.push_back(materialRefs.back().index());
+}
+
+MeshAsset::MeshAsset(Scene& scene, std::string name,
+    const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
+    const std::vector<Face>& faces, std::vector<MaterialRef> materials)
+    : MeshAsset(scene, std::move(name),
+        copyGeometry(vertices, indices, faces), std::move(materials))
+{
+}
+
+MeshAsset::MeshAsset(Scene& scene, std::string name, MeshGeometry&& geometry,
+    const std::vector<MaterialX::DocumentPtr>& materials)
+    : scene(&scene), path(std::move(name)),
+      vertices(std::move(geometry.vertices)),
+      indices(std::move(geometry.indices)),
+      faces(std::move(geometry.faces))
+{
+    materialRefs.reserve(materials.size());
+    for (const MaterialX::DocumentPtr& material : materials)
+        materialRefs.push_back(scene.addMaterial(material));
+    initializeMaterialIds();
+    buildBlas();
+}
+
+MeshAsset::MeshAsset(Scene& scene, std::string name, MeshGeometry&& geometry,
+    std::vector<MaterialRef> materials)
+    : scene(&scene), path(std::move(name)),
+      vertices(std::move(geometry.vertices)),
+      indices(std::move(geometry.indices)),
+      faces(std::move(geometry.faces)),
+      materialRefs(std::move(materials))
+{
+    initializeMaterialIds();
+    buildBlas();
+}
+
+void MeshAsset::initializeMaterialIds()
+{
+    materialIds.reserve(materialRefs.size());
+    for (const MaterialRef& material : materialRefs) {
+        if (!material.isValid())
+            throw std::invalid_argument(
+                "MeshAsset cannot reference a released material");
+        materialIds.push_back(material.index());
     }
-    scene.synchronizeBeforeMutation();
-    const auto& ctx = scene.getContext();
+}
+
+void MeshAsset::buildBlas()
+{
+    scene->synchronizeBeforeMutation();
+    const auto& ctx = scene->getContext();
     if (ctx.getOptixContext() != nullptr && ctx.getCudaStream() != nullptr)
         blas.build(
             ctx.getOptixContext(), ctx.getCudaStream(),
             this->vertices.data(), static_cast<uint32_t>(this->vertices.size()), sizeof(Vertex),
-            this->indices.data(), static_cast<uint32_t>(this->indices.size() / 3));
+            this->indices.data(), static_cast<uint32_t>(this->indices.size() / 3),
+            this->faces.empty() ? nullptr : &this->faces.data()->materialIndex,
+            sizeof(Face), static_cast<uint32_t>(materialIds.size()));
 }
 
 MeshAsset::MeshAsset(MeshAsset&& other) noexcept
@@ -312,7 +393,9 @@ void MeshAsset::updatePositions(const std::vector<glm::vec3>& positions)
     if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
         blas.refit(context.getOptixContext(), context.getCudaStream(),
             vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
-            indices.data(), static_cast<uint32_t>(indices.size() / 3));
+            indices.data(), static_cast<uint32_t>(indices.size() / 3),
+            faces.empty() ? nullptr : &faces.data()->materialIndex,
+            sizeof(Face), static_cast<uint32_t>(materialIds.size()));
 
     scene->setDirtyFlag(Meshes);
     scene->setDirtyFlag(TLAS);
@@ -325,14 +408,17 @@ void MeshAsset::updateVertexData(const std::vector<Vertex>& newVertices)
         return;
 
     scene->synchronizeBeforeMutation();
-    for (size_t i = 0; i < newVertices.size(); ++i)
-        vertices[i] = newVertices[i];
+    static_assert(std::is_trivially_copyable_v<Vertex>);
+    std::memcpy(vertices.data(), newVertices.data(),
+        newVertices.size() * sizeof(Vertex));
 
     const auto& context = scene->getContext();
     if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
         blas.refit(context.getOptixContext(), context.getCudaStream(),
             vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
-            indices.data(), static_cast<uint32_t>(indices.size() / 3));
+            indices.data(), static_cast<uint32_t>(indices.size() / 3),
+            faces.empty() ? nullptr : &faces.data()->materialIndex,
+            sizeof(Face), static_cast<uint32_t>(materialIds.size()));
 
     scene->setDirtyFlag(Meshes);
     scene->setDirtyFlag(TLAS);
@@ -355,7 +441,9 @@ void MeshAsset::updatePositionsDevice(CUdeviceptr devicePositions,
     if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
         blas.refit(context.getOptixContext(), stream,
             vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
-            indices.data(), static_cast<uint32_t>(indices.size() / 3));
+            indices.data(), static_cast<uint32_t>(indices.size() / 3),
+            faces.empty() ? nullptr : &faces.data()->materialIndex,
+            sizeof(Face), static_cast<uint32_t>(materialIds.size()));
 
     scene->setDirtyFlag(Meshes);
     scene->setDirtyFlag(TLAS);
@@ -363,17 +451,38 @@ void MeshAsset::updatePositionsDevice(CUdeviceptr devicePositions,
 }
 
 void MeshAsset::replaceGeometry(const std::vector<Vertex>& newVertices,
-    const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces)
+    const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces,
+    const uint32_t desiredMaterialSlotCount)
+{
+    replaceGeometry(copyGeometry(newVertices, newIndices, newFaces), desiredMaterialSlotCount);
+}
+
+void MeshAsset::replaceGeometry(MeshGeometry&& geometry, const uint32_t desiredMaterialSlotCount)
 {
     scene->synchronizeBeforeMutation();
-    vertices = nr::rstd::vector<Vertex>(newVertices.begin(), newVertices.end());
-    indices = nr::rstd::vector<uint32_t>(newIndices.begin(), newIndices.end());
-    faces = nr::rstd::vector<Face>(newFaces.begin(), newFaces.end());
+    vertices = std::move(geometry.vertices);
+    indices = std::move(geometry.indices);
+    faces = std::move(geometry.faces);
+    if (desiredMaterialSlotCount > materialIds.size())
+    {
+        // Same native grey fallback the first-construction path uses --
+        // BindMaterial (hdnoorray/renderParam.cpp) replaces it once the new
+        // slot's real material Sprim has synced and published.
+        const MaterialX::DocumentPtr fallbackDocument = greyMaterial();
+        while (materialIds.size() < desiredMaterialSlotCount)
+        {
+            MaterialRef ref = scene->addMaterial(fallbackDocument);
+            materialIds.push_back(ref.index());
+            materialRefs.push_back(std::move(ref));
+        }
+    }
     const auto& context = scene->getContext();
     if (context.getOptixContext() != nullptr && context.getCudaStream() != nullptr)
         blas.build(context.getOptixContext(), context.getCudaStream(),
             vertices.data(), static_cast<uint32_t>(vertices.size()), sizeof(Vertex),
-            indices.data(), static_cast<uint32_t>(indices.size() / 3));
+            indices.data(), static_cast<uint32_t>(indices.size() / 3),
+            faces.empty() ? nullptr : &faces.data()->materialIndex,
+            sizeof(Face), static_cast<uint32_t>(materialIds.size()));
     scene->setDirtyFlag(Meshes);
     scene->setDirtyFlag(TLAS);
     scene->setDirtyFlag(Accumulation);

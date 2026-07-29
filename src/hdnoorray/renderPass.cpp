@@ -6,10 +6,13 @@
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/imaging/hd/camera.h>
+#include <pxr/imaging/hd/changeTracker.h>
+#include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/renderPassState.h>
 #include <pxr/imaging/hd/tokens.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <exception>
 #include <mutex>
 
@@ -124,6 +127,37 @@ void UploadToOpenGlTexture(
         bitmap.pixels().data());
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(oldTexture));
 }
+
+bool PresentOutput(
+    const Image& outputImage, const bool directViewport,
+    const GLuint glColorTexture, HdNoorRayRenderBuffer* colorBuffer,
+    const unsigned int width, const unsigned int height)
+{
+    if (outputImage.getCudaArray() == nullptr
+        || outputImage.getWidth() != width
+        || outputImage.getHeight() != height)
+        return false;
+
+    bool copied = directViewport && CopyToOpenGlTexture(
+        glColorTexture, outputImage.getCudaArray(), width, height);
+    if (!copied && colorBuffer != nullptr)
+        copied = colorBuffer->CopyFromCudaArray(outputImage.getCudaArray());
+    if (copied)
+        return true;
+
+    const Bitmap bitmap = outputImage.toBitmap();
+    if (directViewport) {
+        UploadToOpenGlTexture(glColorTexture, bitmap, width, height);
+        return true;
+    }
+    if (colorBuffer != nullptr) {
+        for (size_t pixel = 0; pixel < bitmap.pixels().size(); ++pixel)
+            colorBuffer->WriteFloatPixel(
+                pixel, &bitmap.pixels()[pixel].x, 4);
+        return true;
+    }
+    return false;
+}
 }
 
 HdNoorRayRenderPass::HdNoorRayRenderPass(
@@ -163,20 +197,38 @@ void HdNoorRayRenderPass::_Execute(
     // through that boundary terminates the host (Blender) outright. Anything
     // the renderer can fail on — a GPU allocation, an OptiX launch, a scene
     // that cannot be sized — is contained here instead.
+    //
+    // Deliberately does NOT report convergence on failure. That used to be
+    // the behavior here (stop asking for a frame this pass cannot produce,
+    // on the theory that a later scene/camera change would reset converged_
+    // and give it another attempt), but Blender's own Hydra viewport engine
+    // stops scheduling continuous redraws once the pass reports converged --
+    // so a transient failure (e.g. hitting this mid-resync, while Blender's
+    // full scene re-export is mid-flight tearing down and rebuilding Sprims,
+    // see HdNoorRayRenderParam::ReleaseMaterial's comment) reported as
+    // "converged" could leave the viewport stuck on whatever was last drawn
+    // (often nothing), with no guaranteed later call giving it the "another
+    // attempt" the old comment assumed would come. Leaving
+    // converged_ alone means _Render's own reset logic (sceneVersion/camera/
+    // size checks, already re-evaluated on every call) decides when to
+    // retry, and the render loop keeps calling us until it actually
+    // succeeds instead of giving up after the first failure.
     try {
         _Render(renderPassState);
     } catch (const std::exception& error) {
+        // TF_RUNTIME_ERROR alone is not reliably visible in Blender's own
+        // console (it goes through USD's diagnostic delegate, which Blender
+        // does not always surface) -- write directly to stderr too so a
+        // render failure is never silent.
+        fprintf(stderr, "[hdNoorRay] could not render the frame: %s\n",
+            error.what());
         TF_RUNTIME_ERROR(
             "hdNoorRay could not render the frame: %s", error.what());
-        // Report convergence so the host stops asking for a frame that this
-        // pass cannot produce. A later scene or camera change clears it and
-        // the renderer gets another attempt.
-        converged_ = true;
-        SetBuffersConverged(renderPassState->GetAovBindings(), true);
+        SetBuffersConverged(renderPassState->GetAovBindings(), converged_);
     } catch (...) {
+        fprintf(stderr, "[hdNoorRay] could not render the frame: unknown exception\n");
         TF_RUNTIME_ERROR("hdNoorRay could not render the frame");
-        converged_ = true;
-        SetBuffersConverged(renderPassState->GetAovBindings(), true);
+        SetBuffersConverged(renderPassState->GetAovBindings(), converged_);
     }
 }
 
@@ -195,22 +247,76 @@ void HdNoorRayRenderPass::_Render(
     unsigned int height = colorBuffer != nullptr ? colorBuffer->GetHeight() : 0;
     const bool directViewport = colorBuffer == nullptr
         && GetOpenGlColorTarget(glColorTexture, width, height);
-    if ((!directViewport && colorBuffer == nullptr) || width == 0 || height == 0)
+    if ((!directViewport && colorBuffer == nullptr) || width == 0 || height == 0) {
+        fprintf(stderr,
+            "[hdNoorRay] skipping render: no usable render target yet "
+            "(colorBuffer=%p directViewport=%d width=%u height=%u)\n",
+            static_cast<void*>(colorBuffer), directViewport, width, height);
         return;
+    }
 
+    // OSL compilation runs on TBB workers. OptiX objects and scene bindings
+    // are committed here, in one render-thread batch, without ever blocking
+    // Hydra Sync or Blender's UI.
+    const bool compiledMaterialsChanged =
+        renderParam_.ProcessMaterialCompilations();
     std::scoped_lock lock(renderParam_.mutex);
     Scene& scene = renderParam_.session.scene;
     if (renderParam_.session.raytracer == nullptr) {
-        // No usable GPU context. Report convergence so the host stops asking
-        // for frames instead of spinning on a pass that can never finish.
-        converged_ = true;
-        SetBuffersConverged(bindings, true);
+        // Deliberately does NOT report convergence here (that used to be
+        // the behavior, on the theory that a GPU-less session can never
+        // render so the host might as well stop asking) -- see
+        // HdNoorRayRenderPass::_Execute's comment for why forcing converged_
+        // true on a "cannot render right now" condition can get the viewport
+        // stuck: Blender's Hydra viewport stops scheduling this pass
+        // continuously once it reports converged, so if this is ever hit
+        // transiently (e.g. a session recreation still constructing its
+        // Raytracer when this runs) rather than a genuinely GPU-less host,
+        // there is no guaranteed later call to notice the raytracer exists
+        // and recover. Logging loudly instead of silently giving up is the
+        // point -- this used to return with no output at all.
+        fprintf(stderr,
+            "[hdNoorRay] skipping render: no Raytracer on this session yet "
+            "(GPU init still running, or failed -- see earlier log output)\n");
+        SetBuffersConverged(bindings, converged_);
         return;
     }
     Raytracer& raytracer = *renderParam_.session.raytracer;
 
     HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
-    const uint64_t sceneVersion = renderParam_.GetSceneVersion();
+    const int targetSamples = std::max(
+        1, delegate->GetRenderSetting<int>(TfToken("samples"), 64));
+
+    // Hydra keeps calling Execute while a render buffer is unconverged.
+    // Material compilation can take seconds on a large import, and rendering
+    // during that interval only produces fallback frames which are discarded
+    // when the completed material batch changes the scene version.  An
+    // offline render has no interactive preview to preserve, so do no GPU
+    // work until its materials are ready.  The viewport may show its initial
+    // progressive preview, but once it reaches the requested sample count it
+    // also stops launching redundant frames while compilation finishes.
+    const bool materialsPending =
+        renderParam_.HasPendingMaterialCompilations();
+    if (materialsPending
+        && (!directViewport
+            || accumulatedSamples_ >= static_cast<unsigned int>(targetSamples))) {
+        if (directViewport) {
+            // Blender clears its GPU AOV before every viewport draw. Keep the
+            // last progressive image visible while the replacement materials
+            // finish compiling, even though no new sample is launched.
+            PresentOutput(
+                raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                width, height);
+        }
+        converged_ = false;
+        SetBuffersConverged(bindings, false);
+        return;
+    }
+
+    const unsigned int sceneVersion =
+        GetRenderIndex()->GetChangeTracker().GetSceneStateVersion();
+    const unsigned int renderSettingsVersion =
+        delegate->GetRenderSettingsVersion();
     const GfMatrix4d newProjection = renderPassState->GetProjectionMatrix();
     const HdCamera* hydraCamera = renderPassState->GetCamera();
     const GfMatrix4d newCameraTransform = hydraCamera != nullptr
@@ -223,13 +329,33 @@ void HdNoorRayRenderPass::_Render(
     // not move, or the renderer keeps producing frames at the previous
     // resolution and the copy back into the render buffer reads the wrong size.
     const bool sizeChanged = width != targetWidth_ || height != targetHeight_;
+    const bool renderSettingsChanged =
+        observedRenderSettingsVersion_ != renderSettingsVersion;
+    const bool sceneVersionChanged = observedSceneVersion_ != sceneVersion;
     const bool reset = collectionDirty_ || cameraChanged || sizeChanged
-        || renderParam_.ConsumeRenderSettingsChanged()
-        || observedSceneVersion_ != sceneVersion;
+        || renderSettingsChanged || sceneVersionChanged
+        || compiledMaterialsChanged;
     if (reset) {
         accumulatedSamples_ = 0;
         converged_ = false;
         renderParam_.ResetClock();
+    }
+    // A host may queue more Execute calls before it observes the converged
+    // render-buffer flag. Do not turn those already-queued calls into extra
+    // samples after the requested total is complete.
+    if (!reset
+        && accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)) {
+        if (directViewport) {
+            // Blender's GPU render-task delegate has just cleared this
+            // texture. Re-present the retained final image without exceeding
+            // the configured sample limit.
+            PresentOutput(
+                raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                width, height);
+        }
+        converged_ = true;
+        SetBuffersConverged(bindings, true);
+        return;
     }
 
     CameraInstance* cameraInstance = scene.getRenderCamera();
@@ -240,9 +366,10 @@ void HdNoorRayRenderPass::_Render(
     // Apply NoorRay camera projection (overrides USD orthographic hint).
     bool projectionSwitched = false;
     {
-        const CameraSettings& cs = renderParam_.cameraSettings;
-        const CameraProjectionType projection = cs.projectionType >= 0
-            ? static_cast<CameraProjectionType>(cs.projectionType)
+        const int projectionSetting = delegate->GetRenderSetting<int>(
+            TfToken("cameraProjection"), -1);
+        const CameraProjectionType projection = projectionSetting >= 0
+            ? static_cast<CameraProjectionType>(projectionSetting)
             : hydraCamera != nullptr
                   && hydraCamera->GetProjection() == HdCamera::Orthographic
               ? CameraProjectionType::Orthographic
@@ -266,32 +393,42 @@ void HdNoorRayRenderPass::_Render(
                 hydraCamera->GetFocusDistance() * 100.0f);
         }
 
-        const CameraSettings& cs = renderParam_.cameraSettings;
-        if (cs.apertureDiameterMm >= 0.0f) {
+        const float apertureDiameterMm = delegate->GetRenderSetting<float>(
+            TfToken("cameraApertureDiameter"), -1.0f);
+        if (apertureDiameterMm >= 0.0f) {
             if (auto* tl = camera->CastOrNullptr<ThinLensCamera>())
-                tl->apertureDiameterMm = cs.apertureDiameterMm;
+                tl->apertureDiameterMm = apertureDiameterMm;
             else if (auto* fi = camera->CastOrNullptr<FisheyeCamera>())
-                fi->apertureDiameterMm = cs.apertureDiameterMm;
+                fi->apertureDiameterMm = apertureDiameterMm;
             else if (auto* re = camera->CastOrNullptr<RealisticCamera>())
-                re->apertureDiameterMm = cs.apertureDiameterMm;
+                re->apertureDiameterMm = apertureDiameterMm;
             else if (auto* hp = camera->CastOrNullptr<HybridPsfCamera>())
-                hp->apertureDiameterMm = cs.apertureDiameterMm;
+                hp->apertureDiameterMm = apertureDiameterMm;
         }
-        if (cs.bokehBias >= 0.0f) {
+        const float bokehBias = delegate->GetRenderSetting<float>(
+            TfToken("cameraBokehBias"), -1.0f);
+        if (bokehBias >= 0.0f) {
             if (auto* tl = camera->CastOrNullptr<ThinLensCamera>())
-                tl->bokehBias = cs.bokehBias;
+                tl->bokehBias = bokehBias;
             else if (auto* fi = camera->CastOrNullptr<FisheyeCamera>())
-                fi->bokehBias = cs.bokehBias;
+                fi->bokehBias = bokehBias;
         }
-        if (!cs.lensPath.empty()) {
+        const std::string lensPath = delegate->GetRenderSetting<std::string>(
+            TfToken("cameraLensPath"), {});
+        const std::string glassCatalogs =
+            delegate->GetRenderSetting<std::string>(
+                TfToken("cameraGlassCatalogs"), {});
+        const std::string rayLutPath = delegate->GetRenderSetting<std::string>(
+            TfToken("cameraRayLutPath"), {});
+        if (!lensPath.empty()) {
             if (auto* re = camera->CastOrNullptr<RealisticCamera>()) {
-                if (cs.lensPath != re->getLensPath()
-                    || cs.glassCatalogs != re->getGlassCatalogPaths())
-                    re->load(cs.lensPath, cs.glassCatalogs);
+                if (lensPath != re->getLensPath()
+                    || glassCatalogs != re->getGlassCatalogPaths())
+                    re->load(lensPath, glassCatalogs);
             } else if (auto* hp = camera->CastOrNullptr<HybridPsfCamera>()) {
-                if (cs.lensPath != hp->getLensPath()
-                    || cs.glassCatalogs != hp->getGlassCatalogPaths())
-                    hp->load(cs.lensPath, cs.glassCatalogs, cs.rayLutPath);
+                if (lensPath != hp->getLensPath()
+                    || glassCatalogs != hp->getGlassCatalogPaths())
+                    hp->load(lensPath, glassCatalogs, rayLutPath);
             }
         }
 
@@ -299,10 +436,18 @@ void HdNoorRayRenderPass::_Render(
         camera->getSensor().setOrigin(SensorOrigin::LowerLeft);
     }
 
-    const int targetSamples = std::max(
-        1, delegate->GetRenderSetting<int>(TfToken("samples"), 64));
     RenderSettings& rs = scene.getRenderSettings();
-    rs.samples = 1;
+    // Offline Blender renders do not benefit from copying every intermediate
+    // sample through the Hydra render buffer.  Submit all remaining samples
+    // in this pass and copy the converged image once.  Keep viewport updates
+    // at one sample per pass for interactivity.
+    const unsigned int remainingSamples =
+        accumulatedSamples_ < static_cast<unsigned int>(targetSamples)
+        ? static_cast<unsigned int>(targetSamples) - accumulatedSamples_
+        : 1u;
+    const unsigned int samplesThisPass =
+        directViewport ? 1u : remainingSamples;
+    rs.samples = static_cast<int>(samplesThisPass);
     rs.maxSamples = targetSamples;
     rs.maxBounces = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("maxBounces"), 8));
@@ -341,25 +486,13 @@ void HdNoorRayRenderPass::_Render(
     raytracer.waitForRender();
     renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
 
-    const Image* outputImage = &raytracer.getOutputColor();
-    bool copied = directViewport && CopyToOpenGlTexture(
-        glColorTexture, outputImage->getCudaArray(), width, height);
-    if (!copied && colorBuffer != nullptr)
-        copied = colorBuffer->CopyFromCudaArray(outputImage->getCudaArray());
-    if (!copied) {
-        const Bitmap bitmap = outputImage->toBitmap();
-        if (directViewport) {
-            UploadToOpenGlTexture(glColorTexture, bitmap, width, height);
-            copied = true;
-        } else if (colorBuffer != nullptr) {
-            for (size_t pixel = 0; pixel < bitmap.pixels().size(); ++pixel)
-                colorBuffer->WriteFloatPixel(
-                    pixel, &bitmap.pixels()[pixel].x, 4);
-        }
-    }
+    PresentOutput(
+        raytracer.getOutputColor(), directViewport, glColorTexture,
+        colorBuffer, width, height);
 
-    ++accumulatedSamples_;
-    converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples);
+    accumulatedSamples_ += samplesThisPass;
+    converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)
+        && !renderParam_.HasPendingMaterialCompilations();
     // Defer non-zero progress until after the first frame so Blender's
     // viewport engine can initialize its wall-clock time baseline (it only
     // does so when percentDone == 0, checked after engine_->Execute()).
@@ -370,6 +503,7 @@ void HdNoorRayRenderPass::_Render(
     SetBuffersConverged(bindings, converged_);
 
     observedSceneVersion_ = sceneVersion;
+    observedRenderSettingsVersion_ = renderSettingsVersion;
     cameraTransform_ = newCameraTransform;
     projectionMatrix_ = newProjection;
     targetWidth_ = width;

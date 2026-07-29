@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <nodegraph name="NG_pbr">
+    <input name="tint" type="color3" value="0.35, 0.55, 0.9" />
+    <input name="amount" type="float" value="0.35" />
+    <position name="position" type="vector3" xpos="-390.000000" ypos="180.000000">
+      <input name="space" type="string" value="object" />
+    </position>
+    <noise3d name="grain" type="float" xpos="-60.000000" ypos="60.000000">
+      <input name="position" type="vector3" nodename="position" />
+      <input name="amplitude" type="float" value="0.690000" />
+      <input name="pivot" type="float" value="-0.100000" />
+    </noise3d>
+    <multiply name="tinted_grain" type="color3" xpos="160.000000" ypos="10.000000">
+      <input name="in1" type="color3" interfacename="tint" />
+      <input name="in2" type="float" nodename="grain" />
+    </multiply>
+    <output name="color" type="color3" nodename="tinted_grain" />
+    <output name="roughness" type="float" interfacename="amount" />
+  </nodegraph>
+  <open_pbr_surface name="pbr_surface" type="surfaceshader" xpos="350.000000" ypos="60.000000">
+    <input name="base_weight" type="float" value="1.0" />
+    <input name="base_color" type="color3" nodegraph="NG_pbr" output="color" />
+    <input name="base_metalness" type="float" value="0.0" />
+    <input name="specular_weight" type="float" value="1.0" />
+    <input name="specular_roughness" type="float" nodegraph="NG_pbr" output="roughness" />
+    <input name="specular_ior" type="float" value="1.5" />
+    <input name="geometry_opacity" type="float" value="1.0" />
+  </open_pbr_surface>
+  <surfacematerial name="ComplexOpenPbr" type="material" xpos="770.000000" ypos="50.000000">
+    <input name="surfaceshader" type="surfaceshader" nodename="pbr_surface" />
+  </surfacematerial>
+</materialx>

@@ -29,6 +29,9 @@ ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numI
 {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    // Laptop-friendly node-editor navigation: right-drag pans the canvas.
+    // SDL touchpad pinch gestures are delivered as ImGui mouse-wheel events,
+    // so they use the same navigation path as a physical scroll wheel.
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;

@@ -16,6 +16,7 @@
 #include "Mesh/Assets/GaussianAsset.h"
 #include "Scene/LightInstance.h"
 #include "Vulkan/Viewport.h"
+#include "Raytracing/Runtime/Raytracer.h"
 #include "UI/Window.h"
 
 namespace
@@ -37,9 +38,10 @@ CameraInstance::InputState cameraInputState()
 }
 
 ViewportPanel::ViewportPanel(const std::string& name, Window& window, Context& context,
-    Scene& scene, const Image& outputColor, Image& outputCrypto, Image& outputPosition,
-    const uint32_t width, const uint32_t height)
+    Scene& scene, Raytracer& raytracer, const Image& outputColor, Image& outputCrypto,
+    Image& outputPosition, const uint32_t width, const uint32_t height)
     : ImGuiComponent(name), window(window), context(context), scene(scene),
+    raytracer(raytracer),
     outputCrypto(&outputCrypto), outputPosition(&outputPosition), width(width), height(height),
     displayImage(context, width, height, outputColor.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
     cryptoStagingBuffer(context, Buffer::Type::Custom, sizeof(uint32_t), nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
@@ -165,14 +167,22 @@ void ViewportPanel::updateLayout() {
 }
 
 ivec2 ViewportPanel::screenToPixel() const {
+    if (width == 0 || height == 0)
+        return ivec2(0);
+
     const ImVec2 screenPos = ImGui::GetMousePos();
     const ImVec2 relativePos = ImVec2(screenPos.x - viewportPos.x, screenPos.y - viewportPos.y);
 
     const float normX = std::clamp(relativePos.x / viewportSize.x, 0.f, 1.f);
     const float normY = std::clamp(relativePos.y / viewportSize.y, 0.f, 1.f);
 
-    int pixelX = static_cast<int>(std::round(normX * static_cast<float>(width)));
-    int pixelY = static_cast<int>(std::round(normY * static_cast<float>(height)));
+    // The rightmost/bottommost half pixel maps to width/height, which is one
+    // past the last valid texel. AOV readbacks copy from CUDA-shared images, so
+    // an out-of-bounds copy region reads past the shared allocation.
+    const int pixelX = std::clamp(static_cast<int>(normX * static_cast<float>(width)),
+        0, static_cast<int>(width) - 1);
+    const int pixelY = std::clamp(static_cast<int>(normY * static_cast<float>(height)),
+        0, static_cast<int>(height) - 1);
 
     return ivec2(pixelX, pixelY);
 }
@@ -199,7 +209,11 @@ bool ViewportPanel::processEvent(const SDL_Event& event)
         rightButtonPressPending = true;
         rightButtonPressX = event.button.x;
         rightButtonPressY = event.button.y;
-        viewportPress = rightButtonPressX >= viewportPos.x &&
+        // SDL events arrive before the next ImGui frame is rendered.  Use the
+        // hover state recorded from the actual image item as an additional
+        // guard; the panel/window bounds alone are stale when another docked
+        // tab is covering the viewport.
+        viewportPress = isViewportHovered && rightButtonPressX >= viewportPos.x &&
             rightButtonPressY >= viewportPos.y &&
             rightButtonPressX < viewportPos.x + viewportSize.x &&
             rightButtonPressY < viewportPos.y + viewportSize.y;
@@ -301,7 +315,7 @@ void ViewportPanel::handleInput() {
         handleScrollZoom();
 
     // Use SDL's ordered button edge rather than ImGui's frame-delayed click edge.
-    const bool pressIsInViewport =
+    const bool pressIsInViewport = isViewportHovered &&
         rightButtonPressX >= viewportPos.x &&
         rightButtonPressY >= viewportPos.y &&
         rightButtonPressX < viewportPos.x + viewportSize.x &&
@@ -522,24 +536,47 @@ void ViewportPanel::renderUi() {
     ImGui::End();
 }
 
+bool ViewportPanel::readbackAovTexel(Image* image, const Buffer& staging) const {
+    if (!image || !image->getImage())
+        return false;
+
+    const ivec2 pixel = screenToPixel();
+    if (pixel.x < 0 || pixel.y < 0
+        || static_cast<uint32_t>(pixel.x) >= image->getWidth()
+        || static_cast<uint32_t>(pixel.y) >= image->getHeight())
+    {
+        return false;
+    }
+
+    // AOV images are backed by memory shared with CUDA, and this readback both
+    // reads them and transitions their layout. An OptiX launch writing to the
+    // same images through their surface objects must therefore be finished
+    // first: overlapping the two faults the device, and the resulting sticky
+    // "unspecified launch failure" then kills every later CUDA call.
+    raytracer.waitForRender();
+
+    vk::BufferImageCopy copyRegion{};
+    copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+    copyRegion.imageOffset = vk::Offset3D{pixel.x, pixel.y, 0};
+    copyRegion.imageExtent = vk::Extent3D{1, 1, 1};
+
+    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
+        image->setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
+        cmd.copyImageToBuffer(image->getImage(), vk::ImageLayout::eTransferSrcOptimal,
+            staging.getBuffer(), copyRegion);
+        image->setImageLayout(cmd, vk::ImageLayout::eGeneral);
+    });
+    return true;
+}
+
 void ViewportPanel::handlePositionPicking() const {
 
-    const ivec2 pixelCoords = screenToPixel();
-    
     auto* camera = scene.getRenderCamera();
     if (!camera)
         return;
 
-    vk::BufferImageCopy copyRegion{};
-    copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.imageOffset = vk::Offset3D{pixelCoords.x, pixelCoords.y, 0};
-    copyRegion.imageExtent = vk::Extent3D{1, 1, 1};
-
-    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-        outputPosition->setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-        cmd.copyImageToBuffer(outputPosition->getImage(), vk::ImageLayout::eTransferSrcOptimal, positionStagingBuffer.getBuffer(), copyRegion);
-        outputPosition->setImageLayout(cmd, vk::ImageLayout::eGeneral);
-    });
+    if (!readbackAovTexel(outputPosition, positionStagingBuffer))
+        return;
 
     vec3 position{0.f};
     if (positionStagingBufferMappedPtr) {
@@ -601,19 +638,9 @@ void ViewportPanel::handleObjectPicking() {
     if (m_showOverlays && handleBillboardPicking())
         return;
 
-    const ivec2 pixel = screenToPixel();
+    if (!readbackAovTexel(outputCrypto, cryptoStagingBuffer))
+        return;
 
-    vk::BufferImageCopy copyRegion{};
-    copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.imageOffset = vk::Offset3D{ pixel.x, pixel.y, 0 };
-    copyRegion.imageExtent = vk::Extent3D{ 1, 1, 1 };
-    
-    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-       outputCrypto->setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-       cmd.copyImageToBuffer(outputCrypto->getImage(), vk::ImageLayout::eTransferSrcOptimal, cryptoStagingBuffer.getBuffer(), copyRegion);
-       outputCrypto->setImageLayout(cmd, vk::ImageLayout::eGeneral);
-   });
-    
     uint32_t instanceId = ~0u;
     if (cryptoStagingBufferMappedPtr)
         instanceId = *static_cast<uint32_t*>(cryptoStagingBufferMappedPtr);

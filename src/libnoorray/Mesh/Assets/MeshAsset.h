@@ -14,10 +14,19 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include "Mesh/VertexColor.h"
+
 using glm::vec2;
 using glm::vec3;
 
 class Scene;
+
+namespace MaterialX_v1_39_4
+{
+class Document;
+using DocumentPtr = std::shared_ptr<Document>;
+}
+namespace MaterialX = MaterialX_v1_39_4;
 
 struct Vertex
 {
@@ -26,22 +35,49 @@ struct Vertex
     glm::vec3 tangent;
     float tangentSign;
     glm::vec2 uv;
+    uint32_t color{nr::vertex_color::White};
 };
 
 struct Face
 {
-    int materialIndex;
+    int materialIndex{};
+};
+
+// Move-owned final geometry storage. Importers can fill these managed buffers
+// directly on worker threads, then hand them to MeshAsset without a second
+// std::vector -> managed-vector allocation and element copy.
+struct MeshGeometry
+{
+    MeshGeometry() = default;
+    MeshGeometry(const MeshGeometry&) = delete;
+    MeshGeometry& operator=(const MeshGeometry&) = delete;
+    MeshGeometry(MeshGeometry&&) noexcept = default;
+    MeshGeometry& operator=(MeshGeometry&&) noexcept = default;
+
+    nr::rstd::vector<Vertex> vertices;
+    nr::rstd::vector<uint32_t> indices;
+    nr::rstd::vector<Face> faces;
 };
 
 class MeshAsset : public Inspectable
 {
 public:
-    static MeshAsset CreateCube(Scene& scene, const std::string& name, const Material& material);
-    static MeshAsset CreatePlane(Scene& scene, const std::string& name, const Material& material);
-    static MeshAsset CreateSphere(Scene& scene, const std::string& name,  const Material& material, uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
-    static MeshAsset CreateDisk(Scene& scene, const std::string& name, const Material& material, uint32_t segments = 64);
+    // The material argument is a MaterialX document (the conversion from an
+    // importer's simple authoring record happens in the caller). A null
+    // document means the default MaterialX material.
+    static MeshAsset CreateCube(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material);
+    static MeshAsset CreatePlane(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material);
+    static MeshAsset CreateSphere(Scene& scene, const std::string& name,  const MaterialX::DocumentPtr& material, uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
+    static MeshAsset CreateDisk(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t segments = 64);
     
-    MeshAsset(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<Material>& materials);
+    MeshAsset(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<MaterialX::DocumentPtr>& materials);
+    MeshAsset(Scene& context, std::string name, const std::vector<Vertex>& vertices,
+        const std::vector<uint32_t>& indices, const std::vector<Face>& faces,
+        std::vector<MaterialRef> materials);
+    MeshAsset(Scene& context, std::string name, MeshGeometry&& geometry,
+        const std::vector<MaterialX::DocumentPtr>& materials);
+    MeshAsset(Scene& context, std::string name, MeshGeometry&& geometry,
+        std::vector<MaterialRef> materials);
     MeshAsset(MeshAsset&& other) noexcept;
     MeshAsset(const MeshAsset&) = delete;
     MeshAsset& operator=(const MeshAsset&) = delete;
@@ -84,13 +120,29 @@ public:
     void updatePositionsDevice(CUdeviceptr devicePositions, uint32_t count,
         cudaStream_t stream);
 
+    // desiredMaterialSlotCount: grows materialIds/materialRefs (each new slot
+    // gets the same native grey fallback material construction uses) when the
+    // new topology's Face.materialIndex values reference more slots than
+    // this mesh currently has -- e.g. a live-edited mesh gaining an
+    // HdGeomSubset. 0 (the default) means "no change", the common case where
+    // topology changes but material count does not. Never shrinks: unused
+    // trailing slots are harmless, and shrinking could invalidate a
+    // Face.materialIndex the caller forgot to remap.
     void replaceGeometry(const std::vector<Vertex>& newVertices,
-        const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces);
+        const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces,
+        uint32_t desiredMaterialSlotCount = 0);
+    // Adopts already-managed geometry without allocating or copying it. This
+    // is the preferred integration point for loaders and Hydra adapters that
+    // can prepare final buffers before serial Scene publication.
+    void replaceGeometry(MeshGeometry&& geometry, uint32_t desiredMaterialSlotCount = 0);
     void setMaterial(uint32_t materialIndex, const Material& material);
     void setMaterial(uint32_t materialSlot, const MaterialRef& material);
     void notifyMaterialsChanged();
 
 private:
+    void initializeMaterialIds();
+    void buildBlas();
+
     Scene* scene;
     std::string path;
     uint32_t index = ~0u;

@@ -18,6 +18,7 @@
 #include "Camera/HybridPsfCamera.h"
 #include "Camera/ThinLensCamera.h"
 #include "Log.h"
+#include "MaterialX/MaterialXCompiler.h"
 #include "Mesh/Assets/MeshAsset.h"
 #include "Mesh/Assets/PlyMeshLoader.h"
 #include "Mesh/Transform.h"
@@ -203,10 +204,10 @@ glm::mat4 lookAtCameraFromWorld(const Command& command)
     return glm::inverse(worldFromCamera);
 }
 
-Material makeMaterial(const Command& command,
+MaterialAuthoring makeMaterial(const Command& command,
     const std::unordered_map<std::string, int>& textures)
 {
-    Material material{};
+    MaterialAuthoring material{};
     const std::string type = command.arguments.empty() ? "diffuse" : command.arguments.front();
     if (type != "diffuse" && type != "coateddiffuse" && type != "conductor"
         && type != "coatedconductor" && type != "dielectric" && type != "thindielectric")
@@ -235,13 +236,13 @@ Material makeMaterial(const Command& command,
 struct ShapeRecord {
     Command command;
     glm::mat4 transform{1.f};
-    Material material{};
+    MaterialAuthoring material{};
     bool reverse{};
 };
 
 struct State {
     glm::mat4 transform{1.f};
-    Material material{};
+    MaterialAuthoring material{};
     std::string namedMaterial;
     glm::vec3 areaEmission{};
     bool reverse{};
@@ -269,19 +270,21 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
     if (shape.command.arguments.empty()) return;
     const std::string& type = shape.command.arguments.front();
     const std::string name = type + "_" + std::to_string(index);
-    Material material = shape.material;
+    MaterialAuthoring material = shape.material;
+    const MaterialX::DocumentPtr materialDocument =
+        nr::materialx::documentFromAuthoring(material);
     glm::mat4 transform = shape.transform;
     MeshAssetRef meshAsset;
 
     if (type == "sphere") {
         const float radius = scalar(shape.command, "radius", 1.f);
         transform *= glm::scale(glm::mat4(1.f), glm::vec3(radius * 2.f));
-        meshAsset = scene.add(MeshAsset::CreateSphere(scene, name, material));
+        meshAsset = scene.add(MeshAsset::CreateSphere(scene, name, materialDocument));
     } else if (type == "disk") {
         const float radius = scalar(shape.command, "radius", 1.f);
         transform *= glm::rotate(glm::mat4(1.f), glm::half_pi<float>(), glm::vec3(1, 0, 0));
         transform *= glm::scale(glm::mat4(1.f), glm::vec3(radius * 2.f));
-        meshAsset = scene.add(MeshAsset::CreateDisk(scene, name, material));
+        meshAsset = scene.add(MeshAsset::CreateDisk(scene, name, materialDocument));
     } else if (type == "plymesh") {
         const std::string filename = relativeAssetPath(shape.command, "filename");
         if (filename.empty())
@@ -309,7 +312,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
             meshName.empty() ? name : meshName,
             mesh.vertices, mesh.indices,
             std::vector<Face>(mesh.indices.size() / 3, Face{0}),
-            std::vector<Material>{material}));
+            std::vector<MaterialX::DocumentPtr>{materialDocument}));
     } else if (type == "trianglemesh") {
         const Parameter* positions = shape.command.find("P");
         const Parameter* indexParameter = shape.command.find("indices");
@@ -354,7 +357,8 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
             }
         } else computeMissingNormals(vertices, indices);
         meshAsset = scene.add(MeshAsset(scene, name, vertices, indices,
-            std::vector<Face>(indices.size() / 3, Face{0}), std::vector<Material>{material}));
+            std::vector<Face>(indices.size() / 3, Face{0}),
+            std::vector<MaterialX::DocumentPtr>{materialDocument}));
     } else {
         LOG_ERROR("PBRT shape '" << type << "' is not supported; skipping "
             << shape.command.source.string() << ':' << shape.command.line);
@@ -385,7 +389,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
     state.material.roughness = 1.f;
     std::vector<State> stack;
     std::unordered_map<std::string, glm::mat4> coordinateSystems;
-    std::unordered_map<std::string, Material> namedMaterials;
+    std::unordered_map<std::string, MaterialAuthoring> namedMaterials;
     std::unordered_map<std::string, int> textures;
     // Materials carry bare texture slot indices, so the importer holds a
     // reference per texture until the materials using them reach the scene.
@@ -473,7 +477,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                 : rgb(command, "L", glm::vec3(1.f)) * scalar(command, "scale", 1.f);
         } else if (name == "ReverseOrientation") state.reverse = !state.reverse;
         else if (name == "Shape") {
-            Material material = state.material;
+                MaterialAuthoring material = state.material;
             if (glm::length2(state.areaEmission) > 0.f) {
                 material.emission = state.areaEmission;
                 material.emissionStrength = 1.f;

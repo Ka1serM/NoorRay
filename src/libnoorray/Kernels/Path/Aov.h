@@ -91,9 +91,38 @@ extern "C" __global__ void __raygen__aov()
         else
         {
             const Surface surface = Surface::fromHit(params.scene, hit);
-            albedo = surface.material->albedoAt(params.scene.textures, surface.uv);
-            normal = surface.material->shadingNormalAt(params.scene.textures,
-                surface.uv, surface.tangent, surface.normal);
+            const glm::vec3 geometricNormal =
+                glm::dot(surface.geometricNormal, -cameraSample->ray.direction()) < 0.0f
+                ? -surface.geometricNormal : surface.geometricNormal;
+            MaterialEvaluation evaluation{};
+            nr::shading::NoorRayCompositeBsdf bsdf(
+                geometricNormal, surface.normal, -cameraSample->ray.direction());
+            const bool exiting = glm::dot(
+                -cameraSample->ray.direction(), geometricNormal) < 0.0f;
+            bool svmEvaluated = false;
+            if (surface.material->svmBytecodeLength != 0) {
+                MaterialShadingContext shadingContext{};
+                shadingContext.position = surface.position;
+                shadingContext.geometricNormal = geometricNormal;
+                shadingContext.interpolatedNormal = surface.normal;
+                shadingContext.tangent = surface.tangent;
+                shadingContext.bitangent = glm::cross(surface.normal, surface.tangent)
+                    * surface.tangentSign;
+                shadingContext.uv = surface.uv;
+                shadingContext.vertexColor = surface.color;
+                shadingContext.viewDirection = -cameraSample->ray.direction();
+                shadingContext.primitiveId = surface.primitiveIndex;
+                svmEvaluated = nr::svm::svmEvalNodes(params.scene,
+                    surface.material->svmBytecodeOffset, surface.material->svmBytecodeLength,
+                    surface.material->svmTextureOffset, surface.material->svmTextureCount,
+                    shadingContext, wavelengths, exiting, evaluation, bsdf);
+            }
+            if (!svmEvaluated) {
+                evaluation.opacity = 1.0f;
+                bsdf.prepare();
+            }
+            albedo = evaluation.albedo;
+            normal = bsdf.shadingNormal();
             if (glm::dot(normal, cameraSample->ray.direction()) > 0.0f)
                 normal = -normal;
             position = surface.position;

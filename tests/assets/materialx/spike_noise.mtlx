@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+
+  <nodegraph name="NG_spike">
+    <input name="noise_scale" type="float" value="8.0" />
+    <input name="tint" type="color3" value="0.8, 0.25, 0.15" />
+
+    <position name="object_position" type="vector3">
+      <input name="space" type="string" value="object" />
+    </position>
+
+    <multiply name="noise_coordinates" type="vector3">
+      <input name="in1" type="vector3" nodename="object_position" />
+      <input name="in2" type="float" interfacename="noise_scale" />
+    </multiply>
+
+    <noise3d name="surface_noise" type="float">
+      <input name="position" type="vector3" nodename="noise_coordinates" />
+      <input name="amplitude" type="float" value="0.5" />
+      <input name="pivot" type="float" value="0.5" />
+    </noise3d>
+
+    <multiply name="tinted_noise" type="color3">
+      <input name="in1" type="color3" interfacename="tint" />
+      <input name="in2" type="float" nodename="surface_noise" />
+    </multiply>
+
+    <output name="base_color_out" type="color3" nodename="tinted_noise" />
+    <output name="roughness_out" type="float" nodename="surface_noise" />
+  </nodegraph>
+
+  <standard_surface name="spike_surface" type="surfaceshader">
+    <input name="base_color" type="color3" nodegraph="NG_spike" output="base_color_out" />
+    <input name="specular_roughness" type="float" nodegraph="NG_spike" output="roughness_out" />
+    <input name="metalness" type="float" value="0.0" />
+    <input name="specular" type="float" value="1.0" />
+    <input name="specular_IOR" type="float" value="1.5" />
+    <input name="opacity" type="color3" value="1.0, 1.0, 1.0" />
+  </standard_surface>
+
+  <surfacematerial name="SpikeMaterial" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="spike_surface" />
+  </surfacematerial>
+
+</materialx>

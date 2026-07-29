@@ -75,6 +75,17 @@ find_package(pxr CONFIG QUIET
         NO_DEFAULT_PATH)
 
 add_library(NoorRayHydraUsd INTERFACE)
+# Blender's libusd_ms.so is built with GCC, which enables pxr's GNU
+# hash_map/hash_set/SmallVector extensions on Linux (see
+# pxr/base/arch/defines.h: ARCH_HAS_GNU_STL_EXTENSIONS requires
+# ARCH_COMPILER_GCC). hdnoorray is a plugin loaded into Blender's own
+# process, so it must instantiate those same pxr types -- e.g.
+# TfHashMap's default allocator -- the same way, or symbols mangle
+# differently and the plugin fails to load with an undefined symbol.
+# Defining the macro here restores that code path when hdnoorray is
+# built with clang, which libstdc++ (and its <ext/hash_map>) supports
+# fine even though arch/defines.h only turns it on for GCC.
+target_compile_definitions(NoorRayHydraUsd INTERFACE ARCH_HAS_GNU_STL_EXTENSIONS)
 if(TARGET hd)
     target_link_libraries(NoorRayHydraUsd INTERFACE
             hd
@@ -138,8 +149,12 @@ add_library(hdnoorray MODULE
         lights/rectLight.h
         lights/sphereLight.cpp
         lights/sphereLight.h
+        imageLoader.cpp
+        imageLoader.h
         material.cpp
         material.h
+        memoryTextureRegistry.cpp
+        memoryTextureRegistry.h
         mesh.cpp
         mesh.h
         renderDelegate.cpp
@@ -154,15 +169,27 @@ add_library(hdnoorray MODULE
         rendererPlugin.h)
 
 target_compile_features(hdnoorray PRIVATE cxx_std_23)
-target_compile_definitions(hdnoorray PRIVATE HDNOORRAY_EXPORTS)
+target_compile_definitions(hdnoorray PRIVATE HDNOORRAY_EXPORTS ARCH_HAS_GNU_STL_EXTENSIONS)
 target_link_libraries(hdnoorray PRIVATE
         libnoorray
         NoorRayHydraUsd
         OpenGL::GL)
+target_include_directories(hdnoorray PRIVATE
+        "${PROJECT_SOURCE_DIR}/external/materialx/source")
+target_compile_definitions(hdnoorray PRIVATE
+        NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
 if(UNIX AND NOT APPLE)
     # The Blender Flatpak does not provide CUDA's user-mode runtime. Bundle it
     # beside the delegate and let the dynamic loader resolve it locally.
     target_link_options(hdnoorray PRIVATE "LINKER:-rpath,$ORIGIN")
+    # Blender and its USD/OIIO dependencies load their own TBB ABI, so
+    # exporting the statically linked oneTBB runtime from this module would
+    # make unversioned TBB symbols eligible for cross-DSO interposition with
+    # Blender's own build. Localize it: calls originating in this module then
+    # bind to the matching implementation, while the explicitly exported
+    # Hydra plugin entry points remain public.
+    target_link_options(hdnoorray PRIVATE
+        "LINKER:--exclude-libs,libtbb.a")
 endif()
 set_target_properties(hdnoorray PROPERTIES
         POSITION_INDEPENDENT_CODE ON
@@ -191,6 +218,20 @@ add_custom_command(
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/__init__.py"
     COMMENT "Copying __init__.py")
 add_custom_command(
+    OUTPUT "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_export.py"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/materialx_export.py"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/materialx_export.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_export.py"
+    COMMENT "Copying materialx_export.py")
+add_custom_command(
+    OUTPUT "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_sync.py"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/materialx_sync.py"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/materialx_sync.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_sync.py"
+    COMMENT "Copying materialx_sync.py")
+add_custom_command(
     OUTPUT "${HDNOORRAY_BLENDER_EXTENSION_DIR}/blender_manifest.toml"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/blender_manifest.toml"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -200,6 +241,8 @@ add_custom_command(
 add_custom_target(hdnoorray_py
     DEPENDS
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/__init__.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_export.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_sync.py"
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/blender_manifest.toml")
 add_dependencies(hdnoorray hdnoorray_py)
 
@@ -217,6 +260,8 @@ add_custom_command(TARGET hdnoorray POST_BUILD
                 "${CMAKE_BINARY_DIR}/hdnoorray/hdnoorray-blender-5.2.zip"
                 --format=zip
                 __init__.py
+                materialx_export.py
+                materialx_sync.py
                 blender_manifest.toml
                 plugin
         WORKING_DIRECTORY "${HDNOORRAY_BLENDER_EXTENSION_DIR}"

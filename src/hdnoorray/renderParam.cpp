@@ -1,14 +1,68 @@
 #include "renderParam.h"
 
+#include "imageLoader.h"
+#include "material.h"
+#include "memoryTextureRegistry.h"
+
+#include "MaterialX/MaterialXCompiler.h"
+
+#include <MaterialXCore/Document.h>
+
+#include <pxr/base/arch/hash.h>
 #include <pxr/base/tf/diagnostic.h>
+#include <pxr/usd/ar/asset.h>
+#include <pxr/usd/ar/resolver.h>
 
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <cstdio>
 #include <exception>
+#include <future>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "Raytracing/Runtime/Raytracer.h"
 #include "Scene/Texture.h"
 
+namespace mx = MaterialX;
+
 PXR_NAMESPACE_OPEN_SCOPE
+
+namespace
+{
+
+uint64_t HashMaterialXDocument(const std::string_view xml)
+{
+    // FNV-1a is deterministic, fast for the small/medium XML payloads passed
+    // through Hydra, and does not depend on a platform's std::hash seed.
+    uint64_t hash = 14695981039346656037ull;
+    for (const unsigned char byte : xml) {
+        hash ^= byte;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+std::string AssetFlightKey(const std::string& resolvedPath,
+    const uint64_t size, const bool timestampValid,
+    const uint64_t timestampBits)
+{
+    std::string key;
+    key.reserve(resolvedPath.size() + 48);
+    key = resolvedPath;
+    key.push_back('\n');
+    key += std::to_string(size);
+    key.push_back('\n');
+    key += timestampValid ? std::to_string(timestampBits) : "invalid";
+    return key;
+}
+
+} // namespace
 
 HdNoorRayRenderParam::HdNoorRayRenderParam()
 {
@@ -20,8 +74,19 @@ HdNoorRayRenderParam::HdNoorRayRenderParam()
         session.raytracer->setTimingEnabled(true);
 }
 
-HdNoorRayRenderParam::~HdNoorRayRenderParam()
+HdNoorRayRenderParam::~HdNoorRayRenderParam() noexcept
 {
+    try {
+        materialCompileTasks_.wait();
+    } catch (const std::exception& error) {
+        fprintf(stderr,
+            "[hdNoorRay] a background material compile failed during "
+            "shutdown: %s\n", error.what());
+    } catch (...) {
+        fprintf(stderr,
+            "[hdNoorRay] a background material compile failed during "
+            "shutdown: unknown exception\n");
+    }
     session.scene.setMutationBarrier({});
     if (session.raytracer) {
         session.raytracer->waitForRender();
@@ -29,23 +94,286 @@ HdNoorRayRenderParam::~HdNoorRayRenderParam()
     // Give up every reference before the session (and with it the registries
     // they point into) is destroyed.
     textureCache_.clear();
+    decodedTextureCache_.clear();
+    decodedTextureFlights_.clear();
+    assetHashFlights_.clear();
+    assetFingerprintCache_.clear();
     materialBindings_.clear();
+    materialTextures_.clear();
     materials_.clear();
     if (session.raytracer)
         session.raytracer.reset();
 }
 
+HdNoorRayRenderParam::ContentIdentity
+HdNoorRayRenderParam::GetTextureContentIdentity(
+    const std::string& filePath)
+{
+    ArResolver& resolver = ArGetResolver();
+    const ArResolvedPath resolvedPath = resolver.Resolve(filePath);
+    if (resolvedPath.empty())
+        throw std::runtime_error(
+            "the asset resolver could not resolve the image path");
+
+    const std::shared_ptr<ArAsset> asset =
+        resolver.OpenAsset(resolvedPath);
+    if (!asset)
+        throw std::runtime_error(
+            "the asset resolver could not open the image");
+
+    const uint64_t size = asset->GetSize();
+    const ArTimestamp timestamp =
+        resolver.GetModificationTimestamp(filePath, resolvedPath);
+    const bool timestampValid = timestamp.IsValid();
+    const uint64_t timestampBits = timestampValid
+        ? std::bit_cast<uint64_t>(timestamp.GetTime())
+        : 0;
+    const std::string& resolved = resolvedPath.GetPathString();
+
+    if (timestampValid) {
+        std::scoped_lock lock(mutex);
+        const auto cached = assetFingerprintCache_.find(resolved);
+        if (cached != assetFingerprintCache_.end()
+            && cached->second.size == size
+            && cached->second.timestampBits == timestampBits) {
+            return cached->second.content;
+        }
+    }
+
+    const std::string flightKey =
+        AssetFlightKey(resolved, size, timestampValid, timestampBits);
+    std::shared_future<ContentIdentity> future;
+    std::shared_ptr<std::promise<ContentIdentity>> promise;
+    bool ownsHash = false;
+    {
+        std::scoped_lock lock(mutex);
+        const auto inFlight = assetHashFlights_.find(flightKey);
+        if (inFlight != assetHashFlights_.end()) {
+            future = inFlight->second;
+        } else {
+            promise = std::make_shared<std::promise<ContentIdentity>>();
+            future = promise->get_future().share();
+            assetHashFlights_.emplace(flightKey, future);
+            ownsHash = true;
+        }
+    }
+    if (!ownsHash)
+        return future.get();
+
+    try {
+        constexpr size_t chunkSize = 1024 * 1024;
+        std::array<char, chunkSize> bytes;
+        uint64_t first = 0x243f6a8885a308d3ull;
+        uint64_t second = 0x13198a2e03707344ull;
+        for (uint64_t offset = 0; offset < size;) {
+            const size_t count = static_cast<size_t>(
+                std::min<uint64_t>(bytes.size(), size - offset));
+            if (asset->Read(bytes.data(), count, offset) != count)
+                throw std::runtime_error(
+                    "the asset resolver could not read the complete image");
+            first = ArchHash64(bytes.data(), count, first);
+            second = ArchHash64(bytes.data(), count, second);
+            offset += count;
+        }
+        const ContentIdentity content{first, second, size};
+        {
+            std::scoped_lock lock(mutex);
+            if (timestampValid) {
+                assetFingerprintCache_.insert_or_assign(resolved,
+                    AssetFingerprint{size, timestampBits, content});
+            }
+            assetHashFlights_.erase(flightKey);
+        }
+        promise->set_value(content);
+        return content;
+    } catch (...) {
+        {
+            std::scoped_lock lock(mutex);
+            assetHashFlights_.erase(flightKey);
+        }
+        promise->set_exception(std::current_exception());
+        throw;
+    }
+}
+
+HdNoorRayRenderParam::DecodedTextureData
+HdNoorRayRenderParam::GetOrDecodeTexture(
+    const std::string& filePath, const ContentIdentity& content)
+{
+    std::shared_future<DecodedTextureData> future;
+    std::shared_ptr<std::promise<DecodedTextureData>> promise;
+    bool ownsDecode = false;
+    {
+        std::scoped_lock lock(mutex);
+        const auto cached = decodedTextureCache_.find(content);
+        if (cached != decodedTextureCache_.end()) {
+            DecodedTextureData decoded;
+            decoded.width = cached->second.width;
+            decoded.height = cached->second.height;
+            decoded.pixelType = cached->second.pixelType;
+            switch (decoded.pixelType) {
+            case DecodedPixelType::Rgba8:
+                decoded.rgba8 = cached->second.rgba8.lock();
+                if (decoded.rgba8)
+                    return decoded;
+                break;
+            case DecodedPixelType::Rgba16Float:
+                decoded.rgba16Float =
+                    cached->second.rgba16Float.lock();
+                if (decoded.rgba16Float)
+                    return decoded;
+                break;
+            case DecodedPixelType::Rgba32Float:
+                decoded.rgba32Float =
+                    cached->second.rgba32Float.lock();
+                if (decoded.rgba32Float)
+                    return decoded;
+                break;
+            }
+            decodedTextureCache_.erase(cached);
+        }
+
+        const auto inFlight = decodedTextureFlights_.find(content);
+        if (inFlight != decodedTextureFlights_.end()) {
+            future = inFlight->second;
+        } else {
+            promise = std::make_shared<std::promise<DecodedTextureData>>();
+            future = promise->get_future().share();
+            decodedTextureFlights_.emplace(content, future);
+            ownsDecode = true;
+        }
+    }
+    if (!ownsDecode)
+        return future.get();
+
+    try {
+        DecodedTextureData decoded;
+        HdNoorRayDecodedImage image;
+        std::string hioError;
+        if (HdNoorRayLoadImage(filePath, &image, &hioError)) {
+            decoded.width = image.width;
+            decoded.height = image.height;
+            switch (image.pixelType) {
+            case HdNoorRayImagePixelType::Rgba8:
+                decoded.pixelType = DecodedPixelType::Rgba8;
+                decoded.rgba8 =
+                    std::make_shared<const std::vector<uint8_t>>(
+                        std::move(image.rgba8));
+                break;
+            case HdNoorRayImagePixelType::Rgba16Float:
+                decoded.pixelType = DecodedPixelType::Rgba16Float;
+                decoded.rgba16Float =
+                    std::make_shared<const std::vector<uint16_t>>(
+                        std::move(image.rgba16Float));
+                break;
+            case HdNoorRayImagePixelType::Rgba32Float:
+                decoded.pixelType = DecodedPixelType::Rgba32Float;
+                decoded.rgba32Float =
+                    std::make_shared<const std::vector<float>>(
+                        std::move(image.rgba32Float));
+                break;
+            }
+        } else {
+            // Retain the original decoder for image plugins Hio does not
+            // provide. Its shared backing storage is adopted into the same
+            // content cache as an Hio result.
+            const Texture fallback(filePath, TextureEncoding::Linear8);
+            decoded.width = fallback.getWidth();
+            decoded.height = fallback.getHeight();
+            if (fallback.usesByteStorage()) {
+                decoded.pixelType = DecodedPixelType::Rgba8;
+                decoded.rgba8 = fallback.getByteStorage();
+            } else if (fallback.usesHalfStorage()) {
+                decoded.pixelType = DecodedPixelType::Rgba16Float;
+                decoded.rgba16Float = fallback.getHalfStorage();
+            } else {
+                decoded.pixelType = DecodedPixelType::Rgba32Float;
+                decoded.rgba32Float = fallback.getFloatStorage();
+            }
+        }
+
+        DecodedTextureCacheEntry cacheEntry;
+        cacheEntry.width = decoded.width;
+        cacheEntry.height = decoded.height;
+        cacheEntry.pixelType = decoded.pixelType;
+        cacheEntry.rgba8 = decoded.rgba8;
+        cacheEntry.rgba16Float = decoded.rgba16Float;
+        cacheEntry.rgba32Float = decoded.rgba32Float;
+        {
+            std::scoped_lock lock(mutex);
+            decodedTextureCache_.insert_or_assign(
+                content, std::move(cacheEntry));
+            decodedTextureFlights_.erase(content);
+        }
+        promise->set_value(decoded);
+        return decoded;
+    } catch (...) {
+        {
+            std::scoped_lock lock(mutex);
+            decodedTextureFlights_.erase(content);
+        }
+        promise->set_exception(std::current_exception());
+        throw;
+    }
+}
+
 TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
     const std::string& filePath, const TextureEncoding encoding)
 {
-    PruneTextureCache();
-    const auto existing = textureCache_.find(filePath);
-    if (existing != textureCache_.end() && existing->second.isValid())
-        return existing->second;
-
     try {
-        TextureRef texture = session.scene.add(Texture(filePath, encoding));
-        textureCache_[filePath] = texture;
+        if (filePath.starts_with("noorray-memory://"))
+            return GetOrCreateMemoryTexture(filePath, encoding);
+        const ContentIdentity content =
+            GetTextureContentIdentity(filePath);
+        const DecodedTextureData decoded =
+            GetOrDecodeTexture(filePath, content);
+        const TextureEncoding effectiveEncoding =
+            decoded.pixelType == DecodedPixelType::Rgba16Float
+            ? TextureEncoding::Float16
+            : decoded.pixelType == DecodedPixelType::Rgba32Float
+            ? TextureEncoding::Float32
+            : encoding;
+        const TextureCacheKey cacheKey{content, effectiveEncoding};
+
+        {
+            std::scoped_lock lock(mutex);
+            const auto existing = textureCache_.find(cacheKey);
+            if (existing != textureCache_.end()) {
+                TextureRef texture =
+                    session.scene.getTextureRef(existing->second);
+                if (texture.isValid())
+                    return texture;
+                textureCache_.erase(existing);
+            }
+        }
+
+        std::optional<Texture> textureData;
+        switch (decoded.pixelType) {
+        case DecodedPixelType::Rgba8:
+            textureData.emplace(filePath, decoded.rgba8,
+                decoded.width, decoded.height, effectiveEncoding);
+            break;
+        case DecodedPixelType::Rgba16Float:
+            textureData.emplace(filePath, decoded.rgba16Float,
+                decoded.width, decoded.height, effectiveEncoding);
+            break;
+        case DecodedPixelType::Rgba32Float:
+            textureData.emplace(filePath, decoded.rgba32Float,
+                decoded.width, decoded.height, effectiveEncoding);
+            break;
+        }
+
+        std::scoped_lock lock(mutex);
+        const auto existing = textureCache_.find(cacheKey);
+        if (existing != textureCache_.end()) {
+            TextureRef texture =
+                session.scene.getTextureRef(existing->second);
+            if (texture.isValid())
+                return texture;
+            textureCache_.erase(existing);
+        }
+        TextureRef texture = session.scene.add(std::move(*textureData));
+        textureCache_.insert_or_assign(cacheKey, texture.handle());
         return texture;
     } catch (const std::exception& error) {
         TF_WARN("hdNoorRay could not load texture '%s': %s",
@@ -54,36 +382,198 @@ TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
     }
 }
 
+TextureRef HdNoorRayRenderParam::GetOrCreateMemoryTexture(
+    const std::string& uri, const TextureEncoding encoding)
+{
+    (void) encoding;
+    const std::shared_ptr<const hdnoorray::MemoryTexturePixels> image =
+        hdnoorray::findMemoryTexture(uri);
+    if (!image || !image->rgba)
+        throw std::runtime_error("the Blender memory texture is no longer registered");
+    const std::vector<float>& pixels = *image->rgba;
+
+    const ContentIdentity content{
+        ArchHash64(reinterpret_cast<const char*>(pixels.data()), pixels.size() * sizeof(float),
+            0x243f6a8885a308d3ull),
+        ArchHash64(reinterpret_cast<const char*>(pixels.data()), pixels.size() * sizeof(float),
+            0x13198a2e03707344ull),
+        static_cast<uint64_t>(pixels.size() * sizeof(float))};
+    // Float memory data is already Blender's scene-linear image buffer.
+    // Its requested MaterialX color space is intentionally not reapplied.
+    const TextureCacheKey cacheKey{content, TextureEncoding::Float32};
+    {
+        std::scoped_lock lock(mutex);
+        const auto existing = textureCache_.find(cacheKey);
+        if (existing != textureCache_.end()) {
+            TextureRef texture = session.scene.getTextureRef(existing->second);
+            if (texture.isValid())
+                return texture;
+            textureCache_.erase(existing);
+        }
+    }
+
+    Texture texture(uri, image->rgba, image->width, image->height,
+        TextureEncoding::Float32);
+    std::scoped_lock lock(mutex);
+    const auto existing = textureCache_.find(cacheKey);
+    if (existing != textureCache_.end()) {
+        TextureRef existingTexture = session.scene.getTextureRef(existing->second);
+        if (existingTexture.isValid())
+            return existingTexture;
+        textureCache_.erase(existing);
+    }
+    TextureRef result = session.scene.add(std::move(texture));
+    textureCache_.insert_or_assign(cacheKey, result.handle());
+    return result;
+}
+
 void HdNoorRayRenderParam::PruneTextureCache()
 {
-    // The cache is the only thing keeping a texture alive once no material
-    // samples it, so an entry that nothing else references is dropped. Doing it
-    // lazily here keeps textures shared across a whole material reassignment.
-    std::erase_if(textureCache_, [](const auto& entry) {
-        return !entry.second.isValid();
+    std::scoped_lock lock(mutex);
+    std::erase_if(textureCache_, [this](const auto& entry) {
+        return !session.scene.getTextureRef(entry.second).isValid();
+    });
+    std::erase_if(decodedTextureCache_, [](const auto& entry) {
+        switch (entry.second.pixelType) {
+        case DecodedPixelType::Rgba8:
+            return entry.second.rgba8.expired();
+        case DecodedPixelType::Rgba16Float:
+            return entry.second.rgba16Float.expired();
+        case DecodedPixelType::Rgba32Float:
+            return entry.second.rgba32Float.expired();
+        }
+        return true;
     });
 }
 
-void HdNoorRayRenderParam::MarkSceneDirty()
+void HdNoorRayRenderParam::QueueMaterialCompilation(
+    const SdfPath& id, MaterialX::DocumentPtr document, std::vector<TextureRef> textures,
+    std::function<MaterialCompilationOutput()> compile)
 {
-    sceneNeedsUpdate_.store(true, std::memory_order_relaxed);
+    uint64_t generation;
+    {
+        std::scoped_lock lock(mutex);
+        generation = ++materialCompileGenerations_[id];
+        // Keep the currently published material while an edit compiles. A new
+        // prim gets its document published immediately; the completed compile
+        // then fills that same material slot's program in one render-thread
+        // operation.
+        const auto existing = materials_.find(id);
+        if (existing == materials_.end() || !existing->second.isValid()) {
+            PublishMaterial(id, document);
+        }
+    }
+    pendingMaterialCompiles_.fetch_add(1, std::memory_order_relaxed);
+    materialCompileTasks_.run(
+        [this, id, generation, document, textures = std::move(textures),
+            compile = std::move(compile)]() {
+            MaterialCompilationResult result{
+                id, generation, document, std::move(textures), {}, {}};
+            {
+                // Scene imports can replace a material several times while
+                // older jobs are still sitting in TBB's queue. Discard a
+                // superseded job before it acquires a compiler and starts the
+                // MaterialX-to-SVM graph compilation.
+                std::scoped_lock lock(mutex);
+                const auto current = materialCompileGenerations_.find(id);
+                if (current == materialCompileGenerations_.end()
+                    || current->second != generation) {
+                    completedMaterialCompiles_.push(std::move(result));
+                    return;
+                }
+            }
+            try {
+                result.output = compile();
+            } catch (const std::exception& error) {
+                result.error = error.what();
+            } catch (...) {
+                result.error = "unknown MaterialX compilation failure";
+            }
+            completedMaterialCompiles_.push(std::move(result));
+        });
 }
 
-void HdNoorRayRenderParam::MarkRenderSettingsChanged()
+bool HdNoorRayRenderParam::ProcessMaterialCompilations()
 {
-    renderSettingsChanged_.store(true, std::memory_order_relaxed);
-}
+    bool materialsChanged = false;
+    MaterialCompilationResult result;
+    while (completedMaterialCompiles_.try_pop(result)) {
+        pendingMaterialCompiles_.fetch_sub(1, std::memory_order_relaxed);
+        readyMaterialCompiles_.push_back(std::move(result));
+    }
+    // A scene import can enqueue hundreds of materials. Registering each
+    // wave as soon as it finishes would relink the entire OptiX pipeline once
+    // per frame. Commit the wave together after its last compiler job ends.
+    if (pendingMaterialCompiles_.load(std::memory_order_relaxed) != 0)
+        return false;
 
-bool HdNoorRayRenderParam::ConsumeRenderSettingsChanged()
-{
-    return renderSettingsChanged_.exchange(false, std::memory_order_relaxed);
-}
+    // Fallback documents published straight into scene slots (the shared
+    // native grey, released materials) have no Hydra material prim behind
+    // them, so the queue above never compiles them. Install their programs
+    // here; the graphs are tiny so this stays off the async path.
+    if (CompileSceneMaterials())
+        materialsChanged = true;
 
-uint64_t HdNoorRayRenderParam::GetSceneVersion()
-{
-    if (sceneNeedsUpdate_.exchange(false, std::memory_order_relaxed))
-        sceneVersion_.fetch_add(1, std::memory_order_relaxed);
-    return sceneVersion_.load(std::memory_order_relaxed);
+    const auto publishCompiledProgram = [this](MaterialCompilationResult& result) {
+        if (!session.raytracer)
+            return false;
+        const auto published = materials_.find(result.id);
+        const Material* previousMaterial =
+            published != materials_.end() && published->second.isValid()
+            ? &session.scene.getMaterials()[published->second.index()] : nullptr;
+        const nr::svm::SvmProgramRecord record = previousMaterial
+            && previousMaterial->svmBytecodeLength != 0
+            ? session.raytracer->replaceMaterialXProgram(result.output.program)
+            : session.raytracer->registerMaterialXProgram(result.output.program);
+        materialTextures_[result.id] = std::move(result.textures);
+        PublishMaterial(result.id, result.document);
+        Material& compiled = session.scene.getMaterial(
+            materials_[result.id].handle());
+        compiled.svmBytecodeOffset = record.wordOffset;
+        compiled.svmBytecodeLength = record.wordCount;
+        compiled.svmTextureOffset = record.textureOffset;
+        compiled.svmTextureCount = record.textureCount;
+        return true;
+    };
+
+    for (MaterialCompilationResult& result : readyMaterialCompiles_) {
+        std::scoped_lock lock(mutex);
+        const auto generation = materialCompileGenerations_.find(result.id);
+        if (generation == materialCompileGenerations_.end()
+            || generation->second != result.generation)
+            continue;
+        if (!result.error.empty()) {
+            TF_WARN("hdNoorRay: MaterialX compile failed for %s: %s",
+                result.id.GetText(), result.error.c_str());
+            // A graph that no longer compiles (for example because an
+            // important node was deleted) must never leave the material broken
+            // or stuck on a stale last-good program: fall back to the default
+            // MaterialX material. The synthetic default is a tiny graph that
+            // cannot fail, so compiling it here is safe.
+            try {
+                mx::DocumentPtr fallbackDocument =
+                    nr::materialx::defaultMaterial();
+                fallbackDocument->setDataLibrary(
+                    nr::materialx::getSharedStandardLibraries());
+                nr::svm::SvmCompiler compiler;
+                result.output.program = compiler.compile(fallbackDocument);
+                result.document = std::move(fallbackDocument);
+                result.textures.clear();
+                result.error.clear();
+                if (publishCompiledProgram(result))
+                    materialsChanged = true;
+            } catch (const std::exception& error) {
+                TF_WARN(
+                    "hdNoorRay: default MaterialX fallback also failed for %s: %s",
+                    result.id.GetText(), error.what());
+            }
+            continue;
+        }
+        if (publishCompiledProgram(result))
+            materialsChanged = true;
+    }
+    readyMaterialCompiles_.clear();
+    return materialsChanged;
 }
 
 void HdNoorRayRenderParam::SetProgress(const double progress)
@@ -112,53 +602,205 @@ void HdNoorRayRenderParam::ResetClock()
     progress_.store(0.0, std::memory_order_relaxed);
 }
 
+bool HdNoorRayRenderParam::SetMaterialXDocument(
+    std::string materialLeaf, std::string xml)
+{
+    const uint64_t hash = HashMaterialXDocument(xml);
+    std::unique_lock lock(materialXDocumentsMutex_);
+    const auto existing = materialXDocuments_.find(materialLeaf);
+    if (existing != materialXDocuments_.end()
+        && existing->second.hash == hash
+        && existing->second.xml
+        && existing->second.xml->size() == xml.size()
+        && *existing->second.xml == xml) {
+        return false;
+    }
+
+    MaterialXDocument document;
+    document.xml = std::make_shared<const std::string>(std::move(xml));
+    document.hash = hash;
+    document.revision = ++nextMaterialXDocumentRevision_;
+    materialXDocuments_.insert_or_assign(
+        std::move(materialLeaf), std::move(document));
+    return true;
+}
+
+std::optional<HdNoorRayRenderParam::MaterialXDocument>
+HdNoorRayRenderParam::GetMaterialXDocument(
+    const std::string& materialLeaf) const
+{
+    std::shared_lock lock(materialXDocumentsMutex_);
+    const auto found = materialXDocuments_.find(materialLeaf);
+    if (found == materialXDocuments_.end())
+        return std::nullopt;
+    return found->second;
+}
+
+MaterialRef HdNoorRayRenderParam::GetNativeGreyMaterial()
+{
+    if (!nativeGreyMaterial_.isValid()) {
+        nativeGreyMaterial_ =
+            session.scene.addMaterial(GetSharedNativeFallbackMaterial());
+        QueueSceneMaterialCompilation(nativeGreyMaterial_);
+    }
+    return nativeGreyMaterial_;
+}
+
+void HdNoorRayRenderParam::QueueSceneMaterialCompilation(const MaterialRef slot)
+{
+    if (slot.isValid()
+        && std::ranges::find(pendingSceneMaterialCompiles_, slot)
+            == pendingSceneMaterialCompiles_.end())
+        pendingSceneMaterialCompiles_.push_back(slot);
+}
+
+bool HdNoorRayRenderParam::CompileSceneMaterials()
+{
+    std::vector<MaterialRef> toCompile;
+    {
+        std::scoped_lock lock(mutex);
+        toCompile.swap(pendingSceneMaterialCompiles_);
+    }
+    if (toCompile.empty())
+        return false;
+
+    bool materialsChanged = false;
+    const std::vector<MaterialX::DocumentPtr>& documents =
+        session.scene.getMaterialXDocuments();
+    for (const MaterialRef& slot : toCompile) {
+        if (!slot.isValid() || !session.raytracer)
+            continue;
+        const size_t index = slot.index();
+        if (index >= documents.size() || !documents[index])
+            continue;
+        Material& material = session.scene.getMaterial(slot.handle());
+        if (material.svmBytecodeLength != 0)
+            continue;
+        try {
+            // The graph is a shared immutable fallback document; setDataLibrary
+            // only stores a reference to the process-wide standard libraries.
+            const MaterialX::DocumentPtr& document = documents[index];
+            document->setDataLibrary(nr::materialx::getSharedStandardLibraries());
+            nr::svm::SvmCompiler compiler;
+            const nr::svm::SvmProgramRecord record =
+                session.raytracer->registerMaterialXProgram(
+                    compiler.compile(document));
+            material.svmBytecodeOffset = record.wordOffset;
+            material.svmBytecodeLength = record.wordCount;
+            material.svmTextureOffset = record.textureOffset;
+            material.svmTextureCount = record.textureCount;
+            session.scene.setDirtyFlag(Meshes);
+            session.scene.setDirtyFlag(Accumulation);
+            materialsChanged = true;
+        } catch (const std::exception& error) {
+            TF_WARN("hdNoorRay: could not compile fallback material for slot %zu: %s",
+                index, error.what());
+        }
+    }
+    return materialsChanged;
+}
+
 void HdNoorRayRenderParam::PublishMaterial(
-    const SdfPath& id, const Material& material)
+    const SdfPath& id, const MaterialX::DocumentPtr& document)
 {
     MaterialRef& published = materials_[id];
     if (published.isValid())
-        session.scene.updateMaterial(published.handle(), material);
+    {
+        session.scene.updateMaterialDocument(published.handle(), document);
+    }
     else
-        published = session.scene.add(material);
+    {
+        published = session.scene.addMaterial(document);
+    }
+    session.scene.setDirtyFlag(Meshes);
 
     const auto bindings = materialBindings_.find(id);
     if (bindings != materialBindings_.end())
-        for (const MeshAssetHandle mesh : bindings->second)
+        for (const auto& [mesh, slot] : bindings->second)
             if (MeshAsset* asset = session.scene.getMeshAsset(mesh))
-                asset->setMaterial(0, published);
-    MarkSceneDirty();
+                asset->setMaterial(slot, published);
+}
+
+void HdNoorRayRenderParam::PublishFallbackMaterial(
+    const SdfPath& id, const MaterialX::DocumentPtr& document)
+{
+    std::scoped_lock lock(mutex);
+
+    // Make every queued result for the previous custom document stale before
+    // publishing the fallback, otherwise a late completion could resurrect
+    // the material after its empty transport tombstone was processed.
+    ++materialCompileGenerations_[id];
+
+    materialTextures_.erase(id);
+    PublishMaterial(id, document);
+
+    // PublishMaterial only swaps the document in place; a stale program from
+    // the previous document would otherwise keep rendering. Invalidate the
+    // slot and let the render thread compile the fallback onto it -- unless
+    // this exact document is already current and compiled.
+    const auto published = materials_.find(id);
+    if (published != materials_.end() && published->second.isValid()) {
+        const MaterialHandle handle = published->second.handle();
+        const auto& sceneDocuments = session.scene.getMaterialXDocuments();
+        const bool alreadyCurrent = handle.index() < sceneDocuments.size()
+            && sceneDocuments[handle.index()] == document
+            && session.scene.getMaterial(handle).svmBytecodeLength != 0;
+        if (!alreadyCurrent) {
+            session.scene.invalidateMaterial(handle);
+            QueueSceneMaterialCompilation(published->second);
+        }
+    }
 }
 
 void HdNoorRayRenderParam::ReleaseMaterial(const SdfPath& id)
 {
-    materials_.erase(id);
-    materialBindings_.erase(id);
-    MarkSceneDirty();
+    // Invalidate work queued by the retiring Sprim. Keep the monotonically
+    // increasing counter so a new Sprim at the same path cannot accidentally
+    // accept an older job with a reused generation number.
+    ++materialCompileGenerations_[id];
+
+    const auto published = materials_.find(id);
+    if (published != materials_.end() && published->second.isValid()) {
+        const MaterialRef& slot = published->second;
+
+        // Meshes can outlive their material Sprim. Turn the shared slot into a
+        // visible native grey fallback before dropping the delegate's
+        // reference; their MaterialRefs keep it alive until Hydra either
+        // rebinds or finalizes those meshes. The render thread compiles the
+        // grey document onto the same slot.
+        session.scene.updateMaterialDocument(slot.handle(),
+            GetSharedNativeFallbackMaterial());
+        session.scene.invalidateMaterial(slot.handle());
+        QueueSceneMaterialCompilation(slot);
+        materials_.erase(published);
+    }
+    materialTextures_.erase(id);
 }
 
 void HdNoorRayRenderParam::BindMaterial(
-    const SdfPath& id, const MeshAssetHandle mesh)
+    const SdfPath& id, const MeshAssetHandle mesh, const uint32_t slot)
 {
     if (id.IsEmpty() || !mesh.isValid())
         return;
-    std::vector<MeshAssetHandle>& bindings = materialBindings_[id];
-    if (std::ranges::find(bindings, mesh) == bindings.end())
-        bindings.push_back(mesh);
+    auto& bindings = materialBindings_[id];
+    const auto entry = std::make_pair(mesh, slot);
+    if (std::ranges::find(bindings, entry) == bindings.end())
+        bindings.push_back(entry);
 
     const auto material = materials_.find(id);
     if (material == materials_.end() || !material->second.isValid())
         return;
     if (MeshAsset* asset = session.scene.getMeshAsset(mesh))
-        asset->setMaterial(0, material->second);
+        asset->setMaterial(slot, material->second);
 }
 
 void HdNoorRayRenderParam::UnbindMaterial(
-    const SdfPath& id, const MeshAssetHandle mesh)
+    const SdfPath& id, const MeshAssetHandle mesh, const uint32_t slot)
 {
     const auto found = materialBindings_.find(id);
     if (found == materialBindings_.end())
         return;
-    std::erase(found->second, mesh);
+    std::erase(found->second, std::make_pair(mesh, slot));
     if (found->second.empty())
         materialBindings_.erase(found);
 }

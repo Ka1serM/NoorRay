@@ -1,7 +1,5 @@
 #include "Raytracing/Acceleration/Tlas.h"
 
-#include <algorithm>
-
 #include <optix_stubs.h>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
@@ -15,6 +13,9 @@
 
 namespace
 {
+constexpr uint32_t MeshHitGroupSbtOffset = 0;
+constexpr uint32_t GaussianHitGroupSbtOffset = 1;
+
 std::array<float, 12> toOptixTransform(const glm::mat4& matrix)
 {
     // OptiX expects a row-major 3x4 affine matrix. GLM's matrix indexing is
@@ -55,8 +56,8 @@ std::vector<AccelInstanceInput> Tlas::buildInstanceInputs(
             const uint32_t meshIndex = instance.getMeshIndex();
             const MeshAsset& asset = instance.getMeshAsset();
             result[index] = AccelInstanceInput{toOptixTransform(objectToWorld),
-                asset.getBlas().getTraversable(), static_cast<uint32_t>(index), 0,
-                MeshVisibility};
+                asset.getBlas().getTraversable(), static_cast<uint32_t>(index),
+                MeshHitGroupSbtOffset, MeshVisibility};
 
             GpuInstance gpuInstance{};
             gpuInstance.objectToWorld = objectToWorld;
@@ -160,7 +161,7 @@ void Tlas::buildGaussianInstanceAccel(
             const auto transform = toOptixTransform(toMat4(gaussians[index].transform));
             std::copy(transform.begin(), transform.end(), child.transform);
             child.instanceId = 0;
-            child.sbtOffset = 1;
+            child.sbtOffset = GaussianHitGroupSbtOffset;
             child.visibilityMask = GaussianVisibility;
             child.flags = OPTIX_INSTANCE_FLAG_NONE;
             child.traversableHandle = proxyBlas->getTraversable();
@@ -214,7 +215,7 @@ void Tlas::updateMeshInstanceInPlace(
     const auto transform = toOptixTransform(objectToWorld);
     std::copy(transform.begin(), transform.end(), destination.transform);
     destination.instanceId = index;
-    destination.sbtOffset = 0;
+    destination.sbtOffset = MeshHitGroupSbtOffset;
     destination.visibilityMask = MeshVisibility;
     destination.flags = OPTIX_INSTANCE_FLAG_NONE;
     destination.traversableHandle =

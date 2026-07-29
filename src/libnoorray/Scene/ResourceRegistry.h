@@ -49,6 +49,7 @@ public:
             const auto slot = static_cast<uint32_t>(slots_.size());
             storage_.emplace_back(std::forward<Args>(args)...);
             slots_.push_back(SlotState{.generation = 0, .refCount = 0, .live = true});
+            ++revision_;
             return Handle(slot, 0);
         }
         const uint32_t slot = freeSlots_.back();
@@ -56,7 +57,23 @@ public:
         storage_[slot] = T(std::forward<Args>(args)...);
         slots_[slot].live = true;
         slots_[slot].refCount = 0;
+        ++revision_;
         return Handle(slot, slots_[slot].generation);
+    }
+
+    // Reserves enough backing storage for a batch of additional live
+    // resources. Recycled slots are counted first, so importing into a scene
+    // with spare slots does not needlessly relocate managed storage.
+    void reserveAdditional(const std::size_t additional)
+    {
+        const std::size_t newSlots = additional > freeSlots_.size()
+            ? additional - freeSlots_.size() : 0;
+        if (newSlots == 0)
+            return;
+        const std::size_t capacity = storage_.size() + newSlots;
+        storage_.reserve(capacity);
+        slots_.reserve(capacity);
+        releasedSlots_.reserve(capacity);
     }
 
     bool isValid(const Handle handle) const
@@ -100,6 +117,9 @@ public:
         state.live = false;
         ++state.generation;
         freeSlots_.push_back(handle.index());
+        releasedSlots_.push_back(
+            ReleasedSlot{handle.index(), state.generation});
+        ++revision_;
         return true;
     }
 
@@ -111,6 +131,9 @@ public:
     // Slot-level queries, for consumers that walk the dense storage directly
     // and must skip the placeholders left behind by released resources.
     uint32_t slotCount() const { return static_cast<uint32_t>(slots_.size()); }
+    // Monotonic membership version for consumers that mirror registry slots.
+    // Unsigned wrap is intentional; consumers only compare for inequality.
+    uint64_t revision() const { return revision_; }
     bool isLiveSlot(const uint32_t slot) const
     {
         return slot < slots_.size() && slots_[slot].live;
@@ -118,6 +141,21 @@ public:
     Handle handleAt(const uint32_t slot) const
     {
         return isLiveSlot(slot) ? Handle(slot, slots_[slot].generation) : Handle();
+    }
+
+    // Visits only slots reclaimed since the previous call. Consumers that
+    // own sidecar state (for example Scene's per-material TextureRefs) can
+    // clean that state without scanning the registry's full high-water mark
+    // on every mutation. Events for slots reused in the meantime are filtered
+    // here, so a delayed consumer cannot discard a new resource's sidecar.
+    template<class Visitor>
+    void consumeReleasedSlots(Visitor&& visitor)
+    {
+        for (const ReleasedSlot event : releasedSlots_)
+            if (!isLiveSlot(event.slot)
+                && slots_[event.slot].generation == event.generation)
+                visitor(event.slot);
+        releasedSlots_.clear();
     }
 
     Storage& storage() { return storage_; }
@@ -128,6 +166,7 @@ public:
     // allocated into their slot next.
     void clear()
     {
+        bool changed = false;
         for (uint32_t slot = 0; slot < slots_.size(); ++slot) {
             if (!slots_[slot].live)
                 continue;
@@ -136,7 +175,12 @@ public:
             slots_[slot].refCount = 0;
             ++slots_[slot].generation;
             freeSlots_.push_back(slot);
+            releasedSlots_.push_back(
+                ReleasedSlot{slot, slots_[slot].generation});
+            changed = true;
         }
+        if (changed)
+            ++revision_;
     }
 
 private:
@@ -147,9 +191,17 @@ private:
         bool live{};
     };
 
+    struct ReleasedSlot
+    {
+        uint32_t slot;
+        uint32_t generation;
+    };
+
     Storage storage_;
     std::vector<SlotState> slots_;
     std::vector<uint32_t> freeSlots_;
+    std::vector<ReleasedSlot> releasedSlots_;
+    uint64_t revision_{};
 };
 
 // An owning handle. Copying shares ownership, destruction gives it up, and the

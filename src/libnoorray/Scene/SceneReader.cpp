@@ -16,6 +16,7 @@
 #include "Camera/ThinLensCamera.h"
 #include "Mesh/Assets/MeshAsset.h"
 #include "Mesh/Transform.h"
+#include "MaterialX/MaterialXCompiler.h"
 #include "Shading/Sellmeier.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
@@ -24,6 +25,7 @@
 #include "Scene/SceneObject.h"
 
 namespace {
+std::string readTextFile(const std::string& filepath);
 glm::vec3 toVec3(const nr::sceneio::Vec3& value)
 {
     return {value[0], value[1], value[2]};
@@ -51,9 +53,9 @@ SensorType sensorType(const std::string& type)
     throw std::runtime_error("Unknown camera sensor type: " + type);
 }
 
-Material toMaterial(const nr::sceneio::MaterialFile& file)
+MaterialAuthoring toMaterial(const nr::sceneio::MaterialFile& file)
 {
-    Material material{};
+    MaterialAuthoring material{};
     material.albedo = toVec3(file.albedo);
     material.roughness = file.roughness;
     material.metallic = file.metallic;
@@ -164,8 +166,8 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
         if (SceneObject* root = scene.getActiveObject())
             root->setLocalTransform(transform);
     } else if (object.type == "obj") {
-        Material materialOverride{};
-        const Material* materialOverridePtr = nullptr;
+        MaterialAuthoring materialOverride{};
+        const MaterialAuthoring* materialOverridePtr = nullptr;
         if (object.material) {
             materialOverride = toMaterial(*object.material);
             materialOverridePtr = &materialOverride;
@@ -174,18 +176,43 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
         if (SceneObject* root = scene.getActiveObject())
             root->setLocalTransform(transform);
     } else {
-        Material material = object.material ? toMaterial(*object.material) : Material{};
+        const MaterialX::DocumentPtr materialDocument = object.material
+            ? nr::materialx::documentFromAuthoring(toMaterial(*object.material))
+            : nr::materialx::defaultMaterial();
+
+        // Mark the material as needing MaterialX compilation when a path is
+        // specified. The actual compilation happens later (in runCli()), once
+        // the Raytracer exists and can register OptiX modules.
         MeshAssetRef meshAsset;
         if (object.type == "cube")
-            meshAsset = scene.add(MeshAsset::CreateCube(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreateCube(scene, object.name, materialDocument));
         else if (object.type == "plane")
-            meshAsset = scene.add(MeshAsset::CreatePlane(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreatePlane(scene, object.name, materialDocument));
         else if (object.type == "disk")
-            meshAsset = scene.add(MeshAsset::CreateDisk(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreateDisk(scene, object.name, materialDocument));
         else if (object.type == "sphere")
-            meshAsset = scene.add(MeshAsset::CreateSphere(scene, object.name, material));
+            meshAsset = scene.add(MeshAsset::CreateSphere(scene, object.name, materialDocument));
         else
             throw std::runtime_error("Unknown scene object type: " + object.type);
+
+        if (object.material && !object.material->materialx_path.empty())
+        {
+            const uint32_t matIndex = meshAsset.get()->getMaterialIds()[0];
+            // Ensure the vector is large enough and store the path. The path
+            // is the source of truth for disk-backed materials: the XML is
+            // only read from it at compile time (import), never retained in
+            // memory. The in-memory document slot is cleared so the path
+            // takes precedence.
+            auto& paths = scene.getMaterialXSourcePaths();
+            if (paths.size() <= matIndex)
+                paths.resize(matIndex + 1);
+            paths[matIndex] = object.material->materialx_path;
+            auto& documents = scene.getMaterialXDocuments();
+            if (documents.size() <= matIndex)
+                documents.resize(matIndex + 1);
+            documents[matIndex] = nullptr;
+        }
+
         scene.add(std::make_unique<MeshInstance>(scene, object.name, meshAsset, transform));
     }
 }
@@ -210,6 +237,15 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
         throw std::runtime_error("Failed to parse scene JSON: " + glz::format_error(error, json));
 
     scene.clear();
+
+    const size_t proceduralMeshCount = static_cast<size_t>(
+        std::ranges::count_if(file.objects,
+            [](const nr::sceneio::ObjectFile& object) {
+                return object.type == "cube" || object.type == "plane"
+                    || object.type == "disk" || object.type == "sphere";
+            }));
+    scene.reserveForImport(
+        proceduralMeshCount, proceduralMeshCount, file.objects.size());
 
     if (file.environment) {
         Environment& environment = scene.getEnvironment();
@@ -248,4 +284,5 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
 
     if (activeCameraCount == 0)
         scene.setActiveCamera(nullptr);
+    scene.reclaimUnusedResources();
 }

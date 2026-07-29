@@ -59,6 +59,10 @@ struct MaterialFile {
     float opacity{1.0f};
     Vec3 emission{};
     float emission_strength{};
+    // Path to a MaterialX document (.mtlx). When set, the material is
+    // compiled through MaterialXCompiler -> OSL -> PTX and runs as an
+    // OptiX direct callable instead of using the legacy material path.
+    std::string materialx_path;
 };
 
 struct ObjectFile {

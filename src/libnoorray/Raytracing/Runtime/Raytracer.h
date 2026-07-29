@@ -1,8 +1,8 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <cuda_runtime_api.h>
@@ -25,6 +25,7 @@
 #include "Raytracing/Denoising/OptixDenoiserState.h"
 #include "Raytracing/Acceleration/Tlas.h"
 #include "Shading/EnergyLut.h"
+#include "SVM/SvmProgramTable.h"
 
 class CameraInstance;
 class Context;
@@ -52,12 +53,17 @@ public:
     void resize(uint32_t width, uint32_t height);
     void renderFrame(uint32_t frameIndex = 0, uint32_t accumulatedSamples = 0);
 
-    // Turns the surface AOVs (albedo, normal, cryptomatte, position) on. Their
-    // images are allocated here, so a host that binds them (the app viewport)
-    // must enable AOVs before it reads getOutputAlbedo() and friends.
+    nr::svm::SvmProgramRecord registerMaterialXProgram(const nr::svm::CompiledSvmProgram& program);
+    nr::svm::SvmProgramRecord replaceMaterialXProgram(
+        const nr::svm::CompiledSvmProgram& program);
+    void releaseMaterialXProgram(uint32_t index);
+    uint32_t getAvailableMaterialXProgramCount() const {
+        return static_cast<uint32_t>(materialxPrograms.records().size());
+    }
+    void clearMaterialXPrograms();
+
     void setAovEnabled(bool enabled);
     bool getAovEnabled() const;
-    // True once the AOV images exist and can be bound or read back.
     bool hasAovImages() const { return aovImagesCreated; }
     void setStatsEnabled(bool enabled) { kernelStats.setEnabled(enabled); }
     void setTimingEnabled(bool enabled) { m_timingEnabled = enabled; }
@@ -69,9 +75,6 @@ public:
     void updateLights();
     void updateTLAS();
 
-    // Read-only accessors for GaussianTrainRenderer: training reuses the
-    // same proxy-BVH machinery the interactive renderer already builds
-    // (updateTLAS()), rather than maintaining a second TLAS.
     OptixTraversableHandle getGaussianTlasHandle() const { return tlas.getTraversable(); }
     OptixDeviceContext getOptixDeviceContext() const { return optixCtx; }
     cudaStream_t getCudaStream() const { return stream; }
@@ -101,9 +104,6 @@ private:
 
     Context& context;
     Scene& scene;
-    // AOVs are opt-in: their four images cost VRAM and their raygen costs a
-    // launch, and a host that only wants beauty (hdNoorRay, the CLI) never
-    // reads them. Nothing allocates them until setAovEnabled(true).
     bool aovEnabled{false};
     bool aovAvailable{};
     bool aovStale{true};
@@ -160,6 +160,15 @@ private:
     nr::cuda::UniqueOptixProgramGroup optixGaussianHitGroup;
     nr::cuda::UniqueOptixProgramGroup optixProxyOverdrawHitGroup;
     nr::cuda::UniqueOptixProgramGroup optixMissGroup;
+
+    nr::svm::SvmProgramTable materialxPrograms;
+    nr::cuda::UniqueDeviceBuffer svmWordsDevice;
+    nr::cuda::UniqueDeviceBuffer svmTextureIndicesDevice;
+
+    // One combined buffer, shared by path-trace and AOV SBTs: one common mesh
+    // hitgroup record followed by one Gaussian record. Per-face material
+    // selection happens in Geometry.h and never changes this SBT.
+    nr::cuda::UniqueDeviceBuffer meshHitgroupRecordBase;
     nr::cuda::UniqueOptixPipeline optixPipeline;
     nr::cuda::UniqueOptixPipeline optixProxyOverdrawPipeline;
     nr::cuda::UniqueOptixModule optixTrainingModule;
@@ -169,8 +178,6 @@ private:
     nr::cuda::UniqueDeviceBuffer optixPathTraceRecord;
     nr::cuda::UniqueDeviceBuffer optixAovRecord;
     nr::cuda::UniqueDeviceBuffer optixProxyOverdrawRecord;
-    nr::cuda::UniqueDeviceBuffer optixHitgroupRecord;
-    nr::cuda::UniqueDeviceBuffer optixAovHitgroupRecord;
     nr::cuda::UniqueDeviceBuffer optixProxyOverdrawHitgroupRecord;
     nr::cuda::UniqueDeviceBuffer optixMissRecord;
     nr::cuda::UniqueDeviceBuffer optixTrainingExtendRecord;
@@ -183,6 +190,12 @@ private:
     void allocateScratchBuffers();
     void freeScratchBuffers() noexcept;
     void freeSceneData() noexcept;
+    void rebuildPipeline();
+    nr::cuda::UniqueOptixPipeline prepareSvmPipeline() const;
+    void installSvmPipeline(nr::cuda::UniqueOptixPipeline pipeline);
+    void rebuildMeshHitgroupSbt();
+    void uploadSvmPrograms();
+    OptixPipelineCompileOptions pipelineCompileOptions{};
     static constexpr uint32_t PostProcessPsf = 1u << 0u;
     static constexpr uint32_t PostProcessNoiseVariance = 1u << 1u;
 

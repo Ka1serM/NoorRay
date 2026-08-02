@@ -26,6 +26,7 @@ struct Vec2
 struct LayoutNode
 {
     std::string name;
+    float width = 210.0f;  // Measured width; <= 1 means "unknown", a default is used.
     float height = 60.0f;  // Measured height; <= 1 means "unknown", a default is used.
     bool hasPosition = false;
     Vec2 position{};       // Current position, the anchor when hasPosition is set.

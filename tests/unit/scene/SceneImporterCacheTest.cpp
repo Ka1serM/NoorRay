@@ -1,8 +1,8 @@
 #include "NoorRaySession.h"
 #include "Scene/Scene.h"
-#include "Scene/SceneImporter.h"
+#include "Scene/Import/SceneImporter.h"
 #include "Scene/SceneObject.h"
-#include "Shading/Material.h"
+#include "Materials/Shading/Material.h"
 
 #include <glm/vec3.hpp>
 

@@ -107,6 +107,19 @@ bool HdNoorRayRenderBuffer::CopyFromCudaArray(cudaArray_t source)
         cudaMemcpyDeviceToHost) == cudaSuccess;
 }
 
+bool HdNoorRayRenderBuffer::CopyFromCudaBuffer(
+    const void* source, const size_t bytes)
+{
+    const size_t expectedBytes = static_cast<size_t>(width_) * height_
+        * sizeof(float) * 4;
+    if (source == nullptr || bytes < expectedBytes
+        || format_ != HdFormatFloat32Vec4 || data_.empty())
+        return false;
+    return cudaMemcpy(
+        data_.data(), source, expectedBytes,
+        cudaMemcpyDeviceToHost) == cudaSuccess;
+}
+
 void HdNoorRayRenderBuffer::_Deallocate()
 {
     width_ = 0;

@@ -1,4 +1,4 @@
-#include "Camera/Sensor.h"
+#include "Rendering/Camera/Sensor.h"
 
 #include <algorithm>
 #include <array>
@@ -7,10 +7,10 @@
 #include <type_traits>
 #include <vector>
 
-#include "Camera/GatherPsfSensor.h"
-#include "Camera/RectangularSensor.h"
-#include "Camera/ScatterPsfSensor.h"
-#include "CUDA/ManagedMemory.h"
+#include "Rendering/Camera/GatherPsfSensor.h"
+#include "Rendering/Camera/RectangularSensor.h"
+#include "Rendering/Camera/ScatterPsfSensor.h"
+#include "Backend/CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
 #include "UI/MathInput.h"
 #include "portable-file-dialogs.h"

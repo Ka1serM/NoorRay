@@ -38,6 +38,13 @@ public:
     std::vector<const MaterialXNodeType*> inGroup(const std::string& group) const;
     // The definition backing a menu entry, or nullptr if it is unavailable.
     MaterialX::ConstNodeDefPtr findNodeDef(const MaterialXNodeType& type) const;
+    // The definition backing a node already in a document. A document only
+    // stores the inputs that were actually authored, so the declaration is
+    // what knows a node's full input list and the defaults of the inputs the
+    // document left out. Matched on output type as well as category because
+    // categories like "add" or "mix" are declared once per data type.
+    MaterialX::ConstNodeDefPtr findNodeDef(
+        const std::string& category, const std::string& outputType) const;
     // Non-empty when the standard libraries could not be loaded, in which case
     // the catalog is empty.
     const std::string& loadError() const { return loadError_; }
@@ -50,3 +57,14 @@ private:
     std::vector<std::string> groups_;
     std::string loadError_;
 };
+
+// The inputs a node should expose in the editor: everything its declaration
+// declares, followed by any input the document authored that the declaration
+// does not know about. A document stores only the inputs somebody actually
+// wrote -- the default open_pbr_surface material authors base_color and
+// specular_roughness and nothing else -- so a node's own input list is not its
+// parameter list, and using it would leave metallic, transmission and the rest
+// with neither a pin nor a properties row. Declaration inputs carry the
+// library defaults; the returned elements are only ever read, never written,
+// since the declared ones belong to the shared catalog libraries.
+std::vector<MaterialX::InputPtr> exposedInputs(const MaterialX::NodePtr& node);

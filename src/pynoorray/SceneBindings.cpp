@@ -7,8 +7,8 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/string.h>
 
-#include "Camera/CameraInstance.h"
-#include "Mesh/Assets/MeshAsset.h"
+#include "Rendering/Camera/CameraInstance.h"
+#include "Geometry/Mesh/Assets/MeshAsset.h"
 #include "Scene/Scene.h"
 #include "Scene/SceneObject.h"
 

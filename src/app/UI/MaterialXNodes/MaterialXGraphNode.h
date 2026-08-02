@@ -31,6 +31,9 @@ public:
     void setMaterialNode(MaterialX::NodePtr node);
     // Drops the pins and rebuilds them, for after a rebind changed the inputs.
     void rebuildPins();
+    // Returns the matching input pin, or null for inputs rendered inline in
+    // the node body. ImNodeFlow's inPin() is not a nullable lookup.
+    ImFlow::Pin* findInputPin(const std::string& inputName);
 
 protected:
     // Body drawn under the title bar. The default shows the node category.

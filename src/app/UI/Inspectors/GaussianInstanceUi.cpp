@@ -1,7 +1,7 @@
 #include <imgui.h>
 
-#include "Mesh/Assets/GaussianAsset.h"
-#include "Scene/GaussianInstance.h"
+#include "Geometry/Mesh/Assets/GaussianAsset.h"
+#include "Scene/Objects/GaussianInstance.h"
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"
 

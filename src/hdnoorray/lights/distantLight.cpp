@@ -8,7 +8,7 @@
 
 #include <glm/trigonometric.hpp>
 
-#include "Scene/LightInstance.h"
+#include "Scene/Objects/LightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -26,6 +26,11 @@ void HdNoorRayDistantLight::Configure(
     HdSceneDelegate* delegate, const glm::mat4&,
     LightInstance& light, float& intensity) const
 {
+    // Blender's USD/Hydra exporter writes sun energy as energy / 4. NoorRay's
+    // directional-light radiance uses Blender's energy scale directly, so
+    // restore that scale here before applying USD normalize semantics.
+    intensity *= 4.0f;
+
     const float halfAngle = std::clamp(
         FloatParam(delegate, GetId(), HdLightTokens->angle, 0.265f),
         0.0f, 180.0f);

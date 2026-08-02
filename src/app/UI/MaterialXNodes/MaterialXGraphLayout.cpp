@@ -7,10 +7,11 @@
 
 namespace
 {
-constexpr float XSpacing = 250.0f;
+constexpr float XGap = 40.0f;
 constexpr float YGap = 40.0f;
 constexpr float RootGap = 350.0f;
 constexpr float Margin = 40.0f;
+constexpr float DefaultWidth = 210.0f;
 constexpr float DefaultHeight = 60.0f;
 }
 
@@ -18,6 +19,11 @@ namespace MaterialXGraphLayout
 {
 namespace
 {
+float effectiveWidth(const LayoutNode& node)
+{
+    return node.width > 1.0f ? node.width : DefaultWidth;
+}
+
 float effectiveHeight(const LayoutNode& node)
 {
     return node.height > 1.0f ? node.height : DefaultHeight;
@@ -68,11 +74,23 @@ std::unordered_map<std::string, Vec2> autoLayout(
     std::map<int, std::vector<std::string>> columns;
     for (const LayoutNode& node : nodes)
         columns[level[node.name]].push_back(node.name);
-    const int maxLevel = columns.empty() ? 0 : columns.rbegin()->first;
+
+    // A fixed column stride would let wide nodes extend into the next column.
+    // Build positions from left to right using the widest measured node in
+    // each column, leaving XGap clear before the following column begins.
+    std::unordered_map<int, float> columnX;
+    float cursorX = Margin;
+    for (auto column = columns.rbegin(); column != columns.rend(); ++column) {
+        columnX[column->first] = cursorX;
+        float width = DefaultWidth;
+        for (const std::string& name : column->second)
+            width = std::max(width, effectiveWidth(byName[name]));
+        cursorX += width + XGap;
+    }
 
     std::unordered_map<std::string, Vec2> result;
     for (const auto& [column, names] : columns) {
-        const float x = Margin + static_cast<float>(maxLevel - column) * XSpacing;
+        const float x = columnX[column];
         // Only the free nodes are stacked; anchored nodes stay where they are
         // and contribute to centering alone.
         float block = 0.0f;

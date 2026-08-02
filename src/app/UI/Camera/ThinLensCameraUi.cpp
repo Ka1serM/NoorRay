@@ -1,8 +1,8 @@
-#include "Camera/ThinLensCamera.h"
+#include "Rendering/Camera/ThinLensCamera.h"
 
 #include <algorithm>
 
-#include "CUDA/ManagedMemory.h"
+#include "Backend/CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
 
 bool ThinLensCamera::renderUi()

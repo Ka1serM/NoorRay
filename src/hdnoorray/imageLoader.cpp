@@ -118,7 +118,7 @@ void ExpandHalf(const std::vector<std::byte>& source,
 }
 
 bool HdNoorRayLoadImage(const std::string& assetPath,
-    HdNoorRayDecodedImage* image, std::string* error)
+    HdNoorRayDecodedImage* image, std::string* error, const bool flipY)
 {
     if (!image)
         return Fail(nullptr, error, "Image output pointer is null");
@@ -206,7 +206,10 @@ bool HdNoorRayLoadImage(const std::string& assetPath,
         storage.height = height;
         storage.depth = 1;
         storage.format = format;
-        storage.flipped = false;
+        // Normalize file-backed images to the same bottom-origin row order as
+        // Blender's live image buffer. MaterialX UVs then pass through
+        // unchanged for both memory and file textures.
+        storage.flipped = flipY;
         storage.data = destination;
         if (!source->Read(storage))
             return Fail(image, error,

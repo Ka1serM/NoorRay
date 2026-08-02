@@ -1,7 +1,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "Mesh/VertexColor.h"
+#include "Geometry/Mesh/VertexColor.h"
 
 TEST_CASE("vertex colors use packed RGBA8 sRGB storage", "[vertex-color]")
 {

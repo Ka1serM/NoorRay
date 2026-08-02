@@ -27,9 +27,10 @@ if(NR_USD_ROOT STREQUAL NR_VENDORED_USD_DIR)
         file(MAKE_DIRECTORY "${NR_VENDORED_USD_DIR}/include")
         file(RENAME "${_nr_usd_tmp}/usd/include/pxr"
              "${NR_VENDORED_USD_DIR}/include/pxr")
-        file(MAKE_DIRECTORY "${NR_VENDORED_USD_DIR}/include/python3.13")
-        file(RENAME "${_nr_usd_tmp}/python/include/python3.13/pyconfig.h"
-             "${NR_VENDORED_USD_DIR}/include/python3.13/pyconfig.h")
+        # USD's headers pull in the full CPython API (pyconfig.h, patchlevel.h,
+        # Python.h, ...), so vendor the whole include directory.
+        file(RENAME "${_nr_usd_tmp}/python/include/python3.13"
+             "${NR_VENDORED_USD_DIR}/include/python3.13")
         file(REMOVE_RECURSE "${_nr_usd_tmp}")
         message(STATUS "Vendored USD headers at ${NR_VENDORED_USD_DIR}")
     endif()
@@ -88,6 +89,7 @@ add_library(NoorRayHydraUsd INTERFACE)
 target_compile_definitions(NoorRayHydraUsd INTERFACE ARCH_HAS_GNU_STL_EXTENSIONS)
 if(TARGET hd)
     target_link_libraries(NoorRayHydraUsd INTERFACE
+            NoorRayUsd
             hd
             plug
             tf
@@ -151,6 +153,8 @@ add_library(hdnoorray MODULE
         lights/sphereLight.h
         imageLoader.cpp
         imageLoader.h
+        lensMetadataBridge.cpp
+        lensMetadataBridge.h
         material.cpp
         material.h
         memoryTextureRegistry.cpp

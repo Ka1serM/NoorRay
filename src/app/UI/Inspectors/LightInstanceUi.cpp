@@ -1,4 +1,4 @@
-#include "Scene/LightInstance.h"
+#include "Scene/Objects/LightInstance.h"
 
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"

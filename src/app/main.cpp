@@ -6,12 +6,12 @@
 #include <string>
 #include <filesystem>
 #include <thread>
-#include "MaterialXSceneRuntime.h"
+#include "Materials/MaterialX/MaterialXSceneRuntime.h"
 #include "NoorRaySession.h"
 #include "UI/NoorRayUi.h"
-#include "Camera/CameraInstance.h"
+#include "Rendering/Camera/CameraInstance.h"
 #include "Log.h"
-#include "Raytracing/Runtime/Raytracer.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
 
 namespace
 {

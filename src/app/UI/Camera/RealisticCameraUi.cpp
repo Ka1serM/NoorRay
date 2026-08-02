@@ -1,4 +1,4 @@
-#include "Camera/RealisticCamera.h"
+#include "Rendering/Camera/RealisticCamera.h"
 
 #include <algorithm>
 #include <array>
@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "CUDA/ManagedMemory.h"
-#include "Shading/Sellmeier.h"
+#include "Backend/CUDA/ManagedMemory.h"
+#include "Materials/Shading/Sellmeier.h"
 #include "UI/ImGuiManager.h"
 #include "portable-file-dialogs.h"
 

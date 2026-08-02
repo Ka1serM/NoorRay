@@ -6,7 +6,7 @@
 #include <nanobind/stl/string.h>
 
 #include "Scene/Handle.h"
-#include "Scene/SceneResources.h"
+#include "Scene/Resources/SceneResources.h"
 
 namespace nb = nanobind;
 

@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "UI/MaterialXNodes/MaterialXGraphNodeRegistry.h"
+#include <MaterialXCore/Document.h>
 
 // Node classes register themselves from their own files during static
 // initialisation. Nothing references those files, so a registration that failed
@@ -59,4 +60,19 @@ TEST_CASE("Category registration wins over output type", "[materialx]")
     REQUIRE(byCategory != nullptr);
     REQUIRE(byOutputType != nullptr);
     REQUIRE(byCategory != byOutputType);
+}
+
+TEST_CASE("Inline constant values have no connection pin", "[materialx]")
+{
+    const MaterialX::DocumentPtr document = MaterialX::createDocument();
+    const MaterialX::NodePtr constant =
+        document->addNode("constant", "constant", "color3");
+    constant->addInput("value", "color3")->setValueString("1, 1, 1");
+
+    ImFlow::ImNodeFlow flow;
+    const std::shared_ptr<MaterialXGraphNode> graphNode =
+        addMaterialXGraphNode(flow, ImVec2(0.0f, 0.0f), constant);
+
+    REQUIRE(graphNode != nullptr);
+    REQUIRE(graphNode->findInputPin("value") == nullptr);
 }

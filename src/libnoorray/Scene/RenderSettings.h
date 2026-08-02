@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Raytracing/Acceleration/GaussianProxyBlas.h"
-#include "Shading/SphericalHarmonics.h"
+#include "Backend/OptiX/Acceleration/GaussianProxyBlas.h"
+#include "Materials/Shading/SphericalHarmonics.h"
 
 enum class BufferVisualization : int
 {
@@ -10,6 +10,10 @@ enum class BufferVisualization : int
     Normal,
     Cryptomatte,
     Position,
+    // Full-frame diagnostic outputs. Denoised is a separate shared AOV buffer;
+    // proxy overdraw remains a beauty-surface diagnostic.
+    Denoised,
+    ProxyOverdraw,
 };
 
 enum class GaussianShadingMode : int
@@ -23,8 +27,6 @@ class RenderSettings
 public:
     int samples{1};
     int maxSamples{3000};
-    bool noiseLimitEnabled{false};
-    float noiseLevel{0.0001f};
     bool aovEnabled{true};
     bool optixDenoiserEnabled{false};
     int optixDenoiserMinSamples{1};
@@ -32,6 +34,10 @@ public:
     int russianRouletteStartBounce{3};
     bool tonemappingEnabled{false};
     bool transparentBackground{false};
+    // Applied to the rendered radiance by integrations that own the camera
+    // display path (Hydra). The standalone viewport applies its camera
+    // exposure during presentation instead.
+    float cameraExposure{};
     float gaussianCutoffSigma{3.0f};
     // The tighter level-2 proxy significantly reduces false-positive OptiX
     // any-hit invocations in dense splat scenes while preserving coverage of
@@ -43,3 +49,18 @@ public:
     int gaussianProxyOverdrawMax{1024};
     BufferVisualization bufferVisualization{BufferVisualization::Beauty};
 };
+
+// The checkbox is the sole switch that runs the OptiX denoiser. Selecting the
+// denoised buffer is only a presentation choice and must not enable work by
+// itself. Proxy overdraw has no beauty sample to denoise.
+inline bool runsOptixDenoiser(const RenderSettings& settings)
+{
+    if (settings.bufferVisualization == BufferVisualization::ProxyOverdraw)
+        return false;
+    return settings.optixDenoiserEnabled;
+}
+
+inline bool rendersProxyOverdraw(const RenderSettings& settings)
+{
+    return settings.gaussianProxyOverdrawVisualization;
+}

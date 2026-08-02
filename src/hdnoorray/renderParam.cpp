@@ -4,7 +4,7 @@
 #include "material.h"
 #include "memoryTextureRegistry.h"
 
-#include "MaterialX/MaterialXCompiler.h"
+#include "Materials/MaterialX/MaterialXDocument.h"
 
 #include <MaterialXCore/Document.h>
 
@@ -26,8 +26,8 @@
 #include <string_view>
 #include <utility>
 
-#include "Raytracing/Runtime/Raytracer.h"
-#include "Scene/Texture.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
+#include "Scene/Resources/Texture.h"
 
 namespace mx = MaterialX;
 
@@ -35,6 +35,20 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 namespace
 {
+template<typename T>
+std::vector<T> FlipImageRows(const std::vector<T>& source,
+    const int width, const int height)
+{
+    std::vector<T> result(source.size());
+    const size_t rowSize = static_cast<size_t>(width) * 4;
+    for (int y = 0; y < height; ++y) {
+        const auto sourceRow = source.begin()
+            + static_cast<size_t>(height - 1 - y) * rowSize;
+        std::copy_n(sourceRow, rowSize,
+            result.begin() + static_cast<size_t>(y) * rowSize);
+    }
+    return result;
+}
 
 uint64_t HashMaterialXDocument(const std::string_view xml)
 {
@@ -198,14 +212,16 @@ HdNoorRayRenderParam::GetTextureContentIdentity(
 
 HdNoorRayRenderParam::DecodedTextureData
 HdNoorRayRenderParam::GetOrDecodeTexture(
-    const std::string& filePath, const ContentIdentity& content)
+    const std::string& filePath, const ContentIdentity& content,
+    const bool flipY)
 {
+    const DecodedTextureCacheKey decodeKey{content, flipY};
     std::shared_future<DecodedTextureData> future;
     std::shared_ptr<std::promise<DecodedTextureData>> promise;
     bool ownsDecode = false;
     {
         std::scoped_lock lock(mutex);
-        const auto cached = decodedTextureCache_.find(content);
+        const auto cached = decodedTextureCache_.find(decodeKey);
         if (cached != decodedTextureCache_.end()) {
             DecodedTextureData decoded;
             decoded.width = cached->second.width;
@@ -233,13 +249,13 @@ HdNoorRayRenderParam::GetOrDecodeTexture(
             decodedTextureCache_.erase(cached);
         }
 
-        const auto inFlight = decodedTextureFlights_.find(content);
+        const auto inFlight = decodedTextureFlights_.find(decodeKey);
         if (inFlight != decodedTextureFlights_.end()) {
             future = inFlight->second;
         } else {
             promise = std::make_shared<std::promise<DecodedTextureData>>();
             future = promise->get_future().share();
-            decodedTextureFlights_.emplace(content, future);
+            decodedTextureFlights_.emplace(decodeKey, future);
             ownsDecode = true;
         }
     }
@@ -250,7 +266,7 @@ HdNoorRayRenderParam::GetOrDecodeTexture(
         DecodedTextureData decoded;
         HdNoorRayDecodedImage image;
         std::string hioError;
-        if (HdNoorRayLoadImage(filePath, &image, &hioError)) {
+        if (HdNoorRayLoadImage(filePath, &image, &hioError, flipY)) {
             decoded.width = image.width;
             decoded.height = image.height;
             switch (image.pixelType) {
@@ -282,13 +298,25 @@ HdNoorRayRenderParam::GetOrDecodeTexture(
             decoded.height = fallback.getHeight();
             if (fallback.usesByteStorage()) {
                 decoded.pixelType = DecodedPixelType::Rgba8;
-                decoded.rgba8 = fallback.getByteStorage();
+                decoded.rgba8 = flipY
+                    ? std::make_shared<const std::vector<uint8_t>>(
+                        FlipImageRows(fallback.getBytePixels(),
+                            decoded.width, decoded.height))
+                    : fallback.getByteStorage();
             } else if (fallback.usesHalfStorage()) {
                 decoded.pixelType = DecodedPixelType::Rgba16Float;
-                decoded.rgba16Float = fallback.getHalfStorage();
+                decoded.rgba16Float = flipY
+                    ? std::make_shared<const std::vector<uint16_t>>(
+                        FlipImageRows(fallback.getHalfPixels(),
+                            decoded.width, decoded.height))
+                    : fallback.getHalfStorage();
             } else {
                 decoded.pixelType = DecodedPixelType::Rgba32Float;
-                decoded.rgba32Float = fallback.getFloatStorage();
+                decoded.rgba32Float = flipY
+                    ? std::make_shared<const std::vector<float>>(
+                        FlipImageRows(fallback.getPixels(),
+                            decoded.width, decoded.height))
+                    : fallback.getFloatStorage();
             }
         }
 
@@ -302,15 +330,15 @@ HdNoorRayRenderParam::GetOrDecodeTexture(
         {
             std::scoped_lock lock(mutex);
             decodedTextureCache_.insert_or_assign(
-                content, std::move(cacheEntry));
-            decodedTextureFlights_.erase(content);
+                decodeKey, std::move(cacheEntry));
+            decodedTextureFlights_.erase(decodeKey);
         }
         promise->set_value(decoded);
         return decoded;
     } catch (...) {
         {
             std::scoped_lock lock(mutex);
-            decodedTextureFlights_.erase(content);
+            decodedTextureFlights_.erase(decodeKey);
         }
         promise->set_exception(std::current_exception());
         throw;
@@ -318,7 +346,8 @@ HdNoorRayRenderParam::GetOrDecodeTexture(
 }
 
 TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
-    const std::string& filePath, const TextureEncoding encoding)
+    const std::string& filePath, const TextureEncoding encoding,
+    const bool flipY)
 {
     try {
         if (filePath.starts_with("noorray-memory://"))
@@ -326,14 +355,14 @@ TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
         const ContentIdentity content =
             GetTextureContentIdentity(filePath);
         const DecodedTextureData decoded =
-            GetOrDecodeTexture(filePath, content);
+            GetOrDecodeTexture(filePath, content, flipY);
         const TextureEncoding effectiveEncoding =
             decoded.pixelType == DecodedPixelType::Rgba16Float
             ? TextureEncoding::Float16
             : decoded.pixelType == DecodedPixelType::Rgba32Float
             ? TextureEncoding::Float32
             : encoding;
-        const TextureCacheKey cacheKey{content, effectiveEncoding};
+        const TextureCacheKey cacheKey{content, effectiveEncoding, flipY};
 
         {
             std::scoped_lock lock(mutex);
@@ -713,6 +742,10 @@ void HdNoorRayRenderParam::PublishMaterial(
         published = session.scene.addMaterial(document);
     }
     session.scene.setDirtyFlag(Meshes);
+    // Material and texture edits change the radiance represented by the
+    // progressive framebuffer. Keep the next render from accumulating the
+    // new shader over samples produced by the previous shader.
+    session.scene.setDirtyFlag(Accumulation);
 
     const auto bindings = materialBindings_.find(id);
     if (bindings != materialBindings_.end())

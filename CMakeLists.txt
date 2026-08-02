@@ -45,6 +45,10 @@ set(NR_CORE_DIR "${PROJECT_SOURCE_DIR}/src/libnoorray")
 set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
 set(NR_PTX_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/build/generated")
 
+set(NR_USD_ROOT "${PROJECT_SOURCE_DIR}/external/blender-usd" CACHE PATH
+    "Blender USD SDK root (auto-vendored by default)")
+include(cmake/NoorRayUSD.cmake)
+
 function(nr_header_only target dir)
     add_library(${target} INTERFACE)
     target_include_directories(${target} INTERFACE "${dir}")
@@ -224,37 +228,30 @@ function(nr_ptx name source)
     add_custom_target("${name}" DEPENDS "${ptx}")
 endfunction()
 
-nr_ptx(NoorRayOptixIr "${NR_CORE_DIR}/Kernels/Path/PathTrace.h"
+nr_ptx(NoorRayOptixIr "${NR_CORE_DIR}/Backend/OptiX/Kernels/Generate.h"
     -DROSS_BUILD_GPU_SUPPORT=1 ${NR_OPTIX_INC})
-nr_ptx(NoorRayTrainingOptixIr "${NR_CORE_DIR}/Training/Kernels/GaussianHit.h"
-    "-I${NR_CORE_DIR}" "-I${NR_APP_DIR}" "-I${PROJECT_SOURCE_DIR}/external/glm" "-I${OPTIX_INCLUDE_DIR}")
-
+nr_ptx(NoorRayOptixMissIr "${NR_CORE_DIR}/Backend/OptiX/Kernels/Miss.h"
+    ${NR_OPTIX_INC})
 # ---------------------------------------------------------------------------
 # NoorRayCuda (CUDA / OptiX pipeline library)
 # ---------------------------------------------------------------------------
 set(NR_CUDA_SOURCES
-    src/libnoorray/Raytracing/Acceleration/Blas.cpp
-    src/libnoorray/Raytracing/Acceleration/GaussianProxyBlas.cpp
-    src/libnoorray/Raytracing/Acceleration/Tlas.cpp
-    src/libnoorray/Raytracing/Denoising/OptixDenoiserState.cpp
-    src/libnoorray/Raytracing/Runtime/Raytracer.cpp
-    src/libnoorray/SVM/SvmProgramTable.cpp
-    src/libnoorray/CUDA/Unique/Texture.cpp
-    src/libnoorray/CUDA/Unique/SharedImage.cpp
-    src/libnoorray/CUDA/Unique/SharedBuffer.cpp
-    src/libnoorray/CUDA/rstd/Memory.cpp
-    src/libnoorray/Shading/EnergyLut.cpp
-    src/libnoorray/Shading/RgbSpectrumTableData.cpp
-    src/libnoorray/Training/GaussianTrainRenderer.cpp
-    src/libnoorray/Kernels/Post/PostProcess.h
-    src/libnoorray/Training/GaussianTrainerCuda.h)
-set_source_files_properties(
-    src/libnoorray/Kernels/Post/PostProcess.h
-    src/libnoorray/Training/GaussianTrainerCuda.h
-    PROPERTIES LANGUAGE CUDA HEADER_FILE_ONLY OFF)
+    src/libnoorray/Backend/OptiX/Acceleration/Blas.cpp
+    src/libnoorray/Backend/OptiX/Acceleration/AnalyticLightBlas.cpp
+    src/libnoorray/Backend/OptiX/Acceleration/GaussianProxyBlas.cpp
+    src/libnoorray/Backend/OptiX/Acceleration/Tlas.cpp
+    src/libnoorray/Backend/OptiX/Denoising/OptixDenoiser.cpp
+    src/libnoorray/Backend/OptiX/Runtime/Raytracer.cpp
+    src/libnoorray/Materials/SVM/SvmProgramTable.cpp
+    src/libnoorray/Backend/CUDA/Unique/Texture.cpp
+    src/libnoorray/Backend/CUDA/Unique/SharedImage.cpp
+    src/libnoorray/Backend/CUDA/Unique/SharedBuffer.cpp
+    src/libnoorray/Backend/CUDA/rstd/Memory.cpp
+    src/libnoorray/Materials/Shading/EnergyLut.cpp
+    src/libnoorray/Materials/Shading/RgbSpectrumTableData.cpp)
 
 add_library(NoorRayCuda STATIC ${NR_CUDA_SOURCES})
-add_dependencies(NoorRayCuda NoorRayOptixIr NoorRayTrainingOptixIr)
+add_dependencies(NoorRayCuda NoorRayOptixIr NoorRayOptixMissIr)
 set_target_properties(NoorRayCuda PROPERTIES
     CUDA_ARCHITECTURES "${NR_CUDA_ARCH}"
     CUDA_SEPARABLE_COMPILATION ON
@@ -280,12 +277,13 @@ target_link_libraries(NoorRayCuda PUBLIC
 file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
     "${NR_CORE_DIR}/*.cpp" "${NR_CORE_DIR}/*.h")
 set(NR_CORE_X
-    "/CUDA/" "/Kernels/" "/MaterialX/"
-    "/Shading/EnergyLut/GenerateEnergyLuts\\.cpp$" "/Shading/EnergyLut\\.cpp$"
-    "/Training/GaussianTrainerCuda\\.h$" "/Raytracing/Runtime/Raytracer\\.cpp$"
-    "/Shading/RgbSpectrumTableData\\.cpp$" "/Raytracing/Acceleration/" "/Raytracing/Denoising/"
+    "/Backend/CUDA/" "/Backend/OptiX/Kernels/" "/Materials/MaterialX/MaterialXDocument\\.cpp$"
+    "/Materials/Shading/EnergyLut/GenerateEnergyLuts\\.cpp$" "/Materials/Shading/EnergyLut\\.cpp$"
+    "/Backend/OptiX/Runtime/Raytracer\\.cpp$"
+    "/Materials/Shading/RgbSpectrumTableData\\.cpp$"
+    "/Backend/OptiX/Acceleration/" "/Backend/OptiX/Denoising/"
     "/IO/BitmapReader\\.cpp$" "/IO/BitmapWriter\\.cpp$" "/StbImpl\\.cpp$"
-    "/SVM/references/" "/SVM/SvmProgramTable\\.cpp$")
+    "/Materials/SVM/references/" "/Materials/SVM/SvmProgramTable\\.cpp$")
 foreach(p IN LISTS NR_CORE_X)
     list(FILTER NR_CORE_FILES EXCLUDE REGEX "${p}")
 endforeach()
@@ -295,7 +293,9 @@ set_target_properties(libnoorray PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS OFF
     POSITION_INDEPENDENT_CODE ON)
-target_compile_options(libnoorray PRIVATE -Wno-c23-extensions)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(libnoorray PRIVATE -Wno-c23-extensions)
+endif()
 target_compile_features(libnoorray PUBLIC cxx_std_23)
 target_include_directories(libnoorray PUBLIC "${NR_CORE_DIR}")
 target_compile_definitions(libnoorray PUBLIC
@@ -307,7 +307,7 @@ target_link_libraries(libnoorray PUBLIC
     NoorRayCuda NoorRayIO portable_file_dialogs glm Vulkan::Vulkan
     tinygltf tinyobjloader tinyply tinyexr stb gauss_forge_readers
     GPUOpen::VulkanMemoryAllocator glaze TBB::tbb
-    NoorRayMaterialXCompiler MaterialXFormat MaterialXCore)
+    NoorRayMaterialX MaterialXFormat MaterialXCore NoorRayUsd)
 
 # ---------------------------------------------------------------------------
 # MaterialX
@@ -331,20 +331,20 @@ foreach(t MaterialXCore MaterialXFormat MaterialXGenShader)
 endforeach()
 set(NR_MATERIALX_STDLIB_DIR "${PROJECT_SOURCE_DIR}/external/materialx/libraries")
 
-add_library(NoorRayMaterialXCompiler STATIC
-    src/libnoorray/MaterialX/MaterialXCompiler.cpp)
-target_compile_features(NoorRayMaterialXCompiler PUBLIC cxx_std_23)
-target_include_directories(NoorRayMaterialXCompiler PUBLIC "${NR_CORE_DIR}" PRIVATE "${CUDAToolkit_INCLUDE_DIRS}")
-target_link_libraries(NoorRayMaterialXCompiler PUBLIC
+add_library(NoorRayMaterialX STATIC
+    src/libnoorray/Materials/MaterialX/MaterialXDocument.cpp)
+target_compile_features(NoorRayMaterialX PUBLIC cxx_std_23)
+target_include_directories(NoorRayMaterialX PUBLIC "${NR_CORE_DIR}" PRIVATE "${CUDAToolkit_INCLUDE_DIRS}")
+target_link_libraries(NoorRayMaterialX PUBLIC
     glm MaterialXGenShader MaterialXFormat MaterialXCore CUDA::cudart_static)
-target_compile_definitions(NoorRayMaterialXCompiler PRIVATE
+target_compile_definitions(NoorRayMaterialX PRIVATE
     NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
-set_target_properties(NoorRayMaterialXCompiler PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(NoorRayMaterialX PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
 # Vulkan shaders (Viewport, ViewportBillboards)
 # ---------------------------------------------------------------------------
-set(NR_SHADER_DIR "${NR_CORE_DIR}/Shaders")
+set(NR_SHADER_DIR "${NR_CORE_DIR}/Backend/Vulkan/Shaders")
 set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang")
 set(NR_SHADER_OUT "${NR_SHADER_DIR}/Viewport/Viewport.spv" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.spv")
 add_custom_command(OUTPUT ${NR_SHADER_OUT}
@@ -363,8 +363,6 @@ add_custom_target(NoorRayShaders DEPENDS ${NR_SHADER_OUT})
 # ---------------------------------------------------------------------------
 # hdnoorray (Blender Hydra render delegate)
 # ---------------------------------------------------------------------------
-set(NR_USD_ROOT "${PROJECT_SOURCE_DIR}/external/blender-usd" CACHE PATH
-    "Blender USD SDK root (auto-vendored by default)")
 add_subdirectory(src/hdnoorray)
 
 # ---------------------------------------------------------------------------
@@ -380,11 +378,14 @@ target_include_directories(NoorRay PRIVATE
 target_link_libraries(NoorRay PRIVATE
     libnoorray NoorRayCuda libross portable_file_dialogs glm imgui imnodeflow Vulkan::Vulkan
     SDL3::SDL3-static tinygltf tinyobjloader tinyexr stb gauss_forge_readers
-    ImViewGuizmo GPUOpen::VulkanMemoryAllocator glaze TBB::tbb NoorRayMaterialXCompiler)
+    ImViewGuizmo GPUOpen::VulkanMemoryAllocator glaze TBB::tbb NoorRayMaterialX
+    NoorRayUsdStandalone)
 target_compile_definitions(NoorRay PRIVATE
     SDL_MAIN_HANDLED NR_BACKEND_CUDA=1 VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
-target_compile_options(NoorRay PRIVATE -Wno-c23-extensions)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(NoorRay PRIVATE -Wno-c23-extensions)
+endif()
 target_link_options(NoorRay PRIVATE -static-libstdc++)
 
 # ---------------------------------------------------------------------------

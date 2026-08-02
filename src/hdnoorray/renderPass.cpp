@@ -12,21 +12,32 @@
 #include <pxr/imaging/hd/tokens.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <exception>
+#include <limits>
 #include <mutex>
+#include <vector>
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <cuda_gl_interop.h>
 #include <cuda_runtime_api.h>
 
-#include "Camera/Camera.h"
-#include "Camera/CameraInstance.h"
+#include "Rendering/Camera/Camera.h"
+#include "Rendering/Camera/CameraInstance.h"
+#include "Rendering/Camera/GatherPsfSensor.h"
+#include "Rendering/Camera/RectangularSensor.h"
+#include "Rendering/Camera/ScatterPsfSensor.h"
+#include "Rendering/Camera/HybridPsfCamera.h"
+#include "Rendering/Camera/RealisticCamera.h"
+#include "Backend/CUDA/ManagedMemory.h"
 #include "IO/Bitmap.h"
-#include "Raytracing/Runtime/Raytracer.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
 #include "Scene/Scene.h"
-#include "Vulkan/Image.h"
+#include "Backend/Vulkan/Runtime/Image.h"
+#include "stb_image_resize2.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -128,24 +139,11 @@ void UploadToOpenGlTexture(
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(oldTexture));
 }
 
-bool PresentOutput(
-    const Image& outputImage, const bool directViewport,
+bool PresentBitmap(
+    const Bitmap& bitmap, const bool directViewport,
     const GLuint glColorTexture, HdNoorRayRenderBuffer* colorBuffer,
     const unsigned int width, const unsigned int height)
 {
-    if (outputImage.getCudaArray() == nullptr
-        || outputImage.getWidth() != width
-        || outputImage.getHeight() != height)
-        return false;
-
-    bool copied = directViewport && CopyToOpenGlTexture(
-        glColorTexture, outputImage.getCudaArray(), width, height);
-    if (!copied && colorBuffer != nullptr)
-        copied = colorBuffer->CopyFromCudaArray(outputImage.getCudaArray());
-    if (copied)
-        return true;
-
-    const Bitmap bitmap = outputImage.toBitmap();
     if (directViewport) {
         UploadToOpenGlTexture(glColorTexture, bitmap, width, height);
         return true;
@@ -158,6 +156,43 @@ bool PresentOutput(
     }
     return false;
 }
+
+bool PresentOutput(
+    const Image& outputImage, const bool directViewport,
+    const GLuint glColorTexture, HdNoorRayRenderBuffer* colorBuffer,
+    const unsigned int width, const unsigned int height)
+{
+    if (outputImage.getCudaArray() == nullptr)
+        return false;
+
+    const bool sameSize = outputImage.getWidth() == width
+        && outputImage.getHeight() == height;
+    if (sameSize) {
+        bool copied = directViewport && CopyToOpenGlTexture(
+            glColorTexture, outputImage.getCudaArray(), width, height);
+        if (!copied && colorBuffer != nullptr)
+            copied = colorBuffer->CopyFromCudaArray(outputImage.getCudaArray());
+        if (copied)
+            return true;
+    }
+
+    const Bitmap bitmap = outputImage.toBitmap();
+    if (!sameSize) {
+        std::vector<glm::vec4> resized(static_cast<size_t>(width) * height);
+        if (stbir_resize_float_linear(
+                bitmap.rgba(), static_cast<int>(bitmap.width()),
+                static_cast<int>(bitmap.height()), 0,
+                reinterpret_cast<float*>(resized.data()),
+                static_cast<int>(width), static_cast<int>(height), 0,
+                STBIR_RGBA) == nullptr)
+            return false;
+        return PresentBitmap(
+            Bitmap(width, height, std::move(resized)), directViewport,
+            glColorTexture, colorBuffer, width, height);
+    }
+    return PresentBitmap(
+        bitmap, directViewport, glColorTexture, colorBuffer, width, height);
+}
 }
 
 HdNoorRayRenderPass::HdNoorRayRenderPass(
@@ -169,7 +204,349 @@ HdNoorRayRenderPass::HdNoorRayRenderPass(
 {
 }
 
-HdNoorRayRenderPass::~HdNoorRayRenderPass() = default;
+HdNoorRayRenderPass::~HdNoorRayRenderPass()
+{
+    _ReleaseViewportPresenter();
+}
+
+void HdNoorRayRenderPass::_ReleaseViewportPresenter()
+{
+    if (viewportCopyStream_ != nullptr)
+        cudaStreamSynchronize(viewportCopyStream_);
+    if (offlinePresentationPending_ && offlinePresentationReadyEvent_ != nullptr)
+        cudaEventSynchronize(offlinePresentationReadyEvent_);
+    if (viewportGraphicsResource_ != nullptr) {
+        cudaGraphicsUnregisterResource(viewportGraphicsResource_);
+        viewportGraphicsResource_ = nullptr;
+    }
+    if (viewportImage_ != nullptr) {
+        cudaFreeArray(viewportImage_);
+        viewportImage_ = nullptr;
+    }
+    if (viewportImageReadyEvent_ != nullptr) {
+        cudaEventDestroy(viewportImageReadyEvent_);
+        viewportImageReadyEvent_ = nullptr;
+    }
+    if (viewportCopyFinishedEvent_ != nullptr) {
+        cudaEventDestroy(viewportCopyFinishedEvent_);
+        viewportCopyFinishedEvent_ = nullptr;
+    }
+    if (viewportCopyStream_ != nullptr) {
+        cudaStreamDestroy(viewportCopyStream_);
+        viewportCopyStream_ = nullptr;
+    }
+    if (offlineStaging_ != nullptr) {
+        cudaFreeHost(offlineStaging_);
+        offlineStaging_ = nullptr;
+    }
+    if (offlinePresentationReadyEvent_ != nullptr) {
+        cudaEventDestroy(offlinePresentationReadyEvent_);
+        offlinePresentationReadyEvent_ = nullptr;
+    }
+    offlineStagingCapacity_ = 0;
+    offlinePresentationPending_ = false;
+    viewportImageWidth_ = 0;
+    viewportImageHeight_ = 0;
+    viewportImageValid_ = false;
+    viewportImageEventRecorded_ = false;
+    viewportCopyFinishedEventRecorded_ = false;
+    viewportGraphicsTexture_ = 0;
+    viewportGraphicsWidth_ = 0;
+    viewportGraphicsHeight_ = 0;
+}
+
+bool HdNoorRayRenderPass::_EnsureViewportPresenter(
+    const unsigned int texture, const unsigned int width, const unsigned int height)
+{
+    if (texture == 0 || width == 0 || height == 0)
+        return false;
+
+    if (viewportCopyStream_ == nullptr
+        && cudaStreamCreateWithFlags(
+               &viewportCopyStream_, cudaStreamNonBlocking) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (viewportImageReadyEvent_ == nullptr
+        && cudaEventCreateWithFlags(
+               &viewportImageReadyEvent_, cudaEventDisableTiming) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (viewportCopyFinishedEvent_ == nullptr
+        && cudaEventCreateWithFlags(
+               &viewportCopyFinishedEvent_, cudaEventDisableTiming) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+
+    const bool targetChanged = viewportGraphicsResource_ != nullptr
+        && (viewportGraphicsTexture_ != texture
+            || viewportGraphicsWidth_ != width
+            || viewportGraphicsHeight_ != height);
+    if (targetChanged) {
+        if (cudaStreamSynchronize(viewportCopyStream_) != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        cudaGraphicsUnregisterResource(viewportGraphicsResource_);
+        viewportGraphicsResource_ = nullptr;
+        viewportGraphicsTexture_ = 0;
+    }
+    if (viewportGraphicsResource_ == nullptr) {
+        if (cudaGraphicsGLRegisterImage(
+                &viewportGraphicsResource_, texture, GL_TEXTURE_2D,
+                cudaGraphicsRegisterFlagsWriteDiscard) != cudaSuccess) {
+            cudaGetLastError();
+            viewportGraphicsResource_ = nullptr;
+            return false;
+        }
+        viewportGraphicsTexture_ = texture;
+        viewportGraphicsWidth_ = width;
+        viewportGraphicsHeight_ = height;
+    }
+
+    const bool imageChanged = viewportImage_ == nullptr
+        || viewportImageWidth_ != width || viewportImageHeight_ != height;
+    if (imageChanged) {
+        if (cudaStreamSynchronize(viewportCopyStream_) != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        if (viewportImage_ != nullptr)
+            cudaFreeArray(viewportImage_);
+        const cudaChannelFormatDesc format = cudaCreateChannelDesc<float4>();
+        if (cudaMallocArray(
+                &viewportImage_, &format, width, height,
+                cudaArraySurfaceLoadStore) != cudaSuccess) {
+            cudaGetLastError();
+            viewportImage_ = nullptr;
+            viewportImageWidth_ = 0;
+            viewportImageHeight_ = 0;
+            viewportImageValid_ = false;
+            return false;
+        }
+        viewportImageWidth_ = width;
+        viewportImageHeight_ = height;
+        viewportImageValid_ = false;
+        viewportImageEventRecorded_ = false;
+        viewportCopyFinishedEventRecorded_ = false;
+    }
+    return true;
+}
+
+bool HdNoorRayRenderPass::_QueueViewportImage(
+    const cudaArray_t source, const unsigned int width,
+    const unsigned int height, const cudaStream_t renderStream)
+{
+    if (source == nullptr || viewportImage_ == nullptr
+        || viewportImageWidth_ != width || viewportImageHeight_ != height
+        || viewportImageReadyEvent_ == nullptr)
+        return false;
+
+    // The OpenGL copy runs on a separate CUDA stream and reads viewportImage_;
+    // do not overwrite that reusable staging array until the previous copy has
+    // completed.
+    if (viewportCopyFinishedEventRecorded_
+        && cudaStreamWaitEvent(
+               renderStream, viewportCopyFinishedEvent_, 0) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+
+    cudaMemcpy3DParms copy{};
+    copy.srcArray = source;
+    copy.dstArray = viewportImage_;
+    copy.extent = make_cudaExtent(width, height, 1);
+    copy.kind = cudaMemcpyDeviceToDevice;
+    if (cudaMemcpy3DAsync(&copy, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (cudaEventRecord(viewportImageReadyEvent_, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    viewportImageValid_ = true;
+    viewportImageEventRecorded_ = true;
+    return true;
+}
+
+bool HdNoorRayRenderPass::_QueueViewportBuffer(
+    const void* source, const unsigned int width,
+    const unsigned int height, const cudaStream_t renderStream)
+{
+    if (source == nullptr || viewportImage_ == nullptr
+        || viewportImageWidth_ != width || viewportImageHeight_ != height
+        || viewportImageReadyEvent_ == nullptr)
+        return false;
+
+    if (viewportCopyFinishedEventRecorded_
+        && cudaStreamWaitEvent(
+               renderStream, viewportCopyFinishedEvent_, 0) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+
+    const size_t rowBytes = static_cast<size_t>(width) * sizeof(float) * 4;
+    if (cudaMemcpy2DToArrayAsync(
+            viewportImage_, 0, 0, source, rowBytes, rowBytes, height,
+            cudaMemcpyDeviceToDevice, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (cudaEventRecord(viewportImageReadyEvent_, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    viewportImageValid_ = true;
+    viewportImageEventRecorded_ = true;
+    return true;
+}
+
+bool HdNoorRayRenderPass::_PresentViewportImage(
+    const unsigned int texture, const unsigned int width, const unsigned int height)
+{
+    if (!viewportImageValid_ || viewportImage_ == nullptr
+        || viewportGraphicsResource_ == nullptr
+        || viewportCopyStream_ == nullptr)
+        return false;
+
+    if (viewportImageEventRecorded_
+        && cudaStreamWaitEvent(
+               viewportCopyStream_, viewportImageReadyEvent_, 0) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (cudaGraphicsMapResources(
+            1, &viewportGraphicsResource_, viewportCopyStream_) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+
+    cudaArray_t destination = nullptr;
+    bool success = cudaGraphicsSubResourceGetMappedArray(
+        &destination, viewportGraphicsResource_, 0, 0) == cudaSuccess;
+    if (success) {
+        cudaMemcpy3DParms copy{};
+        copy.srcArray = viewportImage_;
+        copy.dstArray = destination;
+        copy.extent = make_cudaExtent(width, height, 1);
+        copy.kind = cudaMemcpyDeviceToDevice;
+        success = cudaMemcpy3DAsync(
+            &copy, viewportCopyStream_) == cudaSuccess;
+    }
+    const cudaError_t unmapStatus = cudaGraphicsUnmapResources(
+        1, &viewportGraphicsResource_, viewportCopyStream_);
+    if (unmapStatus != cudaSuccess)
+        success = false;
+    if (success && cudaEventRecord(
+            viewportCopyFinishedEvent_, viewportCopyStream_) != cudaSuccess) {
+        cudaGetLastError();
+        success = false;
+    } else if (success)
+        viewportCopyFinishedEventRecorded_ = true;
+    if (!success)
+        cudaGetLastError();
+    return success;
+}
+
+bool HdNoorRayRenderPass::_EnsureOfflineStaging(const size_t bytes)
+{
+    if (bytes == 0)
+        return false;
+    if (offlinePresentationReadyEvent_ == nullptr
+        && cudaEventCreateWithFlags(
+               &offlinePresentationReadyEvent_, cudaEventDisableTiming) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (offlineStagingCapacity_ >= bytes)
+        return true;
+
+    if (offlinePresentationPending_)
+        cudaEventSynchronize(offlinePresentationReadyEvent_);
+    if (offlineStaging_ != nullptr)
+        cudaFreeHost(offlineStaging_);
+    offlineStaging_ = nullptr;
+    offlineStagingCapacity_ = 0;
+    if (cudaHostAlloc(&offlineStaging_, bytes, cudaHostAllocPortable) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    offlineStagingCapacity_ = bytes;
+    return true;
+}
+
+bool HdNoorRayRenderPass::_QueueOfflinePresentation(
+    const cudaArray_t source, const unsigned int width,
+    const unsigned int height, const cudaStream_t renderStream)
+{
+    const size_t rowBytes = static_cast<size_t>(width) * sizeof(float) * 4;
+    const size_t bytes = rowBytes * height;
+    if (source == nullptr || !_EnsureOfflineStaging(bytes)
+        || offlinePresentationReadyEvent_ == nullptr)
+        return false;
+
+    if (cudaMemcpy2DFromArrayAsync(
+            offlineStaging_, rowBytes, source, 0, 0, rowBytes, height,
+            cudaMemcpyDeviceToHost, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (cudaEventRecord(offlinePresentationReadyEvent_, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    offlinePresentationPending_ = true;
+    return true;
+}
+
+bool HdNoorRayRenderPass::_QueueOfflinePresentation(
+    const void* source, const unsigned int width,
+    const unsigned int height, const cudaStream_t renderStream)
+{
+    const size_t rowBytes = static_cast<size_t>(width) * sizeof(float) * 4;
+    const size_t bytes = rowBytes * height;
+    if (source == nullptr || !_EnsureOfflineStaging(bytes)
+        || offlinePresentationReadyEvent_ == nullptr)
+        return false;
+
+    if (cudaMemcpy2DAsync(
+            offlineStaging_, rowBytes, source, rowBytes, rowBytes, height,
+            cudaMemcpyDeviceToHost, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    if (cudaEventRecord(offlinePresentationReadyEvent_, renderStream) != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    offlinePresentationPending_ = true;
+    return true;
+}
+
+bool HdNoorRayRenderPass::_CommitOfflinePresentation(
+    HdNoorRayRenderBuffer& colorBuffer, const size_t bytes)
+{
+    if (!offlinePresentationPending_ || offlinePresentationReadyEvent_ == nullptr
+        || offlineStaging_ == nullptr || bytes > offlineStagingCapacity_)
+        return false;
+    const cudaError_t status = cudaEventQuery(offlinePresentationReadyEvent_);
+    if (status == cudaErrorNotReady)
+        return false;
+    if (status != cudaSuccess) {
+        cudaGetLastError();
+        return false;
+    }
+    void* destination = colorBuffer.Map();
+    if (destination == nullptr)
+        return false;
+    std::memcpy(destination, offlineStaging_, bytes);
+    colorBuffer.Unmap();
+    offlinePresentationPending_ = false;
+    return true;
+}
 
 void HdNoorRayRenderPass::SetBuffersConverged(
     const HdRenderPassAovBindingVector& bindings, const bool converged)
@@ -255,12 +632,34 @@ void HdNoorRayRenderPass::_Render(
         return;
     }
 
-    // OSL compilation runs on TBB workers. OptiX objects and scene bindings
-    // are committed here, in one render-thread batch, without ever blocking
-    // Hydra Sync or Blender's UI.
+    // Do not compile materials or mutate the scene while a render launch is
+    // still using its GPU resources. The viewport can display its retained
+    // image while the launch is in flight; an offline target simply waits for
+    // the next Hydra Execute without blocking this callback.
+    {
+        std::scoped_lock pollLock(renderParam_.mutex);
+        Raytracer* pendingRaytracer = renderParam_.session.raytracer.get();
+        if (framePending_ && pendingRaytracer != nullptr
+            && !pendingRaytracer->isFrameReady()) {
+            if (directViewport) {
+                const bool presenterReady = _EnsureViewportPresenter(
+                    glColorTexture, width, height);
+                if (presenterReady && _PresentViewportImage(
+                        glColorTexture, width, height)) {
+                    SetBuffersConverged(bindings, false);
+                    return;
+                }
+            }
+            SetBuffersConverged(bindings, false);
+            return;
+        }
+    }
+
+    // Material compilation runs on TBB workers. OptiX objects and scene
+    // bindings are committed here in one render-thread batch.
     const bool compiledMaterialsChanged =
         renderParam_.ProcessMaterialCompilations();
-    std::scoped_lock lock(renderParam_.mutex);
+    std::unique_lock lock(renderParam_.mutex);
     Scene& scene = renderParam_.session.scene;
     if (renderParam_.session.raytracer == nullptr) {
         // Deliberately does NOT report convergence here (that used to be
@@ -283,6 +682,100 @@ void HdNoorRayRenderPass::_Render(
     }
     Raytracer& raytracer = *renderParam_.session.raytracer;
 
+    bool viewportPresenterReady = false;
+    bool presentedViewportFrame = false;
+    if (directViewport) {
+        viewportPresenterReady = _EnsureViewportPresenter(
+            glColorTexture, width, height);
+        if (viewportPresenterReady && framePending_) {
+            if (!raytracer.isFrameReady()) {
+                if (_PresentViewportImage(glColorTexture, width, height)) {
+                    SetBuffersConverged(bindings, false);
+                    return;
+                }
+                raytracer.waitForRender();
+            }
+            const bool queued = raytracer.hasDenoisedOutput()
+                ? _QueueViewportBuffer(
+                    raytracer.getOutputDenoised().cudaPointer(), width, height,
+                    raytracer.getCudaStream())
+                : _QueueViewportImage(
+                    raytracer.getOutputColor().getCudaArray(), width, height,
+                    raytracer.getCudaStream());
+            if (viewportPresenterReady && queued) {
+                renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
+                accumulatedSamples_ += pendingSamples_;
+                framePending_ = false;
+                pendingSamples_ = 0;
+            } else {
+                viewportPresenterReady = false;
+            }
+        }
+        if (viewportPresenterReady)
+            presentedViewportFrame = _PresentViewportImage(
+                glColorTexture, width, height);
+        if (!viewportPresenterReady && framePending_) {
+            raytracer.waitForRender();
+            renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
+            PresentOutput(
+                raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                width, height);
+            accumulatedSamples_ += pendingSamples_;
+            framePending_ = false;
+            pendingSamples_ = 0;
+            presentedViewportFrame = true;
+        }
+    }
+
+    const size_t offlineFrameBytes = static_cast<size_t>(width) * height
+        * sizeof(float) * 4;
+    const bool offlineTargetSupported = !directViewport
+        && colorBuffer != nullptr
+        && colorBuffer->GetFormat() == HdFormatFloat32Vec4;
+    if (!directViewport && offlineTargetSupported
+        && offlinePresentationPending_) {
+        if (!_CommitOfflinePresentation(*colorBuffer, offlineFrameBytes)) {
+            SetBuffersConverged(bindings, false);
+            return;
+        }
+        accumulatedSamples_ += pendingSamples_;
+        pendingSamples_ = 0;
+    }
+    if (!directViewport && offlineTargetSupported && framePending_) {
+        if (!raytracer.isFrameReady()) {
+            SetBuffersConverged(bindings, false);
+            return;
+        }
+        const bool queued = raytracer.hasDenoisedOutput()
+            ? _QueueOfflinePresentation(
+                raytracer.getOutputDenoised().cudaPointer(), width, height,
+                raytracer.getCudaStream())
+            : _QueueOfflinePresentation(
+                raytracer.getOutputColor().getCudaArray(), width, height,
+                raytracer.getCudaStream());
+        if (queued) {
+            framePending_ = false;
+            offlinePresentationPending_ = true;
+            SetBuffersConverged(bindings, false);
+            return;
+        }
+        // If pinned staging allocation or async CUDA copy is unavailable,
+        // retain a synchronous fallback rather than returning an incomplete
+        // F12 frame.
+        raytracer.waitForRender();
+        renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
+        if (raytracer.hasDenoisedOutput())
+            colorBuffer->CopyFromCudaBuffer(
+                raytracer.getOutputDenoised().cudaPointer(), offlineFrameBytes);
+        else
+            PresentOutput(
+                raytracer.getOutputColor(), false, glColorTexture, colorBuffer,
+                width, height);
+        accumulatedSamples_ += pendingSamples_;
+        pendingSamples_ = 0;
+        framePending_ = false;
+    }
+
     HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
     const int targetSamples = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("samples"), 64));
@@ -300,13 +793,15 @@ void HdNoorRayRenderPass::_Render(
     if (materialsPending
         && (!directViewport
             || accumulatedSamples_ >= static_cast<unsigned int>(targetSamples))) {
-        if (directViewport) {
+        if (directViewport && !presentedViewportFrame) {
             // Blender clears its GPU AOV before every viewport draw. Keep the
             // last progressive image visible while the replacement materials
             // finish compiling, even though no new sample is launched.
-            PresentOutput(
-                raytracer.getOutputColor(), true, glColorTexture, nullptr,
-                width, height);
+            if (!viewportPresenterReady
+                || !_PresentViewportImage(glColorTexture, width, height))
+                PresentOutput(
+                    raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                    width, height);
         }
         converged_ = false;
         SetBuffersConverged(bindings, false);
@@ -345,13 +840,15 @@ void HdNoorRayRenderPass::_Render(
     // samples after the requested total is complete.
     if (!reset
         && accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)) {
-        if (directViewport) {
+        if (directViewport && !presentedViewportFrame) {
             // Blender's GPU render-task delegate has just cleared this
             // texture. Re-present the retained final image without exceeding
             // the configured sample limit.
-            PresentOutput(
-                raytracer.getOutputColor(), true, glColorTexture, nullptr,
-                width, height);
+            if (!viewportPresenterReady
+                || !_PresentViewportImage(glColorTexture, width, height))
+                PresentOutput(
+                    raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                    width, height);
         }
         converged_ = true;
         SetBuffersConverged(bindings, true);
@@ -380,18 +877,106 @@ void HdNoorRayRenderPass::_Render(
             projectionSwitched = true;
         }
     }
+    const bool opticalCamera = camera->Is<RealisticCamera>()
+        || camera->Is<HybridPsfCamera>();
 
     if (cameraChanged || reset || projectionSwitched) {
-        camera->getSensor().setResolution(
-            width, height);
-        if (hydraCamera != nullptr) {
-            camera->getSensor().setDimensionsMm(
+        const int sensorTypeSetting = delegate->GetRenderSetting<int>(
+            TfToken("cameraSensorType"), -1);
+        if (sensorTypeSetting >= 0) {
+            const SensorType requestedType = static_cast<SensorType>(sensorTypeSetting);
+            if (camera->getSensor().getType() != requestedType) {
+                switch (requestedType) {
+                case SensorType::Rectangular:
+                    camera->setSensor(std::make_unique<RectangularSensor>(camera->getSensor()));
+                    break;
+                case SensorType::ScatterPsf:
+                    camera->setSensor(std::make_unique<ScatterPsfSensor>(camera->getSensor()));
+                    break;
+                case SensorType::GatherPsf:
+                    camera->setSensor(std::make_unique<GatherPsfSensor>(camera->getSensor()));
+                    break;
+                }
+            }
+        }
+
+        Sensor& sensor = camera->getSensor();
+        const std::string sensorPath = delegate->GetRenderSetting<std::string>(
+            TfToken("cameraSensorPath"), {});
+        if (sensorPath != sensor.getImageSensorPath()) {
+            sensor.setImageSensorPath(sensorPath);
+            if (!sensorPath.empty())
+                sensor.loadImageSensorDimensions();
+        }
+        const std::string psfPath = delegate->GetRenderSetting<std::string>(
+            TfToken("cameraPsfPath"), {});
+        if (sensor.getType() != SensorType::Rectangular
+            && psfPath != sensor.getPsfGridPath())
+            sensor.loadPsfGrid(psfPath);
+
+        const float sensorWidthMm = delegate->GetRenderSetting<float>(
+            TfToken("cameraSensorWidthMm"), -1.0f);
+        const float sensorHeightMm = delegate->GetRenderSetting<float>(
+            TfToken("cameraSensorHeightMm"), -1.0f);
+        const bool hasRenderSettingFilm =
+            sensorWidthMm > 0.0f && sensorHeightMm > 0.0f;
+        if (hasRenderSettingFilm) {
+            sensor.setDimensionsMm(sensorWidthMm, sensorHeightMm);
+        } else if (hydraCamera != nullptr) {
+            // Compatibility fallback for non-Blender Hydra clients.
+            sensor.setDimensionsMm(
                 hydraCamera->GetHorizontalAperture(),
                 hydraCamera->GetVerticalAperture());
-            camera->setFocalLengthMm(hydraCamera->GetFocalLength());
-            camera->setFocusDistanceCm(
-                hydraCamera->GetFocusDistance() * 100.0f);
         }
+        // Optical cameras own their sampling grid: loading the image sensor
+        // above establishes its authoritative resolution. Ordinary cameras
+        // follow Blender's current render/viewport target as before.
+        if (!opticalCamera)
+            sensor.setResolution(width, height);
+
+        // Blender sends its native lens in millimeters as a render setting.
+        // Hydra camera geometry may use a host-scaled film unit (Blender's is
+        // commonly one tenth of a millimeter). Never combine the Hydra film
+        // dimensions with the millimeter focal length: that changes the
+        // focal/film ratio and produces an approximately 10x zoom.
+        const float focalLengthMm = delegate->GetRenderSetting<float>(
+            TfToken("cameraFocalLengthMm"), -1.0f);
+        const bool hasHydraCameraGeometry = hydraCamera != nullptr
+            && hydraCamera->GetHorizontalAperture() > 0.0
+            && hydraCamera->GetVerticalAperture() > 0.0
+            && hydraCamera->GetFocalLength() > 0.0;
+        if (!opticalCamera) {
+            if (focalLengthMm > 0.0f)
+                camera->setFocalLengthMm(focalLengthMm);
+            else if (hasHydraCameraGeometry)
+                camera->setFocalLengthMm(hydraCamera->GetFocalLength());
+        }
+
+        // Blender's raster projection conforms the camera film to the actual
+        // render target. That effective film can differ from the physical
+        // sensor height when the output aspect ratio changes. NoorRay's ray
+        // generators use sensor dimensions directly, so derive the effective
+        // dimensions from the same projection matrix to avoid a zoom/crop
+        // mismatch between the raster viewport and the path tracer.
+        const double projectionScaleX = newProjection[0][0];
+        const double projectionScaleY = newProjection[1][1];
+        const bool perspectiveFilm = camera->Is<PerspectiveCamera>()
+            || camera->Is<ThinLensCamera>()
+            || camera->Is<FisheyeCamera>();
+        const float projectionFocalLengthMm = camera->getFocalLengthMm();
+        if (perspectiveFilm && std::isfinite(projectionScaleX)
+            && std::isfinite(projectionScaleY)
+            && projectionScaleX > 0.0 && projectionScaleY > 0.0
+            && projectionFocalLengthMm > 0.0f) {
+            sensor.setDimensionsMm(
+                static_cast<float>(2.0 * projectionFocalLengthMm / projectionScaleX),
+                static_cast<float>(2.0 * projectionFocalLengthMm / projectionScaleY));
+        }
+
+        const float exposure = delegate->GetRenderSetting<float>(
+            TfToken("cameraExposure"), std::numeric_limits<float>::quiet_NaN());
+        if (std::isfinite(exposure))
+            camera->setExposure(exposure);
 
         const float apertureDiameterMm = delegate->GetRenderSetting<float>(
             TfToken("cameraApertureDiameter"), -1.0f);
@@ -401,9 +986,9 @@ void HdNoorRayRenderPass::_Render(
             else if (auto* fi = camera->CastOrNullptr<FisheyeCamera>())
                 fi->apertureDiameterMm = apertureDiameterMm;
             else if (auto* re = camera->CastOrNullptr<RealisticCamera>())
-                re->apertureDiameterMm = apertureDiameterMm;
+                re->setApertureDiameterMm(apertureDiameterMm);
             else if (auto* hp = camera->CastOrNullptr<HybridPsfCamera>())
-                hp->apertureDiameterMm = apertureDiameterMm;
+                hp->setApertureDiameterMm(apertureDiameterMm);
         }
         const float bokehBias = delegate->GetRenderSetting<float>(
             TfToken("cameraBokehBias"), -1.0f);
@@ -420,26 +1005,53 @@ void HdNoorRayRenderPass::_Render(
                 TfToken("cameraGlassCatalogs"), {});
         const std::string rayLutPath = delegate->GetRenderSetting<std::string>(
             TfToken("cameraRayLutPath"), {});
-        if (!lensPath.empty()) {
-            if (auto* re = camera->CastOrNullptr<RealisticCamera>()) {
-                if (lensPath != re->getLensPath()
-                    || glassCatalogs != re->getGlassCatalogPaths())
-                    re->load(lensPath, glassCatalogs);
-            } else if (auto* hp = camera->CastOrNullptr<HybridPsfCamera>()) {
-                if (lensPath != hp->getLensPath()
-                    || glassCatalogs != hp->getGlassCatalogPaths())
-                    hp->load(lensPath, glassCatalogs, rayLutPath);
+        const int rayLutStepSize = delegate->GetRenderSetting<int>(
+            TfToken("cameraRayLutStepSize"), -1);
+        const int apertureSamplesPerDimension = delegate->GetRenderSetting<int>(
+            TfToken("cameraApertureSamplesPerDimension"), -1);
+        if (auto* re = camera->CastOrNullptr<RealisticCamera>()) {
+            if (lensPath != re->getLensPath()
+                || glassCatalogs != re->getGlassCatalogPaths())
+                re->load(lensPath, glassCatalogs);
+        } else if (auto* hp = camera->CastOrNullptr<HybridPsfCamera>()) {
+            const int previousRayLutStepSize = hp->rayLutStepSize;
+            const int previousApertureSamplesPerDimension = hp->samplesPerDimension;
+            const int requestedRayLutStepSize = rayLutStepSize > 0
+                ? rayLutStepSize : previousRayLutStepSize;
+            const int requestedApertureSamplesPerDimension =
+                apertureSamplesPerDimension > 0
+                ? apertureSamplesPerDimension : previousApertureSamplesPerDimension;
+            if (requestedRayLutStepSize != previousRayLutStepSize
+                || requestedApertureSamplesPerDimension
+                    != previousApertureSamplesPerDimension) {
+                nr::synchronizeBeforeManagedMutation("Hybrid PSF LUT settings");
+                hp->rayLutStepSize = requestedRayLutStepSize;
+                hp->samplesPerDimension = requestedApertureSamplesPerDimension;
             }
+            const bool lutSettingsChanged =
+                previousRayLutStepSize != hp->rayLutStepSize
+                || previousApertureSamplesPerDimension != hp->samplesPerDimension;
+            if (lensPath != hp->getLensPath()
+                || glassCatalogs != hp->getGlassCatalogPaths()
+                || rayLutPath != hp->getRayLutPath())
+                hp->load(lensPath, glassCatalogs, rayLutPath);
+            else if (lutSettingsChanged && !hp->getLensPath().empty())
+                hp->loadLensSensorAndPsf();
         }
 
+        const float focusDistanceCm = delegate->GetRenderSetting<float>(
+            TfToken("cameraFocusDistanceCm"), -1.0f);
+        if (focusDistanceCm > 0.0f)
+            camera->setFocusDistanceCm(focusDistanceCm);
+
         cameraInstance->setWorldTransformFromMatrix(ToGlm(newCameraTransform));
-        camera->getSensor().setOrigin(SensorOrigin::LowerLeft);
+        sensor.setOrigin(SensorOrigin::LowerLeft);
     }
 
     RenderSettings& rs = scene.getRenderSettings();
     // Offline Blender renders do not benefit from copying every intermediate
-    // sample through the Hydra render buffer.  Submit all remaining samples
-    // in this pass and copy the converged image once.  Keep viewport updates
+    // sample through the Hydra render buffer. Submit all remaining samples
+    // in this pass and copy the converged image once. Keep viewport updates
     // at one sample per pass for interactivity.
     const unsigned int remainingSamples =
         accumulatedSamples_ < static_cast<unsigned int>(targetSamples)
@@ -451,10 +1063,6 @@ void HdNoorRayRenderPass::_Render(
     rs.maxSamples = targetSamples;
     rs.maxBounces = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("maxBounces"), 8));
-    rs.noiseLimitEnabled = delegate->GetRenderSetting<int>(
-        TfToken("noiseLimitEnabled"), 0) != 0;
-    rs.noiseLevel = delegate->GetRenderSetting<float>(
-        TfToken("noiseLevel"), 0.0001f);
     rs.optixDenoiserEnabled = delegate->GetRenderSetting<int>(
         TfToken("optixDenoiserEnabled"), 0) != 0;
     rs.optixDenoiserMinSamples = std::max(
@@ -465,6 +1073,8 @@ void HdNoorRayRenderPass::_Render(
     // The delegate hands Blender scene-linear radiance and lets its colour
     // management own the display transform, so the renderer never tonemaps.
     rs.tonemappingEnabled = false;
+    rs.cameraExposure = delegate->GetRenderSetting<float>(
+        TfToken("cameraExposure"), 0.0f);
     rs.transparentBackground = delegate->GetRenderSetting<int>(
         TfToken("transparentBackground"), 0) != 0;
     rs.gaussianCutoffSigma = std::max(
@@ -475,32 +1085,46 @@ void HdNoorRayRenderPass::_Render(
         delegate->GetRenderSetting<int>(TfToken("gaussianShadingMode"), 1));
     rs.gaussianRenderSphericalHarmonics = static_cast<SphericalHarmonicsOrder>(
         std::clamp(delegate->GetRenderSetting<int>(TfToken("gaussianRenderSphericalHarmonics"), 3), 0, 3));
+    rs.bufferVisualization = static_cast<BufferVisualization>(
+        std::clamp(delegate->GetRenderSetting<int>(TfToken("bufferVisualization"), 0), 0, 6));
     rs.gaussianProxyOverdrawVisualization = delegate->GetRenderSetting<int>(
         TfToken("gaussianProxyOverdrawVisualization"), 0) != 0;
-    // hdNoorRay only ever hands Hydra a colour buffer, so the denoiser's
-    // albedo and normal guides are the sole use it has for AOVs. Asking for
-    // them here is what allocates their images; with the denoiser off nothing
-    // does, and the AOV raygen never launches.
-    raytracer.setAovEnabled(rs.optixDenoiserEnabled);
+    rs.gaussianProxyOverdrawMax = std::clamp(delegate->GetRenderSetting<int>(
+        TfToken("gaussianProxyOverdrawMax"), 1024), 1, 1024 * 1024);
+    // The denoiser's albedo and normal guides are the AOVs needed by this
+    // colour-only Hydra integration. The denoised result itself is retained
+    // in Raytracer's shared AOV buffer and presented from there.
+    raytracer.setAovEnabled(runsOptixDenoiser(rs));
     raytracer.renderFrame(accumulatedSamples_, accumulatedSamples_);
-    raytracer.waitForRender();
-    renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
-
-    PresentOutput(
-        raytracer.getOutputColor(), directViewport, glColorTexture,
-        colorBuffer, width, height);
-
-    accumulatedSamples_ += samplesThisPass;
-    converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)
-        && !renderParam_.HasPendingMaterialCompilations();
-    // Defer non-zero progress until after the first frame so Blender's
-    // viewport engine can initialize its wall-clock time baseline (it only
-    // does so when percentDone == 0, checked after engine_->Execute()).
-    if (accumulatedSamples_ > 1) {
-        renderParam_.SetProgress(
-            static_cast<double>(accumulatedSamples_) / targetSamples);
+    if ((directViewport && viewportPresenterReady)
+        || (!directViewport && offlineTargetSupported)) {
+        // The render stream now owns the in-flight frame. Completion is
+        // polled on the next Execute; presentation is completed by the target
+        // specific GPU/host handoff above.
+        framePending_ = true;
+        pendingSamples_ = samplesThisPass;
+        converged_ = false;
+        SetBuffersConverged(bindings, false);
+    } else {
+        // Offline/F12 rendering and interop fallback retain the synchronous
+        // contract required by Blender's final render path.
+        raytracer.waitForRender();
+        renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
+        PresentOutput(
+            raytracer.getOutputColor(), directViewport, glColorTexture,
+            colorBuffer, width, height);
+        accumulatedSamples_ += samplesThisPass;
+        converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)
+            && !renderParam_.HasPendingMaterialCompilations();
+        // Defer non-zero progress until after the first frame so Blender's
+        // viewport engine can initialize its wall-clock time baseline (it only
+        // does so when percentDone == 0, checked after engine_->Execute()).
+        if (accumulatedSamples_ > 1) {
+            renderParam_.SetProgress(
+                static_cast<double>(accumulatedSamples_) / targetSamples);
+        }
+        SetBuffersConverged(bindings, converged_);
     }
-    SetBuffersConverged(bindings, converged_);
 
     observedSceneVersion_ = sceneVersion;
     observedRenderSettingsVersion_ = renderSettingsVersion;

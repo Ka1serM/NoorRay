@@ -1,5 +1,5 @@
-#include "Samplers/RandomSampler.h"
-#include "Samplers/OwenSobolSampler.h"
+#include "Rendering/Sampling/RandomSampler.h"
+#include "Rendering/Sampling/OwenSobolSampler.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

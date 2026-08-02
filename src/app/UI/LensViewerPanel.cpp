@@ -4,8 +4,8 @@
 #include <cmath>
 #include <imgui.h>
 
-#include "Camera/CameraInstance.h"
-#include "Camera/RealisticCamera.h"
+#include "Rendering/Camera/CameraInstance.h"
+#include "Rendering/Camera/RealisticCamera.h"
 #include "Scene/Scene.h"
 #include "UI/MathInput.h"
 #include "libross/foundation/physics/Wavelengths.h"

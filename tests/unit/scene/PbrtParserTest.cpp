@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "libnoorray/Scene/PbrtParser.h"
+#include "libnoorray/Scene/Import/PbrtParser.h"
 
 TEST_CASE("PBRT parser keeps only NoorRay-supported directives", "[pbrt]")
 {

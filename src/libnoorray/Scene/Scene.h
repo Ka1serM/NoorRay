@@ -8,20 +8,20 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
-#include "CUDA/rstd/Vector.h"
-#include "CUDA/rstd/UniquePtr.h"
-#include "CUDA/Unique/SharedVector.h"
+#include "Backend/CUDA/rstd/Vector.h"
+#include "Backend/CUDA/rstd/UniquePtr.h"
+#include "Backend/CUDA/Unique/SharedVector.h"
 #include "Scene/Handle.h"
 #include "Scene/RenderSettings.h"
-#include "Scene/SceneResources.h"
-#include "Mesh/Assets/MeshAsset.h"
-#include "Mesh/Assets/GaussianAsset.h"
-#include "Light/PointLight.h"
-#include "Light/SpotLight.h"
-#include "Light/RectLight.h"
-#include "Light/DirectionalLight.h"
-#include "Vulkan/Context.h"
-#include "Scene/Texture.h"
+#include "Scene/Resources/SceneResources.h"
+#include "Geometry/Mesh/Assets/MeshAsset.h"
+#include "Geometry/Mesh/Assets/GaussianAsset.h"
+#include "Rendering/Lighting/PointLight.h"
+#include "Rendering/Lighting/SpotLight.h"
+#include "Rendering/Lighting/RectLight.h"
+#include "Rendering/Lighting/DirectionalLight.h"
+#include "Backend/Vulkan/Runtime/Context.h"
+#include "Scene/Resources/Texture.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -54,7 +54,7 @@ using glm::quat_cast;
 using glm::radians;
 using glm::transpose;
 
-#include "Scene/Environment.h"
+#include "Scene/Resources/Environment.h"
 
 class SceneObject;
 class MeshInstance;
@@ -113,7 +113,7 @@ class Scene {
     RenderSettings renderSettings{};
 
     // VMA owns these allocations. Host code uses the persistent VMA mapping,
-    // while CUDA/OptiX uses the separately imported external-memory address.
+    // while Backend/CUDA/OptiX uses the separately imported external-memory address.
     nr::cuda::SharedVector<PointLight> pointLights;
     nr::cuda::SharedVector<SpotLight> spotLights;
     nr::cuda::SharedVector<RectLight> rectLights;

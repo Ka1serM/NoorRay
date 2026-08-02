@@ -8,7 +8,7 @@ namespace
 {
 // The same constants the layout implementation uses; the test pins the numbers
 // so a change to the layout style is a deliberate, reviewed one.
-constexpr float XSpacing = 250.0f;
+constexpr float XSpacing = 250.0f; // Default width (210) plus the 40-unit gap.
 constexpr float YGap = 40.0f;
 constexpr float RootGap = 350.0f;
 constexpr float Margin = 40.0f;
@@ -52,6 +52,19 @@ TEST_CASE("A chain is laid out in columns from the root", "[materialx][layout]")
     REQUIRE(x(layout, "C") == Margin + 2 * XSpacing);
     REQUIRE(near(y(layout, "A"), y(layout, "B")));
     REQUIRE(near(y(layout, "B"), y(layout, "C")));
+}
+
+TEST_CASE("Wide nodes leave room before the next column", "[materialx][layout]")
+{
+    MaterialXGraphLayout::LayoutNode wide = node("wide");
+    wide.width = 330.0f;
+
+    const std::unordered_map<std::string, MaterialXGraphLayout::Vec2> layout =
+        MaterialXGraphLayout::autoLayout(
+            {wide, node("sink")}, {{"wide", "sink"}});
+
+    REQUIRE(x(layout, "wide") == Margin);
+    REQUIRE(x(layout, "sink") == Margin + 330.0f + 40.0f);
 }
 
 TEST_CASE("A diamond centers the shared input on its consumers", "[materialx][layout]")

@@ -2,8 +2,8 @@
 
 #include <glm/geometric.hpp>
 
-#include "Samplers/RandomSampler.h"
-#include "Shading/Lobes/DiffuseLobe.h"
+#include "Rendering/Sampling/RandomSampler.h"
+#include "Materials/Shading/Lobes/DiffuseLobe.h"
 
 TEST_CASE("Burley diffuse retains its roughness response", "[bsdf][diffuse]")
 {

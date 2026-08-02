@@ -1,4 +1,4 @@
-#include "Camera/HybridPsfCamera.h"
+#include "Rendering/Camera/HybridPsfCamera.h"
 
 #include <algorithm>
 #include <array>
@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "CUDA/ManagedMemory.h"
+#include "Backend/CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
 #include "UI/MathInput.h"
 #include "portable-file-dialogs.h"

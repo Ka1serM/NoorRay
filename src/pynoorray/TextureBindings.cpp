@@ -2,7 +2,7 @@
 
 #include <nanobind/stl/string.h>
 
-#include "Scene/Texture.h"
+#include "Scene/Resources/Texture.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

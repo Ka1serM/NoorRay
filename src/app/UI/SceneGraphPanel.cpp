@@ -1,6 +1,6 @@
 ﻿#include "SceneGraphPanel.h"
 #include "Scene/SceneObject.h"
-#include "Camera/CameraInstance.h"
+#include "Rendering/Camera/CameraInstance.h"
 #include <imgui.h>
 #include <algorithm>
 #include <iterator>

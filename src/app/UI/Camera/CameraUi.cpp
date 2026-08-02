@@ -1,8 +1,8 @@
-#include "Camera/Camera.h"
+#include "Rendering/Camera/Camera.h"
 
 #include <algorithm>
 
-#include "CUDA/ManagedMemory.h"
+#include "Backend/CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
 
 bool Camera::renderUi()
@@ -12,10 +12,9 @@ bool Camera::renderUi()
         nr::synchronizeBeforeManagedMutation("Camera exposure");
         exposure = value; changed = true;
     });
-    ImGuiManager::dragFloatRow("Field of View (degrees)", fieldOfViewDegrees, 0.1f, 1.f, 179.f, [&](float value) {
-        nr::synchronizeBeforeManagedMutation("Camera field of view");
-        fieldOfViewDegrees = std::clamp(value, 1.f, 179.f);
-        focalLengthMm = focalLengthMmForFovDegrees(fieldOfViewDegrees);
+    float derivedFovDegrees = fovDegreesForFocalLengthMm(focalLengthMm);
+    ImGuiManager::dragFloatRow("Field of View (degrees)", derivedFovDegrees, 0.1f, 1.f, 179.f, [&](float value) {
+        setFocalLengthMm(focalLengthMmForFovDegrees(value));
         changed = true;
     });
     ImGuiManager::dragFloatRow("Focal Length (mm)", focalLengthMm, 0.1f, 0.001f, 500.f, [&](float value) {

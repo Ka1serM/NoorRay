@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from pathlib import Path
+import ctypes
+import json
 import math
 import os
 import struct
@@ -9,7 +11,13 @@ import uuid
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 from bpy.types import Camera, Operator, Panel, PropertyGroup
-from bl_ui import properties_data_light, properties_output, properties_render, properties_world
+from bl_ui import (
+    properties_data_camera,
+    properties_data_light,
+    properties_output,
+    properties_render,
+    properties_world,
+)
 
 from .materialx_sync import (
     MaterialXRenderSettingsSync,
@@ -19,6 +27,91 @@ from .materialx_sync import (
 
 MAGIC = b"GSPLAT\x00"
 PROXY_SIZE = 1.0e-5
+_OPTICAL_LENS_LIBRARY = None
+_OPTICAL_LENS_FOCAL_LENGTH = None
+
+
+def _absolute_path_list(value):
+    paths = [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+    return ";".join(bpy.path.abspath(part) for part in paths)
+
+
+def _loaded_lens_focal_length_mm(nrcam):
+    """Return the focal length derived by the same ROSS loader as NoorRay."""
+    global _OPTICAL_LENS_LIBRARY, _OPTICAL_LENS_FOCAL_LENGTH
+    lens_path = bpy.path.abspath(nrcam.lens_path)
+    if not lens_path:
+        return None
+    try:
+        if _OPTICAL_LENS_FOCAL_LENGTH is None:
+            _OPTICAL_LENS_LIBRARY = ctypes.CDLL(
+                str(_plugin_directory() / "libhdnoorray.so"))
+            function = _OPTICAL_LENS_LIBRARY.HdNoorRayLensFocalLengthMm
+            function.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
+            function.restype = ctypes.c_float
+            _OPTICAL_LENS_FOCAL_LENGTH = function
+        value = _OPTICAL_LENS_FOCAL_LENGTH(
+            lens_path.encode("utf-8"),
+            _absolute_path_list(nrcam.glass_catalogs).encode("utf-8"),
+            int(nrcam.projection_type == "REALISTIC"),
+        )
+        return float(value) if value > 0.0 and math.isfinite(value) else None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _sync_blender_optical_preview(nrcam, _context):
+    """Approximate a physical lens in Blender without controlling NoorRay optics."""
+    if nrcam.projection_type not in {"REALISTIC", "HYBRIDPSF"}:
+        return
+    camera_data = getattr(nrcam, "id_data", None)
+    if not isinstance(camera_data, bpy.types.Camera):
+        return
+    focal_length_mm = _loaded_lens_focal_length_mm(nrcam)
+    if focal_length_mm is not None and not math.isclose(
+            camera_data.lens, focal_length_mm, rel_tol=1.0e-6, abs_tol=1.0e-5):
+        camera_data.lens = focal_length_mm
+
+
+def _sync_blender_sensor_preview(nrcam, _context):
+    """Use the image sensor as the optical camera's Blender-side authority."""
+    if nrcam.projection_type not in {"REALISTIC", "HYBRIDPSF"}:
+        return
+    path = bpy.path.abspath(nrcam.sensor_path)
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as sensor_file:
+                sensor = json.load(sensor_file)
+            dimensions = sensor["dimensions"]
+            resolution = sensor["resolution"]
+            width_mm = float(dimensions["width_mm"])
+            height_mm = float(dimensions["height_mm"])
+            resolution_x = max(1, int(resolution["width"]))
+            resolution_y = max(1, int(resolution["height"]))
+            camera_data = getattr(nrcam, "id_data", None)
+            if isinstance(camera_data, bpy.types.Camera) \
+                    and width_mm > 0.0 and height_mm > 0.0:
+                camera_data.sensor_width = width_mm
+                camera_data.sensor_height = height_mm
+
+                # F12 uses the scene render size, while the viewport supplies
+                # its own display-sized Hydra target. Keep F12 authoritative
+                # and let the render pass resample the optical result for the
+                # latter; the ray tracer always renders at this sensor size.
+                for scene in bpy.data.scenes:
+                    if scene.camera is not None \
+                            and scene.camera.data == camera_data:
+                        render = scene.render
+                        render.resolution_x = resolution_x
+                        render.resolution_y = resolution_y
+                        render.resolution_percentage = 100
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+
+def _sync_blender_camera_previews(nrcam, context):
+    _sync_blender_optical_preview(nrcam, context)
+    _sync_blender_sensor_preview(nrcam, context)
 
 
 def _encode_splat_path(mesh: bpy.types.Mesh, path: str) -> None:
@@ -69,19 +162,6 @@ class NoorRaySettings(PropertyGroup):
         default=64,
         min=1,
         max=1_000_000,
-    )
-    noise_limit_enabled: BoolProperty(
-        name="Use Noise Limit",
-        description="Stop rendering early when the noise estimate falls below the threshold",
-        default=False,
-    )
-    noise_level: FloatProperty(
-        name="Noise Threshold",
-        description="Noise level at which rendering is considered converged",
-        default=0.0001,
-        min=0.0,
-        max=1.0,
-        precision=4,
     )
     max_bounces: IntProperty(
         name="Max Bounces",
@@ -145,6 +225,23 @@ class NoorRaySettings(PropertyGroup):
         name="Proxy Overdraw",
         description="Visualize Gaussian proxy overdraw count",
         default=False,
+    )
+    gaussian_proxy_overdraw_max: IntProperty(
+        name="Proxy Overdraw Range",
+        description="Count mapped to the brightest proxy-overdraw colour",
+        default=1024,
+        min=1,
+        max=1024,
+    )
+    buffer_visualization: EnumProperty(
+        name="Buffer View",
+        description="Full-frame output mode for the Hydra colour AOV",
+        items=[
+            ("BEAUTY", "Beauty", "Progressive path-traced beauty output"),
+            ("DENOISED", "Denoised", "OptiX-denoised beauty output"),
+            ("PROXY_OVERDRAW", "Proxy Overdraw", "Gaussian proxy intersection count"),
+        ],
+        default="BEAUTY",
     )
     gaussian_sh_degree: EnumProperty(
         name="Gaussian SH Degree",
@@ -215,12 +312,12 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
         settings = scene.hdnoorray
         gauss = settings.gaussian_proxy_type
         shading = settings.gaussian_shading_mode
+        view_mode = settings.buffer_visualization
         result = {
             "samples": settings.samples,
             "maxBounces": settings.max_bounces,
-            "noiseLimitEnabled": int(settings.noise_limit_enabled),
-            "noiseLevel": settings.noise_level,
-            "optixDenoiserEnabled": int(settings.optix_denoiser_enabled),
+            "optixDenoiserEnabled": int(
+                settings.optix_denoiser_enabled or view_mode == "DENOISED"),
             "optixDenoiserMinSamples": settings.optix_denoiser_min_samples,
             "russianRouletteStartBounce": settings.russian_roulette_start_bounce,
             "transparentBackground": int(settings.transparent_background),
@@ -228,6 +325,12 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             "gaussianProxyType": ["ICOSPHERE", "OCTAHEDRON", "ICOSAHEDRON", "ICOSPHERE_L2"].index(gauss),
             "gaussianShadingMode": ["GI", "DIRECT"].index(shading),
             "gaussianProxyOverdrawVisualization": int(settings.gaussian_proxy_overdraw),
+            "gaussianProxyOverdrawMax": settings.gaussian_proxy_overdraw_max,
+            "bufferVisualization": {
+                "BEAUTY": 0,
+                "DENOISED": 5,
+                "PROXY_OVERDRAW": 6,
+            }[view_mode],
             "gaussianRenderSphericalHarmonics": int(settings.gaussian_sh_degree),
         }
         depsgraph = self._settings_depsgraph
@@ -235,28 +338,71 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             scene_eval = getattr(depsgraph, "scene_eval", scene)
             result.update(self._materialx_sync.collect(depsgraph, scene_eval))
 
-        # Per-camera settings
-        cam = bpy.context.scene.camera
+        # Per-camera settings. These are deliberately sent as render settings
+        # instead of relying on custom properties on HdCamera: Blender's Hydra
+        # camera primitive does not preserve those properties.
+        scene_eval = getattr(depsgraph, "scene_eval", scene) if depsgraph is not None else scene
+        cam = getattr(scene_eval, "camera", None)
         if cam and cam.data:
             nrcam = cam.data.hdnoorray
+            # Blender's native camera is the single source of truth for film
+            # geometry. In particular, Camera.lens is always millimeters;
+            # Blender derives its FOV from lens, sensor fit, and output aspect.
+            original_cam = getattr(scene, "camera", None)
+            original_data = getattr(original_cam, "data", None)
+            camera_data = original_data or cam.data
+            original_nrcam = getattr(camera_data, "hdnoorray", None)
+            if original_nrcam is not None:
+                nrcam = original_nrcam
             result["cameraProjection"] = [
                 "PERSPECTIVE", "ORTHOGRAPHIC", "FISHEYE",
                 "THINLENS", "REALISTIC", "HYBRIDPSF",
             ].index(nrcam.projection_type)
-            if nrcam.projection_type in {"THINLENS", "FISHEYE", "REALISTIC", "HYBRIDPSF"}:
-                result["cameraApertureDiameter"] = nrcam.aperture_diameter_mm
-            if nrcam.projection_type in {"THINLENS", "FISHEYE"}:
-                result["cameraBokehBias"] = nrcam.bokeh_bias
-            if nrcam.projection_type in {"REALISTIC", "HYBRIDPSF"}:
-                result["cameraLensPath"] = nrcam.lens_path
-                result["cameraGlassCatalogs"] = nrcam.glass_catalogs
-            if nrcam.projection_type == "HYBRIDPSF":
-                result["cameraRayLutPath"] = nrcam.ray_lut_path
+            result["cameraExposure"] = nrcam.exposure
+            result["cameraFocalLengthMm"] = (
+                -1.0 if nrcam.projection_type in {"REALISTIC", "HYBRIDPSF"}
+                else camera_data.lens)
+            result["cameraFocusDistanceCm"] = nrcam.focus_distance_cm
+            result["cameraSensorWidthMm"] = camera_data.sensor_width
+            result["cameraSensorHeightMm"] = camera_data.sensor_height
+            result["cameraApertureDiameter"] = (
+                nrcam.aperture_diameter_mm
+                if nrcam.projection_type in {"THINLENS", "FISHEYE", "REALISTIC", "HYBRIDPSF"}
+                else -1.0)
+            result["cameraBokehBias"] = (
+                nrcam.bokeh_bias
+                if nrcam.projection_type in {"THINLENS", "FISHEYE"}
+                else -1.0)
+            result["cameraLensPath"] = (
+                bpy.path.abspath(nrcam.lens_path)
+                if nrcam.projection_type in {"REALISTIC", "HYBRIDPSF"}
+                else "")
+            result["cameraGlassCatalogs"] = (
+                _absolute_path_list(nrcam.glass_catalogs)
+                if nrcam.projection_type in {"REALISTIC", "HYBRIDPSF"}
+                else "")
+            result["cameraRayLutPath"] = (
+                bpy.path.abspath(nrcam.ray_lut_path)
+                if nrcam.projection_type == "HYBRIDPSF"
+                else "")
+            result["cameraRayLutStepSize"] = (
+                nrcam.ray_lut_step_size
+                if nrcam.projection_type == "HYBRIDPSF"
+                else -1)
+            result["cameraApertureSamplesPerDimension"] = (
+                nrcam.aperture_samples_per_dimension
+                if nrcam.projection_type == "HYBRIDPSF"
+                else -1)
             result["cameraSensorType"] = ["RECTANGULAR", "SCATTERPSF", "GATHERPSF"].index(
                 nrcam.sensor_type)
-            if nrcam.sensor_type != "RECTANGULAR":
-                result["cameraSensorPath"] = nrcam.sensor_path
-                result["cameraPsfPath"] = nrcam.psf_path
+            result["cameraSensorPath"] = (
+                bpy.path.abspath(nrcam.sensor_path)
+                if nrcam.sensor_type != "RECTANGULAR"
+                else "")
+            result["cameraPsfPath"] = (
+                bpy.path.abspath(nrcam.psf_path)
+                if nrcam.sensor_type != "RECTANGULAR"
+                else "")
 
         if engine_type != "VIEWPORT":
             result |= {
@@ -287,10 +433,6 @@ class NOORRAY_PT_sampling(Panel):
         layout.use_property_decorate = False
         settings = context.scene.hdnoorray
         layout.prop(settings, "samples")
-        layout.prop(settings, "noise_limit_enabled")
-        row = layout.row()
-        row.enabled = settings.noise_limit_enabled
-        row.prop(settings, "noise_level")
 
 
 class NOORRAY_PT_light_paths(Panel):
@@ -331,8 +473,11 @@ class NOORRAY_PT_denoising(Panel):
         settings = context.scene.hdnoorray
         layout.prop(settings, "optix_denoiser_enabled")
         row = layout.row()
-        row.enabled = settings.optix_denoiser_enabled
+        row.enabled = (
+            settings.optix_denoiser_enabled
+            or settings.buffer_visualization == "DENOISED")
         row.prop(settings, "optix_denoiser_min_samples")
+        layout.prop(settings, "buffer_visualization")
 
 
 class NOORRAY_PT_output(Panel):
@@ -374,6 +519,9 @@ class NOORRAY_PT_gaussians(Panel):
         layout.prop(settings, "gaussian_proxy_type")
         layout.prop(settings, "gaussian_shading_mode")
         layout.prop(settings, "gaussian_proxy_overdraw")
+        row = layout.row()
+        row.enabled = settings.gaussian_proxy_overdraw or settings.buffer_visualization == "PROXY_OVERDRAW"
+        row.prop(settings, "gaussian_proxy_overdraw_max")
         layout.prop(settings, "gaussian_sh_degree")
 
 
@@ -390,6 +538,7 @@ class NoorRayCameraSettings(PropertyGroup):
             ("HYBRIDPSF", "Hybrid PSF", "Hybrid PSF lens model"),
         ],
         default="PERSPECTIVE",
+        update=_sync_blender_camera_previews,
     )
     aperture_diameter_mm: FloatProperty(
         name="Aperture",
@@ -397,6 +546,22 @@ class NoorRayCameraSettings(PropertyGroup):
         default=0.0,
         min=0.0,
         max=1000.0,
+        precision=2,
+    )
+    exposure: FloatProperty(
+        name="Exposure",
+        description="Camera exposure offset in photographic stops",
+        default=0.0,
+        min=-100.0,
+        max=100.0,
+        precision=2,
+    )
+    focus_distance_cm: FloatProperty(
+        name="Focus Distance",
+        description="Optical focus distance in centimeters",
+        default=500.0,
+        min=0.1,
+        max=100000000.0,
         precision=2,
     )
     bokeh_bias: FloatProperty(
@@ -411,18 +576,34 @@ class NoorRayCameraSettings(PropertyGroup):
         description="Path to a ROSS lens description file",
         default="",
         subtype="FILE_PATH",
+        update=_sync_blender_optical_preview,
     )
     glass_catalogs: StringProperty(
         name="Glass Catalogs",
         description="Comma-separated paths to glass catalog files",
         default="",
         subtype="FILE_PATH",
+        update=_sync_blender_optical_preview,
     )
     ray_lut_path: StringProperty(
         name="Ray LUT",
         description="Path to a precomputed ray lookup table",
         default="",
         subtype="FILE_PATH",
+    )
+    ray_lut_step_size: IntProperty(
+        name="Ray LUT Step",
+        description="Pixel spacing used when building the hybrid camera ray LUT",
+        default=32,
+        min=1,
+        max=4096,
+    )
+    aperture_samples_per_dimension: IntProperty(
+        name="Aperture Samples/Dim",
+        description="Aperture samples per dimension used to build the hybrid ray LUT",
+        default=8,
+        min=1,
+        max=256,
     )
     sensor_type: EnumProperty(
         name="Sensor Type",
@@ -439,6 +620,7 @@ class NoorRayCameraSettings(PropertyGroup):
         description="Path to an image sensor description file",
         default="",
         subtype="FILE_PATH",
+        update=_sync_blender_sensor_preview,
     )
     psf_path: StringProperty(
         name="PSF Grid",
@@ -545,12 +727,17 @@ class NOORRAY_PT_camera(Panel):
 
         layout.prop(nrcam, "projection_type")
         ptype = nrcam.projection_type
-        if ptype != "ORTHOGRAPHIC":
-            layout.prop(cam_data, "lens")
-        layout.prop(cam_data, "sensor_width")
-        layout.prop(cam_data, "sensor_height")
+        layout.prop(nrcam, "exposure")
+        if ptype == "ORTHOGRAPHIC":
+            layout.prop(cam_data, "ortho_scale")
+        elif ptype not in {"REALISTIC", "HYBRIDPSF"}:
+            layout.prop(cam_data, "lens_unit", expand=True)
+            if cam_data.lens_unit == "MILLIMETERS":
+                layout.prop(cam_data, "lens")
+            else:
+                layout.prop(cam_data, "angle")
         if ptype in {"THINLENS", "FISHEYE", "REALISTIC", "HYBRIDPSF"}:
-            layout.prop(cam_data.dof, "focus_distance")
+            layout.prop(nrcam, "focus_distance_cm")
             layout.prop(nrcam, "aperture_diameter_mm")
         if ptype in {"THINLENS", "FISHEYE"}:
             layout.prop(nrcam, "bokeh_bias")
@@ -560,9 +747,15 @@ class NOORRAY_PT_camera(Panel):
             col.prop(nrcam, "glass_catalogs")
         if ptype == "HYBRIDPSF":
             layout.prop(nrcam, "ray_lut_path")
+            layout.prop(nrcam, "ray_lut_step_size")
+            layout.prop(nrcam, "aperture_samples_per_dimension")
 
         layout.separator()
         layout.label(text="Sensor", icon="VIEW3D")
+        if ptype != "ORTHOGRAPHIC":
+            layout.prop(cam_data, "sensor_fit")
+            layout.prop(cam_data, "sensor_width")
+            layout.prop(cam_data, "sensor_height")
         layout.prop(nrcam, "sensor_type")
         stype = nrcam.sensor_type
         if stype != "RECTANGULAR":
@@ -637,11 +830,24 @@ _COMPATIBLE_PANELS = [
     for panel in (getattr(module, name, None) for name in names)
     if panel is not None
 ]
+# Keep this exhaustive across Blender versions. New camera subpanels should
+# never leak Blender's native lens/sensor/DOF UI into the NoorRay engine.
+_HIDDEN_CAMERA_PANELS = [
+    getattr(properties_data_camera, panel_name)
+    for panel_name in dir(properties_data_camera)
+    if panel_name.startswith("DATA_PT_")
+    and hasattr(getattr(properties_data_camera, panel_name), "COMPAT_ENGINES")
+]
+_HIDDEN_CAMERA_PANEL_COMPATIBILITY = {}
 
 
 @bpy.app.handlers.persistent
 def _on_load_post(_dummy):
     _restore_forced_view_transform()
+    for camera_data in bpy.data.cameras:
+        nrcam = getattr(camera_data, "hdnoorray", None)
+        if nrcam is not None:
+            _sync_blender_sensor_preview(nrcam, None)
 
 
 def _set_panel_compatibility(enabled: bool):
@@ -651,6 +857,12 @@ def _set_panel_compatibility(enabled: bool):
             panel.COMPAT_ENGINES.add(engine_id)
         else:
             panel.COMPAT_ENGINES.discard(engine_id)
+    for panel in _HIDDEN_CAMERA_PANELS:
+        if enabled:
+            _HIDDEN_CAMERA_PANEL_COMPATIBILITY[panel] = engine_id in panel.COMPAT_ENGINES
+            panel.COMPAT_ENGINES.discard(engine_id)
+        elif _HIDDEN_CAMERA_PANEL_COMPATIBILITY.pop(panel, False):
+            panel.COMPAT_ENGINES.add(engine_id)
 
 
 def _restore_forced_view_transform():

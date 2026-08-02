@@ -1,9 +1,10 @@
 #include "MaterialXNodeEditorPanel.h"
 
-#include "MaterialX/MaterialXCompiler.h"
-#include "Mesh/Assets/MeshAsset.h"
-#include "Scene/MeshInstance.h"
+#include "Materials/MaterialX/MaterialXDocument.h"
+#include "Geometry/Mesh/Assets/MeshAsset.h"
+#include "Scene/Objects/MeshInstance.h"
 #include "UI/MaterialXNodeCatalog.h"
+#include "UI/MathInput.h"
 #include "UI/MaterialXNodes/MaterialXGraphNodeRegistry.h"
 #include "UI/MaterialXNodes/MaterialXGraphLayout.h"
 
@@ -18,12 +19,13 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
-#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <cmath>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace mx = MaterialX;
 
@@ -51,6 +53,57 @@ void writePosition(mx::Node& node, const ImVec2& position)
 bool positionsDiffer(const ImVec2& a, const ImVec2& b)
 {
     return std::fabs(a.x - b.x) > 0.5f || std::fabs(a.y - b.y) > 0.5f;
+}
+
+std::vector<std::string> splitCommaSeparated(const std::string& value)
+{
+    std::vector<std::string> result;
+    size_t start = 0;
+    while (start < value.size()) {
+        const size_t end = value.find(',', start);
+        const size_t tokenEnd = end == std::string::npos ? value.size() : end;
+        const size_t first = value.find_first_not_of(" \t\n\r", start);
+        if (first != std::string::npos && first < tokenEnd) {
+            const size_t last = value.find_last_not_of(" \t\n\r", tokenEnd - 1);
+            result.emplace_back(value.substr(first, last - first + 1));
+        }
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return result;
+}
+
+template <size_t Count>
+std::array<float, Count> parseFloatComponents(const std::string& value, const float fallback)
+{
+    std::array<float, Count> result;
+    result.fill(fallback);
+
+    const char* cursor = value.c_str();
+    for (float& component : result) {
+        char* end = nullptr;
+        const float parsed = std::strtof(cursor, &end);
+        if (end == cursor)
+            break;
+        component = parsed;
+        cursor = end;
+        while (*cursor == ',' || *cursor == ' ' || *cursor == '\t')
+            ++cursor;
+    }
+    return result;
+}
+
+template <size_t Count>
+std::string serializeFloatComponents(const std::array<float, Count>& components)
+{
+    std::string result;
+    for (size_t index = 0; index < Count; ++index) {
+        if (index != 0)
+            result += ", ";
+        result += std::to_string(components[index]);
+    }
+    return result;
 }
 }
 
@@ -178,6 +231,13 @@ void MaterialXNodeEditorPanel::renderUi()
         return;
     }
 
+    // The graph view is intentionally compact, but the properties view should
+    // retain the same padding and spacing as the regular Details panel.
+    const ImVec2 panelWindowPadding = ImGui::GetStyle().WindowPadding;
+    const ImVec2 panelItemSpacing = ImGui::GetStyle().ItemSpacing;
+    const ImVec2 panelFramePadding = ImGui::GetStyle().FramePadding;
+    const ImVec4 panelBackground = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f, 2.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f, 2.0f));
@@ -197,9 +257,16 @@ void MaterialXNodeEditorPanel::renderUi()
     if (ImGui::IsItemHovered() || ImGui::IsItemActive())
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     ImGui::SameLine();
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, panelWindowPadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, panelItemSpacing);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, panelFramePadding);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, panelBackground);
     ImGui::BeginChild("MaterialXParameterPane", ImVec2(0.0f, 0.0f), true);
     drawParameterPane(target);
     ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
     ImGui::PopStyleVar(3);
     ImGui::End();
 }
@@ -239,8 +306,18 @@ void MaterialXNodeEditorPanel::syncGraph()
 {
     if (!flow) {
         flow = std::make_unique<ImFlow::ImNodeFlow>("MaterialXGraph");
-        // Right-click opens the add menu, so panning uses the middle button.
-        flow->getGrid().config().scroll_button = ImGuiMouseButton_Middle;
+        // Tab opens the add menu (see drawGraph), which frees the right button
+        // for panning.
+        flow->getGrid().config().scroll_button = ImGuiMouseButton_Right;
+        flow->droppedLinkPopUpContent([this](ImFlow::Pin* dragged) {
+            if (!dragged)
+                return;
+            // ImNodeFlow invokes this while its internal drop popup is open.
+            // Defer opening our ordinary, unscaled add popup until after
+            // flow->update() returns.
+            droppedLinkWantsAddMenu = true;
+            ImGui::CloseCurrentPopup();
+        });
     }
 
     const std::vector<mx::NodePtr> nodes = collectNodes();
@@ -342,7 +419,10 @@ void MaterialXNodeEditorPanel::applyAutoLayout()
         }
         if (const auto ui = uiNodes.find(node->getName()); ui != uiNodes.end()) {
             const ImVec2& size = ui->second->getSize();
-            layout.height = size.y > 1.0f ? size.y : 60.0f;
+            if (size.x > 1.0f)
+                layout.width = size.x;
+            if (size.y > 1.0f)
+                layout.height = size.y;
         }
         layoutNodes.push_back(std::move(layout));
         for (const mx::InputPtr& input : node->getInputs()) {
@@ -375,6 +455,77 @@ void MaterialXNodeEditorPanel::applyAutoLayout()
     pendingLayoutNodes.clear();
 }
 
+void MaterialXNodeEditorPanel::copySelectedNode()
+{
+    const auto entry = uiNodes.find(selectedNodeName);
+    if (entry == uiNodes.end() || !entry->second->materialNode())
+        return;
+
+    const mx::NodePtr& source = entry->second->materialNode();
+    clipboardDocument = mx::createDocument();
+    clipboardNode = clipboardDocument->addNode(
+        source->getCategory(), source->getName(), source->getType());
+    // copyContentFrom includes authored inputs, values, connection names and
+    // editor attributes while keeping the clipboard independent of the live
+    // document.
+    clipboardNode->copyContentFrom(source);
+}
+
+void MaterialXNodeEditorPanel::pasteNode(const MaterialTarget& target)
+{
+    if (!document || !flow || !clipboardNode)
+        return;
+
+    const std::string baseName = clipboardNode->getName().empty()
+        ? clipboardNode->getCategory() : clipboardNode->getName();
+    const std::string name = document->createValidChildName(baseName + "_copy");
+    const mx::NodePtr pasted = document->addNode(
+        clipboardNode->getCategory(), name, clipboardNode->getType());
+    pasted->copyContentFrom(clipboardNode);
+
+    ImVec2 position;
+    if (ImGui::IsMouseHoveringRect(canvasMin, canvasMax)) {
+        position = flow->screen2grid(ImGui::GetMousePos());
+    } else {
+        ImVec2 sourcePosition(0.0f, 0.0f);
+        if (readPosition(*clipboardNode, sourcePosition))
+            position = sourcePosition + ImVec2(32.0f, 32.0f);
+        else
+            position = ImVec2(32.0f, 32.0f);
+    }
+    writePosition(*pasted, position);
+
+    const std::shared_ptr<MaterialXGraphNode> created =
+        addMaterialXGraphNode(*flow, position, pasted);
+    for (auto& [nodeName, node] : uiNodes)
+        node->selected(nodeName == name);
+    uiNodes.emplace(name, created);
+    selectedNodeName = name;
+    connectionState.clear();
+
+    // Rebuild only the live flow topology on the next frame. This reconnects
+    // copied input links without resetting the viewport or the existing node
+    // objects, and follows the same deferred-edit policy as the add menu.
+    ++documentRevision;
+    (void)target;
+}
+
+void MaterialXNodeEditorPanel::cutSelectedNode(const MaterialTarget& target)
+{
+    const auto entry = uiNodes.find(selectedNodeName);
+    if (entry == uiNodes.end())
+        return;
+
+    copySelectedNode();
+    const std::string name = entry->first;
+    entry->second->destroy();
+    uiNodes.erase(entry);
+    document->removeNode(name);
+    selectedNodeName.clear();
+    connectionState.clear();
+    persistDocument(target, true);
+}
+
 void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
 {
     if (graphRevision != documentRevision) {
@@ -382,17 +533,88 @@ void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
         syncGraph();
     }
 
-    // Bound to a copy: ImNodeFlow keeps the callback past the end of this
-    // frame, and only calls it from inside update() below.
-    addMenuDrawnThisFrame = false;
-    flow->rightClickPopUpContent([this, target](ImFlow::BaseNode*) {
-        drawAddNodeMenu(target);
-    });
+    // Keyboard operations are handled in the outer ImGui context after the
+    // flow has finished drawing. This keeps shortcuts out of node-body editors
+    // while still allowing the graph to use the normal Ctrl+C/V/X gestures.
+    canvasMin = ImGui::GetWindowPos();
+    canvasMax = canvasMin + ImGui::GetWindowSize();
+
+    // ImNodeFlow renders through a contained ImGui context and copies that
+    // context's IME state back to the outer one when update() returns. If an
+    // outer text field is active (for example a transform value in Details),
+    // an idle graph would otherwise clear its WantTextInput request and SDL3
+    // would stop delivering character events. Give the already-active outer
+    // editor priority while still allowing text editors inside the graph to
+    // publish their IME state when the outer UI is not accepting text.
+    ImGuiContext* const outerContext = ImGui::GetCurrentContext();
+    const ImGuiPlatformImeData outerImeData = outerContext->PlatformImeData;
     flow->update();
-    // The popup lives in ImNodeFlow's own ImGui context, so "it closed" is
-    // simply "it did not draw this frame".
-    if (!addMenuDrawnThisFrame)
+    if (outerImeData.WantTextInput || outerImeData.WantVisible)
+        outerContext->PlatformImeData = outerImeData;
+
+    if (droppedLinkWantsAddMenu) {
+        droppedLinkWantsAddMenu = false;
+        addNodePosition = flow->screen2grid(ImGui::GetMousePos());
+        addMenuScreenPosition = ImGui::GetMousePos();
         addMenuOpen = false;
+        focusNodeSearch = true;
+        ImGui::OpenPopup(AddNodePopupId);
+    }
+
+    // The add menu is deliberately not ImNodeFlow's right-click popup. That
+    // callback runs inside the canvas's own ImGui context, whose draw data is
+    // multiplied by the graph zoom on the way out (see context_wrapper.h's
+    // AppendDrawData), so the search box grew and shrank with the view and was
+    // unreadable at low zoom. Opened here instead, in the outer context after
+    // update() has returned, it is an ordinary popup at UI size.
+    // drawGraph runs inside the graph pane's child window, so this is the
+    // canvas rect the menu has to stay inside of.
+    canvasMin = ImGui::GetWindowPos();
+    canvasMax = canvasMin + ImGui::GetWindowSize();
+
+    const bool canvasActive = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
+        || ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+    if (canvasActive && !ImGui::IsPopupOpen(AddNodePopupId)
+        && ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+        // Where the new node lands. screen2grid handles being called from
+        // outside the canvas context, so the outer mouse position is correct
+        // here.
+        addNodePosition = flow->screen2grid(ImGui::GetMousePos());
+        addMenuScreenPosition = ImGui::GetMousePos();
+        addMenuOpen = false;
+        ImGui::OpenPopup(AddNodePopupId);
+    }
+
+    // A popup is a top-level window, so it is not clipped by the child it was
+    // opened over: left alone it spills across the parameter pane and out of
+    // the panel entirely. Constrain it to the canvas instead -- cap the size,
+    // then place it so the whole menu lands inside. addMenuSize is last
+    // frame's measurement, which is exact after the first frame and only ever
+    // used to nudge the position.
+    const ImVec2 canvasSize = canvasMax - canvasMin;
+    constexpr float canvasMargin = 8.0f;
+    const ImVec2 maxMenuSize(
+        std::max(canvasSize.x - 2.0f * canvasMargin, 120.0f),
+        std::max(canvasSize.y - 2.0f * canvasMargin, 120.0f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxMenuSize);
+    const ImVec2 menuSize(
+        std::min(addMenuSize.x > 0.0f ? addMenuSize.x : maxMenuSize.x, maxMenuSize.x),
+        std::min(addMenuSize.y > 0.0f ? addMenuSize.y : maxMenuSize.y, maxMenuSize.y));
+    const ImVec2 clampedPosition(
+        std::clamp(addMenuScreenPosition.x,
+            canvasMin.x + canvasMargin,
+            std::max(canvasMax.x - canvasMargin - menuSize.x, canvasMin.x + canvasMargin)),
+        std::clamp(addMenuScreenPosition.y,
+            canvasMin.y + canvasMargin,
+            std::max(canvasMax.y - canvasMargin - menuSize.y, canvasMin.y + canvasMargin)));
+    ImGui::SetNextWindowPos(clampedPosition);
+    if (ImGui::BeginPopup(AddNodePopupId)) {
+        drawAddNodeMenu(target);
+        addMenuSize = ImGui::GetWindowSize();
+        ImGui::EndPopup();
+    } else {
+        addMenuOpen = false;
+    }
 
     // Nodes created this frame without a stored position were parked off-canvas
     // by syncGraph; now that the flow has measured them, give them the layout
@@ -404,6 +626,16 @@ void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
     for (const auto& [nodeName, uiNode] : uiNodes)
         if (uiNode->isSelected())
             selectedNodeName = nodeName;
+
+    const bool graphFocused = ImGui::IsWindowFocused() && !ImGui::IsAnyItemActive();
+    if (graphFocused && ImGui::IsKeyDown(ImGuiMod_Ctrl)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_C, false))
+            copySelectedNode();
+        else if (ImGui::IsKeyPressed(ImGuiKey_X, false))
+            cutSelectedNode(target);
+        else if (ImGui::IsKeyPressed(ImGuiKey_V, false))
+            pasteNode(target);
+    }
 
     // Dragging a node is a layout change only: record it, but do not recompile
     // the material and do not write the document on every mouse-move frame.
@@ -441,7 +673,7 @@ void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
                 continue;
             // Inputs drawn inline by the node body have no pin, so their
             // connection state cannot be read back here and must be left alone.
-            ImFlow::Pin* pin = uiNode->inPin(input->getName());
+            ImFlow::Pin* pin = uiNode->findInputPin(input->getName());
             if (!pin)
                 continue;
             mx::NodePtr connected;
@@ -483,21 +715,22 @@ void MaterialXNodeEditorPanel::drawAddNodeMenu(const MaterialTarget& target)
         return;
     }
 
-    addMenuDrawnThisFrame = true;
     if (!addMenuOpen) {
         addMenuOpen = true;
         focusNodeSearch = true;
         nodeSearch.clear();
-        // The popup opens where the right-click happened, which is where the
-        // new node should land.
-        addNodePosition = flow->screen2grid(ImGui::GetMousePosOnOpeningCurrentPopup());
     }
+
+    // The menu is a search box, not a panel, and sat too large against the
+    // graph. One factor drives text and both dimensions so it stays in
+    // proportion; it is applied to the popup window only and reset below.
+    ImGui::SetWindowFontScale(AddMenuScale);
 
     ImGui::TextDisabled("Add node");
     std::array<char, 128> buffer{};
     const size_t count = std::min(nodeSearch.size(), buffer.size() - 1);
     std::copy_n(nodeSearch.data(), count, buffer.data());
-    ImGui::SetNextItemWidth(240.0f);
+    ImGui::SetNextItemWidth(240.0f * AddMenuScale);
     if (focusNodeSearch) {
         // Typing must go straight to the search box, so focus is set on the
         // frame the popup first appears.
@@ -536,7 +769,11 @@ void MaterialXNodeEditorPanel::drawAddNodeMenu(const MaterialTarget& target)
             // The new node contributes inputs the recorded state does not know
             // about. Reseed it next frame so the diff does not read as an edit.
             connectionState.clear();
-            persistDocument(target, true);
+            // A newly-created node has no effect until it is connected. Keep
+            // it in the editor's working document so it can be wired in, but
+            // do not write it back to the scene/file or invalidate the
+            // material yet. If the graph is reloaded before it is connected,
+            // the unreferenced node is intentionally discarded.
         }
         catch (const mx::Exception& error) {
             loadError = error.what();
@@ -544,7 +781,14 @@ void MaterialXNodeEditorPanel::drawAddNodeMenu(const MaterialTarget& target)
         ImGui::CloseCurrentPopup();
     };
 
-    ImGui::BeginChild("MaterialXNodeList", ImVec2(280.0f, 320.0f));
+    // The list is what gives the menu its size, so it is what has to give when
+    // the canvas is too small to hold the menu at its natural size. Bounding it
+    // here keeps the whole menu visible instead of letting the window size
+    // constraint clip the bottom of the list off.
+    const ImVec2 canvasSize = canvasMax - canvasMin;
+    const float listWidth = std::clamp(canvasSize.x - 48.0f, 140.0f, 280.0f * AddMenuScale);
+    const float listHeight = std::clamp(canvasSize.y - 96.0f, 100.0f, 320.0f * AddMenuScale);
+    ImGui::BeginChild("MaterialXNodeList", ImVec2(listWidth, listHeight));
     if (!nodeSearch.empty()) {
         const std::vector<const MaterialXNodeType*> matches = catalog.search(nodeSearch);
         if (matches.empty())
@@ -573,6 +817,9 @@ void MaterialXNodeEditorPanel::drawAddNodeMenu(const MaterialTarget& target)
         }
     }
     ImGui::EndChild();
+    // Window font scale is sticky per window, so it has to be put back or the
+    // next popup drawn under this name inherits it.
+    ImGui::SetWindowFontScale(1.0f);
 }
 
 // ── Parameters ────────────────────────────────────────────────────────────────
@@ -589,49 +836,176 @@ void MaterialXNodeEditorPanel::drawParameterPane(const MaterialTarget& target)
         return;
     const mx::NodePtr& editable = entry->second->materialNode();
 
-    ImGui::Text("Node: %s (%s)", editable->getName().c_str(), editable->getCategory().c_str());
-    for (const mx::InputPtr& input : editable->getInputs()) {
-        if (!input)
+    // Keep the heading readable when the properties pane is narrow. The
+    // details panel below uses the same table-based layout, which lets labels
+    // and controls negotiate space instead of controls growing beyond the
+    // pane or being clipped at its right edge.
+    ImGui::TextWrapped("Node: %s (%s)", editable->getName().c_str(),
+        editable->getCategory().c_str());
+    ImGui::Separator();
+
+    const ImGuiTableFlags tableFlags =
+        ImGuiTableFlags_SizingStretchProp
+        | ImGuiTableFlags_Resizable
+        | ImGuiTableFlags_PadOuterX;
+    if (!ImGui::BeginTable("NodeProperties", 2, tableFlags))
+        return;
+
+    ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthStretch, 0.42f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.58f);
+
+    // The declared input list, not the authored one, and an input is written
+    // onto the node lazily the first time it is edited (see exposedInputs).
+    for (const mx::InputPtr& declaredInput : exposedInputs(editable)) {
+        if (!declaredInput)
             continue;
-        if (input->getConnectedNode()) {
-            ImGui::TextDisabled("%s  <-  %s", input->getName().c_str(),
-                input->getConnectedNode()->getName().c_str());
+        const std::string name = declaredInput->getName();
+        // The authored input is the value actually in effect; the declared one
+        // only supplies the name, type and default.
+        const mx::InputPtr authored = editable->getInput(name);
+        if (authored && authored->getConnectedNode()) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextWrapped("%s", name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+            ImGui::TextWrapped("Connected to %s",
+                authored->getConnectedNode()->getName().c_str());
+            ImGui::PopStyleColor();
             continue;
         }
-        const std::string type = input->getType();
-        const std::string value = input->getValueString();
-        bool changed = false;
-        if (type == "color3" || type == "color4") {
-            float color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
-            std::sscanf(value.c_str(), "%f, %f, %f, %f", &color[0], &color[1], &color[2], &color[3]);
-            changed = type == "color3" ? ImGui::ColorEdit3(input->getName().c_str(), color)
-                                       : ImGui::ColorEdit4(input->getName().c_str(), color);
-            if (changed) {
-                std::string serialized = std::to_string(color[0]) + ", "
-                    + std::to_string(color[1]) + ", " + std::to_string(color[2]);
-                if (type == "color4") serialized += ", " + std::to_string(color[3]);
-                input->setValueString(serialized);
+        const std::string type = authored ? authored->getType() : declaredInput->getType();
+        const std::string value = authored && authored->hasValueString()
+            ? authored->getValueString()
+            : declaredInput->getValueString();
+        const std::vector<std::string> enumLabels =
+            splitCommaSeparated(declaredInput->getAttribute("enum"));
+        const std::vector<std::string> enumValues =
+            splitCommaSeparated(declaredInput->getAttribute("enumvalues"));
+        const auto serializedEnumValue = [&](const size_t index) {
+            if (enumValues.size() == enumLabels.size())
+                return enumValues[index];
+
+            size_t componentCount = 1;
+            if (type == "color2" || type == "vector2")
+                componentCount = 2;
+            else if (type == "color3" || type == "vector3")
+                componentCount = 3;
+            else if (type == "color4" || type == "vector4")
+                componentCount = 4;
+
+            if (enumValues.size() == enumLabels.size() * componentCount) {
+                std::string result;
+                for (size_t component = 0; component < componentCount; ++component) {
+                    if (component != 0)
+                        result += ", ";
+                    result += enumValues[index * componentCount + component];
+                }
+                return result;
             }
+            return enumLabels[index];
+        };
+        // Writes go to the node, never to the declaration, which is shared
+        // library state owned by the catalog.
+        const auto write = [&](const std::string& serialized) {
+            const mx::InputPtr target = authored
+                ? authored : editable->addInput(name, type);
+            target->setValueString(serialized);
+        };
+        bool changed = false;
+        ImGui::PushID(name.c_str());
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextWrapped("%s", name.c_str());
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (!enumLabels.empty()) {
+            int currentIndex = -1;
+            for (size_t index = 0; index < enumLabels.size(); ++index) {
+                const std::string enumValue = serializedEnumValue(index);
+                if (value == enumLabels[index] || value == enumValue) {
+                    currentIndex = static_cast<int>(index);
+                    break;
+                }
+            }
+
+            const std::string preview = currentIndex >= 0
+                ? enumLabels[static_cast<size_t>(currentIndex)]
+                : value;
+            if (ImGui::BeginCombo("##Enum", preview.c_str())) {
+                for (size_t index = 0; index < enumLabels.size(); ++index) {
+                    const bool selected = static_cast<int>(index) == currentIndex;
+                    if (ImGui::Selectable(enumLabels[index].c_str(), selected)) {
+                        write(serializedEnumValue(index));
+                        changed = true;
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        } else if (type == "boolean") {
+            bool enabled = value == "true" || value == "1";
+            changed = ImGui::Checkbox("##Boolean", &enabled);
+            if (changed)
+                write(enabled ? "true" : "false");
+        } else if (type == "color3" || type == "color4") {
+            auto color = parseFloatComponents<4>(value, 0.8f);
+            color[3] = value.empty() ? 1.0f : color[3];
+            changed = type == "color3" ? ImGui::ColorEdit3("##Color", color.data())
+                                       : ImGui::ColorEdit4("##Color", color.data());
+            if (changed) {
+                if (type == "color3")
+                    write(serializeFloatComponents<3>({color[0], color[1], color[2]}));
+                else
+                    write(serializeFloatComponents<4>(color));
+            }
+        } else if (type == "vector2" || type == "color2") {
+            auto vector = parseFloatComponents<2>(value, 0.0f);
+            changed = ImGui::DragFloat2("##Vector2", vector.data(), 0.01f);
+            if (changed)
+                write(serializeFloatComponents(vector));
+        } else if (type == "vector3") {
+            auto vector = parseFloatComponents<3>(value, 0.0f);
+            changed = MathInput::DragFloat3("##Vector3", vector.data(), 0.01f);
+            if (changed)
+                write(serializeFloatComponents(vector));
+        } else if (type == "vector4") {
+            auto vector = parseFloatComponents<4>(value, 0.0f);
+            changed = ImGui::DragFloat4("##Vector4", vector.data(), 0.01f);
+            if (changed)
+                write(serializeFloatComponents(vector));
         } else if (type == "float" || type == "half" || type == "double") {
             float number = std::strtof(value.c_str(), nullptr);
-            changed = ImGui::DragFloat(input->getName().c_str(), &number, 0.01f);
+            changed = MathInput::DragFloat("##Number", &number, 0.01f);
             if (changed)
-                input->setValueString(std::to_string(number));
+                write(std::to_string(number));
+        } else if (type == "integer") {
+            int number = static_cast<int>(std::strtol(value.c_str(), nullptr, 10));
+            changed = MathInput::DragInt("##Integer", &number, 1.0f);
+            if (changed)
+                write(std::to_string(number));
         } else {
             std::array<char, 512> buffer{};
             const size_t count = std::min(value.size(), buffer.size() - 1);
             std::copy_n(value.data(), count, buffer.data());
-            changed = ImGui::InputText(input->getName().c_str(), buffer.data(), buffer.size(),
+            changed = ImGui::InputText("##Text", buffer.data(), buffer.size(),
                 ImGuiInputTextFlags_EnterReturnsTrue);
             if (changed) {
                 try {
-                    input->setValueString(buffer.data());
+                    write(buffer.data());
                 } catch (const mx::Exception& error) {
                     loadError = error.what();
+                    changed = false;
                 }
             }
         }
+        ImGui::PopID();
         if (changed)
             persistDocument(target, true);
     }
+
+    ImGui::EndTable();
 }

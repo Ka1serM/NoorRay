@@ -1,4 +1,4 @@
-#include "Scene/ResourceRegistry.h"
+#include "Scene/Resources/ResourceRegistry.h"
 
 #include <vector>
 

@@ -1,8 +1,8 @@
-#include "Camera/FisheyeCamera.h"
+#include "Rendering/Camera/FisheyeCamera.h"
 
 #include <algorithm>
 
-#include "CUDA/ManagedMemory.h"
+#include "Backend/CUDA/ManagedMemory.h"
 #include "UI/ImGuiManager.h"
 
 bool FisheyeCamera::renderUi()

@@ -3,7 +3,7 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/pair.h>
 
-#include "Camera/Camera.h"
+#include "Rendering/Camera/Camera.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

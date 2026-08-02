@@ -5,8 +5,8 @@
 #include <MaterialXCore/Document.h>
 #include <MaterialXFormat/XmlIo.h>
 
-#include "MaterialX/MaterialXCompiler.h"
-#include "Mesh/Assets/MeshAsset.h"
+#include "Materials/MaterialX/MaterialXDocument.h"
+#include "Geometry/Mesh/Assets/MeshAsset.h"
 #include "Scene/Scene.h"
 
 namespace nb = nanobind;

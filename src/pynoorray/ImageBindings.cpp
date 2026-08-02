@@ -6,7 +6,7 @@
 #include <nanobind/stl/string.h>
 
 #include "IO/Bitmap.h"
-#include "Vulkan/Image.h"
+#include "Backend/Vulkan/Runtime/Image.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

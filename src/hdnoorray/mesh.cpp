@@ -29,12 +29,12 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
-#include "Mesh/Assets/GaussianAsset.h"
-#include "Mesh/Assets/MeshAsset.h"
-#include "MaterialX/MaterialXCompiler.h"
-#include "Mesh/Transform.h"
-#include "Scene/GaussianInstance.h"
-#include "Scene/MeshInstance.h"
+#include "Geometry/Mesh/Assets/GaussianAsset.h"
+#include "Geometry/Mesh/Assets/MeshAsset.h"
+#include "Materials/MaterialX/MaterialXDocument.h"
+#include "Geometry/Mesh/Transform.h"
+#include "Scene/Objects/GaussianInstance.h"
+#include "Scene/Objects/MeshInstance.h"
 #include "Scene/Scene.h"
 
 #include <pxr/base/tf/diagnostic.h>
@@ -74,10 +74,10 @@ std::vector<glm::vec3> Vec3Values(const VtValue& value)
     return result;
 }
 
-// USD/Blender "st" primvars put v=0 at the bottom of the image, but the
-// renderer's texture sampler (rs_texture -> tex2D) reads v=0 as the first
-// (top) row, matching how images are decoded and uploaded. Flip here so
-// Blender-authored UVs land the same way PlyMeshLoader's own v-flip does.
+// Keep Blender/USD UVs in their authored convention. Blender's live image
+// buffers are already laid out with the V origin expected by the renderer's
+// normalized texture sampler; changing V here also changes the tangent frame
+// used by MaterialX normal maps and mirrors both color and normal textures.
 std::vector<glm::vec2> Vec2Values(const VtValue& value)
 {
     std::vector<glm::vec2> result;
@@ -85,7 +85,7 @@ std::vector<glm::vec2> Vec2Values(const VtValue& value)
         const VtVec2fArray& values = value.UncheckedGet<VtVec2fArray>();
         result.reserve(values.size());
         for (const GfVec2f& v : values)
-            result.emplace_back(v[0], 1.0f - v[1]);
+            result.emplace_back(v[0], v[1]);
     }
     return result;
 }

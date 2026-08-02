@@ -1,4 +1,4 @@
-#include "Camera/OrthographicCamera.h"
+#include "Rendering/Camera/OrthographicCamera.h"
 
 bool OrthographicCamera::renderUi()
 {

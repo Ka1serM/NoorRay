@@ -5,11 +5,29 @@
 
 #include <imgui.h>
 
-#include "Raytracing/Acceleration/GaussianProxyBlas.h"
+#include "Backend/OptiX/Acceleration/GaussianProxyBlas.h"
 #include "Scene/RenderSettings.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
 #include "UI/MathInput.h"
+
+namespace
+{
+BufferVisualization restoreBuffer(
+    const std::optional<BufferVisualization> previous,
+    const RenderSettings& settings)
+{
+    const BufferVisualization candidate =
+        previous.value_or(BufferVisualization::Beauty);
+    if (candidate == BufferVisualization::Denoised
+        && !settings.optixDenoiserEnabled)
+        return BufferVisualization::Beauty;
+    if (candidate == BufferVisualization::ProxyOverdraw
+        && !settings.gaussianProxyOverdrawVisualization)
+        return BufferVisualization::Beauty;
+    return candidate;
+}
+}
 
 RenderSettingsPanel::RenderSettingsPanel(std::string name, Scene& scene)
     : ImGuiComponent(std::move(name)), scene(scene)
@@ -51,27 +69,33 @@ void RenderSettingsPanel::renderUi()
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Noise Limit");
-        ImGui::TableSetColumnIndex(1);
-        changed |= ImGui::Checkbox("##NoiseLimitEnabled", &settings.noiseLimitEnabled);
-
-        if (settings.noiseLimitEnabled)
-        {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("Noise Level");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            changed |= MathInput::SliderFloat(
-                "##NoiseLevel", &settings.noiseLevel, 0.000001f, 0.1f, "%.6f",
-                ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
-        }
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("OptiX Denoiser");
         ImGui::TableSetColumnIndex(1);
-        changed |= ImGui::Checkbox("##OptixDenoiser", &settings.optixDenoiserEnabled);
+        if (ImGui::Checkbox(
+                "##OptixDenoiser", &settings.optixDenoiserEnabled))
+        {
+            // Enabling generation also selects its separate presentation
+            // buffer. The reverse is deliberately not true: choosing the
+            // Denoised buffer must never enable the denoiser implicitly.
+            if (settings.optixDenoiserEnabled) {
+                previousDenoiserBuffer =
+                    settings.bufferVisualization == BufferVisualization::Denoised
+                    ? BufferVisualization::Beauty
+                    : settings.bufferVisualization;
+                settings.bufferVisualization = BufferVisualization::Denoised;
+            } else {
+                if (settings.bufferVisualization == BufferVisualization::Denoised)
+                    settings.bufferVisualization = restoreBuffer(
+                        previousDenoiserBuffer, settings);
+                // If Proxy Overdraw temporarily covered Denoised, make its
+                // eventual restore skip the now-disabled denoiser buffer.
+                if (previousProxyOverdrawBuffer == BufferVisualization::Denoised)
+                    previousProxyOverdrawBuffer = restoreBuffer(
+                        previousDenoiserBuffer, settings);
+                previousDenoiserBuffer.reset();
+            }
+            changed = true;
+        }
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -168,7 +192,33 @@ void RenderSettingsPanel::renderUi()
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("Proxy Overdraw");
         ImGui::TableSetColumnIndex(1);
-        changed |= ImGui::Checkbox("##ProxyOverdraw", &settings.gaussianProxyOverdrawVisualization);
+        if (ImGui::Checkbox("##ProxyOverdraw",
+                &settings.gaussianProxyOverdrawVisualization))
+        {
+            // Match the denoiser control: enabling generation selects its
+            // buffer, while selecting the buffer never enables generation.
+            if (settings.gaussianProxyOverdrawVisualization) {
+                previousProxyOverdrawBuffer =
+                    settings.bufferVisualization
+                        == BufferVisualization::ProxyOverdraw
+                    ? BufferVisualization::Beauty
+                    : settings.bufferVisualization;
+                settings.bufferVisualization =
+                    BufferVisualization::ProxyOverdraw;
+            } else {
+                if (settings.bufferVisualization
+                    == BufferVisualization::ProxyOverdraw)
+                    settings.bufferVisualization = restoreBuffer(
+                        previousProxyOverdrawBuffer, settings);
+                // Apply the same nested-toggle rule in the other direction.
+                if (previousDenoiserBuffer
+                    == BufferVisualization::ProxyOverdraw)
+                    previousDenoiserBuffer = restoreBuffer(
+                        previousProxyOverdrawBuffer, settings);
+                previousProxyOverdrawBuffer.reset();
+            }
+            changed = true;
+        }
 
         if (settings.gaussianProxyOverdrawVisualization)
         {
@@ -188,7 +238,8 @@ void RenderSettingsPanel::renderUi()
         changed |= ImGui::Checkbox("##TransparentBg", &settings.transparentBackground);
 
         static constexpr const char* kBufferVisNames[] = {
-            "Beauty", "Albedo", "Normal", "Cryptomatte", "Position"
+            "Beauty", "Albedo", "Normal", "Cryptomatte", "Position",
+            "Denoised", "Proxy Overdraw"
         };
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);

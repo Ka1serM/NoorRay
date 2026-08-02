@@ -8,6 +8,7 @@
 struct GpuInstance
 {
     glm::mat4 objectToWorld{1.0f};
+    glm::mat4 worldToObject{1.0f};
     glm::mat3 normalToWorld{1.0f};
     uint32_t meshIndex{};
 };

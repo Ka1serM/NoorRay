@@ -24,9 +24,8 @@ automatically vendors the USD SDK from Blender's dependency package when
 - clang/clang++ 22 with C++23 support, passed as `CMAKE_CXX_COMPILER` (also
   used as the CUDA host compiler automatically)
 - Vulkan SDK (set `VULKAN_SDK`)
-- MaterialX ingestion (always enabled): see the root
-  `README.md`'s MaterialX/OSL prerequisite; OSL uses LLVM/clang 22 and the
-  same CUDA 13 toolkit as NoorRay
+- MaterialX ingestion (always enabled): see the root `README.md` for the
+  MaterialX and CUDA prerequisites
 
 ## Build
 

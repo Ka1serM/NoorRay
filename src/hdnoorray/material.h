@@ -16,8 +16,8 @@ namespace MaterialX = MaterialX_v1_39_4;
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-// Shared native grey fallback document (open_pbr_surface, albedo 0.8,
-// roughness 0.5), used by every path that needs a visible material where none
+// Shared native grey fallback document (MaterialX disney_principled, albedo
+// 0.8, roughness 0.5), used by every path that needs a visible material where none
 // is authored. Static storage is immutable after first construction; callers
 // must never mutate it (setDataLibrary from a compile is idempotent).
 const MaterialX::DocumentPtr& GetSharedNativeFallbackMaterial();

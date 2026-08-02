@@ -50,8 +50,12 @@ private:
     void applyAutoLayout();
     void drawAddNodeMenu(const MaterialTarget& target);
     void drawParameterPane(const MaterialTarget& target);
-    // Nodes reachable from the material root, followed by any other top-level
-    // node in the document so freshly added, not-yet-connected nodes survive.
+    void copySelectedNode();
+    void pasteNode(const MaterialTarget& target);
+    void cutSelectedNode(const MaterialTarget& target);
+    // Nodes reachable from the material root, followed by other top-level
+    // nodes so freshly added, not-yet-connected nodes remain visible in the
+    // editor's working graph until they are connected or the graph reloads.
     std::vector<MaterialX::NodePtr> collectNodes() const;
     // Copies node positions the user dragged into the document's xpos/ypos
     // attributes, the same convention the MaterialX graph editor uses, so a
@@ -84,13 +88,33 @@ private:
     // gives each one a position and clears the list.
     std::vector<std::string> pendingLayoutNodes;
 
+    // Popup opened by Tab over the canvas. An ordinary popup in the panel's own
+    // ImGui context, so it is not scaled by the graph zoom.
+    static constexpr const char* AddNodePopupId = "##MaterialXAddNode";
+    // Size of the add menu relative to the rest of the UI. Fixed, not tied to
+    // the graph zoom, so the menu reads the same at every zoom level.
+    static constexpr float AddMenuScale = 0.85f;
+
     std::string selectedNodeName;
+    // Clipboard contents are kept as an independent MaterialX node so cut
+    // can safely remove the original without invalidating what will be pasted.
+    MaterialX::DocumentPtr clipboardDocument;
+    MaterialX::NodePtr clipboardNode;
     std::string nodeSearch;
     ImVec2 addNodePosition{};
-    // The add menu is drawn from inside ImNodeFlow's update, so "is it open" is
-    // tracked by whether it drew this frame rather than by an ImGui query.
+    // Screen rect of the graph pane, refreshed every frame in drawGraph. The
+    // add menu is a top-level popup and so is not clipped by the pane on its
+    // own; it is positioned and size-capped against this instead.
+    ImVec2 canvasMin{};
+    ImVec2 canvasMax{};
+    // Where the menu was asked to open, before clamping into the canvas.
+    ImVec2 addMenuScreenPosition{};
+    // Last frame's measured menu size, used to clamp this frame's position.
+    ImVec2 addMenuSize{};
+    // Latches the first frame the menu draws, which is when the search box is
+    // cleared and given focus.
     bool addMenuOpen{};
-    bool addMenuDrawnThisFrame{};
     bool focusNodeSearch{};
+    bool droppedLinkWantsAddMenu{};
     float graphRatio{0.66f};
 };

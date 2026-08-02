@@ -1,7 +1,7 @@
 #include "Bindings.h"
 
 #include "NoorRaySession.h"
-#include "Raytracing/Runtime/Raytracer.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

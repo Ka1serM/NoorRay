@@ -16,8 +16,8 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "Mesh/Transform.h"
-#include "Scene/LightInstance.h"
+#include "Geometry/Mesh/Transform.h"
+#include "Scene/Objects/LightInstance.h"
 #include "Scene/Scene.h"
 
 PXR_NAMESPACE_OPEN_SCOPE

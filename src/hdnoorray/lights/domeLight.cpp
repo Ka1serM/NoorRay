@@ -9,9 +9,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "Scene/Environment.h"
+#include "Scene/Resources/Environment.h"
 #include "Scene/Scene.h"
-#include "Scene/Texture.h"
+#include "Scene/Resources/Texture.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -32,7 +32,10 @@ void HdNoorRayDomeLight::Sync(
         delegate, GetId(), HdLightTokens->textureFile);
     const TextureRef texture = texturePath.empty()
         ? TextureRef{}
-        : param.GetOrCreateTexture(texturePath, TextureEncoding::Srgb8);
+        // Material images use bottom-origin rows to match Blender's UV
+        // buffers. Dome maps are sampled by the environment's own
+        // equirectangular convention and must retain their source row order.
+        : param.GetOrCreateTexture(texturePath, TextureEncoding::Srgb8, false);
 
     std::scoped_lock lock(param.mutex);
     Scene& scene = param.session.scene;

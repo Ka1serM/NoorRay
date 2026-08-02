@@ -1,6 +1,6 @@
 #include "Bindings.h"
 
-#include "Mesh/Transform.h"
+#include "Geometry/Mesh/Transform.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

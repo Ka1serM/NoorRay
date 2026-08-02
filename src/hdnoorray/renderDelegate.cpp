@@ -244,8 +244,6 @@ HdNoorRayRenderDelegate::GetRenderSettingDescriptors() const
     return {
         {"Samples", TfToken("samples"), VtValue(64)},
         {"Maximum Bounces", TfToken("maxBounces"), VtValue(8)},
-        {"Noise Limit", TfToken("noiseLimitEnabled"), VtValue(0)},
-        {"Noise Threshold", TfToken("noiseLevel"), VtValue(0.0001f)},
         {"OptiX Denoiser", TfToken("optixDenoiserEnabled"), VtValue(0)},
         {"Denoiser Min Samples", TfToken("optixDenoiserMinSamples"), VtValue(1)},
         {"Russian Roulette Start", TfToken("russianRouletteStartBounce"), VtValue(3)},
@@ -254,7 +252,9 @@ HdNoorRayRenderDelegate::GetRenderSettingDescriptors() const
         {"Gaussian Proxy Type", TfToken("gaussianProxyType"), VtValue(3)},
         {"Gaussian Shading Mode", TfToken("gaussianShadingMode"), VtValue(1)},
         {"Gaussian SH Degree", TfToken("gaussianRenderSphericalHarmonics"), VtValue(3)},
+        {"Buffer View", TfToken("bufferVisualization"), VtValue(0)},
         {"Gaussian Proxy Overdraw", TfToken("gaussianProxyOverdrawVisualization"), VtValue(0)},
+        {"Gaussian Proxy Overdraw Range", TfToken("gaussianProxyOverdrawMax"), VtValue(1024)},
     };
 }
 

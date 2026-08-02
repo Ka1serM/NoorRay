@@ -30,17 +30,6 @@ TEST_CASE_METHOD(MaterialXRenderTest, "NoorRay renders a MaterialX material to E
     CHECK(bitmap.pixels().size() == 256 * 256);
 }
 
-TEST_CASE_METHOD(MaterialXRenderTest,
-    "Embedded OSL default material renders without runtime compilation",
-    "[e2e][materialx]")
-{
-    const std::string output =
-        render("default_osl_sphere.nrscene", 1, "default_osl_sphere.exr");
-    const Bitmap bitmap = BitmapReader::read(output);
-    CHECK(bitmap.width() == 256);
-    CHECK(bitmap.height() == 256);
-}
-
 TEST_CASE_METHOD(MaterialXRenderTest, "NoorRay renders a MaterialX image texture to EXR", "[e2e][materialx]")
 {
     const std::string output = render("materialx_texture_sphere.nrscene", 2, "materialx_texture_sphere.exr");
@@ -61,15 +50,7 @@ TEST_CASE_METHOD(MaterialXRenderTest,
     CHECK(bitmap.height() == 64);
 }
 
-// Guards against a regression where a compiled MaterialX program's closure
-// tree was evaluated but the extracted base_color never reached the final
-// pixels (the OptiX megakernel silently compiled the whole MaterialX
-// evaluation path out because MaterialX support wasn't compiled into it --
-// every MaterialX render then fell back to NoorRay's identical legacy
-// default material, so two materials differing only in base_color produced
-// byte-identical output). Two flat standard_surface materials that differ
-// only in base_color must actually render different, correctly-tinted
-// colors.
+// A compiled MaterialX base_color must affect the rendered pixels.
 TEST_CASE_METHOD(MaterialXRenderTest, "MaterialX base_color actually reaches the rendered pixels", "[e2e][materialx]")
 {
     const std::string redOutput = render("materialx_flat_red.nrscene", 16, "materialx_flat_red.exr");
@@ -80,23 +61,15 @@ TEST_CASE_METHOD(MaterialXRenderTest, "MaterialX base_color actually reaches the
     const glm::vec3 redAvg = averageColor(redBitmap);
     const glm::vec3 greenAvg = averageColor(greenBitmap);
 
-    // The two renders must not be the same image...
+    // The two renders must differ and each must retain its own dominant color.
     CHECK(redAvg != greenAvg);
-    // ...and each must actually be dominated by its own base_color, not
-    // just "different from each other" for some unrelated reason (noise,
-    // a stale cached program, ...).
     CHECK(redAvg.x > redAvg.y);
     CHECK(redAvg.x > redAvg.z);
     CHECK(greenAvg.y > greenAvg.x);
     CHECK(greenAvg.y > greenAvg.z);
 }
 
-// Guards against a regression where OslShaderGenerator's opacity encoding
-// (Ci = (bsdf+edf)*opacity + transparent()*(1-opacity), see docs/MaterialX.md)
-// was collapsed to "any transparent() contribution at all sets opacity to
-// exactly 0", so any opacity < 1.0 -- even 0.99 -- discarded the entire
-// material instead of blending it partially. A half-opacity red sphere must
-// still show substantial red, not vanish to background.
+// Partial opacity must blend the material instead of discarding it.
 TEST_CASE_METHOD(MaterialXRenderTest,
     "MaterialX opacity below 1.0 blends instead of discarding the whole material",
     "[e2e][materialx]")

@@ -35,11 +35,16 @@ const MaterialXGraphNodeCreator* MaterialXGraphNodeRegistry::find(
 std::shared_ptr<MaterialXGraphNode> addMaterialXGraphNode(
     ImFlow::ImNodeFlow& flow, const ImVec2& position, mx::NodePtr node)
 {
+    if (!node)
+        return nullptr;
+
     const MaterialXGraphNodeCreator* creator =
         MaterialXGraphNodeRegistry::instance().find(node->getCategory(), node->getType());
     std::shared_ptr<MaterialXGraphNode> created = creator
         ? (*creator)(flow, position, std::move(node))
         : flow.addNode<MaterialXGraphNode>(position, std::move(node));
+    if (!created)
+        return nullptr;
     created->buildPins();
     return created;
 }

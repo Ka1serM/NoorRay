@@ -10,7 +10,7 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 - **Path Tracing with MIS:** Uses **unidirectional path tracing** with **multiple importance sampling (MIS)**. Supports combined **Lambertian diffuse** and **GGX specular** materials.  
 
-- **Scene Loading:** Supports NoorRay `.nrscene`, PBRT v4 `.pbrt`, Wavefront `.obj`, and Khronos `.gltf`/`.glb` files.
+- **Scene Loading:** Uses USD (`.usd`, `.usda`, and `.usdc`) as the native scene format, while continuing to read legacy NoorRay `.nrscene`, PBRT v4 `.pbrt`, Wavefront `.obj`, and Khronos `.gltf`/`.glb` files.
 
 - **Material System:** Full **Disney PBR** support with **albedo, roughness, metallic, normal, transmission, opacity, and emission**.  
 
@@ -38,10 +38,8 @@ My personal path tracer for exploring graphics programming and testing out new r
 - **Python bindings:** `uv` and Python 3.12.
 - **Hydra delegate (optional):** `python3.13-devel` for the vendored USD
   Python headers, and Blender 5.2 installed (see `src/hdnoorray/README.md`).
-- **MaterialX/OSL:** `llvm22-devel`, `clang22-devel`,
-  `OpenImageIO-devel`, `pugixml-devel`, `flex`, and `bison`. NoorRay always
-  builds its vendored OSL 1.15.5 with OptiX/NVPTX support against the same
-  LLVM 22 and CUDA 13 toolchain as NoorRay itself (see `docs/MaterialX.md`).
+- **MaterialX:** the vendored MaterialX standard library is compiled as part
+  of the NoorRay build (see `docs/MaterialX.md`).
 
 
 #### Clone the Repository

@@ -22,10 +22,11 @@ TEST_CASE("Catalog loads the MaterialX standard libraries", "[materialx]")
     const MaterialXNodeCatalog& catalog = MaterialXNodeCatalog::instance();
 
     REQUIRE(catalog.loadError().empty());
-    // The standard libraries define several hundred nodes; a handful would mean
-    // only part of the library tree was found.
-    REQUIRE(catalog.types().size() > 300);
+    // The vendored MaterialX libraries currently expose roughly 800 typed
+    // definitions. A much smaller count means a library family was omitted.
+    REQUIRE(catalog.types().size() >= 800);
     REQUIRE(catalog.groups().size() > 5);
+    REQUIRE(find(catalog.inGroup("pbr"), "disney_principled", "surfaceshader") != nullptr);
 }
 
 TEST_CASE("Every catalog entry is instantiable", "[materialx]")
@@ -65,6 +66,19 @@ TEST_CASE("Search matches on category, type and group", "[materialx]")
         const auto matches = catalog.search("image");
         REQUIRE_FALSE(matches.empty());
         REQUIRE(find(matches, "image", "color3") != nullptr);
+    }
+
+    SECTION("value aliases find MaterialX constant nodes") {
+        const auto values = catalog.search("value");
+        REQUIRE(find(values, "constant", "float") != nullptr);
+        REQUIRE(find(values, "constant", "color3") != nullptr);
+        REQUIRE(find(values, "constant", "vector3") != nullptr);
+    }
+
+    SECTION("plain type aliases find the corresponding constants") {
+        REQUIRE(find(catalog.search("scalar"), "constant", "float") != nullptr);
+        REQUIRE(find(catalog.search("color"), "constant", "color3") != nullptr);
+        REQUIRE(find(catalog.search("vector"), "constant", "vector3") != nullptr);
     }
 
     SECTION("terms are combined, not alternated") {

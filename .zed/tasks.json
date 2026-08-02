@@ -10,7 +10,7 @@
   },
   {
     "label": "configure debug",
-    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DPython_EXECUTABLE=$ZED_WORKTREE_ROOT/.venv/bin/python -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNR_CUDA_ARCH='86;89' -DNR_BUILD_PYTHON=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/debug -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DVulkan_LIBRARY=/home/marcel/Programs/VulkanSDK/current/lib/VulkanLoader/lib/libvulkan.so -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DPython_EXECUTABLE=$ZED_WORKTREE_ROOT/.venv/bin/python -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNR_CUDA_ARCH='86;89' -DNR_BUILD_PYTHON=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,
@@ -19,7 +19,7 @@
   },
   {
     "label": "configure release",
-    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DPython_EXECUTABLE=/usr/bin/python3.13 -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH='86;89' -DNR_BUILD_HYDRA=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake -S . -B build/release -DCMAKE_CXX_COMPILER=/usr/bin/g++-15 -DVulkan_LIBRARY=/home/marcel/Programs/VulkanSDK/current/lib/VulkanLoader/lib/libvulkan.so -DNR_CUDA_ROOT=/usr/local/cuda -DOPTIX_ROOT=/home/marcel/Programs/OptixSDK -DPython_EXECUTABLE=/usr/bin/python3.14 -DCMAKE_BUILD_TYPE=Release -DNR_CUDA_ARCH='86;89' -DNR_BUILD_HYDRA=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": false,
     "allow_concurrent_runs": false,

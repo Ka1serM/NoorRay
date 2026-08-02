@@ -4,7 +4,7 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
-#include "Camera/RealisticCamera.h"
+#include "Rendering/Camera/RealisticCamera.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

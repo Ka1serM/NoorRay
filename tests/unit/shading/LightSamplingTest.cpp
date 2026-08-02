@@ -1,6 +1,6 @@
-#include "Light/DirectionalLight.h"
-#include "Light/RectLight.h"
-#include "Light/SpotLight.h"
+#include "Rendering/Lighting/DirectionalLight.h"
+#include "Rendering/Lighting/RectLight.h"
+#include "Rendering/Lighting/SpotLight.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

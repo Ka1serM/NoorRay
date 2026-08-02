@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <variant>
 
-#include "Light/RectLight.h"
-#include "Scene/LightInstance.h"
+#include "Rendering/Lighting/RectLight.h"
+#include "Scene/Objects/LightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 

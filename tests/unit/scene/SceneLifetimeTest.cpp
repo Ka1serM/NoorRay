@@ -1,9 +1,9 @@
 #include "NoorRaySession.h"
-#include "Mesh/Assets/GaussianAsset.h"
-#include "Mesh/Assets/MeshAsset.h"
-#include "Raytracing/Runtime/Raytracer.h"
-#include "Scene/GaussianInstance.h"
-#include "Scene/MeshInstance.h"
+#include "Geometry/Mesh/Assets/GaussianAsset.h"
+#include "Geometry/Mesh/Assets/MeshAsset.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
+#include "Scene/Objects/GaussianInstance.h"
+#include "Scene/Objects/MeshInstance.h"
 #include "Scene/SceneObject.h"
 
 #include <cuda_runtime_api.h>

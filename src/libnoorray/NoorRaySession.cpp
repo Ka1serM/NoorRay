@@ -1,7 +1,7 @@
 #include "NoorRaySession.h"
 
-#include "Raytracing/Runtime/Raytracer.h"
-#include "Vulkan/Renderer.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
+#include "Backend/Vulkan/Runtime/Renderer.h"
 
 namespace noorray
 {

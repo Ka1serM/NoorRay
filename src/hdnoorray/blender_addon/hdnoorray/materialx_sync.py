@@ -258,6 +258,12 @@ class MaterialXRenderSettingsSync:
                 self._resolve_image_path,
                 transport_nonce=nonce,
             )
+            if exported.unsupported_nodes:
+                print(
+                    "NoorRay MaterialX exporter: unsupported Blender nodes in "
+                    f"{material.name}: "
+                    + ", ".join(sorted(exported.unsupported_nodes))
+                )
             document = exported.document
             image_revisions = {
                 pointer: _image_revisions.get(pointer, 0)

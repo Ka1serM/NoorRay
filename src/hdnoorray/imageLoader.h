@@ -55,6 +55,6 @@ struct HDNOORRAY_API HdNoorRayDecodedImage
 // it is non-null.
 HDNOORRAY_API bool HdNoorRayLoadImage(
     const std::string& assetPath, HdNoorRayDecodedImage* image,
-    std::string* error = nullptr);
+    std::string* error = nullptr, bool flipY = true);
 
 PXR_NAMESPACE_CLOSE_SCOPE

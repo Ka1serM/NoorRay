@@ -1,13 +1,13 @@
 ﻿#pragma once
 
-#include "Vulkan/Context.h"
-#include "Vulkan/Image.h"
+#include "Backend/Vulkan/Runtime/Context.h"
+#include "Backend/Vulkan/Runtime/Image.h"
 #include "UI/ImGuiComponent.h"
 #include <string>
 #include "imgui.h" //needed here for ImGuizmo!
 #include "ImGuizmo.h"
 #include "Scene/Scene.h"
-#include "Vulkan/Buffer.h"
+#include "Backend/Vulkan/Runtime/Buffer.h"
 #include <SDL3/SDL_events.h>
 
 class Window;

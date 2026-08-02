@@ -1,5 +1,7 @@
 #include "UI/MaterialXNodes/MaterialXGraphNode.h"
 
+#include "UI/MaterialXNodeCatalog.h"
+
 #include <imgui.h>
 
 #include <vector>
@@ -9,12 +11,16 @@ namespace mx = MaterialX;
 MaterialXGraphNode::MaterialXGraphNode(mx::NodePtr node)
     : node_(std::move(node))
 {
-    setTitle(node_->getName().empty() ? node_->getCategory() : node_->getName());
+    if (node_)
+        setTitle(node_->getName().empty() ? node_->getCategory() : node_->getName());
 }
 
 void MaterialXGraphNode::buildPins()
 {
-    for (const mx::InputPtr& input : node_->getInputs()) {
+    // Declared inputs, not just the authored ones: an input with no pin cannot
+    // be connected to, which left most of a surface shader's parameters
+    // unreachable in the graph (see exposedInputs).
+    for (const mx::InputPtr& input : exposedInputs(node_)) {
         if (!input)
             continue;
         // An input the body draws inline still needs a pin once something is
@@ -33,6 +39,8 @@ void MaterialXGraphNode::buildPins()
 void MaterialXGraphNode::setMaterialNode(mx::NodePtr node)
 {
     node_ = std::move(node);
+    if (!node_)
+        return;
     setTitle(node_->getName().empty() ? node_->getCategory() : node_->getName());
 }
 
@@ -48,6 +56,14 @@ void MaterialXGraphNode::rebuildPins()
     buildPins();
 }
 
+ImFlow::Pin* MaterialXGraphNode::findInputPin(const std::string& inputName)
+{
+    for (const std::shared_ptr<ImFlow::Pin>& pin : getIns())
+        if (pin && pin->getName() == inputName)
+            return pin.get();
+    return nullptr;
+}
+
 void MaterialXGraphNode::draw()
 {
     drawBody();
@@ -55,6 +71,8 @@ void MaterialXGraphNode::draw()
 
 void MaterialXGraphNode::drawBody()
 {
+    if (!node_)
+        return;
     ImGui::TextDisabled("%s", node_->getCategory().c_str());
 }
 
@@ -65,6 +83,8 @@ bool MaterialXGraphNode::isInlineInput(const std::string&) const
 
 std::string MaterialXGraphNode::inputValue(const std::string& inputName) const
 {
+    if (!node_)
+        return {};
     const mx::InputPtr input = node_->getInput(inputName);
     if (!input || input->getConnectedNode())
         return {};

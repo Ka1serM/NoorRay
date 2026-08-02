@@ -1,14 +1,17 @@
 ﻿#include "MainMenuBar.h"
 #include "imgui.h"
-#include "Scene/LightInstance.h"
-#include "Scene/MeshInstance.h"
-#include "Camera/CameraInstance.h"
+#include "Scene/Objects/LightInstance.h"
+#include "Scene/Objects/MeshInstance.h"
+#include "Rendering/Camera/CameraInstance.h"
 #include <SDL3/SDL.h>
 #include <iostream>
 #include "Log.h"
-#include "Scene/SceneImporter.h"
-#include "Scene/SceneReader.h"
-#include "Scene/SceneWriter.h"
+#include "Scene/Import/SceneImporter.h"
+#include "Scene/Import/SceneReader.h"
+#include "Scene/Import/SceneUsd.h"
+#include "Scene/Import/SceneWriter.h"
+#include <algorithm>
+#include <cctype>
 #include <memory>
 #include <filesystem>
 #include <fstream>
@@ -137,7 +140,11 @@ void MainMenuBar::openScene(const std::string& filePath)
 
     try {
         scene.load(filePath);
-        currentScenePath = std::filesystem::path(filePath).extension() == ".nrscene"
+        std::string extension = std::filesystem::path(filePath).extension().string();
+        std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        currentScenePath = nr::sceneio::isUsdFile(filePath) || extension == ".pbrt"
             ? filePath : std::string{};
     } catch (const std::exception& e) {
         LOG_ERROR("Open scene failed: " << e.what());
@@ -151,7 +158,7 @@ void MainMenuBar::saveScene(const std::string& filePath)
 
     std::filesystem::path path(filePath);
     if (path.extension().empty())
-        path.replace_extension(".nrscene");
+        path.replace_extension(".usd");
 
     try {
         SceneWriter::Write(scene, path.string());
@@ -196,18 +203,25 @@ void MainMenuBar::renderFileMenu() {
             sceneOpenDialog = std::make_unique<pfd::open_file>(
                 "Open Scene",
                 ".",
-                std::vector<std::string>{"Supported Scenes", "*.nrscene *.pbrt", "PBRT Scene", "*.pbrt", "All Files", "*"});
+                std::vector<std::string>{"Supported Scenes", "*.usd *.usda *.usdc *.nrscene *.pbrt", "USD Scene", "*.usd *.usda *.usdc", "Legacy NoorRay Scene", "*.nrscene", "PBRT Scene", "*.pbrt", "All Files", "*"});
         }
 
         if (ImGui::MenuItem("Save", nullptr, false, !currentScenePath.empty()))
             saveScene(currentScenePath);
 
         if (ImGui::MenuItem("Save As...")) {
-            const std::string defaultPath = currentScenePath.empty() ? "scene.nrscene" : currentScenePath;
+            std::filesystem::path defaultPath = currentScenePath.empty()
+                ? std::filesystem::path("scene.usd")
+                : std::filesystem::path(currentScenePath);
+            // Save As starts with the USD filter selected. Do not carry a
+            // legacy .nrscene suffix into that filter when the current scene
+            // was opened from the old JSON format.
+            if (!nr::sceneio::isUsdFile(defaultPath.string()))
+                defaultPath.replace_extension(".usd");
             sceneSaveDialog = std::make_unique<pfd::save_file>(
                 "Save Scene As",
-                defaultPath,
-                std::vector<std::string>{"NoorRay Scene", "*.nrscene", "All Files", "*"},
+                defaultPath.string(),
+                std::vector<std::string>{"USD Scene", "*.usd *.usda *.usdc", "PBRT Scene", "*.pbrt", "Legacy NoorRay Scene", "*.nrscene", "All Files", "*"},
                 pfd::opt::force_overwrite);
         }
 

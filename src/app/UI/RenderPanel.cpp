@@ -1,6 +1,6 @@
 ﻿#include "RenderPanel.h"
 #include "imgui.h"
-#include "Vulkan/Context.h"
+#include "Backend/Vulkan/Runtime/Context.h"
 #include "portable-file-dialogs.h"
 #include "stb_image_write.h"
 #include <iostream>
@@ -17,9 +17,9 @@
 #include "Log.h"
 #include "IO/Bitmap.h"
 #include "IO/BitmapWriter.h"
-#include "Raytracing/Runtime/Raytracer.h"
-#include "Vulkan/Buffer.h"
-#include "Vulkan/Viewport.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
+#include "Backend/Vulkan/Runtime/Buffer.h"
+#include "Backend/Vulkan/Viewport/Viewport.h"
 
 // Helper function to convert 16-bit half float to 32-bit float.
 static float halfToFloat(const uint16_t half) {

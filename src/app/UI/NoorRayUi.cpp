@@ -1,5 +1,5 @@
 #include "NoorRayUi.h"
-#include "MaterialXSceneRuntime.h"
+#include "Materials/MaterialX/MaterialXSceneRuntime.h"
 #include "NoorRaySession.h"
 #include <filesystem>
 #include <algorithm>
@@ -7,7 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <SDL3/SDL.h>
-#include "Vulkan/Renderer.h"
+#include "Backend/Vulkan/Runtime/Renderer.h"
 #include "UI/ImGuiManager.h"
 #include "UI/DebugPanel.h"
 #include "UI/MainMenuBar.h"
@@ -18,18 +18,17 @@
 #include "UI/RenderPanel.h"
 #include "UI/RenderSettingsPanel.h"
 #include "UI/LensViewerPanel.h"
-#include "UI/TrainingPanel.h"
 #include "UI/MaterialXNodeEditorPanel.h"
 #include "portable-file-dialogs.h"
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include "backends/imgui_impl_sdl3.h"
-#include "Camera/Camera.h"
-#include "Camera/CameraInstance.h"
-#include "Camera/PerspectiveCamera.h"
-#include "Raytracing/Runtime/Raytracer.h"
-#include "Vulkan/Viewport.h"
-#include "Scene/LightInstance.h"
+#include "Rendering/Camera/Camera.h"
+#include "Rendering/Camera/CameraInstance.h"
+#include "Rendering/Camera/PerspectiveCamera.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
+#include "Backend/Vulkan/Viewport/Viewport.h"
+#include "Scene/Objects/LightInstance.h"
 
 using namespace noorray;
 
@@ -62,6 +61,7 @@ NoorRayUi::NoorRayUi(std::string scenePath, const uint32_t windowWidth, const ui
         raytracer.getOutputNormal(),
         raytracer.getOutputCrypto(),
         raytracer.getOutputPosition(),
+        raytracer.getOutputDenoised(),
         renderer->getColorImageFormat());
     Viewport* viewport = this->viewport.get();
     imGuiManager = std::make_unique<ImGuiManager>(
@@ -75,7 +75,6 @@ NoorRayUi::NoorRayUi(std::string scenePath, const uint32_t windowWidth, const ui
     imGuiManager->addComponent<RenderSettingsPanel>("Render Settings", scene);
     imGuiManager->addComponent<RenderPanel>("Render", context, raytracer, *renderer, *viewport);
     imGuiManager->addComponent<LensViewerPanel>("Lens Viewer", scene);
-    imGuiManager->addComponent<TrainingPanel>("Training", scene, raytracer);
     imGuiManager->addComponent<MaterialXNodeEditorPanel>("MaterialX Node Editor", scene);
     imGuiManager->addComponent<ViewportPanel>("Viewport", window, context, scene,
         raytracer, viewport->getOutputImage(), raytracer.getOutputCrypto(),
@@ -99,7 +98,6 @@ void NoorRayUi::run() {
     auto* mainMenuBar      = dynamic_cast<MainMenuBar*>(imGuiManager->getComponent("Menu"));
     auto* viewportPanel    = dynamic_cast<ViewportPanel*>(imGuiManager->getComponent("Viewport"));
     auto* renderPanel      = dynamic_cast<RenderPanel*>(imGuiManager->getComponent("Render"));
-    auto* trainingPanel    = dynamic_cast<TrainingPanel*>(imGuiManager->getComponent("Training"));
 
     raytracer->setTimingEnabled(true);
 
@@ -164,6 +162,7 @@ void NoorRayUi::run() {
                     raytracer->getOutputColor(),    raytracer->getOutputAlbedo(),
                     raytracer->getOutputNormal(),   raytracer->getOutputCrypto(),
                     raytracer->getOutputPosition(),
+                    raytracer->getOutputDenoised(),
                     renderer->getColorImageFormat());
                 viewportPanel->resize(raytracer->getWidth(), raytracer->getHeight(),
                                       viewport->getOutputImage().getFormat());
@@ -172,7 +171,13 @@ void NoorRayUi::run() {
             }
         }
 
-        const bool displayHandoffPending = pendingDisplayFrame.readyValue != 0;
+        static int nrOdFrames = 0;
+        if (std::getenv("NR_PROXY_OVERDRAW") != nullptr && ++nrOdFrames > 300) {
+            scene.getRenderSettings().gaussianProxyOverdrawVisualization = true;
+            scene.getRenderSettings().bufferVisualization =
+                BufferVisualization::ProxyOverdraw;
+        }
+        bool displayHandoffPending = pendingDisplayFrame.readyValue != 0;
         if (!viewportCamera) {
             frameIndex = 0;
             firstFrame = true;
@@ -193,15 +198,11 @@ void NoorRayUi::run() {
                 && completedFrame.readyValue > displayedRenderValue)
             {
                 debugPanel->onComputeFinished(raytracer->getGpuTimeMs());
-                const RenderSettings& settings = scene.getRenderSettings();
-                constexpr int MinimumNoiseSamples = 16;
-                if (settings.noiseLimitEnabled
-                    && submittedSamples >= MinimumNoiseSamples
-                    && raytracer->getAverageNoiseVariance() <= settings.noiseLevel)
-                {
-                    renderComplete = true;
-                }
                 pendingDisplayFrame = completedFrame;
+                // The frame is now owned by the Vulkan handoff below. Do not
+                // queue another CUDA render in this same UI iteration: the
+                // local flag was computed before completedFrame was adopted.
+                displayHandoffPending = true;
             }
 
             // Keep at most one CUDA render in flight. It is submitted before
@@ -211,11 +212,9 @@ void NoorRayUi::run() {
             // its pending handoff is submitted before queueing anything else.
             if (!liveResize && !raytracer->isRenderInFlight() && !displayHandoffPending)
             {
-                trainingPanel->tick();
                 const bool resetAccumulation = firstFrame || scene.isDirty(Accumulation);
                 const RenderSettings& renderSettings = scene.getRenderSettings();
-                const bool proxyOverdraw =
-                    renderSettings.gaussianProxyOverdrawVisualization;
+                const bool proxyOverdraw = rendersProxyOverdraw(renderSettings);
                 const int spp = std::max(1, renderSettings.samples);
                 const int maxSamples = std::max(1, renderSettings.maxSamples);
 
@@ -259,11 +258,12 @@ void NoorRayUi::run() {
                 const RenderSettings& renderSettings = scene.getRenderSettings();
                 const float cameraExposure = viewportCamera
                     ? viewportCamera->getCamera()->exposure : 0.0f;
-                const bool proxyOverdraw =
-                    renderSettings.gaussianProxyOverdrawVisualization;
+                const bool proxyOverdraw = rendersProxyOverdraw(renderSettings);
                 const uint32_t selectedCryptomatteId =
                     scene.getActiveCryptomatteId(
                         viewportPanel->getSelectedGaussianIndex());
+                const int bufferVisualization =
+                    static_cast<int>(renderSettings.bufferVisualization);
                 const glm::mat4 viewProjection = viewportCamera
                     ? viewportCamera->getProjectionMatrix() * viewportCamera->getViewMatrix()
                     : glm::mat4(1.0f);
@@ -273,7 +273,7 @@ void NoorRayUi::run() {
                     cmd, selectedCryptomatteId,
                     viewProjection,
                     proxyOverdraw ? 0.0f : cameraExposure,
-                    proxyOverdraw ? 0 : static_cast<int>(renderSettings.bufferVisualization),
+                    proxyOverdraw ? 0 : bufferVisualization,
                     proxyOverdraw ? 0 : renderSettings.tonemappingEnabled,
                     viewportPanel->showOverlays());
                 viewportPanel->onComputeFinished(cmd, viewport->getOutputImage());

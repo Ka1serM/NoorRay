@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "Scene/Handle.h"
-#include "Scene/SceneResources.h"
+#include "Scene/Resources/SceneResources.h"
 
 class Scene;
 

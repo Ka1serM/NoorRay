@@ -1,6 +1,6 @@
 #include "Bindings.h"
 
-#include "Shading/Material.h"
+#include "Materials/Shading/Material.h"
 
 namespace nb = nanobind;
 

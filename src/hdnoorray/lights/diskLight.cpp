@@ -6,8 +6,8 @@
 #include <numbers>
 #include <variant>
 
-#include "Light/RectLight.h"
-#include "Scene/LightInstance.h"
+#include "Rendering/Lighting/RectLight.h"
+#include "Scene/Objects/LightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -31,8 +31,12 @@ void HdNoorRayDiskLight::Configure(
     const float scaleX = BasisScale(transform, 0);
     const float scaleY = BasisScale(transform, 1);
     auto& rectangle = std::get<RectLight>(light.getLightData());
-    rectangle.width = radius * 2.0f * scaleX;
-    rectangle.height = radius * 2.0f * scaleY;
+    // The core sampler currently represents disk lights with a rectangle.
+    // Preserve the USD disk's emitting area so normalized and unnormalized
+    // Blender lights retain the same total power.
+    const float equivalentSide = std::sqrt(std::numbers::pi_v<float>) * radius;
+    rectangle.width = equivalentSide * scaleX;
+    rectangle.height = equivalentSide * scaleY;
     if (BoolParam(
             delegate, GetId(), HdLightTokens->normalize, false)) {
         const float sourceArea = std::numbers::pi_v<float>

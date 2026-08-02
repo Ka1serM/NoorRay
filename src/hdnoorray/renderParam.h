@@ -23,12 +23,12 @@
 #include <tbb/concurrent_queue.h>
 #include <tbb/task_group.h>
 
-#include "SVM/SvmCompiler.h"
+#include "Materials/SVM/SvmCompiler.h"
 
 #include "NoorRaySession.h"
-#include "Scene/SceneResources.h"
-#include "Scene/Texture.h"
-#include "Shading/Material.h"
+#include "Scene/Resources/SceneResources.h"
+#include "Scene/Resources/Texture.h"
+#include "Materials/Shading/Material.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -76,7 +76,8 @@ public:
     // returned reference owns its share; dropping every one of them frees the
     // texture. Returns an empty reference when the file cannot be loaded.
     TextureRef GetOrCreateTexture(
-        const std::string& filePath, TextureEncoding encoding);
+        const std::string& filePath, TextureEncoding encoding,
+        bool flipY = true);
     // The cache stores generation-checked handles rather than owning
     // references, so it can survive CommitResources without keeping unused
     // scene textures alive. Pruning removes handles reclaimed by the Scene.
@@ -160,6 +161,7 @@ private:
     {
         ContentIdentity content;
         TextureEncoding encoding{TextureEncoding::Linear8};
+        bool flipY{true};
 
         bool operator==(const TextureCacheKey&) const = default;
     };
@@ -170,6 +172,8 @@ private:
         {
             size_t hash = ContentIdentityHash{}(key.content);
             hash ^= static_cast<size_t>(key.encoding)
+                + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+            hash ^= static_cast<size_t>(key.flipY)
                 + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
             return hash;
         }
@@ -209,6 +213,25 @@ private:
         std::weak_ptr<const std::vector<float>> rgba32Float;
     };
 
+    struct DecodedTextureCacheKey
+    {
+        ContentIdentity content;
+        bool flipY{true};
+
+        bool operator==(const DecodedTextureCacheKey&) const = default;
+    };
+
+    struct DecodedTextureCacheKeyHash
+    {
+        size_t operator()(const DecodedTextureCacheKey& key) const noexcept
+        {
+            size_t hash = ContentIdentityHash{}(key.content);
+            hash ^= static_cast<size_t>(key.flipY)
+                + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+            return hash;
+        }
+    };
+
     struct MaterialCompilationResult
     {
         SdfPath id;
@@ -221,7 +244,8 @@ private:
 
     ContentIdentity GetTextureContentIdentity(const std::string& filePath);
     DecodedTextureData GetOrDecodeTexture(
-        const std::string& filePath, const ContentIdentity& content);
+        const std::string& filePath, const ContentIdentity& content,
+        bool flipY);
     TextureRef GetOrCreateMemoryTexture(
         const std::string& dataUri, TextureEncoding encoding);
 
@@ -241,10 +265,11 @@ private:
         assetFingerprintCache_;
     std::unordered_map<std::string, std::shared_future<ContentIdentity>>
         assetHashFlights_;
-    std::unordered_map<ContentIdentity, DecodedTextureCacheEntry,
-        ContentIdentityHash> decodedTextureCache_;
-    std::unordered_map<ContentIdentity, std::shared_future<DecodedTextureData>,
-        ContentIdentityHash> decodedTextureFlights_;
+    std::unordered_map<DecodedTextureCacheKey, DecodedTextureCacheEntry,
+        DecodedTextureCacheKeyHash> decodedTextureCache_;
+    std::unordered_map<DecodedTextureCacheKey,
+        std::shared_future<DecodedTextureData>, DecodedTextureCacheKeyHash>
+        decodedTextureFlights_;
     std::unordered_map<TextureCacheKey, TextureHandle, TextureCacheKeyHash>
         textureCache_;
     std::counting_semaphore<64> materialSyncSlots_{4};

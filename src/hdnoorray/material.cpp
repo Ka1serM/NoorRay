@@ -11,13 +11,13 @@
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 
-#include "Raytracing/Runtime/Raytracer.h"
+#include "Backend/OptiX/Runtime/Raytracer.h"
 
 #include <MaterialXCore/Document.h>
 #include <MaterialXFormat/XmlIo.h>
 
-#include <MaterialX/MaterialXCompiler.h>
-#include <SVM/SvmCompiler.h>
+#include <Materials/MaterialX/MaterialXDocument.h>
+#include <Materials/SVM/SvmCompiler.h>
 
 #include <algorithm>
 #include <chrono>
@@ -198,11 +198,8 @@ mx::NodePtr TranslateNode(const HdMaterialNetwork2& network, const SdfPath& path
 
     visiting.insert(path);
 
-    // USD paths contain the owning Blender material name. Feeding them into
-    // generated OSL identifiers made otherwise identical graphs produce
-    // different PTX and defeated every topology cache. Document node order is
-    // deterministic, so a compact ordinal name preserves graph structure
-    // without instance identity.
+    // Use deterministic ordinal names so equivalent graphs share cache keys
+    // without embedding USD instance identity in the document.
     const std::string nodeName =
         "nr_node_" + std::to_string(doc->getNodes().size());
     const mx::NodePtr mxNode =

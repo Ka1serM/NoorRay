@@ -122,6 +122,31 @@ TEST_CASE("active dielectric supports reflection, transmission, and Snell sampli
     CHECK(transmissions > 0);
 }
 
+TEST_CASE("active dielectric evaluates spectral IOR per sampled wavelength",
+    "[bsdf][dielectric][dispersion]")
+{
+    nr::shading::lobes::DielectricLobe glass;
+    glass.reflectionTint = SampledSpectrum(1.0f);
+    glass.roughness = 0.25f;
+    glass.spectralIor = SampledSpectrum{};
+    glass.spectralIor[0] = 1.45f;
+    glass.spectralIor[1] = 1.50f;
+    glass.spectralIor[2] = 1.55f;
+    glass.spectralIor[3] = 1.60f;
+    glass.useSpectralIor = true;
+
+    const BsdfEvaluation evaluation = glass.eval(
+        Normal, View, glm::normalize(glm::vec3(0.3f, 0.1f, 0.95f)));
+    CHECK(evaluation.value[0] != Catch::Approx(evaluation.value[3]));
+
+    glass.reflectionTint = SampledSpectrum(0.0f);
+    glass.transmissionTint = SampledSpectrum(1.0f);
+    RandomState rng = seedRandom(0x51e11ae1u);
+    const BsdfSample sample = glass.sample(Normal, View, rng);
+    REQUIRE(sample.event == BsdfEvent::Transmission);
+    CHECK(sample.dispersive);
+}
+
 TEST_CASE("active rough glass uses generated LUT energy compensation", "[bsdf][dielectric][furnace]")
 {
     nr::shading::lobes::DielectricLobe glass;

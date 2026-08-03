@@ -24,6 +24,7 @@ from .materialx_sync import (
     register_handlers as _register_materialx_handlers,
     unregister_handlers as _unregister_materialx_handlers,
 )
+from .sellmeier_node import CLASSES as _SELLMEIER_NODE_CLASSES
 
 MAGIC = b"GSPLAT\x00"
 PROXY_SIZE = 1.0e-5
@@ -109,9 +110,44 @@ def _sync_blender_sensor_preview(nrcam, _context):
             pass
 
 
+def _sync_blender_sensor_fit(nrcam, _context):
+    """Keep Blender's viewport projection on the same fit as NoorRay."""
+    camera_data = getattr(nrcam, "id_data", None)
+    if not isinstance(camera_data, bpy.types.Camera):
+        return
+    # Blender has no native Stretch mode. AUTO is the closest preview for
+    # that legacy mode; Horizontal/Vertical can be represented exactly.
+    native_fit = {
+        "STRETCH": "AUTO",
+        "HORIZONTAL": "HORIZONTAL",
+        "VERTICAL": "VERTICAL",
+    }.get(nrcam.sensor_fit, "HORIZONTAL")
+    if camera_data.sensor_fit != native_fit:
+        camera_data.sensor_fit = native_fit
+
+
 def _sync_blender_camera_previews(nrcam, context):
+    _sync_blender_sensor_fit(nrcam, context)
     _sync_blender_optical_preview(nrcam, context)
     _sync_blender_sensor_preview(nrcam, context)
+
+
+def _add_sellmeier_node_menu(menu, context):
+    space = getattr(context, "space_data", None)
+    if space is not None and getattr(space, "tree_type", "") != "ShaderNodeTree":
+        return
+    operator = menu.layout.operator(
+        "node.add_node", text="Sellmeier IOR")
+    operator.type = "NoorRaySellmeierIOR"
+
+
+def _force_focal_length_units():
+    """Keep Blender's native camera controls expressed as millimeters."""
+    for camera_data in bpy.data.cameras:
+        try:
+            camera_data.lens_unit = "MILLIMETERS"
+        except (AttributeError, TypeError, ValueError):
+            pass
 
 
 def _encode_splat_path(mesh: bpy.types.Mesh, path: str) -> None:
@@ -345,9 +381,9 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
         cam = getattr(scene_eval, "camera", None)
         if cam and cam.data:
             nrcam = cam.data.hdnoorray
-            # Blender's native camera is the single source of truth for film
-            # geometry. In particular, Camera.lens is always millimeters;
-            # Blender derives its FOV from lens, sensor fit, and output aspect.
+            # Blender's native camera supplies the physical film geometry.
+            # NoorRay applies the addon-owned sensor-fit policy against the
+            # actual Hydra target, while Camera.lens remains millimeters.
             original_cam = getattr(scene, "camera", None)
             original_data = getattr(original_cam, "data", None)
             camera_data = original_data or cam.data
@@ -365,6 +401,9 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             result["cameraFocusDistanceCm"] = nrcam.focus_distance_cm
             result["cameraSensorWidthMm"] = camera_data.sensor_width
             result["cameraSensorHeightMm"] = camera_data.sensor_height
+            result["cameraSensorFit"] = [
+                "STRETCH", "HORIZONTAL", "VERTICAL",
+            ].index(nrcam.sensor_fit)
             result["cameraApertureDiameter"] = (
                 nrcam.aperture_diameter_mm
                 if nrcam.projection_type in {"THINLENS", "FISHEYE", "REALISTIC", "HYBRIDPSF"}
@@ -605,6 +644,17 @@ class NoorRayCameraSettings(PropertyGroup):
         min=1,
         max=256,
     )
+    sensor_fit: EnumProperty(
+        name="Sensor Fit",
+        description="How the sensor film is fitted to the render aspect ratio",
+        items=[
+            ("STRETCH", "Stretch", "Keep the physical sensor dimensions; mismatched output is stretched"),
+            ("HORIZONTAL", "Horizontal", "Keep the sensor width and fit the film height to the render aspect"),
+            ("VERTICAL", "Vertical", "Keep the sensor height and fit the film width to the render aspect"),
+        ],
+        default="HORIZONTAL",
+        update=_sync_blender_camera_previews,
+    )
     sensor_type: EnumProperty(
         name="Sensor Type",
         description="Sensor / PSF model",
@@ -731,11 +781,7 @@ class NOORRAY_PT_camera(Panel):
         if ptype == "ORTHOGRAPHIC":
             layout.prop(cam_data, "ortho_scale")
         elif ptype not in {"REALISTIC", "HYBRIDPSF"}:
-            layout.prop(cam_data, "lens_unit", expand=True)
-            if cam_data.lens_unit == "MILLIMETERS":
-                layout.prop(cam_data, "lens")
-            else:
-                layout.prop(cam_data, "angle")
+            layout.prop(cam_data, "lens", text="Focal Length")
         if ptype in {"THINLENS", "FISHEYE", "REALISTIC", "HYBRIDPSF"}:
             layout.prop(nrcam, "focus_distance_cm")
             layout.prop(nrcam, "aperture_diameter_mm")
@@ -753,7 +799,7 @@ class NOORRAY_PT_camera(Panel):
         layout.separator()
         layout.label(text="Sensor", icon="VIEW3D")
         if ptype != "ORTHOGRAPHIC":
-            layout.prop(cam_data, "sensor_fit")
+            layout.prop(nrcam, "sensor_fit")
             layout.prop(cam_data, "sensor_width")
             layout.prop(cam_data, "sensor_height")
         layout.prop(nrcam, "sensor_type")
@@ -764,6 +810,7 @@ class NOORRAY_PT_camera(Panel):
 
 
 _CLASSES = (
+    *_SELLMEIER_NODE_CLASSES,
     NoorRaySettings,
     NoorRayCameraSettings,
     NoorRayHydraRenderEngine,
@@ -843,10 +890,12 @@ _HIDDEN_CAMERA_PANEL_COMPATIBILITY = {}
 
 @bpy.app.handlers.persistent
 def _on_load_post(_dummy):
+    _force_focal_length_units()
     _restore_forced_view_transform()
     for camera_data in bpy.data.cameras:
         nrcam = getattr(camera_data, "hdnoorray", None)
         if nrcam is not None:
+            _sync_blender_sensor_fit(nrcam, None)
             _sync_blender_sensor_preview(nrcam, None)
 
 
@@ -901,6 +950,7 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.Scene.hdnoorray = PointerProperty(type=NoorRaySettings)
     bpy.types.Camera.hdnoorray = PointerProperty(type=NoorRayCameraSettings)
+    bpy.types.NODE_MT_shader_node_add_all.append(_add_sellmeier_node_menu)
     bpy.types.VIEW3D_MT_add.append(_add_menu_entry)
     _set_panel_compatibility(True)
     _register_materialx_handlers()
@@ -918,6 +968,8 @@ def unregister():
         del bpy.types.Camera.hdnoorray
     if hasattr(bpy.types.Scene, "hdnoorray"):
         del bpy.types.Scene.hdnoorray
+    if hasattr(bpy.types, "NODE_MT_shader_node_add_all"):
+        bpy.types.NODE_MT_shader_node_add_all.remove(_add_sellmeier_node_menu)
 
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)

@@ -222,10 +222,15 @@ NR_GPU inline LightHit intersectAnalyticLights(
     // Only distant lights have no finite geometry and remain a fallback here.
     if (surfaceDistance == Ray::InfiniteDistance)
         for (uint32_t i = 0; i < params.scene.directionalLightCount; ++i)
-            consider(params.scene.directionalLights[i].intersect(
-                ray, wavelengths, params.scene.spectrumTableScale,
-                params.scene.spectrumTableCoeffs, params.scene.d65),
-                params.scene.directionalLightCandidateOffset + i);
+        {
+            const uint32_t candidateIndex =
+                params.scene.directionalLightCandidateOffset + i;
+            if (params.scene.directLightCandidates != nullptr
+                && candidateIndex < params.scene.directLightCandidateCount)
+                consider(nr::direct_light::intersectDirectionalCandidate(
+                    params.scene.directLightCandidates[candidateIndex],
+                    ray, wavelengths), candidateIndex);
+        }
     return nearest;
 }
 
@@ -294,6 +299,9 @@ NR_GPU inline bool shadowOccluded(
         if (hit.primitiveIndex == InvalidIndex)
             return true;
         const Surface blocker = Surface::fromHit(params.scene, hit);
+        if (blocker.material->shadowOpaque != 0u
+            && blocker.color.a >= 1.0f)
+            return true;
         const bool hasSvmProgram = blocker.material->svmBytecodeLength != 0;
 
         float blockProbability;
@@ -497,8 +505,10 @@ NR_GPU inline void handleGaussianClosestHit(
         payload.status = PathTraceStatus::Terminate;
         return;
     }
+    const bool includeRoulette = static_cast<int>(state.depth + 1u)
+        >= params.scene.renderSettings.russianRouletteStartBounce;
     PathRandomStreams randoms = state.nextRandomStreams(
-        payload.pixel, params.frame.totalAccumulated);
+        payload.pixel, params.frame.totalAccumulated, false, includeRoulette);
     state.radiance += state.throughput * estimateDirect(
         position, gaussianId, albedo, state.wl,
         randoms.light, randoms.shadow);

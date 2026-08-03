@@ -647,6 +647,17 @@ struct NodeClosureDiffuseBsdf
     std::uint32_t translucent;
 };
 
+// Optional spectral IOR payload. `enabled == 0` means the closure uses its
+// ordinary scalar IOR input. The six encoded inputs are retained in the
+// closure instruction so the renderer can evaluate n(lambda) for the actual
+// sampled wavelengths instead of collapsing the model to a reference value.
+struct NodeSellmeierIor
+{
+    std::uint32_t enabled{};
+    std::uint32_t b1{}, b2{}, b3{};
+    std::uint32_t c1{}, c2{}, c3{};
+};
+
 struct NodeClosureConductorBsdf
 {
     std::uint32_t colorX, colorY, colorZ;
@@ -662,6 +673,7 @@ struct NodeClosureDielectricBsdf
     std::uint32_t colorX, colorY, colorZ;
     std::uint32_t roughness;
     std::uint32_t ior;
+    NodeSellmeierIor sellmeier;
     // Float-coded MaterialX scatter mode: 0 = R, 1 = T, 2 = RT.
     std::uint32_t transmission;
     std::uint32_t normalX, normalY, normalZ;
@@ -699,11 +711,13 @@ struct NodeClosureOpenPbrSurface
     std::uint32_t baseWeight, baseDiffuseRoughness;
     std::uint32_t metalness;
     std::uint32_t specularWeight, specularRoughness, specularIor;
+    NodeSellmeierIor specularSellmeier;
     std::uint32_t specularColorX, specularColorY, specularColorZ;
     std::uint32_t transmissionWeight, transmissionColorX, transmissionColorY, transmissionColorZ;
     std::uint32_t subsurfaceWeight, subsurfaceColorX, subsurfaceColorY, subsurfaceColorZ;
     std::uint32_t fuzzWeight, fuzzColorX, fuzzColorY, fuzzColorZ, fuzzRoughness;
     std::uint32_t coatWeight, coatColorX, coatColorY, coatColorZ, coatRoughness, coatIor;
+    NodeSellmeierIor coatSellmeier;
     std::uint32_t normalX, normalY, normalZ;
     std::uint32_t emissionColorX, emissionColorY, emissionColorZ, emissionLuminance;
     std::uint32_t opacity;

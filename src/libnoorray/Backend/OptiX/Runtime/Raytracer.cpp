@@ -530,9 +530,11 @@ void Raytracer::uploadSvmPrograms()
     gpuCache.data.svmTextureIndices = static_cast<const std::uint32_t*>(
         svmTextureIndicesDevice.get());
     // Program replacement can change opacity nodes without changing mesh or
-    // light dirty flags. Disable the opaque shadow fast path until the next
-    // light/mesh upload recomputes its conservative scene-wide classification.
+    // light dirty flags. Disable per-material shadow shortcuts until the next
+    // light/mesh upload recomputes their conservative classifications.
     gpuCache.data.allMaterialsOpaque = 0u;
+    for (Material& material : gpuCache.materials)
+        material.shadowOpaque = 0u;
 }
 
 nr::svm::SvmProgramRecord Raytracer::registerMaterialXProgram(
@@ -941,25 +943,17 @@ void Raytracer::updateLights()
 {
     // VMA-mapped host addresses and CUDA-imported device addresses are distinct.
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
-    gpuCache.data.pointLights = scene.getPointLightsDevice();
-    gpuCache.data.spotLights = scene.getSpotLightsDevice();
-    gpuCache.data.rectLights = scene.getRectLightsDevice();
-    gpuCache.data.directionalLights = scene.getDirectionalLightsDevice();
-    gpuCache.data.pointLightCount = scene.getPointLightCount();
-    gpuCache.data.spotLightCount = scene.getSpotLightCount();
-    gpuCache.data.rectLightCount = scene.getRectLightCount();
-    gpuCache.data.directionalLightCount = scene.getDirectionalLightCount();
-    gpuCache.data.pointLightCandidateOffset = 0;
-    gpuCache.data.spotLightCandidateOffset = gpuCache.data.pointLightCount;
-    gpuCache.data.rectLightCandidateOffset = gpuCache.data.spotLightCandidateOffset
-        + gpuCache.data.spotLightCount;
-    gpuCache.data.directionalLightCandidateOffset = gpuCache.data.rectLightCandidateOffset
-        + gpuCache.data.rectLightCount;
-
     const PointLight* pointLights = scene.getPointLights();
     const SpotLight* spotLights = scene.getSpotLights();
     const RectLight* rectLights = scene.getRectLights();
     const DirectionalLight* directionalLights = scene.getDirectionalLights();
+    const uint32_t pointLightCount = scene.getPointLightCount();
+    const uint32_t spotLightCount = scene.getSpotLightCount();
+    const uint32_t rectLightCount = scene.getRectLightCount();
+    const uint32_t directionalLightCount = scene.getDirectionalLightCount();
+    gpuCache.data.directionalLightCount = directionalLightCount;
+    gpuCache.data.directionalLightCandidateOffset = pointLightCount
+        + spotLightCount + rectLightCount;
 
     std::vector<DirectLightCandidate> candidates;
     std::vector<float> weights;
@@ -967,9 +961,8 @@ void Raytracer::updateLights()
     std::vector<uint32_t> analyticLightBvhCandidateIndices;
     std::vector<OptixAabb> meshLightBvhAabbs;
     std::vector<uint32_t> meshLightBvhCandidateIndices;
-    candidates.reserve(static_cast<size_t>(gpuCache.data.pointLightCount)
-        + gpuCache.data.spotLightCount + gpuCache.data.rectLightCount
-        + gpuCache.data.directionalLightCount);
+    candidates.reserve(static_cast<size_t>(pointLightCount)
+        + spotLightCount + rectLightCount + directionalLightCount);
     weights.reserve(candidates.capacity());
     analyticLightBvhAabbs.reserve(candidates.capacity());
     analyticLightBvhCandidateIndices.reserve(candidates.capacity());
@@ -1000,18 +993,34 @@ void Raytracer::updateLights()
                                      const float height = 0.0f,
                                      const uint32_t twoSided = 0u) {
         const float weight = fmaxf(powerBound, 0.0f);
-        candidates.push_back({type, index, InvalidIndex, InvalidIndex,
-            position, area, normal, weight, weight, spatialRadius,
-            orientationBound, tangent, width, height, twoSided});
+        DirectLightCandidate candidate{};
+        candidate.type = type;
+        candidate.index = index;
+        candidate.instanceIndex = InvalidIndex;
+        candidate.primitiveIndex = InvalidIndex;
+        candidate.position = position;
+        candidate.area = area;
+        candidate.normal = normal;
+        candidate.selectionWeight = weight;
+        candidate.powerBound = weight;
+        candidate.spatialRadius = spatialRadius;
+        candidate.orientationBound = orientationBound;
+        candidate.tangent = tangent;
+        candidate.width = width;
+        candidate.height = height;
+        candidate.twoSided = twoSided;
+        candidates.push_back(candidate);
         weights.push_back(weight);
         return static_cast<uint32_t>(candidates.size() - 1u);
     };
-    for (uint32_t i = 0; i < gpuCache.data.pointLightCount; ++i)
+    for (uint32_t i = 0; i < pointLightCount; ++i)
     {
         const uint32_t candidateIndex = appendCandidate(
             DirectLightType::Point, i, pointLights[i].position,
             glm::vec3(0.0f), 0.0f, pointLights[i].selectionWeight(),
             fmaxf(pointLights[i].softRadius, 0.0f), 1.0f);
+        candidates[candidateIndex].color = pointLights[i].color;
+        candidates[candidateIndex].intensity = pointLights[i].intensity;
         const float radius = fmaxf(pointLights[i].softRadius, 0.0f);
         if (radius > 0.0f)
             appendLightBvhAabb(
@@ -1019,13 +1028,26 @@ void Raytracer::updateLights()
                 pointLights[i].position - glm::vec3(radius),
                 pointLights[i].position + glm::vec3(radius), candidateIndex);
     }
-    for (uint32_t i = 0; i < gpuCache.data.spotLightCount; ++i)
+    for (uint32_t i = 0; i < spotLightCount; ++i)
     {
         const uint32_t candidateIndex = appendCandidate(
             DirectLightType::Spot, i, spotLights[i].position,
             glm::normalize(spotLights[i].direction), 0.0f,
             spotLights[i].selectionWeight(),
             fmaxf(spotLights[i].softRadius, 0.0f), 1.0f);
+        DirectLightCandidate& candidate = candidates[candidateIndex];
+        candidate.color = spotLights[i].color;
+        candidate.intensity = spotLights[i].intensity;
+        const float innerAngle = fminf(
+            spotLights[i].innerConeAngle, spotLights[i].outerConeAngle)
+            * LightPi / 180.0f;
+        const float outerAngle = fmaxf(
+            spotLights[i].innerConeAngle, spotLights[i].outerConeAngle)
+            * LightPi / 180.0f;
+        candidate.innerCos = cosf(innerAngle);
+        candidate.outerCos = cosf(outerAngle);
+        candidate.invConeCosineRange = 1.0f
+            / fmaxf(candidate.innerCos - candidate.outerCos, 1.0e-5f);
         const float radius = fmaxf(spotLights[i].softRadius, 0.0f);
         if (radius > 0.0f)
             appendLightBvhAabb(
@@ -1033,7 +1055,7 @@ void Raytracer::updateLights()
                 spotLights[i].position - glm::vec3(radius),
                 spotLights[i].position + glm::vec3(radius), candidateIndex);
     }
-    for (uint32_t i = 0; i < gpuCache.data.rectLightCount; ++i)
+    for (uint32_t i = 0; i < rectLightCount; ++i)
     {
         const glm::vec3 normal = nr::safeNormalize(rectLights[i].direction);
         const glm::vec3 tangent = nr::safeNormalize(rectLights[i].tangent);
@@ -1050,6 +1072,16 @@ void Raytracer::updateLights()
             fmaxf(rectLights[i].width, 0.0f),
             fmaxf(rectLights[i].height, 0.0f),
             rectLights[i].twoSided != 0 ? 1u : 0u);
+        DirectLightCandidate& candidate = candidates[candidateIndex];
+        candidate.bitangent = bitangent;
+        candidate.color = rectLights[i].color;
+        candidate.intensity = rectLights[i].intensity;
+        candidate.barnDoorLength = fmaxf(rectLights[i].barnDoorLength, 0.0f);
+        candidate.barnDoorEnabled = candidate.barnDoorLength > 0.0f
+            && rectLights[i].barnDoorAngle < 89.9f ? 1u : 0u;
+        candidate.barnDoorExpansion = candidate.barnDoorEnabled != 0u
+            ? candidate.barnDoorLength * tanf(fmaxf(
+                rectLights[i].barnDoorAngle, 0.0f) * LightPi / 180.0f) : 0.0f;
         if (rectLights[i].width > 0.0f && rectLights[i].height > 0.0f)
         {
             const glm::vec3 halfU = tangent * (0.5f * rectLights[i].width);
@@ -1071,10 +1103,21 @@ void Raytracer::updateLights()
                 candidateIndex);
         }
     }
-    for (uint32_t i = 0; i < gpuCache.data.directionalLightCount; ++i)
-        appendCandidate(DirectLightType::Directional, i, glm::vec3(0.0f),
+    for (uint32_t i = 0; i < directionalLightCount; ++i)
+    {
+        const uint32_t candidateIndex = appendCandidate(
+            DirectLightType::Directional, i, glm::vec3(0.0f),
             -glm::normalize(directionalLights[i].direction), 0.0f,
             directionalLights[i].selectionWeight(), 0.0f, 1.0f);
+        DirectLightCandidate& candidate = candidates[candidateIndex];
+        candidate.color = directionalLights[i].color;
+        candidate.intensity = directionalLights[i].intensity;
+        const float halfAngle = 0.5f * fminf(
+            fmaxf(directionalLights[i].softAngle, 0.0f), 180.0f)
+            * LightPi / 180.0f;
+        candidate.coneOneMinusCosine = oneMinusCosine(halfAngle);
+        candidate.coneProjectedArea = LightPi * sinf(halfAngle) * sinf(halfAngle);
+    }
 
     // MaterialX emission can be texture- or position-dependent, so the host
     // cannot reduce this list to a single scalar per material.  It can still
@@ -1161,6 +1204,70 @@ void Raytracer::updateLights()
         default: return 0;
         }
     };
+    const auto literalEquals = [&](const uint32_t word, const float expected) {
+        if (nr::svm::isStackOffset(word))
+            return false;
+        const float value = std::bit_cast<float>(word);
+        return std::isfinite(value) && value == expected;
+    };
+    const auto shadowOpaqueFor = [&](const uint32_t materialIndex) {
+        if (materialIndex >= materials.size())
+            return false;
+        const Material& material = materials[materialIndex];
+        if (material.svmBytecodeLength == 0)
+            return true;
+        if (material.svmBytecodeOffset > words.size()
+            || material.svmBytecodeLength > words.size() - material.svmBytecodeOffset)
+            return false;
+        const uint32_t* begin = words.data() + material.svmBytecodeOffset;
+        const size_t length = material.svmBytecodeLength;
+        for (size_t i = 0; i < length;)
+        {
+            const auto type = static_cast<nr::svm::NodeType>(begin[i]);
+            const size_t wordsForNode = nodeWordCount(type);
+            if (wordsForNode == 0 || wordsForNode > length - i)
+                return false;
+            if (type == nr::svm::NodeType::SurfaceOutput)
+            {
+                nr::svm::NodeSurfaceOutput node{};
+                std::memcpy(&node, begin + i + 1u, sizeof(node));
+                if (!literalEquals(node.opacity, 1.0f))
+                    return false;
+            }
+            else if (type == nr::svm::NodeType::ClosureOpenPbrSurface)
+            {
+                nr::svm::NodeClosureOpenPbrSurface node{};
+                std::memcpy(&node, begin + i + 1u, sizeof(node));
+                if (!literalEquals(node.opacity, 1.0f)
+                    || !literalEquals(node.transmissionWeight, 0.0f))
+                    return false;
+            }
+            else if (type == nr::svm::NodeType::ClosureDielectricBsdf)
+            {
+                nr::svm::NodeClosureDielectricBsdf node{};
+                std::memcpy(&node, begin + i + 1u, sizeof(node));
+                if (!literalEquals(node.transmission, 0.0f))
+                    return false;
+            }
+            else if (type == nr::svm::NodeType::ClosureDiffuseBsdf)
+            {
+                nr::svm::NodeClosureDiffuseBsdf node{};
+                std::memcpy(&node, begin + i + 1u, sizeof(node));
+                if (node.translucent != 0u)
+                    return false;
+            }
+            if (type == nr::svm::NodeType::End)
+                break;
+            i += wordsForNode;
+        }
+        return true;
+    };
+    for (uint32_t materialIndex = 0;
+         materialIndex < materials.size()
+         && materialIndex < gpuCache.materials.size(); ++materialIndex)
+        gpuCache.materials[materialIndex].shadowOpaque =
+            shadowOpaqueFor(materialIndex) ? 1u : 0u;
+
     const auto emissionBound = [&](const uint32_t materialIndex) {
         if (materialIndex >= materials.size())
             return 0.0f;
@@ -1257,19 +1364,18 @@ void Raytracer::updateLights()
                 glm::length(c - center)});
             const float powerBound = area * LightPi * materialEmissionBounds[
                 mesh.getMaterialIds()[face.materialIndex]];
-            DirectLightCandidate candidate{
-                DirectLightType::MeshTriangle,
-                static_cast<uint32_t>(candidates.size()),
-                instanceIndex,
-                primitive,
-                center,
-                area,
-                glm::normalize(crossProduct),
-                fmaxf(powerBound, 0.0f),
-                fmaxf(powerBound, 0.0f),
-                radius,
-                1.0f,
-                glm::vec3(0.0f), 0.0f, 0.0f, 0u};
+            DirectLightCandidate candidate{};
+            candidate.type = DirectLightType::MeshTriangle;
+            candidate.index = static_cast<uint32_t>(candidates.size());
+            candidate.instanceIndex = instanceIndex;
+            candidate.primitiveIndex = primitive;
+            candidate.position = center;
+            candidate.area = area;
+            candidate.normal = glm::normalize(crossProduct);
+            candidate.selectionWeight = fmaxf(powerBound, 0.0f);
+            candidate.powerBound = fmaxf(powerBound, 0.0f);
+            candidate.spatialRadius = radius;
+            candidate.orientationBound = 1.0f;
             meshCandidateIndices[lookupBegin + primitive] =
                 static_cast<uint32_t>(candidates.size());
             const uint32_t candidateIndex =
@@ -1440,42 +1546,23 @@ void Raytracer::updateLights()
 void Raytracer::launchPsfResolve(
     const KernelParams& params, const cudaStream_t stream) const
 {
-    constexpr uint32_t blockSize = 256;
-    const uint32_t count = params.frame.width * params.frame.height;
-    const dim3 grid((count + blockSize - 1) / blockSize, 1, 1);
     const Sensor& sensor = params.scene.camera->Dispatch(
         [](const auto* camera) -> const Sensor& { return camera->getSensor(); });
 
     if (const auto* scatter = sensor.CastOrNullptr<ScatterPsfSensor>())
     {
-        const ScatterPsfSensor* sensorPtr = scatter;
-        const glm::vec4* accumulation = params.accumulation;
-        cudaSurfaceObject_t output = params.output.color;
-        uint32_t width = params.frame.width;
-        uint32_t height = params.frame.height;
-        void* args[] = {
-            &sensorPtr, &accumulation, &output, &width, &height};
-        NR_GPU_CHECK(cudaLaunchKernel(
-            reinterpret_cast<const void*>(&resolveScatterPsfKernel),
-            grid, blockSize, args, 0, stream));
+        NR_GPU_CHECK(launchScatterPsfResolveKernel(
+            scatter, params.accumulation, params.output.color,
+            params.frame.width, params.frame.height, stream));
         return;
     }
 
     if (const auto* gather = sensor.CastOrNullptr<GatherPsfSensor>())
     {
-        const GatherPsfSensor* sensorPtr = gather;
-        glm::vec4* accumulation = params.accumulation;
-        cudaSurfaceObject_t output = params.output.color;
-        uint32_t width = params.frame.width;
-        uint32_t height = params.frame.height;
-        uint32_t binCount = params.psfBinCount;
-        PsfGatherBucketSample* buckets = params.psfGatherBuckets;
-        void* args[] = {
-            &sensorPtr, &accumulation, &output,
-            &width, &height, &binCount, &buckets};
-        NR_GPU_CHECK(cudaLaunchKernel(
-            reinterpret_cast<const void*>(&resolveGatherPsfKernel),
-            grid, blockSize, args, 0, stream));
+        NR_GPU_CHECK(launchGatherPsfResolveKernel(
+            gather, params.accumulation, params.output.color,
+            params.frame.width, params.frame.height, params.psfBinCount,
+            params.psfGatherBuckets, stream));
     }
 }
 
@@ -1511,11 +1598,19 @@ void Raytracer::prepareSensorFrame(Sensor& sensor, KernelParams& params, const b
 }
 
 void Raytracer::launchPathTrace(
-    const KernelParams& params, const cudaStream_t stream) const
+    const KernelParams& params, const cudaStream_t stream,
+    const bool uploadStaticParams) const
 {
     const NvtxRange profileRange("NoorRay/PathTrace");
-    NR_GPU_CHECK(cudaMemcpyAsync(optixLaunchParamsDevice.get(),
-        &params, sizeof(params), cudaMemcpyHostToDevice, stream));
+    if (uploadStaticParams)
+        NR_GPU_CHECK(cudaMemcpyAsync(optixLaunchParamsDevice.get(),
+            &params, sizeof(params), cudaMemcpyHostToDevice, stream));
+    else
+        NR_GPU_CHECK(cudaMemcpyAsync(
+            static_cast<char*>(optixLaunchParamsDevice.get())
+                + offsetof(KernelParams, frame),
+            &params.frame, sizeof(params.frame),
+            cudaMemcpyHostToDevice, stream));
     NR_OPTIX_CHECK(optixLaunch(optixPipeline.get(), stream,
         optixLaunchParamsDevice.devicePtr(), sizeof(KernelParams),
         &optixPathTraceSbt, params.frame.width, params.frame.height, 1));
@@ -1614,8 +1709,13 @@ void Raytracer::renderFrame(
     if (scene.isDirty(Lights) || scene.isDirty(Meshes)
         || scene.isDirty(TLAS))
         updateLights();
+    // MaterialX updates use the Meshes flag to refresh material records and
+    // hit-group bindings, but they do not change geometry. In particular,
+    // rebuilding a 20-million-Gaussian TLAS for every IOR/transmission edit
+    // creates a second multi-gigabyte acceleration structure and can trigger
+    // the OS OOM killer. Geometry mutations set TLAS explicitly.
     if (scene.isDirty(TLAS) || scene.isDirty(GaussianData)
-        || scene.isDirty(Lights) || scene.isDirty(Meshes))
+        || scene.isDirty(Lights))
         updateTLAS();
     if (scene.isDirty(CameraState)) activeCamera->rebuildCamera();
 
@@ -1704,11 +1804,12 @@ void Raytracer::renderFrame(
         for (uint32_t s = 0; s < samplesPerFrame; ++s)
         {
             params.frame.totalAccumulated = accumulatedSamples + s;
+            params.frame.writeOutput = s + 1u == samplesPerFrame ? 1u : 0u;
             // AOV queries run inline in the first beauty raygen launch. The
             // combined SBT routes their traversal calls to query records.
             params.frame.aovQuery = renderAov && s == 0 ? 1u : 0u;
             kernelStats.time("PathTrace", stream,
-                [&] { launchPathTrace(params, stream); });
+                [&] { launchPathTrace(params, stream, s == 0); });
         }
         params.frame.aovQuery = 0;
         if (renderAov)

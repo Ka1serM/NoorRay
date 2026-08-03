@@ -18,7 +18,7 @@ public:
         bool centered = false) const
     {
         const Sensor& sensor = getSensor();
-        const float aspect = sensor.width() / sensor.height();
+        const float aspect = sensor.filmWidth() / sensor.filmHeight();
         const float sx = nx * aspect;
         const float sy = ny;
         const float r = sqrtf(sx * sx + sy * sy);
@@ -32,7 +32,7 @@ public:
         // Fisheye angular extent follows the same physical focal length and
         // film width as the pinhole cameras; FOV is derived, never stored.
         const float halfFov = atanf(
-            getSensor().width() / (2.f * fmaxf(0.001f, focalLengthMm)));
+            getSensor().filmWidth() / (2.f * fmaxf(0.001f, focalLengthMm)));
         const float theta = (r / rMax) * halfFov;
         const float scale = sinf(theta) / r;
         glm::vec3 origin(0.0f);

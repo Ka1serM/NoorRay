@@ -204,6 +204,7 @@ private:
     void ensureSemaphores();
     void ensureAovImages();
     void releaseAovImages() noexcept;
-    void launchPathTrace(const KernelParams& params, cudaStream_t stream) const;
+    void launchPathTrace(const KernelParams& params, cudaStream_t stream,
+        bool uploadStaticParams) const;
     void launchProxyOverdraw(const KernelParams& params, cudaStream_t stream) const;
 };

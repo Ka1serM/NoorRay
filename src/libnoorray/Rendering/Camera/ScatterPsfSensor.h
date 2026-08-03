@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 
 #include "libross/imaging/interpolatedpsfgrid/InterpolatedPsfGrid.h"
+#include "libross/foundation/parallel/GpuParallelFor.h"
 
 #include <memory>
 #include <string>
@@ -53,9 +54,6 @@ public:
         const uint32_t x = pixel % ctx.width;
         const uint32_t y = pixel / ctx.width;
         auto addSplat = [=](const ross::Vector2i& dest, float psfWeight) {
-            if (dest.x < 0 || dest.y < 0 ||
-                dest.x >= static_cast<int>(ctx.width) || dest.y >= static_cast<int>(ctx.height))
-                return;
             glm::vec4& out = ctx.accumulation[static_cast<uint32_t>(dest.y) * ctx.width
                 + static_cast<uint32_t>(dest.x)];
             sensorAtomicAdd(&out.x, rgb.x * sampleWeight * psfWeight);
@@ -68,24 +66,32 @@ public:
     }
 };
 
-// The scatter resolve belongs to the sensor because it is the sensor's
-// accumulation representation that defines the resolve operation. Keeping the
-// launch here also means generic post-processing does not need PSF knowledge.
-inline NR_GPU_KERNEL void resolveScatterPsfKernel(
+#if defined(__CUDACC__) && defined(NR_BUILD_SCATTER_PSF_RESOLVE)
+
+cudaError_t launchScatterPsfResolveKernel(
     const ScatterPsfSensor* sensor, const glm::vec4* accumulation,
-    cudaSurfaceObject_t output, uint32_t width, uint32_t height)
+    cudaSurfaceObject_t output, const uint32_t width, const uint32_t height,
+    const cudaStream_t stream)
 {
-#if defined(__CUDACC__)
-    const uint32_t pixel = NR_GPU_LAUNCH_IDX;
-    const uint32_t pixelCount = width * height;
-    if (pixel >= pixelCount)
-        return;
-    const glm::vec4 value = sensor->resolvePixel(pixel, width, accumulation);
-    const uint32_t x = pixel % width;
-    const uint32_t y = pixel / width;
-    surf2Dwrite(make_float4(value.x, value.y, value.z, value.w),
-        output, x * sizeof(float4), y);
-#else
-    (void)sensor; (void)accumulation; (void)output; (void)width; (void)height;
-#endif
+    const cudaError_t syncResult = cudaStreamSynchronize(stream);
+    if (syncResult != cudaSuccess)
+        return syncResult;
+
+    ross::parallelFor2dGpu(width, height,
+        [=] ROSS_GPU(ross::Index2d index) {
+            const uint32_t pixel = static_cast<uint32_t>(index.y) * width
+                + static_cast<uint32_t>(index.x);
+            const glm::vec4 value = sensor->resolvePixel(pixel, width, accumulation);
+            surf2Dwrite(make_float4(value.x, value.y, value.z, value.w),
+                output, index.x * sizeof(float4), index.y);
+        });
+    return cudaGetLastError();
 }
+
+#else
+
+cudaError_t launchScatterPsfResolveKernel(
+    const ScatterPsfSensor*, const glm::vec4*, cudaSurfaceObject_t,
+    uint32_t, uint32_t, cudaStream_t);
+
+#endif

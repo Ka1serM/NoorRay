@@ -175,9 +175,9 @@ mat4 CameraInstance::getViewMatrix() const
 mat4 CameraInstance::getProjectionMatrix() const
 {
     const Sensor& sensor = camera->getSensor();
-    const float aspect = sensor.aspectRatio();
+    const float aspect = sensor.filmWidth() / sensor.filmHeight();
     const float focalLengthMm = camera->getFocalLengthMm();
-    const float fovY = 2.f * std::atan(sensor.height() / (2.f * focalLengthMm));
+    const float fovY = 2.f * std::atan(sensor.filmHeight() / (2.f * focalLengthMm));
     return perspective(fovY, aspect, 0.01f, 10000.f);
 }
 

@@ -12,10 +12,8 @@
 #include "Materials/Shading/Spectrum.h"
 
 // Standalone GGX dielectric lobe (reflection + transmission through a
-// single interface, scalar IOR -- MaterialX's dielectric_bsdf/
-// generalized_schlick_bsdf/coat all reduce to this). No wavelength
-// dispersion: MaterialX's ior input is a plain scalar, unlike the legacy
-// Sellmeier-driven glass path.
+// single interface). Direction and branch selection use the hero wavelength;
+// Fresnel and spectral throughput use the per-wavelength IOR when supplied.
 namespace nr::shading::lobes
 {
 
@@ -25,6 +23,8 @@ struct DielectricLobe
     SampledSpectrum transmissionTint{0.0f};
     float roughness{0.5f};
     float ior{1.5f};
+    SampledSpectrum spectralIor{1.5f};
+    bool useSpectralIor{false};
     bool exiting{false};
     const nr::shading::energy_lut::Textures* energyLuts{};
 
@@ -58,8 +58,8 @@ struct DielectricLobe
         if (viewHalfCosine <= 0.0f)
             return {};
 
-        const float fresnel = nr::shading::dielectric::fresnel(
-            viewHalfCosine, 1.0f, etaPath);
+        const SampledSpectrum fresnelValues = fresnelSpectrum(viewHalfCosine);
+        const float fresnel = fresnelValues[0];
         const bool hasReflection = reflectionTint.maxComponent() > 0.0f;
         const bool hasTransmission = transmissionTint.maxComponent() > 0.0f;
         const glm::vec3 refracted = glm::refract(
@@ -81,8 +81,8 @@ struct DielectricLobe
                 const float branchProbability =
                     hasTransmission ? fresnel : 1.0f;
                 result.pdf = branchProbability * nr::shading::ggx::SingularPdf;
-                result.weight = reflectionTint
-                    * (fresnel / fmaxf(branchProbability, BsdfEpsilon));
+                result.weight = reflectionTint * (fresnelValues
+                    * (1.0f / fmaxf(branchProbability, BsdfEpsilon)));
                 return result;
             }
             const BsdfEvaluation evaluation = eval(
@@ -109,12 +109,18 @@ struct DielectricLobe
         BsdfSample result;
         result.event = BsdfEvent::Transmission;
         result.eta = etaPath;
+        result.dispersive = useSpectralIor;
         result.direction = direction;
         if (smooth || fabsf(etaPath - 1.0f) < 1.0e-4f)
         {
             result.singular = true;
             result.pdf = (1.0f - fresnel) * nr::shading::ggx::SingularPdf;
-            result.weight = transmissionTint * (1.0f / (etaPath * etaPath));
+            SampledSpectrum etaScale;
+            for (int i = 0; i < NrSpectrumSamples; ++i) {
+                const float eta = pathEtaAt(i);
+                etaScale[i] = 1.0f / (eta * eta);
+            }
+            result.weight = transmissionTint * etaScale;
             return result;
         }
         const BsdfEvaluation evaluation = eval(normal, view, direction);
@@ -130,18 +136,44 @@ struct DielectricLobe
         const glm::vec3 normal, const glm::vec3 view) const
     {
         const float normalView = fmaxf(glm::dot(normal, view), 0.0f);
-        const float f0 = nr::shading::dielectric::fresnel(1.0f, 1.0f, ior);
-        const float directional =
-            nr::shading::dielectric::fresnelFromNormalReflectance(
-                normalView, f0);
-        return reflectionTint * directional + transmissionTint * (1.0f - directional);
+        SampledSpectrum result;
+        for (int i = 0; i < NrSpectrumSamples; ++i) {
+            const float eta = pathEtaAt(i);
+            const float f0 = nr::shading::dielectric::fresnel(1.0f, 1.0f, eta);
+            const float directional =
+                nr::shading::dielectric::fresnelFromNormalReflectance(
+                    normalView, f0);
+            result[i] = reflectionTint[i] * directional
+                + transmissionTint[i] * (1.0f - directional);
+        }
+        return result;
     }
 
 private:
+    NR_CPU_GPU float iorAt(const int index) const
+    {
+        return fmaxf(useSpectralIor ? spectralIor[index] : ior, 1.0f);
+    }
+
+    NR_CPU_GPU float pathEtaAt(const int index) const
+    {
+        const float materialIor = iorAt(index);
+        return exiting ? 1.0f / fmaxf(materialIor,
+            nr::shading::dielectric::DenominatorEpsilon) : materialIor;
+    }
+
     NR_CPU_GPU float pathEta() const
     {
-        return exiting ? 1.0f / fmaxf(ior, nr::shading::dielectric::DenominatorEpsilon)
-                        : ior;
+        return pathEtaAt(0);
+    }
+
+    NR_CPU_GPU SampledSpectrum fresnelSpectrum(const float cosine) const
+    {
+        SampledSpectrum result;
+        for (int i = 0; i < NrSpectrumSamples; ++i)
+            result[i] = nr::shading::dielectric::fresnel(
+                cosine, 1.0f, pathEtaAt(i));
+        return result;
     }
 
     NR_CPU_GPU BsdfEvaluation evalReflection(
@@ -161,16 +193,17 @@ private:
         const float etaPath = pathEta();
         const float f0 = nr::shading::dielectric::fresnel(
             1.0f, 1.0f, etaPath);
+        const SampledSpectrum fresnelValues = fresnelSpectrum(
+            microfacet.viewHalfCosine);
         if (transmissionTint.maxComponent() > 0.0f)
         {
             const float base = microfacet.cosineWeighted / normalOutgoing;
-            const float fresnel = nr::shading::dielectric::fresnel(
-                microfacet.viewHalfCosine, 1.0f, etaPath);
             const SampledSpectrum scale = glassEnergyScale(
                 normalView, etaPath);
-            result.pdf = microfacet.pdf * fresnel;
+            result.pdf = microfacet.pdf * fresnelValues[0];
             for (int i = 0; i < NrSpectrumSamples; ++i)
-                result.value[i] = reflectionTint[i] * fresnel * base * scale[i];
+                result.value[i] = reflectionTint[i] * fresnelValues[i]
+                    * base * scale[i];
             return result;
         }
         const float viewAlbedo = nr::shading::energy_lut::dielectricDirectionalAlbedo(
@@ -189,8 +222,6 @@ private:
         const float ms = msScale * nr::shading::energy_lut::multipleScatterFresnel(
             averageFresnelValue, averageAlbedo);
 
-        const float fresnel = nr::shading::dielectric::fresnel(
-            microfacet.viewHalfCosine, 1.0f, etaPath);
         // sample() picks the reflection branch with probability
         // fresnel(pathEta) whenever this lobe also transmits, so the density
         // has to carry that factor -- evalTransmission()'s (1 - fresnel) is
@@ -201,7 +232,8 @@ private:
             result.pdf *= nr::shading::dielectric::fresnel(
                 microfacet.viewHalfCosine, 1.0f, pathEta());
         for (int i = 0; i < NrSpectrumSamples; ++i)
-            result.value[i] = reflectionTint[i] * (fresnel * geometryFactor + ms);
+            result.value[i] = reflectionTint[i]
+                * (fresnelValues[i] * geometryFactor + ms);
         return result;
     }
 
@@ -222,16 +254,18 @@ private:
         if (microfacet.cosineWeighted <= 0.0f || outgoingCosine <= 0.0f)
             return result;
 
-        const float base = microfacet.cosineWeighted
-            / outgoingCosine / (etaPath * etaPath);
-        const float fresnel = nr::shading::dielectric::fresnel(
-            microfacet.viewHalfCosine, 1.0f, etaPath);
-        result.pdf = (1.0f - fresnel) * microfacet.pdf;
+        const SampledSpectrum fresnelValues = fresnelSpectrum(
+            microfacet.viewHalfCosine);
+        result.pdf = (1.0f - fresnelValues[0]) * microfacet.pdf;
         const SampledSpectrum scale = glassEnergyScale(
             glm::dot(normal, view), etaPath);
-        for (int i = 0; i < NrSpectrumSamples; ++i)
-            result.value[i] = transmissionTint[i] * (1.0f - fresnel)
+        for (int i = 0; i < NrSpectrumSamples; ++i) {
+            const float eta = pathEtaAt(i);
+            const float base = microfacet.cosineWeighted
+                / outgoingCosine / (eta * eta);
+            result.value[i] = transmissionTint[i] * (1.0f - fresnelValues[i])
                 * base * scale[i];
+        }
         return result;
     }
 

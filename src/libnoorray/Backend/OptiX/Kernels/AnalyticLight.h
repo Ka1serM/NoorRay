@@ -116,29 +116,10 @@ NR_GPU inline LightHit intersectAnalyticCandidate(
     const float tMax,
     const SampledWavelengths& wavelengths)
 {
-    LightHit hit{};
     const DirectLightCandidate& candidate =
         params.scene.directLightCandidates[candidateIndex];
-    switch (candidate.type)
-    {
-    case DirectLightType::Point:
-        return params.scene.pointLights[candidate.index].intersect(
-            ray, tMin, tMax, wavelengths,
-            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-            params.scene.d65);
-    case DirectLightType::Spot:
-        return params.scene.spotLights[candidate.index].intersect(
-            ray, tMin, tMax, wavelengths,
-            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-            params.scene.d65);
-    case DirectLightType::Rect:
-        return params.scene.rectLights[candidate.index].intersect(
-            ray, tMin, tMax, wavelengths,
-            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
-            params.scene.d65);
-    default:
-        return hit;
-    }
+    return nr::direct_light::intersectAnalyticCandidate(
+        candidate, ray, tMin, tMax, wavelengths);
 }
 
 NR_GPU inline bool evaluateMeshEmission(

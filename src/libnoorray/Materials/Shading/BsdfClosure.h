@@ -42,6 +42,11 @@ struct BsdfSample
     float eta{1.0f};
     BsdfEvent event{BsdfEvent::Diffuse};
     bool singular{};
+    // A Sellmeier transmission uses the hero wavelength for this packet's
+    // direction. The caller terminates secondary wavelengths before tracing
+    // the next segment, making subsequent path samples carry their own
+    // wavelength-dependent refracted directions.
+    bool dispersive{};
 
     NR_CPU_GPU bool directionIsValid() const
     {

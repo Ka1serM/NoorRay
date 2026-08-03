@@ -15,6 +15,27 @@ namespace nr::materialx
 
 namespace
 {
+void addNoorRayExtensions(const mx::DocumentPtr& document)
+{
+    if (document->getNodeDef("ND_noorray_sellmeier_ior"))
+        return;
+
+    const mx::NodeDefPtr definition = document->addNodeDef(
+        "ND_noorray_sellmeier_ior", "float", "noorray_sellmeier_ior");
+    definition->setNodeGroup("spectral");
+    definition->setAttribute("doc",
+        "Sellmeier dispersion model; scalar consumers use 546.074 nm while NoorRay evaluates sampled wavelengths");
+    const auto addInput = [&](const char* name, const char* value) {
+        definition->addInput(name, "float")->setValueString(value);
+    };
+    addInput("b1", "1.03961212");
+    addInput("b2", "0.231792344");
+    addInput("b3", "1.01046945");
+    addInput("c1", "0.00600069867");
+    addInput("c2", "0.0200179144");
+    addInput("c3", "103.560653");
+}
+
 mx::NodePtr addDisneyPrincipled(const mx::DocumentPtr& document,
     const std::string& name)
 {
@@ -34,6 +55,7 @@ mx::DocumentPtr loadStandardLibraries(const std::string& materialXStdlibDir)
     if (loaded.empty())
         throw std::runtime_error(
             "No MaterialX definitions were loaded from " + materialXStdlibDir);
+    addNoorRayExtensions(libraries);
     return libraries;
 }
 

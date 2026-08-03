@@ -83,7 +83,9 @@ struct alignas(16) PathState
     float etaScale;
 
     NR_CPU_GPU PathRandomStreams nextRandomStreams(
-        const uint32_t pixel, const uint32_t accumulatedSamples)
+        const uint32_t pixel, const uint32_t accumulatedSamples,
+        const bool includeOpacity = true,
+        const bool includeRoulette = true)
     {
         const RandomState bounceKey = depth == 0
             ? seedRandom((static_cast<uint64_t>(accumulatedSamples) << 32u)
@@ -91,11 +93,13 @@ struct alignas(16) PathState
             : rngState;
         rngState = advanceRandomSequence(bounceKey);
         return {
-            forkRandom(bounceKey, RandomStream::Opacity),
+            includeOpacity
+                ? forkRandom(bounceKey, RandomStream::Opacity) : RandomState{},
             forkRandom(bounceKey, RandomStream::Bsdf),
             forkRandom(bounceKey, RandomStream::Light),
             forkRandom(bounceKey, RandomStream::Shadow),
-            forkRandom(bounceKey, RandomStream::Roulette)};
+            includeRoulette
+                ? forkRandom(bounceKey, RandomStream::Roulette) : RandomState{}};
     }
 
     NR_CPU_GPU void scatter(const SampledSpectrum& weight, const float pdf)

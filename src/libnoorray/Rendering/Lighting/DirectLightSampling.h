@@ -139,6 +139,208 @@ NR_GPU inline float meshLightHitMisWeight(
         instanceIndex, primitiveIndex, origin, hitPosition, normal));
 }
 
+NR_GPU inline float candidateSpotAttenuation(
+    const DirectLightCandidate& candidate, const glm::vec3 outgoing);
+
+template <typename Rng>
+NR_GPU inline bool sampleAnalyticCandidate(
+    const DirectLightCandidate& candidate,
+    const glm::vec3 position,
+    const SampledWavelengths& wavelengths,
+    Rng& rng,
+    LightSample& light)
+{
+    if (candidate.type == DirectLightType::Point
+        || candidate.type == DirectLightType::Spot)
+    {
+        light = sampleSphereLight(position, candidate.position,
+            candidate.spatialRadius, rng);
+        if (light.distance <= 0.0f)
+            return false;
+        float attenuation = 1.0f;
+        if (candidate.type == DirectLightType::Spot)
+            attenuation = candidateSpotAttenuation(candidate, -light.direction);
+        const glm::vec3 rgb = candidate.spatialRadius > 0.0f
+            ? candidate.color * (candidate.intensity * attenuation
+                / (LightPi * candidate.spatialRadius * candidate.spatialRadius)
+                / fmaxf(light.pdf, 1.0e-20f))
+            : candidate.color * (candidate.intensity * attenuation
+                / fmaxf(light.distance * light.distance, 1.0e-6f));
+        light.radiance = rgbIlluminantToSpectrum(rgb, wavelengths,
+            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+            params.scene.d65);
+        return true;
+    }
+
+    if (candidate.type == DirectLightType::Rect)
+    {
+        light = {};
+        glm::vec3 sampledPosition = candidate.position;
+        light.pdf = sampleSphericalRectangle(position, sampledPosition,
+            candidate.tangent, candidate.width,
+            candidate.bitangent, candidate.height,
+            glm::vec2(randomFloat(rng), randomFloat(rng)));
+        if (light.pdf <= 0.0f)
+            return false;
+        const glm::vec3 delta = sampledPosition - position;
+        light.distance = glm::length(delta);
+        if (light.distance <= 0.0f)
+            return false;
+        light.direction = delta / light.distance;
+        float emitterCosine = glm::dot(candidate.normal, -light.direction);
+        emitterCosine = candidate.twoSided != 0
+            ? fabsf(emitterCosine) : fmaxf(emitterCosine, 0.0f);
+        if (emitterCosine <= 0.0f)
+            return false;
+        float barnDoorMask = 1.0f;
+        if (candidate.barnDoorEnabled != 0u)
+        {
+            const glm::vec3 outgoing = -light.direction;
+            const float forward = fmaxf(fabsf(glm::dot(
+                candidate.normal, outgoing)), 1.0e-5f);
+            const glm::vec3 local = sampledPosition - candidate.position;
+            const float projectedU = glm::dot(local, candidate.tangent)
+                + candidate.barnDoorLength * glm::dot(
+                    outgoing, candidate.tangent) / forward;
+            const float projectedV = glm::dot(local, candidate.bitangent)
+                + candidate.barnDoorLength * glm::dot(
+                    outgoing, candidate.bitangent) / forward;
+            if (fabsf(projectedU) > candidate.width * 0.5f
+                    + candidate.barnDoorExpansion
+                || fabsf(projectedV) > candidate.height * 0.5f
+                    + candidate.barnDoorExpansion)
+                barnDoorMask = 0.0f;
+        }
+        light.radiance = rgbIlluminantToSpectrum(
+            candidate.color * (candidate.intensity * barnDoorMask
+                / fmaxf(light.pdf, 1.0e-20f)), wavelengths,
+            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+            params.scene.d65);
+        return true;
+    }
+
+    if (candidate.type == DirectLightType::Directional)
+    {
+        light = {};
+        light.direction = candidate.normal;
+        light.distance = 1.0e16f;
+        light.radiance = rgbIlluminantToSpectrum(
+            candidate.color * candidate.intensity, wavelengths,
+            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+            params.scene.d65);
+        if (candidate.coneOneMinusCosine <= 0.0f)
+            return true;
+        const UniformConeSample cone = sampleUniformCone(candidate.normal,
+            candidate.coneOneMinusCosine,
+            glm::vec2(randomFloat(rng), randomFloat(rng)));
+        light.direction = cone.direction;
+        light.pdf = cone.pdf;
+        light.radiance *= 1.0f / fmaxf(
+            candidate.coneProjectedArea * light.pdf, 1.0e-20f);
+        return true;
+    }
+    return false;
+}
+
+NR_GPU inline float candidateSpotAttenuation(
+    const DirectLightCandidate& candidate, const glm::vec3 outgoing)
+{
+    const float cone = fminf(fmaxf(
+        (glm::dot(candidate.normal, outgoing) - candidate.outerCos)
+            * candidate.invConeCosineRange, 0.0f), 1.0f);
+    return cone * cone * (3.0f - 2.0f * cone);
+}
+
+NR_GPU inline LightHit intersectAnalyticCandidate(
+    const DirectLightCandidate& candidate,
+    const Ray& ray,
+    const float tMin,
+    const float tMax,
+    const SampledWavelengths& wavelengths)
+{
+    LightHit hit{};
+    if (candidate.type == DirectLightType::Point
+        || candidate.type == DirectLightType::Spot)
+    {
+        if (!intersectSphereLight(ray, tMin, tMax, candidate.position,
+                candidate.spatialRadius, hit.distance))
+            return {};
+        hit.pdf = sphereLightPdf(ray.origin(), candidate.position,
+            candidate.spatialRadius);
+        float attenuation = 1.0f;
+        if (candidate.type == DirectLightType::Spot)
+        {
+            const glm::vec3 hitPosition = ray.at(hit.distance);
+            attenuation = candidateSpotAttenuation(candidate,
+                nr::safeNormalize(ray.origin() - hitPosition,
+                    candidate.normal));
+        }
+        hit.radiance = rgbIlluminantToSpectrum(candidate.color * (
+            candidate.intensity * attenuation
+            / fmaxf(LightPi * candidate.spatialRadius
+                * candidate.spatialRadius, 1.0e-20f)), wavelengths,
+            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+            params.scene.d65);
+        return hit;
+    }
+    if (candidate.type != DirectLightType::Rect
+        || candidate.width <= 0.0f || candidate.height <= 0.0f)
+        return hit;
+    const float denominator = glm::dot(candidate.normal, ray.direction());
+    if (fabsf(denominator) <= 1.0e-8f)
+        return hit;
+    hit.distance = glm::dot(candidate.position - ray.origin(), candidate.normal)
+        / denominator;
+    if (hit.distance < tMin || hit.distance > tMax)
+        return {};
+    const glm::vec3 local = ray.at(hit.distance) - candidate.position;
+    if (fabsf(glm::dot(local, candidate.tangent)) > 0.5f * candidate.width
+        || fabsf(glm::dot(local, candidate.bitangent)) > 0.5f * candidate.height)
+        return {};
+    if (candidate.twoSided == 0
+        && glm::dot(candidate.normal, -ray.direction()) <= 0.0f)
+        return {};
+    hit.pdf = sphericalRectanglePdf(ray.origin(), candidate.position,
+        ray.at(hit.distance), candidate.tangent, candidate.width,
+        candidate.bitangent, candidate.height);
+    hit.radiance = rgbIlluminantToSpectrum(
+        candidate.color * candidate.intensity, wavelengths,
+        params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+        params.scene.d65);
+    return hit;
+}
+
+NR_GPU inline LightHit intersectDirectionalCandidate(
+    const DirectLightCandidate& candidate,
+    const Ray& ray,
+    const SampledWavelengths& wavelengths)
+{
+    LightHit hit{};
+    const float cosine = glm::dot(ray.direction(), candidate.normal);
+    if (candidate.coneOneMinusCosine <= 0.0f)
+    {
+        if (cosine < 1.0f - 1.0e-7f)
+            return hit;
+        hit.radiance = rgbIlluminantToSpectrum(
+            candidate.color * candidate.intensity, wavelengths,
+            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+            params.scene.d65);
+    }
+    else
+    {
+        if (1.0f - cosine > candidate.coneOneMinusCosine)
+            return hit;
+        hit.pdf = 1.0f / (2.0f * LightPi * candidate.coneOneMinusCosine);
+        hit.radiance = rgbIlluminantToSpectrum(
+            candidate.color * (candidate.intensity
+                / fmaxf(candidate.coneProjectedArea, 1.0e-20f)), wavelengths,
+            params.scene.spectrumTableScale, params.scene.spectrumTableCoeffs,
+            params.scene.d65);
+    }
+    hit.distance = Ray::InfiniteDistance;
+    return hit;
+}
+
 template <typename Rng>
 NR_GPU inline bool sampleMeshTriangle(
     const uint32_t candidateIndex,
@@ -222,34 +424,8 @@ NR_GPU inline bool sampleCandidate(
     if (candidate.type == DirectLightType::MeshTriangle)
         sampled = sampleMeshTriangle(candidateIndex, candidate, position,
             wavelengths, rng, light);
-    else if (candidate.type == DirectLightType::Point)
-    {
-        light = params.scene.pointLights[candidate.index].sampleLi(position, rng,
-            wavelengths, params.scene.spectrumTableScale,
-            params.scene.spectrumTableCoeffs, params.scene.d65);
-        sampled = true;
-    }
-    else if (candidate.type == DirectLightType::Spot)
-    {
-        light = params.scene.spotLights[candidate.index].sampleLi(position, rng,
-            wavelengths, params.scene.spectrumTableScale,
-            params.scene.spectrumTableCoeffs, params.scene.d65);
-        sampled = true;
-    }
-    else if (candidate.type == DirectLightType::Rect)
-    {
-        light = params.scene.rectLights[candidate.index].sampleLi(position, rng,
-            wavelengths, params.scene.spectrumTableScale,
-            params.scene.spectrumTableCoeffs, params.scene.d65);
-        sampled = true;
-    }
-    else if (candidate.type == DirectLightType::Directional)
-    {
-        light = params.scene.directionalLights[candidate.index].sampleLi(position, rng,
-            wavelengths, params.scene.spectrumTableScale,
-            params.scene.spectrumTableCoeffs, params.scene.d65);
-        sampled = true;
-    }
+    else
+        sampled = sampleAnalyticCandidate(candidate, position, wavelengths, rng, light);
     if (!sampled)
         return false;
     light.candidateIndex = candidateIndex;

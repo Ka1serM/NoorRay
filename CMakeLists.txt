@@ -247,8 +247,17 @@ set(NR_CUDA_SOURCES
     src/libnoorray/Backend/CUDA/Unique/SharedImage.cpp
     src/libnoorray/Backend/CUDA/Unique/SharedBuffer.cpp
     src/libnoorray/Backend/CUDA/rstd/Memory.cpp
+    src/libnoorray/Rendering/Camera/GatherPsfSensor.h
+    src/libnoorray/Rendering/Camera/ScatterPsfSensor.h
     src/libnoorray/Materials/Shading/EnergyLut.cpp
     src/libnoorray/Materials/Shading/RgbSpectrumTableData.cpp)
+set_source_files_properties(
+    src/libnoorray/Rendering/Camera/GatherPsfSensor.h
+    PROPERTIES LANGUAGE CUDA)
+set_source_files_properties(src/libnoorray/Rendering/Camera/GatherPsfSensor.h
+    PROPERTIES COMPILE_DEFINITIONS NR_BUILD_GATHER_PSF_RESOLVE=1)
+set_source_files_properties(src/libnoorray/Rendering/Camera/ScatterPsfSensor.h
+    PROPERTIES LANGUAGE CUDA COMPILE_DEFINITIONS NR_BUILD_SCATTER_PSF_RESOLVE=1)
 
 add_library(NoorRayCuda STATIC ${NR_CUDA_SOURCES})
 add_dependencies(NoorRayCuda NoorRayOptixIr NoorRayOptixMissIr)
@@ -280,6 +289,8 @@ set(NR_CORE_X
     "/Backend/CUDA/" "/Backend/OptiX/Kernels/" "/Materials/MaterialX/MaterialXDocument\\.cpp$"
     "/Materials/Shading/EnergyLut/GenerateEnergyLuts\\.cpp$" "/Materials/Shading/EnergyLut\\.cpp$"
     "/Backend/OptiX/Runtime/Raytracer\\.cpp$"
+    "/Rendering/Camera/GatherPsfSensor\\.h$"
+    "/Rendering/Camera/ScatterPsfSensor\\.h$"
     "/Materials/Shading/RgbSpectrumTableData\\.cpp$"
     "/Backend/OptiX/Acceleration/" "/Backend/OptiX/Denoising/"
     "/IO/BitmapReader\\.cpp$" "/IO/BitmapWriter\\.cpp$" "/StbImpl\\.cpp$"

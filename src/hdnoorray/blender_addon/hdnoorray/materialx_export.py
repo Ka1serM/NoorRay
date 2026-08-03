@@ -22,6 +22,22 @@ _EDF = "EDF"
 _SHADER = "shader"
 _SHADER_FAMILY = {_SHADER, _BSDF, _EDF, _SURFACE}
 
+# NoorRay's formal MaterialX extension. The node returns a regular float for
+# Blender's scalar IOR sockets, while NoorRay evaluates the coefficient model
+# at the sampled wavelengths.
+_NOORRAY_SELLMEIER_NODEDEF = (
+    '<nodedef name="ND_noorray_sellmeier_ior" '
+    'node="noorray_sellmeier_ior">'
+    '<input name="b1" type="float" value="1.03961212"/>'
+    '<input name="b2" type="float" value="0.231792344"/>'
+    '<input name="b3" type="float" value="1.01046945"/>'
+    '<input name="c1" type="float" value="0.00600069867"/>'
+    '<input name="c2" type="float" value="0.0200179144"/>'
+    '<input name="c3" type="float" value="103.560653"/>'
+    '<output name="out" type="float"/>'
+    '</nodedef>'
+)
+
 @dataclass(frozen=True, slots=True)
 class ExportedMaterial:
     document: str
@@ -234,6 +250,7 @@ class _Document:
         return (
             '<?xml version="1.0"?><materialx version="1.39">'
             + nonce
+            + _NOORRAY_SELLMEIER_NODEDEF
             + "".join(self._nodes)
             + "</materialx>"
         )
@@ -652,6 +669,26 @@ class _Converter:
         )
 
     # -- Terminals and constants -----------------------------------------
+
+    def _export_NoorRaySellmeierIOR(self, node, socket):
+        del socket
+        names = (
+            ("B1", "b1"),
+            ("B2", "b2"),
+            ("B3", "b3"),
+            ("C1 (um²)", "c1"),
+            ("C2 (um²)", "c2"),
+            ("C3 (um²)", "c3"),
+        )
+        inputs = [
+            (mx_name, _FLOAT, self._input(node, blender_name, _FLOAT))
+            for blender_name, mx_name in names
+        ]
+        return self.doc.node(
+            "noorray_sellmeier_ior",
+            _FLOAT,
+            tuple(inputs),
+        )
 
     def surface(self) -> _Value:
         tree = getattr(self.material, "node_tree", None)

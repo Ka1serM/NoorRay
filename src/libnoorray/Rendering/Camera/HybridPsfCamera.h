@@ -38,8 +38,13 @@ public:
         const Sensor& sensor = getSensor();
         const float width = static_cast<float>(sensor.resolutionX());
         const float height = static_cast<float>(sensor.resolutionY());
-        const float px = (nx * 0.5f + 0.5f) * width;
-        const float py = (1.0f - (ny * 0.5f + 0.5f)) * height;
+        // The LUT is built in physical sensor coordinates. Sensor-fit may
+        // crop that film for the current render target, so map the fitted
+        // film coordinates back into the native LUT extent before lookup.
+        const float sensorNx = nx * sensor.filmWidth() / sensor.width();
+        const float sensorNy = ny * sensor.filmHeight() / sensor.height();
+        const float px = (sensorNx * 0.5f + 0.5f) * width;
+        const float py = (1.0f - (sensorNy * 0.5f + 0.5f)) * height;
 
         const auto traced = rayLut->lookupInterpolated(ross::Vector2f(px, py), wavelengths[0]);
         if (!traced)

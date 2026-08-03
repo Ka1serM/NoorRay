@@ -190,6 +190,34 @@ NR_CPU_GPU inline float safeArcsine(const float value)
     return asinf(fminf(fmaxf(value, -1.0f), 1.0f));
 }
 
+// The exact spherical-rectangle formula below is numerically unnecessary when
+// even the conservative area/distance bound is below the precision cutoff.
+// Keeping this test separate also lets both sampling and PDF evaluation take
+// the same cheap planar-Jacobian path.
+NR_CPU_GPU inline bool rectangleSolidAngleBelowPrecision(
+    const glm::vec3 origin, const glm::vec3 center,
+    const float lengthU, const float lengthV)
+{
+    const float area = lengthU * lengthV;
+    const float centerDistance = sqrtf(glm::dot(center - origin, center - origin));
+    const float halfDiagonal = 0.5f * sqrtf(
+        lengthU * lengthU + lengthV * lengthV);
+    const float nearestDistance = centerDistance - halfDiagonal;
+    return nearestDistance > 0.0f
+        && area <= 1.0e-5f * nearestDistance * nearestDistance;
+}
+
+NR_CPU_GPU inline float planarRectanglePdf(
+    const glm::vec3 origin, const glm::vec3 sampledPosition,
+    const glm::vec3 normal, const float area)
+{
+    const glm::vec3 sampledDelta = sampledPosition - origin;
+    const float distanceSquared = glm::dot(sampledDelta, sampledDelta);
+    const float projectedDistance = fabsf(glm::dot(normal, sampledDelta));
+    return distanceSquared * sqrtf(distanceSquared)
+        / fmaxf(projectedDistance * area, 1.0e-20f);
+}
+
 NR_CPU_GPU inline float sphericalRectanglePdf(
     const glm::vec3 origin,
     const glm::vec3 center,
@@ -213,6 +241,10 @@ NR_CPU_GPU inline float sphericalRectanglePdf(
         z = -z;
         z0 = -z0;
     }
+
+    if (rectangleSolidAngleBelowPrecision(
+            origin, center, lengthU, lengthV))
+        return planarRectanglePdf(origin, sampledPosition, z, area);
 
     const float centerX = glm::dot(direction, x);
     const float centerY = glm::dot(direction, y);
@@ -240,11 +272,7 @@ NR_CPU_GPU inline float sphericalRectanglePdf(
     if (solidAngle >= 1.0e-5f && minimumNormalSquared <= 0.99999f)
         return 1.0f / solidAngle;
 
-    const glm::vec3 sampledDelta = sampledPosition - origin;
-    const float distanceSquared = glm::dot(sampledDelta, sampledDelta);
-    const float projectedDistance = fabsf(glm::dot(z, sampledDelta));
-    return distanceSquared * sqrtf(distanceSquared)
-        / fmaxf(projectedDistance * area, 1.0e-20f);
+    return planarRectanglePdf(origin, sampledPosition, z, area);
 }
 
 // Area-preserving spherical-rectangle sampling from Cycles (Urena et al.).
@@ -272,6 +300,14 @@ NR_CPU_GPU inline float sampleSphericalRectangle(
     {
         z = -z;
         z0 = -z0;
+    }
+
+    if (rectangleSolidAngleBelowPrecision(
+            origin, sampledPosition, lengthU, lengthV))
+    {
+        sampledPosition += axisU * ((random.x - 0.5f) * lengthU)
+            + axisV * ((random.y - 0.5f) * lengthV);
+        return planarRectanglePdf(origin, sampledPosition, z, area);
     }
 
     const float centerX = glm::dot(direction, x);
@@ -305,11 +341,7 @@ NR_CPU_GPU inline float sampleSphericalRectangle(
         // sampled point instead of the center-point approximation.
         sampledPosition += axisU * ((random.x - 0.5f) * lengthU)
             + axisV * ((random.y - 0.5f) * lengthV);
-        const glm::vec3 sampledDelta = sampledPosition - origin;
-        const float distanceSquared = glm::dot(sampledDelta, sampledDelta);
-        const float projectedDistance = fabsf(glm::dot(z, sampledDelta));
-        return distanceSquared * sqrtf(distanceSquared)
-            / fmaxf(projectedDistance * area, 1.0e-20f);
+        return planarRectanglePdf(origin, sampledPosition, z, area);
     }
 
     const float b0 = n0;

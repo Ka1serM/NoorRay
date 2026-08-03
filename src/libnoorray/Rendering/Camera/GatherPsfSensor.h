@@ -4,6 +4,7 @@
 #include "Backend/CUDA/rstd/UniquePtr.h"
 
 #include "libross/imaging/interpolatedpsfgrid/InterpolatedPsfGrid.h"
+#include "libross/foundation/parallel/GpuParallelFor.h"
 
 #include <memory>
 #include <string>
@@ -85,14 +86,15 @@ public:
 
     template <typename WritePixel>
     NR_CPU_GPU void addSample(uint32_t pixel, const SampledSpectrum& L,
-        const SampledWavelengths& wl, float sampleWeight, const SensorSampleContext& ctx,
-        const WritePixel& writePixel) const
+        const SampledWavelengths& wl, float, const SensorSampleContext& ctx,
+        const WritePixel&) const
     {
-        RectangularSensor::addSample(pixel, L, wl, sampleWeight, ctx, writePixel);
-
+        // Gather mode keeps only the per-bin bucket, just as ROSS
+        // GatherPsfFilm does; the final resolve creates the image.
+        const glm::vec3 rgb = sensorRGBFromSpectrum(
+            L, wl, ctx.cieX, ctx.cieY, ctx.cieZ);
         if (!psfGrid || ctx.psfBuckets == nullptr)
             return;
-        glm::vec3 rgb = sensorRGBFromSpectrum(L, wl, ctx.cieX, ctx.cieY, ctx.cieZ);
         const size_t bin = psfGrid->nearestPsfIndex(wl[0] * 0.001f);
         const size_t pixelCount = static_cast<size_t>(ctx.width) * ctx.height;
         PsfGatherBucketSample& bucket = ctx.psfBuckets[bin * pixelCount + pixel];
@@ -103,25 +105,35 @@ public:
     }
 };
 
-inline NR_GPU_KERNEL void resolveGatherPsfKernel(
+#if defined(__CUDACC__) && defined(NR_BUILD_GATHER_PSF_RESOLVE)
+
+cudaError_t launchGatherPsfResolveKernel(
     const GatherPsfSensor* sensor, glm::vec4* accumulation,
-    cudaSurfaceObject_t output, uint32_t width, uint32_t height,
-    uint32_t psfBinCount, const PsfGatherBucketSample* psfBuckets)
+    cudaSurfaceObject_t output, const uint32_t width, const uint32_t height,
+    const uint32_t psfBinCount, const PsfGatherBucketSample* psfBuckets,
+    const cudaStream_t stream)
 {
-#if defined(__CUDACC__)
-    const uint32_t pixel = NR_GPU_LAUNCH_IDX;
-    const uint32_t pixelCount = width * height;
-    if (pixel >= pixelCount)
-        return;
-    const glm::vec4 value = sensor->resolvePixel(
-        pixel, width, height, psfBinCount, psfBuckets);
-    accumulation[pixel] = value;
-    const uint32_t x = pixel % width;
-    const uint32_t y = pixel / width;
-    surf2Dwrite(make_float4(value.x, value.y, value.z, value.w),
-        output, x * sizeof(float4), y);
-#else
-    (void)sensor; (void)accumulation; (void)output; (void)width;
-    (void)height; (void)psfBinCount; (void)psfBuckets;
-#endif
+    const cudaError_t syncResult = cudaStreamSynchronize(stream);
+    if (syncResult != cudaSuccess)
+        return syncResult;
+
+    ross::parallelFor2dGpu(width, height,
+        [=] ROSS_GPU(ross::Index2d index) {
+            const uint32_t pixel = static_cast<uint32_t>(index.y) * width
+                + static_cast<uint32_t>(index.x);
+            const glm::vec4 value = sensor->resolvePixel(
+                pixel, width, height, psfBinCount, psfBuckets);
+            accumulation[pixel] = value;
+            surf2Dwrite(make_float4(value.x, value.y, value.z, value.w),
+                output, index.x * sizeof(float4), index.y);
+        });
+    return cudaGetLastError();
 }
+
+#else
+
+cudaError_t launchGatherPsfResolveKernel(
+    const GatherPsfSensor*, glm::vec4*, cudaSurfaceObject_t,
+    uint32_t, uint32_t, uint32_t, const PsfGatherBucketSample*, cudaStream_t);
+
+#endif

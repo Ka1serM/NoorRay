@@ -27,6 +27,10 @@ TEST_CASE("Node classes register themselves for their categories", "[materialx]"
         REQUIRE(registry.find("multiply", "vector3") != nullptr);
         REQUIRE(registry.find("crossproduct", "vector3") != nullptr);
     }
+
+    SECTION("NoorRay spectral IOR") {
+        REQUIRE(registry.find("noorray_sellmeier_ior", "float") != nullptr);
+    }
 }
 
 TEST_CASE("Shading roots are registered by output type", "[materialx]")

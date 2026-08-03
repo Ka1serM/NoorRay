@@ -287,9 +287,22 @@ class MaterialXRenderSettingsSync:
         current: dict[str, str] = {}
         used_identities: set[tuple[int, int]] = set()
 
-        for datablock in depsgraph.ids:
-            if not isinstance(datablock, bpy.types.Material):
-                continue
+        # ``depsgraph.ids`` contains every material datablock reachable from
+        # the scene, including materials on hidden objects and collections
+        # outside the render view.  Uploading those documents also registers
+        # their textures with the delegate, which can exhaust GPU memory on
+        # large Blender scenes before the first ray is traced.  Hydratize only
+        # materials referenced by renderable evaluated objects instead.
+        materials = {
+            slot.material
+            for obj in depsgraph.objects
+            if obj.type in {"MESH", "CURVE", "SURFACE", "FONT", "META"}
+            and not obj.hide_render
+            for slot in obj.material_slots
+            if slot.material is not None
+        }
+
+        for datablock in materials:
             identity, document = self._document_for(datablock, scene)
             used_identities.add(identity)
             current[hydra_material_leaf(datablock)] = document

@@ -19,7 +19,7 @@ public:
         const Sensor& sensor = getSensor();
         CameraSample result{};
         result.ray = transformRay(Ray(
-            glm::vec3(nx * height * sensor.aspectRatio() * 0.5f,
+            glm::vec3(nx * height * sensor.filmWidth() / sensor.filmHeight() * 0.5f,
                 ny * height * 0.5f, 0.0f),
             glm::vec3(0.0f, 0.0f, -1.0f)));
         return result;

@@ -236,6 +236,13 @@ add_custom_command(
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_sync.py"
     COMMENT "Copying materialx_sync.py")
 add_custom_command(
+    OUTPUT "${HDNOORRAY_BLENDER_EXTENSION_DIR}/sellmeier_node.py"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/sellmeier_node.py"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/sellmeier_node.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/sellmeier_node.py"
+    COMMENT "Copying sellmeier_node.py")
+add_custom_command(
     OUTPUT "${HDNOORRAY_BLENDER_EXTENSION_DIR}/blender_manifest.toml"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/blender_addon/hdnoorray/blender_manifest.toml"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -247,6 +254,7 @@ add_custom_target(hdnoorray_py
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/__init__.py"
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_export.py"
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/materialx_sync.py"
+        "${HDNOORRAY_BLENDER_EXTENSION_DIR}/sellmeier_node.py"
         "${HDNOORRAY_BLENDER_EXTENSION_DIR}/blender_manifest.toml")
 add_dependencies(hdnoorray hdnoorray_py)
 
@@ -266,6 +274,7 @@ add_custom_command(TARGET hdnoorray POST_BUILD
                 __init__.py
                 materialx_export.py
                 materialx_sync.py
+                sellmeier_node.py
                 blender_manifest.toml
                 plugin
         WORKING_DIRECTORY "${HDNOORRAY_BLENDER_EXTENSION_DIR}"

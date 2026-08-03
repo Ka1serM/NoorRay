@@ -738,3 +738,108 @@ TEST_CASE("MaterialX dielectric scatter mode preserves R, T, and RT",
     CHECK(modePayload(compileMode("T")) == 1.0f);
     CHECK(modePayload(compileMode("RT")) == 2.0f);
 }
+
+TEST_CASE("MaterialX Sellmeier IOR reaches dielectric closure as spectral payload",
+    "[svm][materialx][sellmeier]")
+{
+    const MaterialX::DocumentPtr document = MaterialX::createDocument();
+    const MaterialX::NodePtr material = document->addNode(
+        "surfacematerial", "material", "material");
+    const MaterialX::NodePtr surface = document->addNode(
+        "surface", "surface", "surfaceshader");
+    const MaterialX::NodePtr dielectric = document->addNode(
+        "dielectric_bsdf", "dielectric", "BSDF");
+    const MaterialX::NodePtr sellmeier = document->addNode(
+        "noorray_sellmeier_ior", "sellmeier", "float");
+    sellmeier->setInputValue("b1", 1.1f);
+    sellmeier->setInputValue("b2", 0.2f);
+    sellmeier->setInputValue("b3", 0.3f);
+    sellmeier->setInputValue("c1", 0.01f);
+    sellmeier->setInputValue("c2", 0.02f);
+    sellmeier->setInputValue("c3", 100.0f);
+    dielectric->setConnectedNode("ior", sellmeier);
+    surface->setConnectedNode("bsdf", dielectric);
+    material->setConnectedNode("surfaceshader", surface);
+
+    nr::svm::SvmCompiler compiler;
+    const nr::svm::CompiledSvmProgram program = compiler.compile(document);
+    const std::uint32_t opcode = static_cast<std::uint32_t>(
+        nr::svm::NodeType::ClosureDielectricBsdf);
+    for (std::size_t i = 0; i < program.bytecode.size(); ++i) {
+        if (program.bytecode[i] != opcode)
+            continue;
+        REQUIRE(i + 1 + sizeof(nr::svm::NodeClosureDielectricBsdf)
+            / sizeof(std::uint32_t) <= program.bytecode.size());
+        nr::svm::NodeClosureDielectricBsdf payload{};
+        std::memcpy(&payload, program.bytecode.data() + i + 1, sizeof(payload));
+        CHECK(payload.sellmeier.enabled == 1);
+        CHECK(std::bit_cast<float>(payload.sellmeier.b1) == 1.1f);
+        CHECK(std::bit_cast<float>(payload.sellmeier.c3) == 100.0f);
+        return;
+    }
+    FAIL("Sellmeier dielectric closure was not emitted");
+}
+
+TEST_CASE("MaterialX Sellmeier IOR reaches open PBR specular closure",
+    "[svm][materialx][sellmeier][openpbr]")
+{
+    const MaterialX::DocumentPtr document = MaterialX::createDocument();
+    const MaterialX::NodePtr material = document->addNode(
+        "surfacematerial", "material", "material");
+    const MaterialX::NodePtr surface = document->addNode(
+        "open_pbr_surface", "surface", "surfaceshader");
+    const MaterialX::NodePtr sellmeier = document->addNode(
+        "noorray_sellmeier_ior", "sellmeier", "float");
+    sellmeier->setInputValue("c3", 100.0f);
+    surface->setConnectedNode("specular_ior", sellmeier);
+    material->setConnectedNode("surfaceshader", surface);
+
+    nr::svm::SvmCompiler compiler;
+    const nr::svm::CompiledSvmProgram program = compiler.compile(document);
+    const std::uint32_t opcode = static_cast<std::uint32_t>(
+        nr::svm::NodeType::ClosureOpenPbrSurface);
+    for (std::size_t i = 0; i < program.bytecode.size(); ++i) {
+        if (program.bytecode[i] != opcode)
+            continue;
+        REQUIRE(i + 1 + sizeof(nr::svm::NodeClosureOpenPbrSurface)
+            / sizeof(std::uint32_t) <= program.bytecode.size());
+        nr::svm::NodeClosureOpenPbrSurface payload{};
+        std::memcpy(&payload, program.bytecode.data() + i + 1, sizeof(payload));
+        CHECK(payload.specularSellmeier.enabled == 1);
+        CHECK(std::bit_cast<float>(payload.specularSellmeier.c3) == 100.0f);
+        return;
+    }
+    FAIL("Sellmeier open PBR closure was not emitted");
+}
+
+TEST_CASE("MaterialX Sellmeier IOR reaches Disney Principled specular closure",
+    "[svm][materialx][sellmeier][disney]")
+{
+    const MaterialX::DocumentPtr document = MaterialX::createDocument();
+    const MaterialX::NodePtr material = document->addNode(
+        "surfacematerial", "material", "material");
+    const MaterialX::NodePtr disney = document->addNode(
+        "disney_principled", "disney", "surfaceshader");
+    const MaterialX::NodePtr sellmeier = document->addNode(
+        "noorray_sellmeier_ior", "sellmeier", "float");
+    sellmeier->setInputValue("c3", 100.0f);
+    disney->setConnectedNode("ior", sellmeier);
+    material->setConnectedNode("surfaceshader", disney);
+
+    nr::svm::SvmCompiler compiler;
+    const nr::svm::CompiledSvmProgram program = compiler.compile(document);
+    const std::uint32_t opcode = static_cast<std::uint32_t>(
+        nr::svm::NodeType::ClosureOpenPbrSurface);
+    for (std::size_t i = 0; i < program.bytecode.size(); ++i) {
+        if (program.bytecode[i] != opcode)
+            continue;
+        REQUIRE(i + 1 + sizeof(nr::svm::NodeClosureOpenPbrSurface)
+            / sizeof(std::uint32_t) <= program.bytecode.size());
+        nr::svm::NodeClosureOpenPbrSurface payload{};
+        std::memcpy(&payload, program.bytecode.data() + i + 1, sizeof(payload));
+        CHECK(payload.specularSellmeier.enabled == 1);
+        CHECK(std::bit_cast<float>(payload.specularSellmeier.c3) == 100.0f);
+        return;
+    }
+    FAIL("Sellmeier Disney Principled closure was not emitted");
+}

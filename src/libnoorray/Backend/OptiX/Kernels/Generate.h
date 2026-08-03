@@ -468,6 +468,7 @@ NR_GPU inline void writeSensorSample(
     ctx.height = params.frame.height;
     ctx.totalAccumulated = params.frame.totalAccumulated;
     ctx.alpha = state.alpha;
+    ctx.writeOutput = params.frame.writeOutput;
     ctx.cieX = params.scene.cieX;
     ctx.cieY = params.scene.cieY;
     ctx.cieZ = params.scene.cieZ;
@@ -476,8 +477,9 @@ NR_GPU inline void writeSensorSample(
     sensor.Dispatch([&](const auto* concreteSensor) {
         concreteSensor->addSample(pixel, state.radiance, state.wl, 1.0f, ctx,
             [&](const glm::vec4 out) {
-                surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
-                    params.output.color, x * sizeof(float4), y);
+                if (ctx.writeOutput != 0u)
+                    surf2Dwrite(make_float4(out.x, out.y, out.z, out.w),
+                        params.output.color, x * sizeof(float4), y);
             });
     });
 }

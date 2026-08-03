@@ -668,12 +668,18 @@ void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
     std::string newConnectionState;
     for (const auto& [nodeName, uiNode] : uiNodes) {
         const mx::NodePtr& materialNode = uiNode->materialNode();
-        for (const mx::InputPtr& input : materialNode->getInputs()) {
-            if (!input)
+        // Pins are built from exposedInputs(), which includes library defaults
+        // that are not authored on the node yet. Iterate the same set here:
+        // otherwise a link to a default input such as Disney's `ior` is drawn
+        // but never serialized because materialNode->getInputs() is empty for
+        // that port.
+        for (const mx::InputPtr& declared : exposedInputs(materialNode)) {
+            if (!declared)
                 continue;
+            const std::string& inputName = declared->getName();
             // Inputs drawn inline by the node body have no pin, so their
             // connection state cannot be read back here and must be left alone.
-            ImFlow::Pin* pin = uiNode->findInputPin(input->getName());
+            ImFlow::Pin* pin = uiNode->findInputPin(inputName);
             if (!pin)
                 continue;
             mx::NodePtr connected;
@@ -681,12 +687,19 @@ void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
                 if (auto* source = dynamic_cast<MaterialXGraphNode*>(link->left()->getParent()))
                     connected = source->materialNode();
             }
-            const mx::NodePtr old = input->getConnectedNode();
+            const mx::InputPtr authored = materialNode->getInput(inputName);
+            const mx::NodePtr old = authored ? authored->getConnectedNode() : nullptr;
             if ((old ? old->getName() : "") != (connected ? connected->getName() : "")) {
-                input->setConnectedNode(connected);
+                if (connected) {
+                    const mx::InputPtr target = authored
+                        ? authored : materialNode->addInput(inputName, declared->getType());
+                    target->setConnectedNode(connected);
+                } else if (authored) {
+                    authored->setConnectedNode(nullptr);
+                }
                 changed = true;
             }
-            newConnectionState += materialNode->getName() + ":" + input->getName() + "="
+            newConnectionState += materialNode->getName() + ":" + inputName + "="
                 + (connected ? connected->getName() : "") + ";";
         }
     }
@@ -979,7 +992,17 @@ void MaterialXNodeEditorPanel::drawParameterPane(const MaterialTarget& target)
                 write(serializeFloatComponents(vector));
         } else if (type == "float" || type == "half" || type == "double") {
             float number = std::strtof(value.c_str(), nullptr);
-            changed = MathInput::DragFloat("##Number", &number, 0.01f);
+            // Disney transmission is a weight, not an unrestricted scalar.
+            // Keep invalid values out of the authored graph: changing a
+            // MaterialX input invalidates the GPU program, which is an
+            // especially expensive mistake for large Gaussian scenes.
+            const bool unitInterval = name == "specTrans"
+                || name == "transmission"
+                || name == "transmission_weight";
+            const float maximum = unitInterval ? 1.0f : 0.0f;
+            changed = MathInput::DragFloat("##Number", &number, 0.01f,
+                0.0f, maximum, "%.3f",
+                unitInterval ? ImGuiSliderFlags_ClampOnInput : 0);
             if (changed)
                 write(std::to_string(number));
         } else if (type == "integer") {

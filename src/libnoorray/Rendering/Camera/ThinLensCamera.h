@@ -19,8 +19,8 @@ public:
     {
         const Sensor& sensor = getSensor();
         const glm::vec2 scale{
-            sensor.width() / (2.f * focalLengthMm),
-            sensor.height() / (2.f * focalLengthMm)};
+            sensor.filmWidth() / (2.f * focalLengthMm),
+            sensor.filmHeight() / (2.f * focalLengthMm)};
         CameraSample result{};
         glm::vec3 origin(0.0f);
         glm::vec3 direction = glm::normalize(

@@ -29,6 +29,19 @@ assert _EXPORTER_SPEC.loader is not None
 _EXPORTER_SPEC.loader.exec_module(_EXPORTER_MODULE)
 export_material = _EXPORTER_MODULE.export_material
 
+# Source-tree validation also works before the installable extension zip has
+# been rebuilt. The normal add-on registration wins when the node is already
+# registered in Blender.
+_SELLMEIER_NODE_PATH = Path(__file__).resolve().parents[2] / \
+    "src/hdnoorray/blender_addon/hdnoorray/sellmeier_node.py"
+_SELLMEIER_NODE_SPEC = importlib.util.spec_from_file_location(
+    "noorray_source_sellmeier_node", _SELLMEIER_NODE_PATH)
+_SELLMEIER_NODE_MODULE = importlib.util.module_from_spec(_SELLMEIER_NODE_SPEC)
+assert _SELLMEIER_NODE_SPEC.loader is not None
+_SELLMEIER_NODE_SPEC.loader.exec_module(_SELLMEIER_NODE_MODULE)
+if bpy.types.ShaderNode.bl_rna_get_subclass_py("NoorRaySellmeierIOR", None) is None:
+    bpy.utils.register_class(_SELLMEIER_NODE_MODULE.NoorRaySellmeierIOR)
+
 import MaterialX as mx
 
 
@@ -316,6 +329,23 @@ def make_physical_metallic_material():
     return material
 
 
+def make_sellmeier_material(shader_type="ShaderNodeBsdfPrincipled"):
+    material = new_material(f"MaterialX_Sellmeier_{shader_type}")
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    shader = nodes.get("Principled BSDF")
+    if shader_type != "ShaderNodeBsdfPrincipled":
+        nodes.remove(shader)
+        shader = nodes.new(shader_type)
+        shader.location = (0.0, 0.0)
+    sellmeier = nodes.new("NoorRaySellmeierIOR")
+    sellmeier.location = (-260.0, 120.0)
+    output = nodes.get("Material Output")
+    links.new(sellmeier.outputs["IOR"], shader.inputs["IOR"])
+    links.new(shader.outputs[0], output.inputs["Surface"])
+    return material
+
+
 for graph in (
     make_math_material(),
     make_color_material(),
@@ -383,6 +413,30 @@ if "<generalized_schlick_bsdf" not in metallic_document.document:
 physical_metallic_document = validate_export(make_physical_metallic_material())
 if "<conductor_bsdf" not in physical_metallic_document.document:
     raise AssertionError("Physical Metallic BSDF did not export to conductor_bsdf")
+
+for shader_type in ("ShaderNodeBsdfPrincipled", "ShaderNodeBsdfGlass", "ShaderNodeBsdfRefraction"):
+    sellmeier_material = make_sellmeier_material(shader_type)
+    sellmeier_node = next(
+        (node for node in sellmeier_material.node_tree.nodes
+         if node.bl_idname == "NoorRaySellmeierIOR"), None)
+    if sellmeier_node is None:
+        raise AssertionError("Sellmeier node was not created")
+    if any(socket.name == "Reference IOR" for socket in sellmeier_node.inputs):
+        raise AssertionError("Sellmeier node still exposes a reference IOR input")
+    if not 1.50 < sellmeier_node.outputs["IOR"].default_value < 1.53:
+        raise AssertionError("Sellmeier node did not derive its scalar IOR output")
+    sellmeier_document = validate_export(sellmeier_material)
+    expected_ior_input = "specular_ior" if shader_type == "ShaderNodeBsdfPrincipled" else "ior"
+    if f'<input name="{expected_ior_input}" type="float" nodename="' not in sellmeier_document.document:
+        raise AssertionError(
+            f"Sellmeier node was not connected to {shader_type}'s IOR input")
+    expected_closure = "open_pbr_surface" if shader_type == "ShaderNodeBsdfPrincipled" else "dielectric_bsdf"
+    if f"<{expected_closure}" not in sellmeier_document.document:
+        raise AssertionError(f"{shader_type} did not export to {expected_closure}")
+    if "<nodedef name=\"ND_noorray_sellmeier_ior\"" not in sellmeier_document.document:
+        raise AssertionError("Sellmeier MaterialX nodedef was not emitted")
+    if "<noorray_sellmeier_ior" not in sellmeier_document.document:
+        raise AssertionError("Sellmeier node was not emitted")
 
 
 benchmark_count = int(

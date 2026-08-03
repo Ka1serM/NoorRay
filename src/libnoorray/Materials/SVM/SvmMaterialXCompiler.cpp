@@ -100,6 +100,7 @@ bool isNativelySupportedCategory(const std::string& category)
         "creatematrix", "transpose", "determinant", "invertmatrix",
         "image", "normalmap", "convert", "luminance", "blackbody", "extract",
         "randomfloat",
+        "noorray_sellmeier_ior",
         "fractal2d", "fractal3d", "noise2d", "noise3d", "worleynoise2d", "worleynoise3d",
         "cellnoise2d", "cellnoise3d", "unifiednoise2d", "unifiednoise3d",
         "checkerboard", "roughness_anisotropy", "roughness_dual", "artistic_ior",
@@ -484,6 +485,19 @@ public:
                 || port->getType() == "vector2") ? 2 : 3)};
     }
 
+    bool sellmeierInput(const mx::NodePtr& node, const char* name,
+        NodeSellmeierIor& result) const
+    {
+        const mx::NodePtr source = connectedNode(node, name);
+        if (!source || source->getCategory() != "noorray_sellmeier_ior")
+            return false;
+        const auto found = sellmeierOutputs_.find(source.get());
+        if (found == sellmeierOutputs_.end())
+            return false;
+        result = found->second;
+        return true;
+    }
+
     ValueRef compile(const mx::NodePtr& node)
     {
         const auto found = values_.find(node.get());
@@ -578,6 +592,60 @@ public:
         else if (category == "constant") {
             // ND_constant_*: passes its `value` input straight through.
             result = input(node, "value", vector, 0.0f, mx::Color3(0.0f));
+        }
+        else if (category == "noorray_sellmeier_ior") {
+            // MaterialX and Blender expose a scalar IOR socket, so retain a
+            // green-line compatibility value for ordinary scalar consumers.
+            // Dielectric closures also capture the coefficient operands below;
+            // NoorRay's spectral evaluator uses those instead of this value.
+            const ValueRef b[3]{
+                input(node, "b1", false, 1.03961212f),
+                input(node, "b2", false, 0.231792344f),
+                input(node, "b3", false, 1.01046945f)};
+            const ValueRef c[3]{
+                input(node, "c1", false, 0.00600069867f),
+                input(node, "c2", false, 0.0200179144f),
+                input(node, "c3", false, 103.560653f)};
+            const std::uint32_t lambdaSquared = floatWord(0.546074f * 0.546074f);
+            std::uint32_t nSquared = floatWord(1.0f);
+            for (int index = 0; index < 3; ++index) {
+                const StackOffset numerator = allocate(1);
+                emitter_.add(NodeType::Math, NodeMath{
+                    static_cast<std::uint32_t>(MathOp::Multiply),
+                    b[index].x, lambdaSquared, 0, numerator});
+                const StackOffset denominator = allocate(1);
+                emitter_.add(NodeType::Math, NodeMath{
+                    static_cast<std::uint32_t>(MathOp::Subtract),
+                    lambdaSquared, c[index].x, 0, denominator});
+                const StackOffset term = allocate(1);
+                emitter_.add(NodeType::Math, NodeMath{
+                    static_cast<std::uint32_t>(MathOp::Divide),
+                    encodeStackOffset(numerator), encodeStackOffset(denominator), 0, term});
+                const StackOffset sum = allocate(1);
+                emitter_.add(NodeType::Math, NodeMath{
+                    static_cast<std::uint32_t>(MathOp::Add),
+                    nSquared, encodeStackOffset(term), 0, sum});
+                nSquared = encodeStackOffset(sum);
+            }
+            const StackOffset clamped = allocate(1);
+            emitter_.add(NodeType::Math, NodeMath{
+                static_cast<std::uint32_t>(MathOp::Max),
+                nSquared, floatWord(1.0f), 0, clamped});
+            const StackOffset output = allocate(1);
+            emitter_.add(NodeType::Math, NodeMath{
+                static_cast<std::uint32_t>(MathOp::Sqrt),
+                encodeStackOffset(clamped), 0, 0, output});
+            result = stack(output, false);
+
+            NodeSellmeierIor spectral{};
+            spectral.enabled = 1;
+            spectral.b1 = b[0].x; spectral.b2 = b[1].x; spectral.b3 = b[2].x;
+            spectral.c1 = c[0].x; spectral.c2 = c[1].x; spectral.c3 = c[2].x;
+            sellmeierOutputs_[node.get()] = spectral;
+            for (const ValueRef value : b)
+                retainValue(value);
+            for (const ValueRef value : c)
+                retainValue(value);
         }
         else if (category == "dot") {
             // ND_dot_*: organizational no-op (IM_dot_*_genglsl is a bare
@@ -1901,6 +1969,7 @@ private:
     const std::unordered_map<std::string, std::uint32_t>& resolvedTextures_;
     std::unordered_map<const mx::Node*, ValueRef> values_;
     std::unordered_map<const mx::Node*, std::unordered_map<std::string, ValueRef>> namedOutputs_;
+    std::unordered_map<const mx::Node*, NodeSellmeierIor> sellmeierOutputs_;
     std::unordered_set<const mx::Node*> active_;
     std::unordered_map<const mx::Node*, std::uint32_t> remainingUses_;
     std::vector<std::vector<const mx::Node*>> consumptionScopes_;
@@ -1946,6 +2015,8 @@ NodeClosureOpenPbrSurface compileOpenPbr(const mx::NodePtr& node, GraphCompiler&
     color("coat_color", mx::Color3(1.0f), result.coatColorX, result.coatColorY, result.coatColorZ);
     result.coatRoughness = scalar("coat_roughness", 0.0f);
     result.coatIor = scalar("coat_ior", 1.5f);
+    graph.sellmeierInput(node, "specular_ior", result.specularSellmeier);
+    graph.sellmeierInput(node, "coat_ior", result.coatSellmeier);
     if (const mx::InputPtr normal = node->getInput("geometry_normal");
         normal && normal->getConnectedNode()) {
         const ValueRef value = graph.input(node, "geometry_normal", true);
@@ -2005,6 +2076,8 @@ NodeClosureOpenPbrSurface compileStandardSurface(const mx::NodePtr& node, GraphC
     color("coat_color", mx::Color3(1.0f), result.coatColorX, result.coatColorY, result.coatColorZ);
     result.coatRoughness = scalar("coat_roughness", 0.1f);
     result.coatIor = scalar("coat_IOR", 1.5f);
+    graph.sellmeierInput(node, "specular_IOR", result.specularSellmeier);
+    graph.sellmeierInput(node, "coat_IOR", result.coatSellmeier);
     if (const mx::InputPtr normal = node->getInput("normal");
         normal && normal->getConnectedNode()) {
         const ValueRef value = graph.input(node, "normal", true);
@@ -2052,6 +2125,7 @@ NodeClosureOpenPbrSurface compileDisneyPrincipled(const mx::NodePtr& node,
     result.specularWeight = scalar("specular", 0.5f);
     result.specularRoughness = scalar("roughness", 0.5f);
     result.specularIor = scalar("ior", 1.5f);
+    graph.sellmeierInput(node, "ior", result.specularSellmeier);
     result.specularColorX = result.specularColorY = result.specularColorZ =
         floatWord(1.0f);
     result.transmissionWeight = scalar("specTrans", 0.0f);
@@ -2248,6 +2322,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         instruction.colorX = tint.x; instruction.colorY = tint.y; instruction.colorZ = tint.z;
         instruction.roughness = graph.input(node, "roughness", false, 0.0f).x;
         instruction.ior = graph.input(node, "ior", false, 1.5f).x;
+        graph.sellmeierInput(node, "ior", instruction.sellmeier);
         // scatter_mode is a uniform MaterialX string. Preserve all three
         // modes in the compact closure payload: R=0, T=1, RT=2. The SVM
         // evaluator uses this to disable the unwanted lobe, rather than

@@ -65,8 +65,19 @@ struct DirectLightCandidate
     float orientationBound{}; // upper bound on emitter cosine
     glm::vec3 tangent{};      // rectangle local +U axis
     float width{};
+    glm::vec3 bitangent{};    // cached rectangle local +V axis
     float height{};
+    glm::vec3 color{1.0f};
+    float intensity{1.0f};
+    float innerCos{};         // spot-light inner cone cosine
+    float outerCos{};         // spot-light outer cone cosine
+    float invConeCosineRange{};
+    float coneOneMinusCosine{}; // directional-light half-angle cache
+    float coneProjectedArea{};
+    float barnDoorLength{};
+    float barnDoorExpansion{};
     uint32_t twoSided{};
+    uint32_t barnDoorEnabled{};
 };
 
 struct GpuSceneData
@@ -74,10 +85,6 @@ struct GpuSceneData
     const MeshAsset* meshes{};
     const Material* materials{};
     const GpuInstance* instances{};
-    const PointLight* pointLights{};
-    const SpotLight* spotLights{};
-    const RectLight* rectLights{};
-    const DirectionalLight* directionalLights{};
     const LightAliasEntry* lightAliases{};
     const DirectLightCandidate* directLightCandidates{};
     // Primitive-to-candidate mappings for the separate analytic and mesh-light
@@ -104,13 +111,7 @@ struct GpuSceneData
     const float* cieX{};
     const float* cieY{};
     const float* cieZ{};
-    uint32_t pointLightCount{};
-    uint32_t spotLightCount{};
-    uint32_t rectLightCount{};
     uint32_t directionalLightCount{};
-    uint32_t pointLightCandidateOffset{};
-    uint32_t spotLightCandidateOffset{};
-    uint32_t rectLightCandidateOffset{};
     uint32_t directionalLightCandidateOffset{};
     float lightSelectionWeight{};
     // Cached finite/environment mixture probabilities. These are constant for
@@ -147,6 +148,7 @@ struct GpuFrameSettings
     uint32_t frameIndex{};         // 0 while accumulation is being reset (for example, camera motion)
     uint32_t aovQuery{};           // true while the first path raygen writes AOVs
     uint32_t serEnabled{1};        // beauty SER is enabled by default; debug-toggleable
+    uint32_t writeOutput{1};       // only the final queued spp needs a display-surface write
 };
 
 struct KernelParams

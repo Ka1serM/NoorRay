@@ -63,4 +63,7 @@ struct Material
     std::uint32_t svmBytecodeLength{};
     std::uint32_t svmTextureOffset{};
     std::uint32_t svmTextureCount{};
+    // Host-classified fast path for opaque, non-transmissive shadow hits.
+    // Vertex alpha is still checked at the hit site.
+    std::uint32_t shadowOpaque{};
 };

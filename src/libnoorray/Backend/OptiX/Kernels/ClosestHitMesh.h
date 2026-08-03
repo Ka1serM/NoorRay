@@ -269,10 +269,15 @@ NR_GPU inline LightHit intersectAnalyticLights(
     // Only distant lights have no finite geometry and remain a fallback here.
     if (surfaceDistance == Ray::InfiniteDistance)
         for (uint32_t i = 0; i < params.scene.directionalLightCount; ++i)
-            consider(params.scene.directionalLights[i].intersect(
-                ray, wavelengths, params.scene.spectrumTableScale,
-                params.scene.spectrumTableCoeffs, params.scene.d65),
-                params.scene.directionalLightCandidateOffset + i);
+        {
+            const uint32_t candidateIndex =
+                params.scene.directionalLightCandidateOffset + i;
+            if (params.scene.directLightCandidates != nullptr
+                && candidateIndex < params.scene.directLightCandidateCount)
+                consider(nr::direct_light::intersectDirectionalCandidate(
+                    params.scene.directLightCandidates[candidateIndex],
+                    ray, wavelengths), candidateIndex);
+        }
     return nearest;
 }
 
@@ -341,6 +346,9 @@ NR_GPU inline bool shadowOccluded(
         if (hit.primitiveIndex == InvalidIndex)
             return true;
         const Surface blocker = Surface::fromHit(params.scene, hit);
+        if (blocker.material->shadowOpaque != 0u
+            && blocker.color.a >= 1.0f)
+            return true;
         const bool hasSvmProgram = blocker.material->svmBytecodeLength != 0;
 
         float blockProbability;
@@ -500,9 +508,6 @@ NR_GPU inline void handleMeshClosestHit(
         return;
     const Surface surface = Surface::fromHit(params.scene, hit);
     const glm::vec3 geometricNormal = orientedNormal(surface, payload.ray);
-    PathRandomStreams randoms = state.nextRandomStreams(
-        payload.pixel, params.frame.totalAccumulated);
-
     MaterialEvaluation evaluation{};
     nr::shading::NoorRayCompositeBsdf bsdf(
         geometricNormal, surface.normal, -payload.ray.direction());
@@ -540,7 +545,13 @@ NR_GPU inline void handleMeshClosestHit(
 
     const float opacity = fminf(fmaxf(
         evaluation.opacity * surface.color.a, 0.0f), 1.0f);
-    if (randomFloat(randoms.opacity) > opacity)
+    const bool includeOpacity = opacity < 1.0f;
+    const bool includeRoulette = static_cast<int>(state.depth + 1u)
+        >= params.scene.renderSettings.russianRouletteStartBounce;
+    PathRandomStreams randoms = state.nextRandomStreams(
+        payload.pixel, params.frame.totalAccumulated,
+        includeOpacity, includeRoulette);
+    if (includeOpacity && randomFloat(randoms.opacity) > opacity)
     {
         payload.ray = spawnSurfaceRay(
             surface, payload.ray.direction(), geometricNormal);
@@ -574,8 +585,11 @@ NR_GPU inline void handleMeshClosestHit(
         const BsdfSample bsdfSample = shadingBsdf.sample(randoms.bsdf);
         if (!bsdfSample.directionIsValid())
             return false;
-        if (bsdfSample.event == BsdfEvent::Transmission)
+        if (bsdfSample.event == BsdfEvent::Transmission) {
             state.transmit(bsdfSample.eta);
+            if (bsdfSample.dispersive)
+                state.wl.terminateSecondary();
+        }
         state.scatter(bsdfSample.weight,
             bsdfSample.singular ? 0.0f : bsdfSample.pdf);
         if (!survivesRussianRoulette(state, randoms.roulette))

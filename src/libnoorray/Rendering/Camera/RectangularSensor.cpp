@@ -20,6 +20,8 @@ Sensor::Sensor(const Sensor& other)
     : TaggedSensor(nullptr)
     , widthMm(other.width())
     , heightMm(other.height())
+    , filmWidthMm(other.filmWidth())
+    , filmHeightMm(other.filmHeight())
     , resolutionWidth(other.resolutionX())
     , resolutionHeight(other.resolutionY())
     , sensorOrigin(other.origin())
@@ -36,6 +38,8 @@ Sensor& Sensor::operator=(const Sensor& other)
         return *this;
     widthMm = other.widthMm;
     heightMm = other.heightMm;
+    filmWidthMm = other.filmWidthMm;
+    filmHeightMm = other.filmHeightMm;
     resolutionWidth = other.resolutionWidth;
     resolutionHeight = other.resolutionHeight;
     sensorOrigin = other.sensorOrigin;
@@ -129,8 +133,9 @@ bool Sensor::loadImageSensorDimensions()
     try {
         const ross::ImageSensor loadedSensor = ross::ImageSensorReader::readFile(imageSensorPath);
         nr::synchronizeBeforeManagedMutation("Image sensor dimensions");
-        widthMm = std::max(0.001f, loadedSensor.dimensions.width.millimeter());
-        heightMm = std::max(0.001f, loadedSensor.dimensions.height.millimeter());
+        setDimensionsMm(
+            loadedSensor.dimensions.width.millimeter(),
+            loadedSensor.dimensions.height.millimeter());
         resolutionWidth = std::max(1u, static_cast<unsigned int>(loadedSensor.resolution.width));
         resolutionHeight = std::max(1u, static_cast<unsigned int>(loadedSensor.resolution.height));
         std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%ux%u",

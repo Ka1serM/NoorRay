@@ -103,7 +103,8 @@ ${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodeCatalog.cpp;\
 ${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXImageGraphNode.cpp;\
 ${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXConstantGraphNode.cpp;\
 ${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXShaderGraphNode.cpp;\
-${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXMathGraphNode.cpp" ui)
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXMathGraphNode.cpp;\
+${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodes/MaterialXSellmeierGraphNode.cpp" ui)
 target_include_directories(materialx_graph_node_registry_test PRIVATE
     "${CMAKE_SOURCE_DIR}/src/app")
 target_compile_definitions(materialx_graph_node_registry_test PRIVATE

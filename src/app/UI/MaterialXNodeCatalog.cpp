@@ -142,14 +142,22 @@ std::vector<mx::InputPtr> exposedInputs(const mx::NodePtr& node)
         return result;
 
     if (const mx::ConstNodeDefPtr declaration = MaterialXNodeCatalog::instance()
-            .findNodeDef(node->getCategory(), node->getType()))
-        result = declaration->getActiveInputs();
+            .findNodeDef(node->getCategory(), node->getType())) {
+        for (const mx::InputPtr& declared : declaration->getActiveInputs()) {
+            if (declared && !(node->getCategory() == "noorray_sellmeier_ior"
+                    && declared->getName() == "reference_ior"))
+                result.push_back(declared);
+        }
+    }
 
     // A hand-authored document, or a definition the catalog failed to load,
     // can carry inputs the declaration has never heard of. Dropping those
     // would hide parts of a document the editor is about to write back.
     for (const mx::InputPtr& authored : node->getInputs()) {
         if (!authored)
+            continue;
+        if (node->getCategory() == "noorray_sellmeier_ior"
+            && authored->getName() == "reference_ior")
             continue;
         const bool declared = std::ranges::any_of(result,
             [&authored](const mx::InputPtr& candidate) {

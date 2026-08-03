@@ -27,6 +27,7 @@ TEST_CASE("Catalog loads the MaterialX standard libraries", "[materialx]")
     REQUIRE(catalog.types().size() >= 800);
     REQUIRE(catalog.groups().size() > 5);
     REQUIRE(find(catalog.inGroup("pbr"), "disney_principled", "surfaceshader") != nullptr);
+    REQUIRE(find(catalog.inGroup("spectral"), "noorray_sellmeier_ior", "float") != nullptr);
 }
 
 TEST_CASE("Every catalog entry is instantiable", "[materialx]")
@@ -66,6 +67,11 @@ TEST_CASE("Search matches on category, type and group", "[materialx]")
         const auto matches = catalog.search("image");
         REQUIRE_FALSE(matches.empty());
         REQUIRE(find(matches, "image", "color3") != nullptr);
+    }
+
+    SECTION("NoorRay spectral extensions are searchable") {
+        REQUIRE(find(catalog.search("sellmeier"),
+            "noorray_sellmeier_ior", "float") != nullptr);
     }
 
     SECTION("value aliases find MaterialX constant nodes") {

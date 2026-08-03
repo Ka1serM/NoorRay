@@ -632,29 +632,6 @@ void HdNoorRayRenderPass::_Render(
         return;
     }
 
-    // Do not compile materials or mutate the scene while a render launch is
-    // still using its GPU resources. The viewport can display its retained
-    // image while the launch is in flight; an offline target simply waits for
-    // the next Hydra Execute without blocking this callback.
-    {
-        std::scoped_lock pollLock(renderParam_.mutex);
-        Raytracer* pendingRaytracer = renderParam_.session.raytracer.get();
-        if (framePending_ && pendingRaytracer != nullptr
-            && !pendingRaytracer->isFrameReady()) {
-            if (directViewport) {
-                const bool presenterReady = _EnsureViewportPresenter(
-                    glColorTexture, width, height);
-                if (presenterReady && _PresentViewportImage(
-                        glColorTexture, width, height)) {
-                    SetBuffersConverged(bindings, false);
-                    return;
-                }
-            }
-            SetBuffersConverged(bindings, false);
-            return;
-        }
-    }
-
     // Material compilation runs on TBB workers. OptiX objects and scene
     // bindings are committed here in one render-thread batch.
     const bool compiledMaterialsChanged =
@@ -682,100 +659,6 @@ void HdNoorRayRenderPass::_Render(
     }
     Raytracer& raytracer = *renderParam_.session.raytracer;
 
-    bool viewportPresenterReady = false;
-    bool presentedViewportFrame = false;
-    if (directViewport) {
-        viewportPresenterReady = _EnsureViewportPresenter(
-            glColorTexture, width, height);
-        if (viewportPresenterReady && framePending_) {
-            if (!raytracer.isFrameReady()) {
-                if (_PresentViewportImage(glColorTexture, width, height)) {
-                    SetBuffersConverged(bindings, false);
-                    return;
-                }
-                raytracer.waitForRender();
-            }
-            const bool queued = raytracer.hasDenoisedOutput()
-                ? _QueueViewportBuffer(
-                    raytracer.getOutputDenoised().cudaPointer(), width, height,
-                    raytracer.getCudaStream())
-                : _QueueViewportImage(
-                    raytracer.getOutputColor().getCudaArray(), width, height,
-                    raytracer.getCudaStream());
-            if (viewportPresenterReady && queued) {
-                renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
-                accumulatedSamples_ += pendingSamples_;
-                framePending_ = false;
-                pendingSamples_ = 0;
-            } else {
-                viewportPresenterReady = false;
-            }
-        }
-        if (viewportPresenterReady)
-            presentedViewportFrame = _PresentViewportImage(
-                glColorTexture, width, height);
-        if (!viewportPresenterReady && framePending_) {
-            raytracer.waitForRender();
-            renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
-            PresentOutput(
-                raytracer.getOutputColor(), true, glColorTexture, nullptr,
-                width, height);
-            accumulatedSamples_ += pendingSamples_;
-            framePending_ = false;
-            pendingSamples_ = 0;
-            presentedViewportFrame = true;
-        }
-    }
-
-    const size_t offlineFrameBytes = static_cast<size_t>(width) * height
-        * sizeof(float) * 4;
-    const bool offlineTargetSupported = !directViewport
-        && colorBuffer != nullptr
-        && colorBuffer->GetFormat() == HdFormatFloat32Vec4;
-    if (!directViewport && offlineTargetSupported
-        && offlinePresentationPending_) {
-        if (!_CommitOfflinePresentation(*colorBuffer, offlineFrameBytes)) {
-            SetBuffersConverged(bindings, false);
-            return;
-        }
-        accumulatedSamples_ += pendingSamples_;
-        pendingSamples_ = 0;
-    }
-    if (!directViewport && offlineTargetSupported && framePending_) {
-        if (!raytracer.isFrameReady()) {
-            SetBuffersConverged(bindings, false);
-            return;
-        }
-        const bool queued = raytracer.hasDenoisedOutput()
-            ? _QueueOfflinePresentation(
-                raytracer.getOutputDenoised().cudaPointer(), width, height,
-                raytracer.getCudaStream())
-            : _QueueOfflinePresentation(
-                raytracer.getOutputColor().getCudaArray(), width, height,
-                raytracer.getCudaStream());
-        if (queued) {
-            framePending_ = false;
-            offlinePresentationPending_ = true;
-            SetBuffersConverged(bindings, false);
-            return;
-        }
-        // If pinned staging allocation or async CUDA copy is unavailable,
-        // retain a synchronous fallback rather than returning an incomplete
-        // F12 frame.
-        raytracer.waitForRender();
-        renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
-        if (raytracer.hasDenoisedOutput())
-            colorBuffer->CopyFromCudaBuffer(
-                raytracer.getOutputDenoised().cudaPointer(), offlineFrameBytes);
-        else
-            PresentOutput(
-                raytracer.getOutputColor(), false, glColorTexture, colorBuffer,
-                width, height);
-        accumulatedSamples_ += pendingSamples_;
-        pendingSamples_ = 0;
-        framePending_ = false;
-    }
-
     HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
     const int targetSamples = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("samples"), 64));
@@ -793,16 +676,10 @@ void HdNoorRayRenderPass::_Render(
     if (materialsPending
         && (!directViewport
             || accumulatedSamples_ >= static_cast<unsigned int>(targetSamples))) {
-        if (directViewport && !presentedViewportFrame) {
-            // Blender clears its GPU AOV before every viewport draw. Keep the
-            // last progressive image visible while the replacement materials
-            // finish compiling, even though no new sample is launched.
-            if (!viewportPresenterReady
-                || !_PresentViewportImage(glColorTexture, width, height))
-                PresentOutput(
-                    raytracer.getOutputColor(), true, glColorTexture, nullptr,
-                    width, height);
-        }
+        if (directViewport)
+            PresentOutput(
+                raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                width, height);
         converged_ = false;
         SetBuffersConverged(bindings, false);
         return;
@@ -840,16 +717,11 @@ void HdNoorRayRenderPass::_Render(
     // samples after the requested total is complete.
     if (!reset
         && accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)) {
-        if (directViewport && !presentedViewportFrame) {
-            // Blender's GPU render-task delegate has just cleared this
-            // texture. Re-present the retained final image without exceeding
-            // the configured sample limit.
-            if (!viewportPresenterReady
-                || !_PresentViewportImage(glColorTexture, width, height))
-                PresentOutput(
-                    raytracer.getOutputColor(), true, glColorTexture, nullptr,
-                    width, height);
-        }
+        if (directViewport)
+            PresentOutput(
+                raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                width, height);
+        renderParam_.SetProgress(1.0);
         converged_ = true;
         SetBuffersConverged(bindings, true);
         return;
@@ -952,27 +824,6 @@ void HdNoorRayRenderPass::_Render(
                 camera->setFocalLengthMm(hydraCamera->GetFocalLength());
         }
 
-        // Blender's raster projection conforms the camera film to the actual
-        // render target. That effective film can differ from the physical
-        // sensor height when the output aspect ratio changes. NoorRay's ray
-        // generators use sensor dimensions directly, so derive the effective
-        // dimensions from the same projection matrix to avoid a zoom/crop
-        // mismatch between the raster viewport and the path tracer.
-        const double projectionScaleX = newProjection[0][0];
-        const double projectionScaleY = newProjection[1][1];
-        const bool perspectiveFilm = camera->Is<PerspectiveCamera>()
-            || camera->Is<ThinLensCamera>()
-            || camera->Is<FisheyeCamera>();
-        const float projectionFocalLengthMm = camera->getFocalLengthMm();
-        if (perspectiveFilm && std::isfinite(projectionScaleX)
-            && std::isfinite(projectionScaleY)
-            && projectionScaleX > 0.0 && projectionScaleY > 0.0
-            && projectionFocalLengthMm > 0.0f) {
-            sensor.setDimensionsMm(
-                static_cast<float>(2.0 * projectionFocalLengthMm / projectionScaleX),
-                static_cast<float>(2.0 * projectionFocalLengthMm / projectionScaleY));
-        }
-
         const float exposure = delegate->GetRenderSetting<float>(
             TfToken("cameraExposure"), std::numeric_limits<float>::quiet_NaN());
         if (std::isfinite(exposure))
@@ -1039,6 +890,37 @@ void HdNoorRayRenderPass::_Render(
                 hp->loadLensSensorAndPsf();
         }
 
+        // Apply this after loading an image sensor: optical loaders restore
+        // the physical dimensions, while the fitted film is render-target
+        // dependent and must be derived from the current Hydra size.
+        const int sensorFitSetting = delegate->GetRenderSetting<int>(
+            TfToken("cameraSensorFit"), 1);
+        const SensorFit sensorFit = static_cast<SensorFit>(std::clamp(
+            sensorFitSetting, 0, 2));
+        sensor.setFilmFit(sensorFit, width, height);
+
+        // Blender's Hydra projection already includes its exact sensor-fit,
+        // pixel-aspect, and target-size calculation. Use it to remove small
+        // focal/zoom discrepancies caused by reimplementing that calculation
+        // from rounded camera properties. Stretch intentionally keeps the
+        // legacy raw-sensor behavior and therefore skips this correction.
+        const bool perspectiveFilm = !opticalCamera
+            && cameraInstance->getProjectionType()
+                != CameraProjectionType::Orthographic;
+        const double projectionScaleX = std::abs(newProjection[0][0]);
+        const double projectionScaleY = std::abs(newProjection[1][1]);
+        const float projectionFocalLengthMm = camera->getFocalLengthMm();
+        if (perspectiveFilm && sensorFit != SensorFit::Stretch
+            && std::isfinite(projectionScaleX)
+            && std::isfinite(projectionScaleY)
+            && projectionScaleX > 0.0 && projectionScaleY > 0.0
+            && std::isfinite(projectionFocalLengthMm)
+            && projectionFocalLengthMm > 0.0f) {
+            sensor.setFilmDimensionsMm(
+                static_cast<float>(2.0 * projectionFocalLengthMm / projectionScaleX),
+                static_cast<float>(2.0 * projectionFocalLengthMm / projectionScaleY));
+        }
+
         const float focusDistanceCm = delegate->GetRenderSetting<float>(
             TfToken("cameraFocusDistanceCm"), -1.0f);
         if (focusDistanceCm > 0.0f)
@@ -1049,16 +931,11 @@ void HdNoorRayRenderPass::_Render(
     }
 
     RenderSettings& rs = scene.getRenderSettings();
-    // Offline Blender renders do not benefit from copying every intermediate
-    // sample through the Hydra render buffer. Submit all remaining samples
-    // in this pass and copy the converged image once. Keep viewport updates
-    // at one sample per pass for interactivity.
-    const unsigned int remainingSamples =
-        accumulatedSamples_ < static_cast<unsigned int>(targetSamples)
-        ? static_cast<unsigned int>(targetSamples) - accumulatedSamples_
-        : 1u;
-    const unsigned int samplesThisPass =
-        directViewport ? 1u : remainingSamples;
+    // Submit one sample per pass for both viewport and offline Blender
+    // renders. Hydra/F12 must receive the intermediate framebuffer so the
+    // user can see convergence instead of waiting for the complete sample
+    // budget before the first image is displayed.
+    const unsigned int samplesThisPass = 1u;
     rs.samples = static_cast<int>(samplesThisPass);
     rs.maxSamples = targetSamples;
     rs.maxBounces = std::max(
@@ -1096,35 +973,20 @@ void HdNoorRayRenderPass::_Render(
     // in Raytracer's shared AOV buffer and presented from there.
     raytracer.setAovEnabled(runsOptixDenoiser(rs));
     raytracer.renderFrame(accumulatedSamples_, accumulatedSamples_);
-    if ((directViewport && viewportPresenterReady)
-        || (!directViewport && offlineTargetSupported)) {
-        // The render stream now owns the in-flight frame. Completion is
-        // polled on the next Execute; presentation is completed by the target
-        // specific GPU/host handoff above.
-        framePending_ = true;
-        pendingSamples_ = samplesThisPass;
-        converged_ = false;
-        SetBuffersConverged(bindings, false);
-    } else {
-        // Offline/F12 rendering and interop fallback retain the synchronous
-        // contract required by Blender's final render path.
-        raytracer.waitForRender();
-        renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
-        PresentOutput(
-            raytracer.getOutputColor(), directViewport, glColorTexture,
-            colorBuffer, width, height);
-        accumulatedSamples_ += samplesThisPass;
-        converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)
-            && !renderParam_.HasPendingMaterialCompilations();
-        // Defer non-zero progress until after the first frame so Blender's
-        // viewport engine can initialize its wall-clock time baseline (it only
-        // does so when percentDone == 0, checked after engine_->Execute()).
-        if (accumulatedSamples_ > 1) {
-            renderParam_.SetProgress(
-                static_cast<double>(accumulatedSamples_) / targetSamples);
-        }
-        SetBuffersConverged(bindings, converged_);
-    }
+    raytracer.waitForRender();
+    renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
+    PresentOutput(
+        raytracer.getOutputColor(), directViewport, glColorTexture,
+        colorBuffer, width, height);
+    accumulatedSamples_ += samplesThisPass;
+    converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)
+        && !renderParam_.HasPendingMaterialCompilations();
+    // Defer non-zero progress until after the first frame so Blender's
+    // render engine can initialize its wall-clock time baseline.
+    if (accumulatedSamples_ > 1)
+        renderParam_.SetProgress(
+            static_cast<double>(accumulatedSamples_) / targetSamples);
+    SetBuffersConverged(bindings, converged_);
 
     observedSceneVersion_ = sceneVersion;
     observedRenderSettingsVersion_ = renderSettingsVersion;

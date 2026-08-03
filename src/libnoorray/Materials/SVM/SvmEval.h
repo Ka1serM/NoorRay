@@ -16,6 +16,7 @@
 #include "Materials/Shading/Lobes/DiffuseLobe.h"
 #include "Materials/Shading/MaterialEvaluation.h"
 #include "Materials/Shading/RgbToSpectrum.h"
+#include "Materials/Shading/Sellmeier.h"
 #include "Materials/SVM/SvmTypes.h"
 #include "Materials/SVM/artistic_ior.h"
 #include "Materials/SVM/blackbody.h"
@@ -47,6 +48,22 @@ NR_GPU inline glm::vec3 loadColor(const float* stack, const std::uint32_t x,
     const std::uint32_t y, const std::uint32_t z)
 {
     return {loadInput(stack, x), loadInput(stack, y), loadInput(stack, z)};
+}
+
+NR_GPU inline SampledSpectrum loadSellmeierIor(const float* stack,
+    const NodeSellmeierIor& node, const SampledWavelengths& wavelengths)
+{
+    SellmeierCoefficients coefficients;
+    coefficients.b = {
+        loadInput(stack, node.b1), loadInput(stack, node.b2),
+        loadInput(stack, node.b3)};
+    coefficients.c = {
+        loadInput(stack, node.c1), loadInput(stack, node.c2),
+        loadInput(stack, node.c3)};
+    SampledSpectrum result;
+    for (int i = 0; i < NrSpectrumSamples; ++i)
+        result[i] = sellmeierIor(coefficients, wavelengths[i]);
+    return result;
 }
 
 NR_GPU inline void storeColor(float* stack, const StackOffset offset,
@@ -260,6 +277,16 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
             dielectric.transmissionTint = hasTransmission ? tint : SampledSpectrum(0.0f);
             dielectric.roughness = glm::clamp(detail::loadInput(stack, node.roughness), 0.0f, 1.0f);
             dielectric.ior = fmaxf(detail::loadInput(stack, node.ior), 1.0f);
+            // Keep reflection-only closures on the scalar compatibility IOR.
+            // The wavelength-dependent path is needed once transmission is
+            // active, where it also drives dispersive refraction. This avoids
+            // evaluating an inactive spectral branch while a graph is being
+            // authored with specTrans/scatter_mode still disabled.
+            if (node.sellmeier.enabled != 0 && hasTransmission) {
+                dielectric.spectralIor = detail::loadSellmeierIor(
+                    stack, node.sellmeier, wavelengths);
+                dielectric.useSpectralIor = true;
+            }
             dielectric.exiting = exiting;
             dielectric.energyLuts = &scene.energyLuts;
             const glm::vec3 normal = detail::isInvalidInput(node.normalX)
@@ -1090,6 +1117,8 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
             const float roughness = glm::clamp(
                 detail::loadInput(stack, node.specularRoughness), 0.0f, 1.0f);
             const float ior = fmaxf(detail::loadInput(stack, node.specularIor), 1.0f);
+            const bool spectralTransmission =
+                node.specularSellmeier.enabled != 0 && transmission > 0.0f;
             const SampledSpectrum base = rgbAlbedoToSpectrum(
                 baseColor, wavelengths, scene.spectrumTableScale, scene.spectrumTableCoeffs);
             const SampledSpectrum specular = rgbAlbedoToSpectrum(
@@ -1162,6 +1191,11 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
                     reflection.transmissionTint = SampledSpectrum(0.0f);
                     reflection.roughness = roughness;
                     reflection.ior = ior;
+                    if (spectralTransmission) {
+                        reflection.spectralIor = detail::loadSellmeierIor(
+                            stack, node.specularSellmeier, wavelengths);
+                        reflection.useSpectralIor = true;
+                    }
                     reflection.exiting = exiting;
                     reflection.energyLuts = &scene.energyLuts;
                     shaderData.addDielectric(weight * (baseWeight * (1.0f - metalness)
@@ -1173,6 +1207,11 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
                     transmissionLobe.transmissionTint = transmissionTint;
                     transmissionLobe.roughness = roughness;
                     transmissionLobe.ior = ior;
+                    if (spectralTransmission) {
+                        transmissionLobe.spectralIor = detail::loadSellmeierIor(
+                            stack, node.specularSellmeier, wavelengths);
+                        transmissionLobe.useSpectralIor = true;
+                    }
                     transmissionLobe.exiting = exiting;
                     transmissionLobe.energyLuts = &scene.energyLuts;
                     shaderData.addDielectric(weight * (baseWeight * (1.0f - metalness)
@@ -1186,6 +1225,11 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
                 coat.reflectionTint = coatTint;
                 coat.roughness = glm::clamp(detail::loadInput(stack, node.coatRoughness), 0.0f, 1.0f);
                 coat.ior = fmaxf(detail::loadInput(stack, node.coatIor), 1.0f);
+                if (node.coatSellmeier.enabled != 0) {
+                    coat.spectralIor = detail::loadSellmeierIor(
+                        stack, node.coatSellmeier, wavelengths);
+                    coat.useSpectralIor = true;
+                }
                 coat.exiting = exiting;
                 coat.energyLuts = &scene.energyLuts;
                 shaderData.addDielectric(weight * coatWeight, coat);

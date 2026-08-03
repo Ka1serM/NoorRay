@@ -32,7 +32,10 @@ public:
         if (!rossLens || !exitPupil || exitPupil->pupilBounds.empty())
             return false;
 
-        const ross::Vector2f filmPos(-nx * sensorWidthCm * 0.5f, -ny * sensorHeightCm * 0.5f);
+        const Sensor& sensor = getSensor();
+        const ross::Vector2f filmPos(
+            -nx * sensor.filmWidth() * 0.1f * 0.5f,
+            -ny * sensor.filmHeight() * 0.1f * 0.5f);
         const auto pupil = exitPupil->samplePupil(filmPos, filmDiagonalCm, pupilSample);
         if (sampleBoundsArea != nullptr)
             *sampleBoundsArea = pupil.sampleBoundsArea;

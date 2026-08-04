@@ -88,6 +88,10 @@ class Scene {
     // materials, materials by mesh assets, and all of them by scene objects
     // (declared further down), so each holder is declared after its target.
     TextureRegistry textures;
+    // Images imported as standalone assets have no material owner. Keep them
+    // alive so the environment picker can use them later rather than exposing
+    // a released, empty registry slot.
+    std::vector<TextureRef> standaloneTextureOwners;
     MaterialRegistry materials;
     // Scene ownership keeps materials available in the global material list
     // even when no mesh slot currently references them.
@@ -220,6 +224,9 @@ public:
     void updateMaterialDocument(MaterialHandle handle, MaterialX::DocumentPtr document);
     GaussianAssetRef add(GaussianAsset gaussianAsset);
     TextureRef add(Texture texture);
+    // Adds a user-imported image to the scene texture library. Unlike a
+    // material texture, it has no other resource that owns its lifetime.
+    TextureRef addStandaloneTexture(Texture texture);
     void updateMaterial(MaterialHandle handle, const Material& material);
     void invalidateMaterial(MaterialHandle handle);
     // Pre-allocates the registries and dense object arrays used by an import

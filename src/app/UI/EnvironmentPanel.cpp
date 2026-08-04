@@ -20,10 +20,13 @@ void EnvironmentPanel::renderUi() {
         ImGuiManager::tableRowLabel("HDRI Texture");
         
         const auto& textures = scene.getTextures();
+        const auto& textureRegistry = scene.getTextureRegistry();
         const int oldHdriTexture = environment.textureIndex;
         int selectedHdriTexture = oldHdriTexture;
 
-        if (selectedHdriTexture >= static_cast<int>(textures.size()))
+        if (selectedHdriTexture < 0
+            || selectedHdriTexture >= static_cast<int>(textures.size())
+            || !textureRegistry.isLiveSlot(static_cast<uint32_t>(selectedHdriTexture)))
             selectedHdriTexture = -1;
 
         const char* comboPreview = "No Texture";
@@ -40,8 +43,14 @@ void EnvironmentPanel::renderUi() {
 
             // Add all available textures from the scene
             for (int i = 0; i < static_cast<int>(textures.size()); ++i) {
+                if (!textureRegistry.isLiveSlot(static_cast<uint32_t>(i)))
+                    continue;
                 const bool isSelected = (selectedHdriTexture == i);
-                if (ImGui::Selectable(textures[i].getName().c_str(), isSelected))
+                const std::string label = textures[i].getName().empty()
+                    ? "Texture " + std::to_string(i)
+                    : textures[i].getName();
+                const std::string selectableId = label + "##hdriTexture" + std::to_string(i);
+                if (ImGui::Selectable(selectableId.c_str(), isSelected))
                     selectedHdriTexture = i;
                 if (isSelected)
                     ImGui::SetItemDefaultFocus();
@@ -51,9 +60,12 @@ void EnvironmentPanel::renderUi() {
         
         if (oldHdriTexture != selectedHdriTexture) {
             scene.synchronizeBeforeMutation();
-            environment.textureIndex = selectedHdriTexture;
+            if (selectedHdriTexture == -1)
+                scene.clearEnvironmentTexture();
+            else
+                scene.setEnvironmentTexture(scene.getTextureRef(
+                    textureRegistry.handleAt(static_cast<uint32_t>(selectedHdriTexture))));
             anyChanged = true;
-            scene.setDirtyFlag(EnvironmentCdf);
         }
 
         ImGuiManager::colorEdit3Row("HDRI Color", environment.color, [&](const vec3 v) {

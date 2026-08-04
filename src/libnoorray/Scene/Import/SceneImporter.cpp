@@ -1089,7 +1089,10 @@ void SceneImporter::ImportFile(Scene& scene, const std::string& filepath)
     } else if (path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".jpeg") ||
                path.ends_with(".bmp") || path.ends_with(".tga") || path.ends_with(".psd") ||
                path.ends_with(".gif") || path.ends_with(".hdr") || path.ends_with(".pic")) {
-        scene.add(Texture(filepath));
+        // Standalone images have no material reference to retain them. Keep
+        // an explicit scene-library owner so they remain available to the
+        // HDRI picker after this importer returns.
+        scene.addStandaloneTexture(Texture(filepath));
     } else {
         throw std::runtime_error("Unsupported import file type: " + filepath);
     }

@@ -17,6 +17,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Materials/SVM/SvmTypes.h"
+
 namespace MaterialX_v1_39_4
 {
 class Document;
@@ -38,6 +40,8 @@ public:
 struct CompiledSvmProgram
 {
     std::vector<std::uint32_t> bytecode;
+
+    std::uint32_t stackSize{StackSize};
 
     // Scene texture registry index per SVM texture slot referenced by
     // NodeImageTexture::textureSlot in `bytecode`, in the order textures

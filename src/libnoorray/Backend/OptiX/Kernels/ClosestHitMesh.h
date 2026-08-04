@@ -22,10 +22,9 @@ namespace nr::mesh_hit
 
 static constexpr float RayOffset = Ray::DefaultMinDistance;
 static constexpr float Inv4Pi = 0.07957747154594767f;
-static constexpr uint32_t CoherenceHintMiss = 0;
-static constexpr uint32_t CoherenceHintGaussian = 0x80u;
-static constexpr uint32_t CoherenceHintMaterialBase = 0;
-static constexpr uint32_t CoherenceHintBits = 8;
+static constexpr uint32_t CoherenceHintMiss = nr::ser::Miss;
+static constexpr uint32_t CoherenceHintGaussian = nr::ser::Gaussian;
+static constexpr uint32_t CoherenceHintBits = nr::ser::CoherenceHintBits;
 
 NR_GPU inline bool gaussianEnabled()
 {
@@ -41,8 +40,7 @@ NR_GPU inline uint32_t coherenceHint(const RayHit& hit)
     const GpuInstance instance = params.scene.instances[hit.instanceIndex];
     const MeshAsset& mesh = params.scene.meshes[instance.meshIndex];
     const int materialSlot = mesh.getFaces()[hit.primitiveIndex].materialIndex;
-    return CoherenceHintMaterialBase
-        | (mesh.getMaterialIds()[materialSlot] & 0x7Fu);
+    return nr::ser::material(mesh.getMaterialIds()[materialSlot]);
 }
 
 NR_GPU inline RayHit intersect(
@@ -176,7 +174,7 @@ NR_GPU inline RayHit intersect(
     // is where this earns its keep. See this function's reorder parameter
     // comment for why this must not run for shadow rays. hit is held in
     // thread state, which SER migrates with the thread.
-    if (reorder)
+    if (reorder && params.frame.serEnabled != 0u)
         optixReorder(coherenceHint(hit), CoherenceHintBits);
     return hit;
 }
@@ -361,7 +359,7 @@ NR_GPU inline bool shadowOccluded(
         else
         {
             MaterialEvaluation evaluation{};
-            nr::shading::NoorRayCompositeBsdf bsdf(
+            nr::shading::NoorRayShadowData bsdf(
                 blocker.geometricNormal, blocker.normal, -ray.direction());
             MaterialShadingContext shadingContext{};
             shadingContext.position = blocker.position;
@@ -380,11 +378,12 @@ NR_GPU inline bool shadowOccluded(
             shadingContext.normalToWorld = blockerInstance.normalToWorld;
             const bool exiting = glm::dot(
                 -ray.direction(), blocker.geometricNormal) < 0.0f;
-            if (!nr::svm::svmEvalNodes(params.scene,
+            if (!nr::svm::svmEvalReduced(params.scene,
                 blocker.material->svmBytecodeOffset, blocker.material->svmBytecodeLength,
                 blocker.material->svmTextureOffset, blocker.material->svmTextureCount,
                 shadingContext, wavelengths,
-                exiting, evaluation, bsdf))
+                exiting, evaluation, bsdf,
+                blocker.material->svmStackSize))
             {
                 // A stale material slot is handled exactly like a native
                 // material, rather than turning the surface opaque.
@@ -393,7 +392,7 @@ NR_GPU inline bool shadowOccluded(
             }
             blockProbability = fminf(fmaxf(
                 evaluation.opacity * blocker.color.a
-                * (1.0f - bsdf.transmissionEstimate()), 0.0f), 1.0f);
+                * (1.0f - evaluation.transmissionEstimate), 0.0f), 1.0f);
         }
         if (blockProbability >= 1.0f
             || randomFloat(rng) < blockProbability)
@@ -429,6 +428,19 @@ NR_GPU inline SampledSpectrum estimateDirect(
         || !light.radiance.isFinite())
         return SampledSpectrum(0.0f);
 
+    // Back-facing surfaces commonly sample lights from the opposite
+    // hemisphere. Test those responses before paying for visibility; for
+    // ordinary front-facing hits retain shadow-first ordering so heavily
+    // occluded lights do not incur a speculative BSDF evaluation.
+    const bool backside = glm::dot(surface.geometricNormal, geometricNormal) < 0.0f;
+    BsdfEvaluation evaluation{};
+    if (backside) {
+        evaluation = bsdf.evaluate(light.direction);
+        if (!evaluation.isFinite() || evaluation.pdf <= 0.0f
+            || evaluation.value.maxComponent() <= 0.0f)
+            return SampledSpectrum(0.0f);
+    }
+
     float shadowTMin, shadowTMax;
     const Ray shadowRay = spawnShadowRay(
         surface, light, geometricNormal, bsdf.shadingNormal(),
@@ -439,9 +451,12 @@ NR_GPU inline SampledSpectrum estimateDirect(
         || shadowOccluded(shadowRay, shadowTMin, shadowTMax,
             InvalidIndex, wavelengths, shadowRng))
         return SampledSpectrum(0.0f);
-    const BsdfEvaluation evaluation = bsdf.evaluate(light.direction);
-    if (!evaluation.isFinite())
-        return SampledSpectrum(0.0f);
+    if (!backside) {
+        evaluation = bsdf.evaluate(light.direction);
+        if (!evaluation.isFinite() || evaluation.pdf <= 0.0f
+            || evaluation.value.maxComponent() <= 0.0f)
+            return SampledSpectrum(0.0f);
+    }
     if (analyticPdf > 0.0f)
         light.radiance *= powerHeuristic(analyticPdf, evaluation.pdf);
     if (environmentPdf > 0.0f)
@@ -485,9 +500,12 @@ NR_GPU inline bool terminateForAnalyticLight(
     if (light.radiance.maxComponent() <= 0.0f
         || light.distance > surfaceDistance)
         return false;
-    state.radiance += state.throughput * light.radiance
+    const SampledSpectrum contribution = state.throughput * light.radiance
         * analyticLightHitMisWeightAt(
             light, payload.ray.origin(), state.lastBsdfPdf);
+    state.radiance += nr::lighting::clampIndirectLightContribution(
+        contribution, params.scene.renderSettings.indirectLightClamp,
+        state.depth);
     // An analytic light hit is a terminal light path.  In particular, a
     // distant/sun light uses InfiniteDistance, but it must not fall through
     // to the environment as well: Cycles' light intersection shader shades
@@ -540,7 +558,8 @@ NR_GPU inline void handleMeshClosestHit(
             surface.material->svmBytecodeLength,
             surface.material->svmTextureOffset,
             surface.material->svmTextureCount,
-            shadingContext, state.wl, exiting, evaluation, bsdf);
+            shadingContext, state.wl, exiting, evaluation, bsdf,
+            surface.material->svmStackSize);
     }
     if (!svmEvaluated) {
         evaluation.opacity = 1.0f;
@@ -554,6 +573,7 @@ NR_GPU inline void handleMeshClosestHit(
         > RussianRouletteMinBounces;
     PathRandomStreams randoms = state.nextRandomStreams(
         payload.pixel, params.frame.totalAccumulated,
+        params.frame.sampleSeed,
         includeOpacity, includeRoulette);
     if (includeOpacity && randomFloat(randoms.opacity) > opacity)
     {
@@ -584,8 +604,15 @@ NR_GPU inline void handleMeshClosestHit(
         const float emissionMisWeight = nr::direct_light::meshLightHitMisWeight(
             surface.instanceIndex, surface.primitiveIndex, payload.ray.origin(),
             surface.position, surface.geometricNormal, state.lastBsdfPdf);
-        state.radiance += state.throughput * emission * emissionMisWeight;
-        state.radiance += state.throughput * direct;
+        const SampledSpectrum emissionContribution =
+            state.throughput * emission * emissionMisWeight;
+        const SampledSpectrum directContribution = state.throughput * direct;
+        state.radiance += nr::lighting::clampIndirectLightContribution(
+            emissionContribution, params.scene.renderSettings.indirectLightClamp,
+            state.depth);
+        state.radiance += nr::lighting::clampIndirectLightContribution(
+            directContribution, params.scene.renderSettings.indirectLightClamp,
+            state.depth);
         const BsdfSample bsdfSample = shadingBsdf.sample(randoms.bsdf);
         if (!bsdfSample.directionIsValid())
             return false;

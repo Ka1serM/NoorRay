@@ -17,7 +17,8 @@ std::uint32_t SvmProgramTable::append(const CompiledSvmProgram& program)
         checkedSize(words_.size(), "word buffer"),
         checkedSize(program.bytecode.size(), "program"),
         checkedSize(textureIndices_.size(), "texture buffer"),
-        checkedSize(program.textureIndices.size(), "texture list")};
+        checkedSize(program.textureIndices.size(), "texture list"),
+        program.stackSize};
     words_.insert(words_.end(), program.bytecode.begin(), program.bytecode.end());
     textureIndices_.insert(textureIndices_.end(), program.textureIndices.begin(), program.textureIndices.end());
     records_.push_back(record);

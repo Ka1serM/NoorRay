@@ -970,6 +970,9 @@ void HdNoorRayRenderPass::_Render(
     rs.maxSamples = targetSamples;
     rs.maxBounces = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("maxBounces"), 8));
+    rs.indirectLightClamp = std::max(
+        0.0f, delegate->GetRenderSetting<float>(
+            TfToken("indirectLightClamp"), 10.0f));
     rs.optixDenoiserEnabled = delegate->GetRenderSetting<int>(
         TfToken("optixDenoiserEnabled"), 0) != 0;
     rs.optixDenoiserMinSamples = std::max(

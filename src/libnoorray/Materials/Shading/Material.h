@@ -12,6 +12,7 @@
 #include "Backend/CUDA/Unique/Texture.h"
 #include "Materials/Shading/RgbToSpectrum.h"
 #include "Materials/Shading/Sellmeier.h"
+#include "Materials/SVM/SvmTypes.h"
 #include "Backend/OptiX/ABI/Types.h"
 
 struct GpuSceneData;
@@ -63,6 +64,7 @@ struct Material
     std::uint32_t svmBytecodeLength{};
     std::uint32_t svmTextureOffset{};
     std::uint32_t svmTextureCount{};
+    std::uint32_t svmStackSize{nr::svm::StackSize};
     // Host-classified fast path for opaque, non-transmissive shadow hits.
     // Vertex alpha is still checked at the hit site.
     std::uint32_t shadowOpaque{};

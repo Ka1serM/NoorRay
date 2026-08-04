@@ -50,9 +50,12 @@ extern "C" __global__ void __anyhit__gaussian_path()
         return;
     }
 
+    const uint32_t scramble = hashCombine32(
+        payload->gaussianSampleIndex, globalGaussianId);
     const OwenSobolSampler sampler({
         params.frame.totalAccumulated,
-        hashCombine32(payload->gaussianSampleIndex, globalGaussianId)});
+        params.frame.sampleSeed == 0u
+            ? scramble : hashCombine32(scramble, params.frame.sampleSeed)});
     const float xi = sampler.sample1D(SampleDimension::PixelX);
     if (xi >= opacity)
     {
@@ -99,9 +102,12 @@ extern "C" __global__ void __anyhit__gaussian_query()
             return;
         }
 
+        const uint32_t scramble = hashCombine32(
+            optixGetPayload_0(), globalGaussianId);
         const OwenSobolSampler sampler({
             params.frame.totalAccumulated,
-            hashCombine32(optixGetPayload_0(), globalGaussianId)});
+            params.frame.sampleSeed == 0u
+                ? scramble : hashCombine32(scramble, params.frame.sampleSeed)});
         xi = sampler.sample1D(SampleDimension::PixelX);
         if (xi >= opacity)
         {

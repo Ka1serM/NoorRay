@@ -302,6 +302,7 @@ void Scene::invalidateMaterial(const MaterialHandle handle)
     materials[handle].svmBytecodeLength = 0;
     materials[handle].svmTextureOffset = 0;
     materials[handle].svmTextureCount = 0;
+    materials[handle].svmStackSize = nr::svm::StackSize;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
 }

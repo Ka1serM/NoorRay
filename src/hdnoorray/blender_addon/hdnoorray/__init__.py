@@ -206,6 +206,13 @@ class NoorRaySettings(PropertyGroup):
         min=1,
         max=65,
     )
+    indirect_light_clamp: FloatProperty(
+        name="Indirect Light Clamp",
+        description="Maximum indirect light contribution; zero disables clamping",
+        default=10.0,
+        min=0.0,
+        max=1.0e8,
+    )
     optix_denoiser_enabled: BoolProperty(
         name="Use OptiX Denoiser",
         description="Apply the OptiX AI denoiser as a post-process",
@@ -345,6 +352,7 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
         result = {
             "samples": settings.samples,
             "maxBounces": settings.max_bounces,
+            "indirectLightClamp": settings.indirect_light_clamp,
             "optixDenoiserEnabled": int(
                 settings.optix_denoiser_enabled or view_mode == "DENOISED"),
             "optixDenoiserMinSamples": settings.optix_denoiser_min_samples,
@@ -483,6 +491,7 @@ class NOORRAY_PT_light_paths(Panel):
         layout.use_property_decorate = False
         settings = context.scene.hdnoorray
         layout.prop(settings, "max_bounces")
+        layout.prop(settings, "indirect_light_clamp")
 
 
 class NOORRAY_PT_denoising(Panel):

@@ -153,13 +153,15 @@ NR_GPU inline const T& node(const std::uint32_t* words, std::uint32_t& offset)
 
 // Returns false only for a malformed/out-of-range bytecode stream. A caller
 // then uses the authored native material rather than reading beyond GPU memory.
-NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
+// StackCapacity is selected from compiler-recorded peak liveness so a simple
+// material does not pay for the full 255-float frame.
+template <bool Reduced, int StackCapacity, typename ShaderDataT>
+NR_GPU NR_SVM_NOINLINE bool svmEvalNodesImpl(const GpuSceneData& scene,
     const std::uint32_t bytecodeOffset, const std::uint32_t bytecodeLength,
     const std::uint32_t textureOffset, const std::uint32_t textureCount,
     const MaterialShadingContext& context,
     const SampledWavelengths& wavelengths, const bool exiting,
-    MaterialEvaluation& result, nr::shading::NoorRayShaderData& shaderData,
-    const bool emissionOnly = false)
+    MaterialEvaluation& result, ShaderDataT& shaderData)
 {
 #if NR_SVM_VALIDATE_BYTECODE
     if (!scene.svmWords || bytecodeLength == 0
@@ -172,7 +174,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
     // written before it is read. Zeroing all 255 slots here only adds a
     // local-memory memset to every material evaluation, including tiny
     // programs that use a handful of values.
-    float stack[StackSize];
+    float stack[StackCapacity];
     glm::vec3 closureWeight(1.0f);
     std::uint32_t offset = 0;
 
@@ -221,7 +223,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
         case NodeType::ClosureDiffuseBsdf: {
             const NodeClosureDiffuseBsdf& node =
                 detail::node<NodeClosureDiffuseBsdf>(words, offset);
-            if (emissionOnly)
+            if constexpr (Reduced)
                 break;
             nr::shading::lobes::DiffuseLobe diffuse;
             diffuse.albedo = rgbAlbedoToSpectrum(detail::loadColor(
@@ -240,7 +242,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
         case NodeType::ClosureConductorBsdf: {
             const NodeClosureConductorBsdf& node =
                 detail::node<NodeClosureConductorBsdf>(words, offset);
-            if (emissionOnly)
+            if constexpr (Reduced)
                 break;
             nr::shading::lobes::ConductorLobe conductor;
             conductor.eta = rgbAlbedoToSpectrum(detail::loadColor(
@@ -264,8 +266,17 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
         case NodeType::ClosureDielectricBsdf: {
             const NodeClosureDielectricBsdf& node =
                 detail::node<NodeClosureDielectricBsdf>(words, offset);
-            if (emissionOnly)
+            if constexpr (Reduced) {
+                const float scatterMode = detail::loadInput(stack, node.transmission);
+                if (scatterMode > 0.5f) {
+                    const glm::vec3 tint = glm::clamp(detail::loadColor(
+                        stack, node.colorX, node.colorY, node.colorZ),
+                        glm::vec3(0.0f), glm::vec3(1.0f));
+                    result.transmissionEstimate = fmaxf(result.transmissionEstimate,
+                        fmaxf(tint.x, fmaxf(tint.y, tint.z)));
+                }
                 break;
+            }
             const SampledSpectrum tint = rgbAlbedoToSpectrum(detail::loadColor(
                 stack, node.colorX, node.colorY, node.colorZ), wavelengths,
                 scene.spectrumTableScale, scene.spectrumTableCoeffs);
@@ -298,7 +309,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
 
         case NodeType::ClosureSheenBsdf: {
             const NodeClosureSheenBsdf& node = detail::node<NodeClosureSheenBsdf>(words, offset);
-            if (emissionOnly)
+            if constexpr (Reduced)
                 break;
             nr::shading::lobes::DielectricLobe sheen;
             sheen.reflectionTint = rgbAlbedoToSpectrum(detail::loadColor(
@@ -318,7 +329,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
         case NodeType::ClosureSubsurfaceBsdf: {
             const NodeClosureSubsurfaceBsdf& node =
                 detail::node<NodeClosureSubsurfaceBsdf>(words, offset);
-            if (emissionOnly)
+            if constexpr (Reduced)
                 break;
             nr::shading::lobes::DiffuseLobe diffuse;
             diffuse.albedo = rgbAlbedoToSpectrum(detail::loadColor(
@@ -1079,13 +1090,26 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
         case NodeType::ClosureOpenPbrSurface: {
             const NodeClosureOpenPbrSurface& node =
                 detail::node<NodeClosureOpenPbrSurface>(words, offset);
-            if (emissionOnly) {
+            if constexpr (Reduced) {
                 result.opacity = glm::clamp(
                     detail::loadInput(stack, node.opacity), 0.0f, 1.0f);
                 if (result.opacity < 1.0f)
                     result.set(MaterialEvaluationFlags::HasCutout);
                 const float emissionStrength = fmaxf(
                     detail::loadInput(stack, node.emissionLuminance), 0.0f);
+                const float baseWeight = glm::clamp(
+                    detail::loadInput(stack, node.baseWeight), 0.0f, 1.0f);
+                const float metalness = glm::clamp(
+                    detail::loadInput(stack, node.metalness), 0.0f, 1.0f);
+                const float transmission = glm::clamp(
+                    detail::loadInput(stack, node.transmissionWeight), 0.0f, 1.0f);
+                const glm::vec3 transmissionColor = glm::clamp(detail::loadColor(
+                    stack, node.transmissionColorX, node.transmissionColorY,
+                    node.transmissionColorZ), glm::vec3(0.0f), glm::vec3(1.0f));
+                result.transmissionEstimate = fmaxf(result.transmissionEstimate,
+                    baseWeight * (1.0f - metalness) * transmission
+                    * fmaxf(transmissionColor.x,
+                        fmaxf(transmissionColor.y, transmissionColor.z)));
                 result.emission += detail::loadColor(stack,
                     node.emissionColorX, node.emissionColorY,
                     node.emissionColorZ) * closureWeight * emissionStrength;
@@ -1117,6 +1141,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
             const float roughness = glm::clamp(
                 detail::loadInput(stack, node.specularRoughness), 0.0f, 1.0f);
             const float ior = fmaxf(detail::loadInput(stack, node.specularIor), 1.0f);
+            const bool disneyPrincipled = node.disneyPrincipled != 0;
             const bool spectralTransmission =
                 node.specularSellmeier.enabled != 0 && transmission > 0.0f;
             const SampledSpectrum base = rgbAlbedoToSpectrum(
@@ -1167,30 +1192,68 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
             }
             if (metalness > 0.0f) {
                 nr::shading::lobes::ConductorLobe conductor;
-                // MaterialX's open-PBR metal path is lowered to a complex-IOR
-                // conductor by the complete front end. The direct terminal
-                // form has only RGB base color, so use the same artistic
-                // normal-incidence conversion for the conductor fallback.
+                // The direct Disney terminal form has only RGB base color.
+                // Convert it to a conductor representation whose normal
+                // incidence reflectance is exactly the authored base color.
+                // Zero extinction is the lossless artistic fallback; forcing
+                // k=1 here made white metallic surfaces permanently darker
+                // than white, especially after roughness compensation.
                 for (int i = 0; i < NrSpectrumSamples; ++i) {
                     conductor.eta[i] = nr::shading::dielectric::iorFromNormalReflectance(
                         glm::clamp(base[i], 0.0f, 0.9999f));
-                    conductor.extinction[i] = 1.0f;
+                    conductor.extinction[i] = 0.0f;
                 }
                 conductor.roughness = roughness;
                 conductor.energyLuts = &scene.energyLuts;
                 shaderData.addConductor(weight * (baseWeight * metalness), conductor);
             }
             if (metalness < 1.0f) {
+                if (disneyPrincipled && transmission > 0.0f) {
+                    // Rough glass must be compensated as one interface. If
+                    // reflection and transmission are emitted as separate
+                    // dielectric lobes, each lobe applies the glass
+                    // multi-bounce correction independently and the furnace
+                    // becomes bright (while the old specular weight made it
+                    // dark at the default settings).
+                    nr::shading::lobes::DielectricLobe glass;
+                    glass.reflectionTint = specularWeight > 0.0f
+                        ? SampledSpectrum(1.0f) : SampledSpectrum(0.0f);
+                    glass.transmissionTint = transmissionTint * transmission;
+                    glass.roughness = roughness;
+                    glass.ior = specularWeight > 0.0f
+                        ? nr::shading::dielectric::iorFromNormalReflectance(
+                            0.08f * specularWeight) : ior;
+                    if (spectralTransmission) {
+                        glass.spectralIor = detail::loadSellmeierIor(
+                            stack, node.specularSellmeier, wavelengths);
+                        glass.useSpectralIor = true;
+                    }
+                    glass.exiting = exiting;
+                    glass.energyLuts = &scene.energyLuts;
+                    shaderData.addDielectric(weight * (baseWeight
+                        * (1.0f - metalness)), glass);
+                }
+                else {
                 // Reflection and transmission have independent Disney/Open-PBR
                 // weights. Keeping them in one dielectric lobe made the
                 // specular factor also attenuate transmitted energy, making
                 // specTrans materials unnecessarily dark.
                 if (specularWeight > 0.0f) {
                     nr::shading::lobes::DielectricLobe reflection;
-                    reflection.reflectionTint = specular;
+                    reflection.reflectionTint = disneyPrincipled
+                        ? SampledSpectrum(1.0f) : specular;
                     reflection.transmissionTint = SampledSpectrum(0.0f);
                     reflection.roughness = roughness;
-                    reflection.ior = ior;
+                    // MaterialX Disney's generalized Schlick closure takes
+                    // F0 = 0.08 * specular.  Treating `specular` as an outer
+                    // lobe weight (the old code) both attenuated glass and
+                    // gave the wrong grazing response.  Convert that F0 to
+                    // the equivalent dielectric IOR and use a unit lobe
+                    // weight, which is also the representation expected by
+                    // the energy LUTs.
+                    reflection.ior = disneyPrincipled
+                        ? nr::shading::dielectric::iorFromNormalReflectance(
+                            0.08f * specularWeight) : ior;
                     if (spectralTransmission) {
                         reflection.spectralIor = detail::loadSellmeierIor(
                             stack, node.specularSellmeier, wavelengths);
@@ -1199,7 +1262,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
                     reflection.exiting = exiting;
                     reflection.energyLuts = &scene.energyLuts;
                     shaderData.addDielectric(weight * (baseWeight * (1.0f - metalness)
-                        * specularWeight), reflection);
+                        * (disneyPrincipled ? 1.0f : specularWeight)), reflection);
                 }
                 if (transmission > 0.0f) {
                     nr::shading::lobes::DielectricLobe transmissionLobe;
@@ -1216,6 +1279,7 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
                     transmissionLobe.energyLuts = &scene.energyLuts;
                     shaderData.addDielectric(weight * (baseWeight * (1.0f - metalness)
                         * transmission), transmissionLobe);
+                }
                 }
             }
             const float coatWeight = glm::clamp(
@@ -1264,6 +1328,71 @@ NR_GPU NR_SVM_NOINLINE bool svmEvalNodes(const GpuSceneData& scene,
             return false;
         }
     }
+}
+
+// Keep the public ABI stable while specializing the expensive local frame.
+// The final fallback also handles old scene records that predate stackSize.
+NR_GPU inline bool svmEvalNodes(const GpuSceneData& scene,
+    const std::uint32_t bytecodeOffset, const std::uint32_t bytecodeLength,
+    const std::uint32_t textureOffset, const std::uint32_t textureCount,
+    const MaterialShadingContext& context,
+    const SampledWavelengths& wavelengths, const bool exiting,
+    MaterialEvaluation& result, nr::shading::NoorRayShaderData& shaderData,
+    const std::uint32_t stackSize = StackSize)
+{
+    if (stackSize <= 64u)
+        return svmEvalNodesImpl<false, 64>(scene, bytecodeOffset, bytecodeLength,
+            textureOffset, textureCount, context, wavelengths, exiting,
+            result, shaderData);
+    if (stackSize <= 128u)
+        return svmEvalNodesImpl<false, 128>(scene, bytecodeOffset, bytecodeLength,
+            textureOffset, textureCount, context, wavelengths, exiting,
+            result, shaderData);
+    if (stackSize <= 192u)
+        return svmEvalNodesImpl<false, 192>(scene, bytecodeOffset, bytecodeLength,
+            textureOffset, textureCount, context, wavelengths, exiting,
+            result, shaderData);
+    return svmEvalNodesImpl<false, StackSize>(scene, bytecodeOffset, bytecodeLength,
+        textureOffset, textureCount, context, wavelengths, exiting,
+        result, shaderData);
+}
+
+template <int StackCapacity>
+NR_GPU inline bool svmEvalReducedImpl(const GpuSceneData& scene,
+    const std::uint32_t bytecodeOffset, const std::uint32_t bytecodeLength,
+    const std::uint32_t textureOffset, const std::uint32_t textureCount,
+    const MaterialShadingContext& context,
+    const SampledWavelengths& wavelengths, const bool exiting,
+    MaterialEvaluation& result, nr::shading::NoorRayShadowData& shaderData)
+{
+    return svmEvalNodesImpl<true, StackCapacity>(scene, bytecodeOffset,
+        bytecodeLength, textureOffset, textureCount, context, wavelengths,
+        exiting, result, shaderData);
+}
+
+NR_GPU inline bool svmEvalReduced(const GpuSceneData& scene,
+    const std::uint32_t bytecodeOffset, const std::uint32_t bytecodeLength,
+    const std::uint32_t textureOffset, const std::uint32_t textureCount,
+    const MaterialShadingContext& context,
+    const SampledWavelengths& wavelengths, const bool exiting,
+    MaterialEvaluation& result, nr::shading::NoorRayShadowData& shaderData,
+    const std::uint32_t stackSize = StackSize)
+{
+    if (stackSize <= 64u)
+        return svmEvalReducedImpl<64>(scene, bytecodeOffset, bytecodeLength,
+            textureOffset, textureCount, context, wavelengths, exiting,
+            result, shaderData);
+    if (stackSize <= 128u)
+        return svmEvalReducedImpl<128>(scene, bytecodeOffset, bytecodeLength,
+            textureOffset, textureCount, context, wavelengths, exiting,
+            result, shaderData);
+    if (stackSize <= 192u)
+        return svmEvalReducedImpl<192>(scene, bytecodeOffset, bytecodeLength,
+            textureOffset, textureCount, context, wavelengths, exiting,
+            result, shaderData);
+    return svmEvalReducedImpl<StackSize>(scene, bytecodeOffset, bytecodeLength,
+        textureOffset, textureCount, context, wavelengths, exiting,
+        result, shaderData);
 }
 
 #undef NR_SVM_NOINLINE

@@ -48,8 +48,13 @@ extern "C" __global__ void __miss__pathTrace()
     const bool backgroundVisible =
         !params.scene.renderSettings.transparentBackground;
     if (!cameraPath || backgroundVisible)
-        state.radiance += state.throughput
+    {
+        const SampledSpectrum contribution = state.throughput
             * nr::path_miss::environmentRadiance(payload->ray, state);
+        state.radiance += nr::lighting::clampIndirectLightContribution(
+            contribution, params.scene.renderSettings.indirectLightClamp,
+            state.depth);
+    }
     if (cameraPath && backgroundVisible)
         state.alpha = 1.0f;
     payload->status = PathTraceStatus::Terminate;

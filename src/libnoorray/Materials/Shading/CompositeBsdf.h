@@ -195,15 +195,39 @@ public:
         if (overflowed_)
             return false;
         float total = 0.0f;
+        SampledSpectrum estimatedEnergy;
         for (int i = 0; i < count_; ++i)
         {
-            selectionPdf_[i] = lobes_[i].sampleWeight;
+            const SampledSpectrum albedo = lobes_[i].albedoEstimate(view_);
+            estimatedEnergy += lobes_[i].weight * albedo;
+            // Select closures by expected contribution, not just authored
+            // closure weight. A Disney diffuse+specular material commonly has
+            // roughly 1 unit of diffuse energy and 0.02--0.08 units of
+            // specular energy; a 50/50 selector creates large variance in a
+            // white furnace and in ordinary environment lighting. The
+            // resulting mixture remains unbiased because the full mixture
+            // PDF is still evaluated after sampling.
+            selectionPdf_[i] = lobes_[i].sampleWeight
+                * fmaxf(albedo.average(), 0.0f);
             total += selectionPdf_[i];
         }
         for (int i = 0; i < count_; ++i)
             selectionPdf_[i] = total > 0.0f
                 ? selectionPdf_[i] / total
                 : (count_ > 0 ? 1.0f / static_cast<float>(count_) : 0.0f);
+
+        // Closure trees use additive evaluation for efficient mixture
+        // sampling, while MaterialX `layer` nodes are physically an energy
+        // sharing operation.  A stack of independently compensated lobes can
+        // therefore exceed one in a white furnace.  Apply a spectral guard
+        // once per prepared surface so the final BSDF remains non-negative
+        // and energy conserving without changing any branch PDF.  Single
+        // lobes normally remain at one; the guard only scales an overfull
+        // composite (Disney coat/specular/glass combinations in particular).
+        energyScale_ = SampledSpectrum(1.0f);
+        for (int i = 0; i < NrSpectrumSamples; ++i)
+            if (estimatedEnergy[i] > 1.0f)
+                energyScale_[i] = 1.0f / estimatedEnergy[i];
         return true;
     }
 
@@ -213,7 +237,8 @@ public:
         for (int i = 0; i < count_; ++i)
         {
             const BsdfEvaluation lobeEval = lobes_[i].eval(view_, outgoing);
-            result.value = result.value + lobes_[i].weight * lobeEval.value;
+            result.value = result.value + energyScale_
+                * (lobes_[i].weight * lobeEval.value);
             result.pdf += selectionPdf_[i] * lobeEval.pdf;
         }
         return result;
@@ -236,19 +261,40 @@ public:
             if (selectionPdf_[chosen] <= 0.0f)
                 return {};
             proposal.weight = proposal.weight * lobes_[chosen].weight
-                * (1.0f / selectionPdf_[chosen]);
+                * energyScale_ * (1.0f / selectionPdf_[chosen]);
             proposal.pdf *= selectionPdf_[chosen];
             return proposal;
         }
 
-        const BsdfEvaluation combined = evaluate(proposal.direction);
+        // The selected lobe has already evaluated f*cos/pdf while producing
+        // this sample. Reconstruct its f from that result and only evaluate
+        // the other lobes for the mixture MIS terms. This preserves the
+        // mixture estimator while removing one expensive GGX/dielectric
+        // evaluation on every non-delta sample.
+        const float selectedPdf = proposal.pdf;
+        const float selectedCosine = fabsf(glm::dot(
+            lobes_[chosen].normal, proposal.direction));
+        if (selectedPdf <= 0.0f || selectedCosine <= 0.0f)
+            return {};
+        const SampledSpectrum selectedValue = proposal.weight
+            * (selectedPdf / selectedCosine);
+        BsdfEvaluation combined{};
+        combined.value = lobes_[chosen].weight * selectedValue;
+        combined.pdf = selectionPdf_[chosen] * selectedPdf;
+        for (int i = 0; i < count_; ++i) {
+            if (i == chosen)
+                continue;
+            const BsdfEvaluation other = lobes_[i].eval(
+                view_, proposal.direction);
+            combined.value += lobes_[i].weight * other.value;
+            combined.pdf += selectionPdf_[i] * other.pdf;
+        }
         if (!combined.isFinite())
             return {};
-        const float outgoingCosine = fabsf(
-            glm::dot(lobes_[chosen].normal, proposal.direction));
-        if (combined.pdf <= 0.0f || outgoingCosine <= 0.0f)
+        if (combined.pdf <= 0.0f)
             return {};
-        proposal.weight = combined.value * (outgoingCosine / combined.pdf);
+        proposal.weight = energyScale_ * combined.value
+            * (selectedCosine / combined.pdf);
         proposal.pdf = combined.pdf;
         return proposal;
     }
@@ -327,8 +373,41 @@ private:
     // hit only creates a multi-kilobyte local-memory memset.
     NoorRayShaderClosure lobes_[NoorRayMaxLobes];
     float selectionPdf_[NoorRayMaxLobes];
+    SampledSpectrum energyScale_{1.0f};
     int count_{};
     bool overflowed_{};
+};
+
+// Reduced SVM sink for visibility and emitter queries. These modes need
+// opacity/emission (and the scalar transmission estimate), but never retain
+// scattering closures. Keeping this type separate prevents the shadow path
+// from reserving the full 64-lobe local frame.
+class NoorRayShadowData
+{
+public:
+    NR_CPU_GPU NoorRayShadowData(const glm::vec3 geometricNormal,
+        const glm::vec3 shadingNormal, const glm::vec3 /*view*/)
+        : shadingNormal_(shadingNormal)
+    {
+        setShadingNormal(geometricNormal, shadingNormal);
+    }
+
+    NR_CPU_GPU void setShadingNormal(const glm::vec3 geometricNormal,
+        const glm::vec3 shadingNormal)
+    {
+        shadingNormal_ = nr::safeNormalize(shadingNormal,
+            nr::safeNormalize(geometricNormal, glm::vec3(0.0f, 1.0f, 0.0f)));
+    }
+
+    NR_CPU_GPU const glm::vec3& shadingNormal() const { return shadingNormal_; }
+    NR_CPU_GPU bool prepare() { return true; }
+
+    template <typename... Args> NR_CPU_GPU bool addDiffuse(Args&&...) { return true; }
+    template <typename... Args> NR_CPU_GPU bool addConductor(Args&&...) { return true; }
+    template <typename... Args> NR_CPU_GPU bool addDielectric(Args&&...) { return true; }
+
+private:
+    glm::vec3 shadingNormal_{};
 };
 
 // Compatibility aliases for existing call sites.

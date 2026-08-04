@@ -78,8 +78,34 @@ struct DiffuseLobe
     }
 
     NR_CPU_GPU SampledSpectrum albedoEstimate(
-        const glm::vec3 /*normal*/, const glm::vec3 /*view*/) const
+        const glm::vec3 normal, const glm::vec3 view) const
     {
+        if (burley && !translucent)
+        {
+            // Cosine-integrate the Burley retro-reflection factor over the
+            // incident hemisphere.  This is the closed-form polynomial of
+            // the Disney diffuse furnace integral (x = 1 - N.V), avoiding a
+            // per-hit 2D quadrature while retaining the grazing correction
+            // needed by the composite energy guard.
+            const float normalView = fmaxf(glm::dot(normal, view), 0.0f);
+            const float x = 1.0f - fminf(normalView, 1.0f);
+            const float x2 = x * x;
+            const float x3 = x2 * x;
+            const float x4 = x3 * x;
+            const float x5 = x4 * x;
+            const float x6 = x5 * x;
+            const float a0 = 0.976190476f - 0.488095238f * x5;
+            const float a1 = 0.059523810f - 0.011904762f * x
+                + 1.607142857f * x5 - 0.654760863f * x6;
+            const float a2 = -0.000001844f + 0.000212882f * x
+                - 0.003366655f * x2 + 0.020045492f * x3
+                - 0.057259231f * x4 + 0.159789532f * x5
+                - 0.049970620f * x6;
+            const float roughnessSquared = roughness * roughness;
+            const float burleyAlbedo = fmaxf(
+                a0 + roughness * a1 + roughnessSquared * a2, 0.0f);
+            return albedo * burleyAlbedo;
+        }
         return albedo;
     }
 

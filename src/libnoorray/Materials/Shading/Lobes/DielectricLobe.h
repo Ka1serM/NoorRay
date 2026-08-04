@@ -140,9 +140,39 @@ struct DielectricLobe
         for (int i = 0; i < NrSpectrumSamples; ++i) {
             const float eta = pathEtaAt(i);
             const float f0 = nr::shading::dielectric::fresnel(1.0f, 1.0f, eta);
-            const float directional =
-                nr::shading::dielectric::fresnelFromNormalReflectance(
-                    normalView, f0);
+            // For a rough reflection-only lobe, the relevant estimate is the
+            // directional GGX albedo, not smooth-interface Fresnel.  The
+            // latter underestimates/overestimates the amount that the LUT
+            // compensated lobe contributes at oblique views and makes a
+            // composite energy guard scale Disney stacks incorrectly.
+            const float singleScatter =
+                nr::shading::ggx::isAlmostSpecular(roughness)
+                ? nr::shading::dielectric::fresnelFromNormalReflectance(
+                    normalView, f0)
+                : nr::shading::energy_lut::dielectricDirectionalAlbedo(
+                    energyLuts, roughness, normalView, f0);
+            const float averageGeometryAlbedo =
+                nr::shading::ggx::isAlmostSpecular(roughness)
+                ? 1.0f
+                : nr::shading::energy_lut::ggxAverageAlbedo(
+                    energyLuts, roughness);
+            const float averageFresnel =
+                nr::shading::dielectric::averageFresnel(eta);
+            const float multipleScatter = nr::shading::ggx::isAlmostSpecular(roughness)
+                ? 0.0f
+                : nr::shading::energy_lut::multipleScatterFresnel(
+                    averageFresnel, averageGeometryAlbedo);
+            // Match the directional integral of evalReflection(), including
+            // the Kulla-Conty multiple-scatter term.  Using only the LUT's
+            // single-scatter value made the composite guard vary with view
+            // angle and left a visible white-furnace gradient.
+            const float geometryDirectional =
+                nr::shading::ggx::isAlmostSpecular(roughness)
+                ? 1.0f
+                : nr::shading::energy_lut::ggxDirectionalAlbedo(
+                    energyLuts, roughness, normalView);
+            const float directional = singleScatter
+                + (1.0f - geometryDirectional) * multipleScatter;
             result[i] = reflectionTint[i] * directional
                 + transmissionTint[i] * (1.0f - directional);
         }
@@ -206,12 +236,15 @@ private:
                     * base * scale[i];
             return result;
         }
-        const float viewAlbedo = nr::shading::energy_lut::dielectricDirectionalAlbedo(
-            energyLuts, roughness, normalView, f0);
-        const float lightAlbedo = nr::shading::energy_lut::dielectricDirectionalAlbedo(
-            energyLuts, roughness, normalOutgoing, f0);
-        const float averageAlbedo = nr::shading::energy_lut::dielectricAverageAlbedo(
-            energyLuts, roughness, f0);
+        // The dielectric table is the single-scatter Fresnel-weighted
+        // response. Missing GGX energy is controlled by the geometry-only
+        // masking albedo, shared with the conductor compensation.
+        const float viewAlbedo = nr::shading::energy_lut::ggxDirectionalAlbedo(
+            energyLuts, roughness, normalView);
+        const float lightAlbedo = nr::shading::energy_lut::ggxDirectionalAlbedo(
+            energyLuts, roughness, normalOutgoing);
+        const float averageAlbedo = nr::shading::energy_lut::ggxAverageAlbedo(
+            energyLuts, roughness);
         const float averageFresnelValue = nr::shading::dielectric::averageFresnel(etaPath);
         const float geometryFactor = microfacet.cosineWeighted / normalOutgoing;
         const float missingAverage = 1.0f - averageAlbedo;

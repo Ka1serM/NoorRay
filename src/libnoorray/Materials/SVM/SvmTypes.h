@@ -14,6 +14,9 @@ struct SvmProgramRecord
     std::uint32_t wordCount{};
     std::uint32_t textureOffset{};
     std::uint32_t textureCount{};
+    // Peak live float slots, recorded by the compiler. The evaluator uses
+    // this to select a smaller stack frame for simple materials.
+    std::uint32_t stackSize{};
 };
 
 using StackOffset = std::uint8_t;
@@ -721,6 +724,11 @@ struct NodeClosureOpenPbrSurface
     std::uint32_t normalX, normalY, normalZ;
     std::uint32_t emissionColorX, emissionColorY, emissionColorZ, emissionLuminance;
     std::uint32_t opacity;
+    // Disney Principled uses `specular` as a normal-incidence reflectance
+    // control (0.08 * specular), rather than as the weight of a separate
+    // dielectric closure.  Keep the terminal identity so the evaluator can
+    // preserve that distinction from OpenPBR/Standard Surface.
+    std::uint32_t disneyPrincipled{};
 };
 
 // artistic_ior has two color3 outputs from one input pair.

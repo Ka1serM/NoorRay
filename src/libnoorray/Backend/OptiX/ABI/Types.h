@@ -5,7 +5,7 @@
 #include "Backend/CUDA/Annotations.h"
 #include "Rendering/Ray.h"
 #include "Materials/Shading/Spectrum.h"
-#include "Rendering/Sampling/RandomSampler.h"
+#include "Rendering/Sampling/PathSampler.h"
 
 #if defined(NR_GPU_CODE)
 #include <optix_device.h>
@@ -27,6 +27,8 @@ static constexpr uint8_t SceneVisibility = MeshVisibility | GaussianVisibility;
 static constexpr uint8_t PathVisibility = SceneVisibility
     | AnalyticLightVisibility | MeshLightVisibility;
 static constexpr uint8_t FullVisibility = ~uint8_t{0};
+// Cycles' default: roulette starts after the first completed light bounce.
+static constexpr int RussianRouletteMinBounces = 0;
 // The path SBT keeps mesh at record 0 and Gaussian at record 1.  This is
 // intentionally shared by the raygen SER classifier and the runtime SBT
 // builder, so Gaussian/mesh classification never depends on triangle IDs.
@@ -64,11 +66,11 @@ struct CameraSample
 
 struct PathRandomStreams
 {
-    RandomState opacity{};
-    RandomState bsdf{};
-    RandomState light{};
-    RandomState shadow{};
-    RandomState roulette{};
+    PathSampleStream opacity{};
+    PathSampleStream bsdf{};
+    PathSampleStream light{};
+    PathSampleStream shadow{};
+    PathSampleStream roulette{};
 };
 
 struct alignas(16) PathState
@@ -76,7 +78,6 @@ struct alignas(16) PathState
     SampledSpectrum throughput;
     SampledSpectrum radiance;
     SampledWavelengths wl;
-    RandomState rngState;
     uint32_t depth;
     float alpha;
     float lastBsdfPdf;
@@ -87,19 +88,27 @@ struct alignas(16) PathState
         const bool includeOpacity = true,
         const bool includeRoulette = true)
     {
-        const RandomState bounceKey = depth == 0
-            ? seedRandom((static_cast<uint64_t>(accumulatedSamples) << 32u)
-                | static_cast<uint64_t>(pixel))
-            : rngState;
-        rngState = advanceRandomSequence(bounceKey);
+        // Reserve a generous block range per bounce. In particular, shadow
+        // traversal can consume samples while walking a transparent stack;
+        // its range must not overlap BSDF, light, or roulette dimensions.
+        constexpr uint32_t BlocksPerBounce = 256u;
+        constexpr uint32_t OpacityBlock = 0u;
+        constexpr uint32_t BsdfBlock = 1u;
+        constexpr uint32_t LightBlock = 3u;
+        constexpr uint32_t ShadowBlock = 16u;
+        constexpr uint32_t RouletteBlock = 255u;
+        const uint32_t baseBlock = depth * BlocksPerBounce;
+        const uint32_t scramble = hashCombine32(pixel, 0x6c8e9cf5u);
+        const auto stream = [&](const uint32_t block) {
+            return PathSampleStream{accumulatedSamples, scramble,
+                baseBlock + block, 0u};
+        };
         return {
-            includeOpacity
-                ? forkRandom(bounceKey, RandomStream::Opacity) : RandomState{},
-            forkRandom(bounceKey, RandomStream::Bsdf),
-            forkRandom(bounceKey, RandomStream::Light),
-            forkRandom(bounceKey, RandomStream::Shadow),
-            includeRoulette
-                ? forkRandom(bounceKey, RandomStream::Roulette) : RandomState{}};
+            includeOpacity ? stream(OpacityBlock) : PathSampleStream{},
+            stream(BsdfBlock),
+            stream(LightBlock),
+            stream(ShadowBlock),
+            includeRoulette ? stream(RouletteBlock) : PathSampleStream{}};
     }
 
     NR_CPU_GPU void scatter(const SampledSpectrum& weight, const float pdf)
@@ -116,7 +125,7 @@ struct alignas(16) PathState
 
 };
 
-static_assert(sizeof(PathState) == (NrSpectrumSamples == 1 ? 48 : 96));
+static_assert(sizeof(PathState) == (NrSpectrumSamples == 1 ? 32 : 80));
 
 // Beauty-path OptiX traces pass a pointer to this state through two payload
 // registers.  The closest-hit and miss programs update the path in place,

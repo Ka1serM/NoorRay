@@ -14,9 +14,10 @@ NR_GPU inline float finiteNonNegative(const float value)
 }
 
 // These bounds are uploaded with each candidate. The current flat alias
-// sampler uses the scene-independent power proposal; hierarchical samplers
-// can use this conservative bound to tighten a position-dependent proposal
-// without changing the exact conditional PDFs below.
+// sampler follows Cycles' non-light-tree proposal (area-weighted mesh
+// emitters and uniform analytic lights); a hierarchical sampler can use this
+// conservative bound to tighten a position-dependent proposal without
+// changing the exact conditional PDFs below.
 NR_GPU inline float conservativeSpatialWeight(
     const glm::vec3 position, const DirectLightCandidate& candidate)
 {
@@ -98,11 +99,75 @@ NR_GPU inline bool findMeshCandidate(
         && candidateIndex < params.scene.directLightCandidateCount;
 }
 
+struct MeshLightTriangle
+{
+    glm::vec3 a{};
+    glm::vec3 b{};
+    glm::vec3 c{};
+};
+
+NR_GPU inline bool meshLightTriangle(
+    const DirectLightCandidate& candidate, MeshLightTriangle& triangle)
+{
+    if (candidate.instanceIndex >= params.scene.meshInstanceCount)
+        return false;
+    const GpuInstance instance = params.scene.instances[candidate.instanceIndex];
+    const MeshAsset& mesh = params.scene.meshes[instance.meshIndex];
+    const auto& indices = mesh.getIndices();
+    const auto& vertices = mesh.getVertices();
+    const size_t offset = static_cast<size_t>(candidate.primitiveIndex) * 3u;
+    if (offset + 2u >= indices.size())
+        return false;
+    const uint32_t ia = indices[offset];
+    const uint32_t ib = indices[offset + 1u];
+    const uint32_t ic = indices[offset + 2u];
+    if (ia >= vertices.size() || ib >= vertices.size() || ic >= vertices.size())
+        return false;
+    triangle.a = glm::vec3(instance.objectToWorld * glm::vec4(vertices[ia].position, 1.0f));
+    triangle.b = glm::vec3(instance.objectToWorld * glm::vec4(vertices[ib].position, 1.0f));
+    triangle.c = glm::vec3(instance.objectToWorld * glm::vec4(vertices[ic].position, 1.0f));
+    return true;
+}
+
+// Cycles switches from area sampling when the triangle subtends a sufficiently
+// large solid angle at the shading point. The resulting directional PDF is
+// constant across the spherical triangle.
+NR_GPU inline bool meshLightSolidAngle(
+    const DirectLightCandidate& candidate, const glm::vec3 origin,
+    float& solidAngle)
+{
+    MeshLightTriangle triangle{};
+    if (!meshLightTriangle(candidate, triangle))
+        return false;
+    const glm::vec3 edge0 = triangle.b - triangle.a;
+    const glm::vec3 edge1 = triangle.c - triangle.a;
+    const glm::vec3 edge2 = triangle.c - triangle.b;
+    const glm::vec3 normal = glm::cross(edge0, edge1);
+    const float normalSquared = glm::dot(normal, normal);
+    if (normalSquared <= 1.0e-20f || glm::dot(normal, origin - triangle.a) <= 0.0f)
+        return false;
+    const float longestEdgeSquared = fmaxf(glm::dot(edge0, edge0),
+        fmaxf(glm::dot(edge1, edge1), glm::dot(edge2, edge2)));
+    const float distanceToPlane = glm::dot(normal, triangle.a - origin) / normalSquared;
+    if (longestEdgeSquared <= distanceToPlane * distanceToPlane)
+        return false;
+
+    const glm::vec3 a = nr::safeNormalize(triangle.a - origin);
+    const glm::vec3 b = nr::safeNormalize(triangle.b - origin);
+    const glm::vec3 c = nr::safeNormalize(triangle.c - origin);
+    const float denominator = 1.0f + glm::dot(a, b) + glm::dot(a, c) + glm::dot(b, c);
+    solidAngle = 2.0f * atan2f(fabsf(glm::dot(a, glm::cross(b, c))), denominator);
+    return nr::isFinite(solidAngle) && solidAngle > 1.0e-5f;
+}
+
 NR_GPU inline float meshLightConditionalPdf(
     const DirectLightCandidate& candidate,
     const glm::vec3 origin, const glm::vec3 hitPosition,
     const glm::vec3 normal)
 {
+    float solidAngle = 0.0f;
+    if (meshLightSolidAngle(candidate, origin, solidAngle))
+        return 1.0f / solidAngle;
     const glm::vec3 delta = hitPosition - origin;
     const float distanceSquared = glm::dot(delta, delta);
     if (candidate.area <= 0.0f || distanceSquared <= 1.0e-12f)
@@ -342,6 +407,67 @@ NR_GPU inline LightHit intersectDirectionalCandidate(
 }
 
 template <typename Rng>
+NR_GPU inline bool sampleMeshTriangleSolidAngle(
+    const DirectLightCandidate& candidate, const glm::vec3 origin,
+    Rng& rng, float& barycentricU, float& barycentricV)
+{
+    float solidAngle = 0.0f;
+    if (!meshLightSolidAngle(candidate, origin, solidAngle))
+        return false;
+    MeshLightTriangle triangle{};
+    if (!meshLightTriangle(candidate, triangle))
+        return false;
+
+    const glm::vec3 a = nr::safeNormalize(triangle.a - origin);
+    const glm::vec3 b = nr::safeNormalize(triangle.b - origin);
+    const glm::vec3 c = nr::safeNormalize(triangle.c - origin);
+    const float cosineB = glm::dot(a, c);
+    const float cosineC = glm::dot(a, b);
+    const glm::vec3 normalAB = nr::safeNormalize(glm::cross(a, b));
+    const glm::vec3 normalAC = nr::safeNormalize(glm::cross(a, c));
+    const float cosineAlpha = fminf(fmaxf(glm::dot(normalAB, normalAC), -1.0f), 1.0f);
+    const float sineAlpha = sqrtf(fmaxf(1.0f - cosineAlpha * cosineAlpha, 0.0f));
+    if (sineAlpha <= 1.0e-7f)
+        return false;
+
+    const float sampledArea = randomFloat(rng) * solidAngle;
+    float sine, cosine;
+    sincosf(sampledArea - acosf(cosineAlpha), &sine, &cosine);
+    const float u = cosine - cosineAlpha;
+    const float v = sine + sineAlpha * cosineC;
+    const float numerator = (v * cosine - u * sine) * cosineAlpha - v;
+    const float denominator = (v * sine + u * cosine) * sineAlpha;
+    const float q = fabsf(denominator) > 1.0e-20f ? numerator / denominator : 1.0f;
+    const glm::vec3 basis = nr::safeNormalize(c - cosineB * a);
+    const glm::vec3 cPrime = nr::safeNormalize(
+        fminf(fmaxf(q, -1.0f), 1.0f) * a
+        + sqrtf(fmaxf(1.0f - q * q, 0.0f)) * basis);
+    const float dotCB = fminf(fmaxf(glm::dot(cPrime, b), -1.0f), 1.0f);
+    const float z = 1.0f - randomFloat(rng) * (1.0f - dotCB);
+    const glm::vec3 direction = nr::safeNormalize(
+        z * b + sqrtf(fmaxf(1.0f - z * z, 0.0f))
+            * nr::safeNormalize(cPrime - dotCB * b));
+
+    const glm::vec3 edge1 = triangle.b - triangle.a;
+    const glm::vec3 edge2 = triangle.c - triangle.a;
+    const glm::vec3 p = glm::cross(direction, edge2);
+    const float determinant = glm::dot(edge1, p);
+    if (fabsf(determinant) <= 1.0e-8f)
+        return false;
+    const float inverseDeterminant = 1.0f / determinant;
+    const glm::vec3 offset = origin - triangle.a;
+    barycentricU = glm::dot(offset, p) * inverseDeterminant;
+    if (barycentricU < 0.0f || barycentricU > 1.0f)
+        return false;
+    const glm::vec3 qVector = glm::cross(offset, edge1);
+    barycentricV = glm::dot(direction, qVector) * inverseDeterminant;
+    if (barycentricV < 0.0f || barycentricU + barycentricV > 1.0f)
+        return false;
+    const float distance = glm::dot(edge2, qVector) * inverseDeterminant;
+    return nr::isFinite(distance) && distance > 0.0f;
+}
+
+template <typename Rng>
 NR_GPU inline bool sampleMeshTriangle(
     const uint32_t candidateIndex,
     const DirectLightCandidate& candidate,
@@ -350,9 +476,29 @@ NR_GPU inline bool sampleMeshTriangle(
     Rng& rng,
     LightSample& light)
 {
-    const float root = sqrtf(randomFloat(rng));
-    const float u = 1.0f - root;
-    const float v = randomFloat(rng) * root;
+    float u = 0.0f;
+    float v = 0.0f;
+    float solidAngle = 0.0f;
+    const bool useSolidAngle = meshLightSolidAngle(candidate, position, solidAngle);
+    if (useSolidAngle) {
+        if (!sampleMeshTriangleSolidAngle(candidate, position, rng, u, v))
+            return false;
+    }
+    else {
+        // Cycles' low-distortion square-to-triangle map for the area-sampling
+        // fallback. It remains uniform over area while improving the local
+        // distribution relative to the classic square-root map.
+        u = randomFloat(rng);
+        v = randomFloat(rng);
+        if (v > u) {
+            u *= 0.5f;
+            v -= u;
+        }
+        else {
+            v *= 0.5f;
+            u -= v;
+        }
+    }
     RayHit hit{};
     hit.u = u;
     hit.v = v;

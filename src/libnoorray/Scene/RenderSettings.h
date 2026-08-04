@@ -31,7 +31,6 @@ public:
     bool optixDenoiserEnabled{false};
     int optixDenoiserMinSamples{1};
     int maxBounces{10};
-    int russianRouletteStartBounce{3};
     bool tonemappingEnabled{false};
     bool transparentBackground{false};
     // Applied to the rendered radiance by integrations that own the camera

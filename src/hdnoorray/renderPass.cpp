@@ -712,12 +712,42 @@ void HdNoorRayRenderPass::_Render(
         converged_ = false;
         renderParam_.ResetClock();
     }
+
+    bool completedViewportFramePresented = false;
+    // A heavy full-resolution OptiX launch must not stall Blender's viewport
+    // event loop.  Keep at most one launch in flight: while it is running,
+    // return to Blender so navigation input and Hydra sync can continue.  On
+    // the first later Execute after completion, present that completed frame
+    // before submitting the newest scene/camera state.  This deliberately
+    // does not change render resolution, samples, or shading quality.
+    if (directViewport && framePending_) {
+        if (raytracer.isRenderInFlight()) {
+            // Blender clears its direct viewport target between Execute calls.
+            // Replay the retained completed frame while CUDA produces the
+            // next one, rather than leaving the viewport blank.
+            _PresentViewportImage(glColorTexture, width, height);
+            converged_ = false;
+            SetBuffersConverged(bindings, false);
+            return;
+        }
+        if (!_PresentViewportImage(glColorTexture, width, height)) {
+            // CUDA/GL interop can be unavailable on unusual GL contexts.
+            // This fallback is safe now because the render has completed.
+            PresentOutput(
+                raytracer.getOutputColor(), true, glColorTexture, nullptr,
+                width, height);
+        }
+        renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
+        framePending_ = false;
+        completedViewportFramePresented = true;
+    }
+
     // A host may queue more Execute calls before it observes the converged
     // render-buffer flag. Do not turn those already-queued calls into extra
     // samples after the requested total is complete.
     if (!reset
         && accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)) {
-        if (directViewport)
+        if (directViewport && !completedViewportFramePresented)
             PresentOutput(
                 raytracer.getOutputColor(), true, glColorTexture, nullptr,
                 width, height);
@@ -944,9 +974,6 @@ void HdNoorRayRenderPass::_Render(
         TfToken("optixDenoiserEnabled"), 0) != 0;
     rs.optixDenoiserMinSamples = std::max(
         1, delegate->GetRenderSetting<int>(TfToken("optixDenoiserMinSamples"), 1));
-    rs.russianRouletteStartBounce = std::clamp(
-        delegate->GetRenderSetting<int>(TfToken("russianRouletteStartBounce"), 3),
-        0, 65);
     // The delegate hands Blender scene-linear radiance and lets its colour
     // management own the display transform, so the renderer never tonemaps.
     rs.tonemappingEnabled = false;
@@ -968,18 +995,41 @@ void HdNoorRayRenderPass::_Render(
         TfToken("gaussianProxyOverdrawVisualization"), 0) != 0;
     rs.gaussianProxyOverdrawMax = std::clamp(delegate->GetRenderSetting<int>(
         TfToken("gaussianProxyOverdrawMax"), 1024), 1, 1024 * 1024);
-    // The denoiser's albedo and normal guides are the AOVs needed by this
-    // colour-only Hydra integration. The denoised result itself is retained
-    // in Raytracer's shared AOV buffer and presented from there.
-    raytracer.setAovEnabled(runsOptixDenoiser(rs));
+    // AOVs are expensive full-resolution side buffers. The Hydra integration
+    // has no consumer for them except the OptiX denoiser's albedo and normal
+    // guides, so keep both gates off by default and enable them together only
+    // when denoising is actually requested.
+    const bool needsDenoiserAovs = runsOptixDenoiser(rs);
+    rs.aovEnabled = needsDenoiserAovs;
+    raytracer.setAovEnabled(needsDenoiserAovs);
     raytracer.renderFrame(accumulatedSamples_, accumulatedSamples_);
-    raytracer.waitForRender();
-    renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
-    PresentOutput(
-        raytracer.getOutputColor(), directViewport, glColorTexture,
-        colorBuffer, width, height);
+    if (directViewport) {
+        // Keep a dedicated CUDA staging image for presentation. Blender
+        // clears the OpenGL viewport target before each Execute, while this
+        // retained image lets us replay the last finished full-resolution
+        // frame without ever reading the output being written by OptiX.
+        const bool queuedForPresentation = _EnsureViewportPresenter(
+                glColorTexture, width, height)
+            && _QueueViewportImage(
+                raytracer.getOutputColor().getCudaArray(), width, height,
+                raytracer.getCudaStream());
+        // The completion event is polled at the top of the next Execute.
+        // Waiting here made a costly frame block camera navigation entirely.
+        // If interop setup failed, the completion path uses its safe fallback.
+        (void)queuedForPresentation;
+        framePending_ = true;
+    } else {
+        // Offline/F12 rendering owns a CPU-side render buffer, so it must
+        // wait for and copy this sample before returning to its caller.
+        raytracer.waitForRender();
+        renderParam_.AccumulateGpuTimeMs(raytracer.getGpuTimeMs());
+        PresentOutput(
+            raytracer.getOutputColor(), false, glColorTexture,
+            colorBuffer, width, height);
+    }
     accumulatedSamples_ += samplesThisPass;
-    converged_ = accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)
+    converged_ = !directViewport
+        && accumulatedSamples_ >= static_cast<unsigned int>(targetSamples)
         && !renderParam_.HasPendingMaterialCompilations();
     // Defer non-zero progress until after the first frame so Blender's
     // render engine can initialize its wall-clock time baseline.

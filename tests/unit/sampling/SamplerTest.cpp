@@ -1,5 +1,6 @@
 #include "Rendering/Sampling/RandomSampler.h"
 #include "Rendering/Sampling/OwenSobolSampler.h"
+#include "Rendering/Sampling/PathSampler.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -89,4 +90,18 @@ TEST_CASE("Owen Sobol sequence remains bit exact", "[sampler]")
             CHECK(std::bit_cast<uint32_t>(value) == Expected[sample][dimension]);
         }
     }
+}
+
+TEST_CASE("path Sobol streams are deterministic and advance by independent blocks", "[sampler]")
+{
+    PathSampleStream first{17u, 0x3e71u, 9u, 0u};
+    PathSampleStream second = first;
+    for (int i = 0; i < 12; ++i)
+        CHECK(randomUint(first) == randomUint(second));
+
+    PathSampleStream sequential{17u, 0x3e71u, 9u, 0u};
+    for (int i = 0; i < 4; ++i)
+        static_cast<void>(randomUint(sequential));
+    PathSampleStream nextBlock{17u, 0x3e71u, 10u, 0u};
+    CHECK(randomUint(sequential) == randomUint(nextBlock));
 }

@@ -246,7 +246,6 @@ HdNoorRayRenderDelegate::GetRenderSettingDescriptors() const
         {"Maximum Bounces", TfToken("maxBounces"), VtValue(8)},
         {"OptiX Denoiser", TfToken("optixDenoiserEnabled"), VtValue(0)},
         {"Denoiser Min Samples", TfToken("optixDenoiserMinSamples"), VtValue(1)},
-        {"Russian Roulette Start", TfToken("russianRouletteStartBounce"), VtValue(3)},
         {"Transparent Background", TfToken("transparentBackground"), VtValue(0)},
         {"Gaussian Cutoff Sigma", TfToken("gaussianCutoffSigma"), VtValue(3.0f)},
         {"Gaussian Proxy Type", TfToken("gaussianProxyType"), VtValue(3)},

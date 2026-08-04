@@ -19,6 +19,18 @@ void bindRenderSettings(nb::module_& module)
         .value("GLOBAL_ILLUMINATION", GaussianShadingMode::GlobalIllumination)
         .value("DIRECT_COLOR", GaussianShadingMode::DirectColor);
 
+    nb::enum_<GaussianProxyType>(module, "GaussianProxyType")
+        .value("ICOSPHERE", GaussianProxyType::Icosphere)
+        .value("OCTAHEDRON", GaussianProxyType::Octahedron)
+        .value("ICOSAHEDRON", GaussianProxyType::Icosahedron)
+        .value("ICOSPHERE_LEVEL2", GaussianProxyType::IcosphereLevel2);
+
+    nb::enum_<SphericalHarmonicsOrder>(module, "SphericalHarmonicsOrder")
+        .value("DEGREE_0", SphericalHarmonicsOrder::Degree0)
+        .value("DEGREE_1", SphericalHarmonicsOrder::Degree1)
+        .value("DEGREE_2", SphericalHarmonicsOrder::Degree2)
+        .value("DEGREE_3", SphericalHarmonicsOrder::Degree3);
+
     nb::class_<RenderSettings>(module, "RenderSettings")
         .def(nb::init<>())
         .def_rw("samples", &RenderSettings::samples)
@@ -27,10 +39,17 @@ void bindRenderSettings(nb::module_& module)
         .def_rw("optix_denoiser_enabled", &RenderSettings::optixDenoiserEnabled)
         .def_rw("optix_denoiser_min_samples", &RenderSettings::optixDenoiserMinSamples)
         .def_rw("max_bounces", &RenderSettings::maxBounces)
-        .def_rw("russian_roulette_start_bounce", &RenderSettings::russianRouletteStartBounce)
         .def_rw("tonemapping_enabled", &RenderSettings::tonemappingEnabled)
         .def_rw("transparent_background", &RenderSettings::transparentBackground)
+        .def_rw("camera_exposure", &RenderSettings::cameraExposure)
         .def_rw("gaussian_cutoff_sigma", &RenderSettings::gaussianCutoffSigma)
+        .def_rw("gaussian_proxy_type", &RenderSettings::gaussianProxyType)
         .def_rw("gaussian_shading_mode", &RenderSettings::gaussianShadingMode)
+        .def_rw("gaussian_render_spherical_harmonics",
+            &RenderSettings::gaussianRenderSphericalHarmonics)
+        .def_rw("gaussian_proxy_overdraw_visualization",
+            &RenderSettings::gaussianProxyOverdrawVisualization)
+        .def_rw("gaussian_proxy_overdraw_max",
+            &RenderSettings::gaussianProxyOverdrawMax)
         .def_rw("buffer_visualization", &RenderSettings::bufferVisualization);
 }

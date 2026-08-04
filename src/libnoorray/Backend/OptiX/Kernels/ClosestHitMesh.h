@@ -458,11 +458,16 @@ NR_GPU inline bool survivesRussianRoulette(PathState& state, Rng& rng)
 {
     if (!state.throughput.isFinite() || !nr::isFinite(state.etaScale))
         return false;
+    // Match Cycles' default min_bounce convention: apply roulette after the
+    // first completed scatter.
     if (static_cast<int>(state.depth)
-        < params.scene.renderSettings.russianRouletteStartBounce)
+        <= RussianRouletteMinBounces)
         return true;
-    const float survival = fminf(fmaxf(
-        state.throughput.maxComponent() * state.etaScale, 0.05f), 0.95f);
+    // Cycles uses sqrt(max(abs(throughput))) to postpone termination roughly
+    // in line with the usual display transform. Do not clamp this: a value of
+    // one simply means that the path always survives.
+    const float survival = fminf(sqrtf(
+        state.throughput.maxAbsComponent()), 1.0f);
     if (randomFloat(rng) > survival)
         return false;
     state.throughput *= 1.0f / survival;
@@ -547,7 +552,7 @@ NR_GPU inline void handleMeshClosestHit(
         evaluation.opacity * surface.color.a, 0.0f), 1.0f);
     const bool includeOpacity = opacity < 1.0f;
     const bool includeRoulette = static_cast<int>(state.depth + 1u)
-        >= params.scene.renderSettings.russianRouletteStartBounce;
+        > RussianRouletteMinBounces;
     PathRandomStreams randoms = state.nextRandomStreams(
         payload.pixel, params.frame.totalAccumulated,
         includeOpacity, includeRoulette);

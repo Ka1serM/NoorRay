@@ -422,11 +422,12 @@ NR_GPU inline bool survivesRussianRoulette(PathState& state, Rng& rng)
 {
     if (!state.throughput.isFinite() || !nr::isFinite(state.etaScale))
         return false;
+    // Keep the same minimum-bounce convention as Cycles and mesh paths.
     if (static_cast<int>(state.depth)
-        < params.scene.renderSettings.russianRouletteStartBounce)
+        <= RussianRouletteMinBounces)
         return true;
-    const float survival = fminf(fmaxf(
-        state.throughput.maxComponent() * state.etaScale, 0.05f), 0.95f);
+    const float survival = fminf(sqrtf(
+        state.throughput.maxAbsComponent()), 1.0f);
     if (randomFloat(rng) > survival)
         return false;
     state.throughput *= 1.0f / survival;
@@ -506,7 +507,7 @@ NR_GPU inline void handleGaussianClosestHit(
         return;
     }
     const bool includeRoulette = static_cast<int>(state.depth + 1u)
-        >= params.scene.renderSettings.russianRouletteStartBounce;
+        > RussianRouletteMinBounces;
     PathRandomStreams randoms = state.nextRandomStreams(
         payload.pixel, params.frame.totalAccumulated, false, includeRoulette);
     state.radiance += state.throughput * estimateDirect(

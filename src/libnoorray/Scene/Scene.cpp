@@ -184,6 +184,7 @@ void Scene::clear() {
     gaussianInstances.clear();
     gaussianCount = 0;
     environmentTexture.reset();
+    standaloneTextureOwners.clear();
     materialOwners.clear();
     meshAssets.clear();
     materials.clear();
@@ -308,6 +309,13 @@ TextureRef Scene::add(Texture texture) {
     textures[handle].sceneIndex = static_cast<int>(handle.index());
     setDirtyFlag(Textures);
     return {textures, handle};
+}
+
+TextureRef Scene::addStandaloneTexture(Texture texture)
+{
+    TextureRef reference = add(std::move(texture));
+    standaloneTextureOwners.push_back(reference);
+    return reference;
 }
 
 void Scene::reserveForImport(

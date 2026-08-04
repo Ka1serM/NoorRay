@@ -78,6 +78,12 @@ public:
         for (int i = 1; i < NrSpectrumSamples; ++i) m = fmaxf(m, values[i]);
         return m;
     }
+    NR_CPU_GPU float maxAbsComponent() const {
+        float m = fabsf(values[0]);
+        for (int i = 1; i < NrSpectrumSamples; ++i)
+            m = fmaxf(m, fabsf(values[i]));
+        return m;
+    }
     NR_CPU_GPU bool isFinite() const {
         for (int i = 0; i < NrSpectrumSamples; ++i)
             if (!nr::isFinite(values[i])) return false;

@@ -17,6 +17,17 @@ class OwenSobolSampler : public IndexedSampler<OwenSobolSampler>
 public:
     NR_CPU_GPU explicit OwenSobolSampler(const SampleKey key) : IndexedSampler(key) {}
 
+    // Cycles-style path sampling uses small, independently scrambled Sobol
+    // blocks rather than consuming an ever-growing global dimension index.
+    // These helpers expose the same table-free sequence for that use while
+    // keeping the normal SampleDimension interface for camera sampling.
+    NR_CPU_GPU static uint32_t sampleUint(
+        const uint32_t sampleIndex, const uint32_t dimension,
+        const uint32_t seed)
+    {
+        return fastOwenScramble(sampleBits(sampleIndex, dimension), seed);
+    }
+
     NR_CPU_GPU float evaluate1D(
         const uint32_t seed, const SampleDimension dimension) const
     {

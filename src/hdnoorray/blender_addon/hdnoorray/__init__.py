@@ -195,7 +195,7 @@ class NoorRaySettings(PropertyGroup):
     samples: IntProperty(
         name="Samples",
         description="Maximum progressive samples per pixel",
-        default=64,
+        default=1_000_000,
         min=1,
         max=1_000_000,
     )
@@ -204,13 +204,6 @@ class NoorRaySettings(PropertyGroup):
         description="Maximum number of ray bounces (total depth)",
         default=8,
         min=1,
-        max=65,
-    )
-    russian_roulette_start_bounce: IntProperty(
-        name="Russian Roulette",
-        description="Bounce at which Russian roulette ray termination begins (0 disables)",
-        default=3,
-        min=0,
         max=65,
     )
     optix_denoiser_enabled: BoolProperty(
@@ -355,7 +348,6 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             "optixDenoiserEnabled": int(
                 settings.optix_denoiser_enabled or view_mode == "DENOISED"),
             "optixDenoiserMinSamples": settings.optix_denoiser_min_samples,
-            "russianRouletteStartBounce": settings.russian_roulette_start_bounce,
             "transparentBackground": int(settings.transparent_background),
             "gaussianCutoffSigma": settings.gaussian_cutoff_sigma,
             "gaussianProxyType": ["ICOSPHERE", "OCTAHEDRON", "ICOSAHEDRON", "ICOSPHERE_L2"].index(gauss),
@@ -491,7 +483,6 @@ class NOORRAY_PT_light_paths(Panel):
         layout.use_property_decorate = False
         settings = context.scene.hdnoorray
         layout.prop(settings, "max_bounces")
-        layout.prop(settings, "russian_roulette_start_bounce")
 
 
 class NOORRAY_PT_denoising(Panel):

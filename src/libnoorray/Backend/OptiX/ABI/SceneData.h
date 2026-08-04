@@ -47,9 +47,10 @@ enum class DirectLightType : uint32_t
 
 // Host-built light candidates. Analytic entries use `index` in their family
 // array; mesh entries use instance/primitive to address the scene geometry.
-// `selectionWeight` is a conservative, scene-independent proposal weight.
-// The remaining bounds let future hierarchical samplers tighten the proposal
-// without changing the exact per-sample solid-angle PDFs.
+// `selectionWeight` is the flat, Cycles-compatible proposal weight: mesh
+// emitters are weighted by area and analytic lights are uniform. The remaining
+// bounds are retained for a future hierarchical sampler without changing the
+// exact per-sample solid-angle PDFs.
 struct DirectLightCandidate
 {
     DirectLightType type{};
@@ -59,7 +60,7 @@ struct DirectLightCandidate
     glm::vec3 position{};
     float area{};
     glm::vec3 normal{};
-    float selectionWeight{};
+    float selectionWeight{}; // flat proposal weight (not emitted power)
     float powerBound{};       // conservative emitted-power estimate
     float spatialRadius{};    // bound around position for distance tests
     float orientationBound{}; // upper bound on emitter cosine

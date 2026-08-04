@@ -1119,6 +1119,14 @@ void Raytracer::updateLights()
         candidate.coneProjectedArea = LightPi * sinf(halfAngle) * sinf(halfAngle);
     }
 
+    // Match Cycles' non-light-tree distribution: sample emissive mesh
+    // triangles proportional to world-space area, sample analytic lights
+    // uniformly, and split probability equally between those two groups when
+    // both are present.  In particular, do not use a conservative shader
+    // bound as the proposal: textures and procedurals routinely make that
+    // bound many orders of magnitude larger than the actual emission.
+    const uint32_t analyticCandidateCount = static_cast<uint32_t>(candidates.size());
+
     // MaterialX emission can be texture- or position-dependent, so the host
     // cannot reduce this list to a single scalar per material.  It can still
     // identify programs that contain an EDF and put every such triangle in
@@ -1390,6 +1398,40 @@ void Raytracer::updateLights()
         meshCandidateOffsets.push_back(static_cast<uint32_t>(meshCandidateIndices.size()));
     }
 
+    double meshEmissionArea = 0.0;
+    for (uint32_t i = analyticCandidateCount;
+         i < static_cast<uint32_t>(candidates.size()); ++i)
+    {
+        meshEmissionArea += std::max(static_cast<double>(candidates[i].area), 0.0);
+    }
+
+    if (meshEmissionArea > 0.0 && analyticCandidateCount > 0u)
+    {
+        // Equal total probability for analytic and triangle emitters.
+        const float analyticWeight = static_cast<float>(
+            meshEmissionArea / static_cast<double>(analyticCandidateCount));
+        for (uint32_t i = 0; i < analyticCandidateCount; ++i)
+            weights[i] = analyticWeight;
+        for (uint32_t i = analyticCandidateCount;
+             i < static_cast<uint32_t>(candidates.size()); ++i)
+            weights[i] = candidates[i].area;
+    }
+    else if (analyticCandidateCount > 0u)
+    {
+        // With no emissive triangles Cycles samples the finite lights
+        // uniformly, independently of their radiometric power.
+        for (uint32_t i = 0; i < analyticCandidateCount; ++i)
+            weights[i] = 1.0f;
+    }
+    else
+    {
+        for (float& weight : weights)
+            weight = 0.0f;
+        for (uint32_t i = analyticCandidateCount;
+             i < static_cast<uint32_t>(candidates.size()); ++i)
+            weights[i] = candidates[i].area;
+    }
+
     double finiteWeightDouble = 0.0;
     for (float& weight : weights)
     {
@@ -1408,10 +1450,7 @@ void Raytracer::updateLights()
         }
     }
     for (size_t i = 0; i < candidates.size(); ++i)
-    {
         candidates[i].selectionWeight = weights[i];
-        candidates[i].powerBound = weights[i];
-    }
     const float finiteWeight = static_cast<float>(finiteWeightDouble);
     gpuCache.data.lightSelectionWeight = finiteWeight;
     const float environmentWeight = std::max(

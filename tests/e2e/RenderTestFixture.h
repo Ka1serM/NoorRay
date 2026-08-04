@@ -11,7 +11,8 @@ class RenderTestFixture
 {
 protected:
     static std::string render(const char* scene, const int spp, const char* output,
-        const uint32_t width = 0, const uint32_t height = 0)
+        const uint32_t width = 0, const uint32_t height = 0,
+        const uint32_t sampleSeed = 0)
     {
         const std::string path = output;
         const std::filesystem::path scenePath = std::filesystem::path(scene).is_absolute()
@@ -21,6 +22,7 @@ protected:
             + scenePath.string() + "\" --spp " + std::to_string(spp)
             + (width != 0 ? " --width " + std::to_string(width) : "")
             + (height != 0 ? " --height " + std::to_string(height) : "")
+            + (sampleSeed != 0 ? " --seed " + std::to_string(sampleSeed) : "")
             + " --output \"" + path + "\"";
         INFO("Command: " << command);
         REQUIRE(std::system(command.c_str()) == 0);

@@ -368,6 +368,8 @@ public:
         const std::unordered_map<std::string, std::uint32_t>& resolvedTextures)
         : emitter_(emitter), resolvedTextures_(resolvedTextures) {}
 
+    int maxStackSize() const { return maxStackSize_; }
+
     void setRemainingUses(std::unordered_map<const mx::Node*, std::uint32_t> uses)
     {
         remainingUses_ = std::move(uses);
@@ -1820,6 +1822,7 @@ private:
                 continue;
             for (int i = 0; i < count; ++i)
                 stackUsed_[offset + i] = true;
+            maxStackSize_ = std::max(maxStackSize_, offset + count);
             return static_cast<StackOffset>(offset);
         }
         throw SvmCompileError("SVM: stack exhausted (SVM stack has 255 float slots)");
@@ -1977,6 +1980,7 @@ private:
     std::vector<std::uint32_t> textures_;
     std::array<bool, StackSize> stackUsed_{};
     std::array<bool, StackSize> stackPinned_{};
+    int maxStackSize_{1};
 };
 
 NodeClosureOpenPbrSurface compileOpenPbr(const mx::NodePtr& node, GraphCompiler& graph)
@@ -2033,6 +2037,7 @@ NodeClosureOpenPbrSurface compileOpenPbr(const mx::NodePtr& node, GraphCompiler&
         result.emissionColorX, result.emissionColorY, result.emissionColorZ);
     result.emissionLuminance = scalar("emission_luminance", 0.0f);
     result.opacity = scalar("geometry_opacity", 1.0f);
+    result.disneyPrincipled = 0;
     return result;
 }
 
@@ -2095,6 +2100,7 @@ NodeClosureOpenPbrSurface compileStandardSurface(const mx::NodePtr& node, GraphC
     // intentionally uses its first channel for scalar MaterialX inputs
     // behavior for linked RGB values.
     result.opacity = scalar("opacity", 1.0f);
+    result.disneyPrincipled = 0;
     return result;
 }
 
@@ -2152,6 +2158,7 @@ NodeClosureOpenPbrSurface compileDisneyPrincipled(const mx::NodePtr& node,
         floatWord(0.0f);
     result.emissionLuminance = floatWord(0.0f);
     result.opacity = floatWord(1.0f);
+    result.disneyPrincipled = 1;
     return result;
 }
 
@@ -2523,6 +2530,7 @@ CompiledSvmProgram SvmCompiler::compile(const mx::DocumentPtr& document,
     emitClosure(emitter, graph, surface,
         ValueRef{floatWord(1.0f), floatWord(1.0f), floatWord(1.0f), true});
     emitter.end();
-    return {emitter.take(), graph.textures()};
+    return {emitter.take(),
+        static_cast<std::uint32_t>(graph.maxStackSize()), graph.textures()};
 }
 } // namespace nr::svm

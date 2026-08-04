@@ -118,9 +118,41 @@ struct ConductorLobe
     {
         const float normalView = fmaxf(glm::dot(normal, view), 0.0f);
         SampledSpectrum result{};
+        if (nr::shading::ggx::isAlmostSpecular(roughness))
+        {
+            for (int i = 0; i < NrSpectrumSamples; ++i)
+                result[i] = nr::shading::dielectric::conductorFresnel(
+                    normalView, eta[i], extinction[i]);
+            return result;
+        }
+
+        // The composite energy guard must estimate the same compensated
+        // directional albedo as eval(), rather than only sampling Fresnel at
+        // the view angle.  In particular, a white Disney metal must remain
+        // exactly white at every roughness: its missing single-scatter energy
+        // is returned by the Kulla--Conty term.
+        const float directionalGeometry =
+            nr::shading::energy_lut::ggxDirectionalAlbedo(
+                energyLuts, roughness, normalView);
+        const float averageGeometry =
+            nr::shading::energy_lut::ggxAverageAlbedo(energyLuts, roughness);
         for (int i = 0; i < NrSpectrumSamples; ++i)
+        {
+            const float normalFresnel =
+                nr::shading::dielectric::conductorFresnel(
+                    1.0f, eta[i], extinction[i]);
+            const float averageFresnel =
+                nr::shading::dielectric::averageFresnel(
+                    nr::shading::dielectric::iorFromNormalReflectance(
+                        normalFresnel));
+            const float multipleScatter =
+                nr::shading::energy_lut::multipleScatterFresnel(
+                    averageFresnel, averageGeometry);
             result[i] = nr::shading::dielectric::conductorFresnel(
-                normalView, eta[i], extinction[i]);
+                    normalView, eta[i], extinction[i])
+                * directionalGeometry
+                + (1.0f - directionalGeometry) * multipleScatter;
+        }
         return result;
     }
 

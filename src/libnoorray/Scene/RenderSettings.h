@@ -31,6 +31,9 @@ public:
     bool optixDenoiserEnabled{false};
     int optixDenoiserMinSamples{1};
     int maxBounces{10};
+    // Blender/Cycles-style maximum per-contribution indirect light. Zero
+    // disables clamping.
+    float indirectLightClamp{10.0f};
     bool tonemappingEnabled{false};
     bool transparentBackground{false};
     // Applied to the rendered radiance by integrations that own the camera

@@ -12,6 +12,34 @@
 #endif
 
 static constexpr uint32_t InvalidIndex = ~0u;
+
+// SER coherence hints are deliberately compact. OptiX uses the hint bits in
+// addition to the hit object's shader ID, so the hint should describe the
+// branch divergence inside a shader rather than duplicate the SBT record.
+// Keep distinct values for misses, analytic lights, Gaussian hits, and mesh
+// material classes. Material IDs are hashed before compression so IDs that
+// differ by a power-of-two do not systematically collide in the hint.
+namespace nr::ser
+{
+
+inline constexpr uint32_t CoherenceHintBits = 8u;
+inline constexpr uint32_t Miss = 0u;
+inline constexpr uint32_t AnalyticLight = 0x7Fu;
+inline constexpr uint32_t Gaussian = 0x80u;
+
+NR_CPU_GPU inline uint32_t material(const uint32_t materialIndex)
+{
+    uint32_t value = materialIndex + 0x9E3779B9u;
+    value ^= value >> 16u;
+    value *= 0x85EBCA6Bu;
+    value ^= value >> 13u;
+    // Values 1..126 are reserved for mesh-material classes. Zero is the
+    // miss class, 127 is analytic-light, and 128 is Gaussian.
+    return 1u + value % 126u;
+}
+
+}
+
 // AOV Cryptomatte queries reserve this sample value to request analytic,
 // full-opacity Gaussian intersections. It is only interpreted while an AOV
 // refresh is active, so regular path samples remain unaffected.
@@ -85,6 +113,7 @@ struct alignas(16) PathState
 
     NR_CPU_GPU PathRandomStreams nextRandomStreams(
         const uint32_t pixel, const uint32_t accumulatedSamples,
+        const uint32_t sampleSeed,
         const bool includeOpacity = true,
         const bool includeRoulette = true)
     {
@@ -98,7 +127,9 @@ struct alignas(16) PathState
         constexpr uint32_t ShadowBlock = 16u;
         constexpr uint32_t RouletteBlock = 255u;
         const uint32_t baseBlock = depth * BlocksPerBounce;
-        const uint32_t scramble = hashCombine32(pixel, 0x6c8e9cf5u);
+        const uint32_t pixelScramble = sampleSeed == 0u
+            ? pixel : hashCombine32(pixel, sampleSeed);
+        const uint32_t scramble = hashCombine32(pixelScramble, 0x6c8e9cf5u);
         const auto stream = [&](const uint32_t block) {
             return PathSampleStream{accumulatedSamples, scramble,
                 baseBlock + block, 0u};

@@ -22,6 +22,7 @@ struct RenderSettingsFile {
     bool aov_enabled{true};
     bool optix_denoiser_enabled{false};
     int optix_denoiser_min_samples{1};
+    float indirect_light_clamp{10.0f};
     int gaussian_shading_mode{};
     int gaussian_render_sh_degree{3};
 };

@@ -161,6 +161,7 @@ void MaterialXSceneRuntime::compilePending(Scene& scene, Raytracer& raytracer,
             materials[materialIndex].svmBytecodeLength = record.wordCount;
             materials[materialIndex].svmTextureOffset = record.textureOffset;
             materials[materialIndex].svmTextureCount = record.textureCount;
+            materials[materialIndex].svmStackSize = record.stackSize;
             changed = true;
         }
         impl_->ready.clear();

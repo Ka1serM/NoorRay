@@ -21,6 +21,7 @@
 #include "Rendering/Lighting/PointLight.h"
 #include "Rendering/Lighting/SpotLight.h"
 #include "Rendering/Lighting/RectLight.h"
+#include "Rendering/IndirectLightClamp.h"
 
 class Camera;
 struct PsfGatherBucketSample;
@@ -98,6 +99,17 @@ struct DirectLightCandidate
     uint32_t lightTreeLeaf{InvalidIndex};
 };
 
+// World-space triangle vertices cached alongside direct-light candidates.
+// Sampling the same mesh light can touch the triangle several times (solid
+// angle test, sample reconstruction and PDF); avoid repeated index/vertex
+// fetches and object-to-world transforms in those paths.
+struct MeshLightGeometry
+{
+    glm::vec3 a{};
+    glm::vec3 b{};
+    glm::vec3 c{};
+};
+
 struct GpuSceneData
 {
     const MeshAsset* meshes{};
@@ -105,6 +117,7 @@ struct GpuSceneData
     const GpuInstance* instances{};
     const LightAliasEntry* lightAliases{};
     const DirectLightCandidate* directLightCandidates{};
+    const MeshLightGeometry* meshLightGeometry{};
     const LightTreeNode* lightTreeNodes{};
     // Primitive-to-candidate mappings for the separate analytic and mesh-light
     // GAS instances. Mesh-light visibility is opt-in for path rays because
@@ -163,6 +176,7 @@ struct GpuFrameSettings
     uint32_t width{};
     uint32_t height{};
     uint32_t totalAccumulated{};   // total samples accumulated so far (blend weight)
+    uint32_t sampleSeed{};         // Owen-scramble seed; zero preserves the default sequence
     uint32_t visibilityMask{SceneVisibility};
     float cutoffDistanceSq{};      // cutoff sigma squared, precomputed on host
     uint32_t frameIndex{};         // 0 while accumulation is being reset (for example, camera motion)

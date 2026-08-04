@@ -160,6 +160,7 @@ endfunction()
 
 add_noorray_render_test(render_smoke_test e2e/RenderSmokeTest.cpp)
 add_noorray_render_test(white_furnace_test e2e/WhiteFurnaceTest.cpp)
+add_noorray_render_test(convergence_test e2e/ConvergenceTest.cpp)
 
 add_noorray_render_test(materialx_fidelity_test e2e/MaterialXFidelityTest.cpp)
 set(MATERIALXVIEW_EXECUTABLE

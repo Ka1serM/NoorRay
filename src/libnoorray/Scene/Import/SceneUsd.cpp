@@ -691,6 +691,7 @@ void writeUsd(const Scene& scene, const std::string& filepath)
     setAttr(root.GetPrim(), "nr:aovEnabled", pxr::SdfValueTypeNames->Bool, scene.getRenderSettings().aovEnabled);
     setAttr(root.GetPrim(), "nr:optixDenoiserEnabled", pxr::SdfValueTypeNames->Bool, scene.getRenderSettings().optixDenoiserEnabled);
     setAttr(root.GetPrim(), "nr:optixDenoiserMinSamples", pxr::SdfValueTypeNames->Int, scene.getRenderSettings().optixDenoiserMinSamples);
+    setAttr(root.GetPrim(), "nr:indirectLightClamp", pxr::SdfValueTypeNames->Float, scene.getRenderSettings().indirectLightClamp);
     MaterialTable materialTable;
     for (const auto& object : scene.getRootObjects())
         writeObject(scene, object, stage, root.GetPath(), usdPath, materialTable, scene.getActiveCamera());
@@ -714,6 +715,9 @@ void readUsd(Scene& scene, const std::string& filepath)
     getAttr(root, "nr:aovEnabled", &scene.getRenderSettings().aovEnabled);
     getAttr(root, "nr:optixDenoiserEnabled", &scene.getRenderSettings().optixDenoiserEnabled);
     getAttr(root, "nr:optixDenoiserMinSamples", &scene.getRenderSettings().optixDenoiserMinSamples);
+    getAttr(root, "nr:indirectLightClamp", &scene.getRenderSettings().indirectLightClamp);
+    scene.getRenderSettings().indirectLightClamp = std::max(
+        scene.getRenderSettings().indirectLightClamp, 0.0f);
     scene.getEnvironment().updateDerivedSettings();
     MaterialTable materials;
     for (const UsdPrim& prim : root.GetChildren())

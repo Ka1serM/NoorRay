@@ -135,8 +135,20 @@ struct MeshLightTriangle
 };
 
 NR_GPU inline bool meshLightTriangle(
-    const DirectLightCandidate& candidate, MeshLightTriangle& triangle)
+    const uint32_t candidateIndex, const DirectLightCandidate& candidate,
+    MeshLightTriangle& triangle)
 {
+    if (params.scene.meshLightGeometry != nullptr
+        && candidateIndex < params.scene.directLightCandidateCount) {
+        const MeshLightGeometry& cached =
+            params.scene.meshLightGeometry[candidateIndex];
+        if (candidate.type == DirectLightType::MeshTriangle) {
+            triangle.a = cached.a;
+            triangle.b = cached.b;
+            triangle.c = cached.c;
+            return true;
+        }
+    }
     if (candidate.instanceIndex >= params.scene.meshInstanceCount)
         return false;
     const GpuInstance instance = params.scene.instances[candidate.instanceIndex];
@@ -161,11 +173,12 @@ NR_GPU inline bool meshLightTriangle(
 // large solid angle at the shading point. The resulting directional PDF is
 // constant across the spherical triangle.
 NR_GPU inline bool meshLightSolidAngle(
-    const DirectLightCandidate& candidate, const glm::vec3 origin,
+    const uint32_t candidateIndex, const DirectLightCandidate& candidate,
+    const glm::vec3 origin,
     float& solidAngle)
 {
     MeshLightTriangle triangle{};
-    if (!meshLightTriangle(candidate, triangle))
+    if (!meshLightTriangle(candidateIndex, candidate, triangle))
         return false;
     const glm::vec3 edge0 = triangle.b - triangle.a;
     const glm::vec3 edge1 = triangle.c - triangle.a;
@@ -189,12 +202,12 @@ NR_GPU inline bool meshLightSolidAngle(
 }
 
 NR_GPU inline float meshLightConditionalPdf(
-    const DirectLightCandidate& candidate,
+    const uint32_t candidateIndex, const DirectLightCandidate& candidate,
     const glm::vec3 origin, const glm::vec3 hitPosition,
     const glm::vec3 normal)
 {
     float solidAngle = 0.0f;
-    if (meshLightSolidAngle(candidate, origin, solidAngle))
+    if (meshLightSolidAngle(candidateIndex, candidate, origin, solidAngle))
         return 1.0f / solidAngle;
     const glm::vec3 delta = hitPosition - origin;
     const float distanceSquared = glm::dot(delta, delta);
@@ -218,7 +231,7 @@ NR_GPU inline float meshLightHitPdf(
     const DirectLightCandidate candidate =
         params.scene.directLightCandidates[candidateIndex];
     return lightPdf(candidateIndex, origin, meshLightConditionalPdf(
-        candidate, origin, hitPosition, normal));
+        candidateIndex, candidate, origin, hitPosition, normal));
 }
 
 NR_GPU inline float meshLightHitMisWeight(
@@ -436,14 +449,15 @@ NR_GPU inline LightHit intersectDirectionalCandidate(
 
 template <typename Rng>
 NR_GPU inline bool sampleMeshTriangleSolidAngle(
-    const DirectLightCandidate& candidate, const glm::vec3 origin,
+    const uint32_t candidateIndex, const DirectLightCandidate& candidate,
+    const glm::vec3 origin,
     Rng& rng, float& barycentricU, float& barycentricV)
 {
     float solidAngle = 0.0f;
-    if (!meshLightSolidAngle(candidate, origin, solidAngle))
+    if (!meshLightSolidAngle(candidateIndex, candidate, origin, solidAngle))
         return false;
     MeshLightTriangle triangle{};
-    if (!meshLightTriangle(candidate, triangle))
+    if (!meshLightTriangle(candidateIndex, candidate, triangle))
         return false;
 
     const glm::vec3 a = nr::safeNormalize(triangle.a - origin);
@@ -507,9 +521,11 @@ NR_GPU inline bool sampleMeshTriangle(
     float u = 0.0f;
     float v = 0.0f;
     float solidAngle = 0.0f;
-    const bool useSolidAngle = meshLightSolidAngle(candidate, position, solidAngle);
+    const bool useSolidAngle = meshLightSolidAngle(
+        candidateIndex, candidate, position, solidAngle);
     if (useSolidAngle) {
-        if (!sampleMeshTriangleSolidAngle(candidate, position, rng, u, v))
+        if (!sampleMeshTriangleSolidAngle(
+            candidateIndex, candidate, position, rng, u, v))
             return false;
     }
     else {
@@ -541,12 +557,13 @@ NR_GPU inline bool sampleMeshTriangle(
     light.direction = delta / distance;
     light.distance = distance;
     light.pdf = meshLightConditionalPdf(
-        candidate, position, surface.position, surface.geometricNormal);
+        candidateIndex, candidate, position, surface.position,
+        surface.geometricNormal);
     if (light.pdf <= 0.0f)
         return false;
 
     MaterialEvaluation evaluation{};
-    nr::shading::NoorRayCompositeBsdf bsdf(
+    nr::shading::NoorRayShadowData bsdf(
         surface.geometricNormal, surface.normal, -light.direction);
     MaterialShadingContext context{};
     context.position = surface.position;
@@ -563,10 +580,11 @@ NR_GPU inline bool sampleMeshTriangle(
     context.objectToWorld = instance.objectToWorld;
     context.worldToObject = instance.worldToObject;
     context.normalToWorld = instance.normalToWorld;
-    if (!nr::svm::svmEvalNodes(params.scene,
+    if (!nr::svm::svmEvalReduced(params.scene,
         surface.material->svmBytecodeOffset, surface.material->svmBytecodeLength,
         surface.material->svmTextureOffset, surface.material->svmTextureCount,
-        context, wavelengths, false, evaluation, bsdf, true)
+        context, wavelengths, false, evaluation, bsdf,
+        surface.material->svmStackSize)
         || !evaluation.has(MaterialEvaluationFlags::HasEmission))
         return false;
     SampledSpectrum emission = rgbIlluminantToSpectrum(

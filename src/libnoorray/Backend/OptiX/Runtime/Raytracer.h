@@ -52,7 +52,9 @@ public:
     Raytracer& operator=(const Raytracer&) = delete;
 
     void resize(uint32_t width, uint32_t height);
-    void renderFrame(uint32_t frameIndex = 0, uint32_t accumulatedSamples = 0);
+    void renderFrame(
+        uint32_t frameIndex = 0, uint32_t accumulatedSamples = 0,
+        uint32_t sampleSeed = 0);
 
     nr::svm::SvmProgramRecord registerMaterialXProgram(const nr::svm::CompiledSvmProgram& program);
     nr::svm::SvmProgramRecord replaceMaterialXProgram(
@@ -136,6 +138,7 @@ private:
     nr::cuda::UniqueDeviceBuffer lightAliasDevice;
     nr::cuda::UniqueDeviceBuffer lightTreeDevice;
     nr::cuda::UniqueDeviceBuffer directLightCandidateDevice;
+    nr::cuda::UniqueDeviceBuffer meshLightGeometryDevice;
     nr::cuda::UniqueDeviceBuffer meshLightCandidateOffsetsDevice;
     nr::cuda::UniqueDeviceBuffer meshLightCandidateIndicesDevice;
     nr::cuda::UniqueDeviceBuffer analyticLightBvhCandidateDevice;

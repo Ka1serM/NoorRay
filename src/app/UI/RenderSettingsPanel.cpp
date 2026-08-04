@@ -122,6 +122,16 @@ void RenderSettingsPanel::renderUi()
         ImGui::SetNextItemWidth(-FLT_MIN);
         changed |= MathInput::DragInt("##MaxBounces", &settings.maxBounces, 0.1f, 1, 64, "%d");
 
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Indirect Light Clamp");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        changed |= MathInput::DragFloat(
+            "##IndirectLightClamp", &settings.indirectLightClamp,
+            0.1f, 0.0f, 100000.0f, "%.2f",
+            ImGuiSliderFlags_AlwaysClamp);
+
         static constexpr const char* kProxyNames[] =
             { "Icosphere", "Octahedron", "Icosahedron", "Icosphere (Level 2)" };
         ImGui::TableNextRow();

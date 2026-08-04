@@ -48,6 +48,32 @@ float integrateDielectric(
         / static_cast<double>(samples * samples));
 }
 
+float integrateComposite(const nr::shading::NoorRayShaderData& shader,
+    const glm::vec3 normal, const glm::vec3 view)
+{
+    constexpr int samples = 512;
+    double energy = 0.0;
+    for (int hemisphere = 0; hemisphere < 2; ++hemisphere)
+    {
+        for (int y = 0; y < samples; ++y)
+        {
+            for (int x = 0; x < samples; ++x)
+            {
+                glm::vec3 light = nr::sampling::uniformHemisphere({
+                    (y + 0.5f) / samples, (x + 0.5f) / samples});
+                if (hemisphere != 0)
+                    light = -light;
+                const float radianceToEnergy = glm::dot(normal, light) < 0.0f
+                    ? 1.5f * 1.5f : 1.0f;
+                energy += shader.evaluate(light).value[0]
+                    * fabsf(glm::dot(normal, light)) * radianceToEnergy;
+            }
+        }
+    }
+    return static_cast<float>(energy * 2.0 * BsdfPi
+        / static_cast<double>(samples * samples));
+}
+
 }
 
 TEST_CASE("active GGX reflection PDF integrates to a probability", "[bsdf][ggx]")
@@ -162,6 +188,34 @@ TEST_CASE("active rough glass uses generated LUT energy compensation", "[bsdf][d
         const glm::vec3 view = normal;
         const float energy = integrateDielectric(glass, normal, view);
         INFO("exiting=" << exiting << " energy=" << energy);
+        CHECK(energy >= 0.98f);
+        CHECK(energy <= 1.02f);
+    }
+}
+
+TEST_CASE("Disney glass reflection and transmission conserve furnace energy",
+    "[bsdf][dielectric][disney][furnace]")
+{
+    for (const float roughness : {0.25f, 0.5f, 1.0f})
+    {
+        nr::shading::NoorRayShaderData shader(Normal, Normal, View);
+
+        nr::shading::lobes::DielectricLobe glass;
+        glass.reflectionTint = SampledSpectrum(1.0f);
+        glass.transmissionTint = SampledSpectrum(1.0f);
+        glass.roughness = roughness;
+        glass.ior = 1.5f;
+        shader.addDielectric(SampledSpectrum(1.0f), glass);
+        REQUIRE(shader.prepare());
+
+        const float energy = integrateComposite(shader, Normal, View);
+        const float lutDirectional = nr::shading::energy_lut::glassDirectionalAlbedo(
+            nullptr, roughness, 1.0f, 1.5f);
+        const float lutAverage = nr::shading::energy_lut::glassAverageAlbedo(
+            nullptr, roughness, 1.5f);
+        INFO("roughness=" << roughness << " energy=" << energy
+            << " lutDirectional=" << lutDirectional
+            << " lutAverage=" << lutAverage);
         CHECK(energy >= 0.98f);
         CHECK(energy <= 1.02f);
     }

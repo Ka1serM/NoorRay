@@ -269,6 +269,8 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
             file.render_settings->optix_denoiser_enabled;
         scene.getRenderSettings().optixDenoiserMinSamples =
             std::max(file.render_settings->optix_denoiser_min_samples, 1);
+        scene.getRenderSettings().indirectLightClamp = std::max(
+            file.render_settings->indirect_light_clamp, 0.0f);
         scene.getRenderSettings().gaussianShadingMode =
             file.render_settings->gaussian_shading_mode == static_cast<int>(GaussianShadingMode::DirectColor)
                 ? GaussianShadingMode::DirectColor

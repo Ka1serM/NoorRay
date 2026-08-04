@@ -22,6 +22,7 @@ struct CliOptions
     std::string scenePath;
     std::string outputPath{"output.exr"};
     int samplesPerPixel{64};
+    uint32_t sampleSeed{};
     int maxBounces{-1};
     int width{};
     int height{};
@@ -45,6 +46,7 @@ void printUsage()
         << "\nOptions:\n"
         << "  --cli                Render headlessly instead of opening the GUI\n"
         << "  --output <path>      Output image path (default: output.exr)\n"
+        << "  --seed <uint>        Owen-scramble seed for independent renders\n"
         << "  --width  <int>       Output width (default: from camera sensor or 1280)\n"
         << "  --height <int>       Output height (default: from camera sensor or 720)\n"
         << "  --window-width <int>  GUI window width (default: auto, 2/3 of display)\n"
@@ -81,6 +83,8 @@ CliOptions parseOptions(const int argc, char* argv[])
             options.scenePath = requireValue(argc, argv, i);
         else if (arg == "--spp")
             options.samplesPerPixel = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--seed")
+            options.sampleSeed = static_cast<uint32_t>(std::stoul(requireValue(argc, argv, i)));
         else if (arg == "--output")
             options.outputPath = requireValue(argc, argv, i);
         else if (arg == "--width")
@@ -194,7 +198,7 @@ void runCli(const CliOptions& options)
         session.scene.getRenderSettings().gaussianProxyType = *options.gaussianProxyType;
     session.scene.getRenderSettings().optixDenoiserEnabled = options.denoiserEnabled;
     LOG_INFO("Rendering @ " << options.samplesPerPixel << " spp");
-    raytracer.renderFrame(0, 0);
+    raytracer.renderFrame(0, 0, options.sampleSeed);
     raytracer.getOutputColor().save(options.outputPath);
     raytracer.harvestKernelStats();
     LOG_INFO("Saved: " << options.outputPath);

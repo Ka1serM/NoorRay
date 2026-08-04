@@ -44,6 +44,10 @@ struct MaterialEvaluation
     glm::vec3 albedo{0.0f};
     glm::vec3 emission{0.0f};
     float emissionStrength{0.0f};
+    // Fast shadow-only estimate of the transmitted fraction. It avoids
+    // constructing and preparing the full BSDF when a material is evaluated
+    // only for stochastic transparent visibility.
+    float transmissionEstimate{0.0f};
 
     glm::vec3 shadingNormal{0.0f};
     uint32_t flags{0};

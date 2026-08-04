@@ -44,10 +44,9 @@ NR_GPU inline ushort4 packAovHalf4(const glm::vec3 value, const float w)
 namespace nr::aov
 {
 
-static constexpr uint32_t CoherenceHintMiss = 0;
-static constexpr uint32_t CoherenceHintGaussian = 0x80u;
-static constexpr uint32_t CoherenceHintMaterialBase = 0;
-static constexpr uint32_t CoherenceHintBits = 8;
+static constexpr uint32_t CoherenceHintMiss = nr::ser::Miss;
+static constexpr uint32_t CoherenceHintGaussian = nr::ser::Gaussian;
+static constexpr uint32_t CoherenceHintBits = nr::ser::CoherenceHintBits;
 
 NR_GPU inline bool gaussianEnabled()
 {
@@ -63,8 +62,7 @@ NR_GPU inline uint32_t coherenceHint(const RayHit& hit)
     const GpuInstance instance = params.scene.instances[hit.instanceIndex];
     const MeshAsset& mesh = params.scene.meshes[instance.meshIndex];
     const int materialSlot = mesh.getFaces()[hit.primitiveIndex].materialIndex;
-    return CoherenceHintMaterialBase
-        | (mesh.getMaterialIds()[materialSlot] & 0x7Fu);
+    return nr::ser::material(mesh.getMaterialIds()[materialSlot]);
 }
 
 NR_GPU inline RayHit intersect(
@@ -199,7 +197,7 @@ NR_GPU inline RayHit intersect(
     // is where this earns its keep. See this function's reorder parameter
     // comment for why this must not run for shadow rays. hit is held in
     // thread state, which SER migrates with the thread.
-    if (reorder)
+    if (reorder && params.frame.serEnabled != 0u)
         optixReorder(coherenceHint(hit), CoherenceHintBits);
     return hit;
 }
@@ -301,7 +299,8 @@ NR_GPU inline void writeAovs(
                 svmEvaluated = nr::svm::svmEvalNodes(params.scene,
                     surface.material->svmBytecodeOffset, surface.material->svmBytecodeLength,
                     surface.material->svmTextureOffset, surface.material->svmTextureCount,
-                    shadingContext, wavelengths, exiting, evaluation, bsdf);
+                    shadingContext, wavelengths, exiting, evaluation, bsdf,
+                    surface.material->svmStackSize);
             }
             if (!svmEvaluated) {
                 evaluation.opacity = 1.0f;
@@ -336,10 +335,10 @@ NR_GPU inline void writeAovs(
 namespace nr::path_trace
 {
 
-static constexpr uint32_t CoherenceHintMiss = 0;
-static constexpr uint32_t CoherenceHintGaussian = 0x80u;
-static constexpr uint32_t CoherenceHintMaterialBase = 0;
-static constexpr uint32_t CoherenceHintBits = 8;
+static constexpr uint32_t CoherenceHintMiss = nr::ser::Miss;
+static constexpr uint32_t CoherenceHintGaussian = nr::ser::Gaussian;
+static constexpr uint32_t CoherenceHintAnalytic = nr::ser::AnalyticLight;
+static constexpr uint32_t CoherenceHintBits = nr::ser::CoherenceHintBits;
 
 NR_GPU inline bool gaussianEnabled()
 {
@@ -355,8 +354,7 @@ NR_GPU inline uint32_t coherenceHint(const RayHit& hit)
     const GpuInstance instance = params.scene.instances[hit.instanceIndex];
     const MeshAsset& mesh = params.scene.meshes[instance.meshIndex];
     const int materialSlot = mesh.getFaces()[hit.primitiveIndex].materialIndex;
-    return CoherenceHintMaterialBase
-        | (mesh.getMaterialIds()[materialSlot] & 0x7Fu);
+    return nr::ser::material(mesh.getMaterialIds()[materialSlot]);
 }
 
 NR_GPU inline void tracePrimary(PathTracePayload& payload)
@@ -368,6 +366,7 @@ NR_GPU inline void tracePrimary(PathTracePayload& payload)
         return;
     }
     const bool gaussian = gaussianEnabled();
+    const bool reorder = params.frame.serEnabled && payload.state->depth > 0;
     // Analytic finite lights are terminal geometry for indirect path rays.
     // Keep them out of camera rays so the existing renderer semantics remain
     // unchanged: analytic lights are sampled by NEE rather than shown as
@@ -394,12 +393,13 @@ NR_GPU inline void tracePrimary(PathTracePayload& payload)
 
     if (!optixHitObjectIsHit())
     {
+        if (reorder)
+            optixReorder(CoherenceHintMiss, CoherenceHintBits);
         optixInvoke(payload0, payload1, payload2);
         return;
     }
 
     const uint32_t sbtRecord = optixHitObjectGetSbtRecordIndex();
-    const bool reorder = params.frame.serEnabled && payload.state->depth > 0;
     if (sbtRecord == PathGaussianSbtRecord)
     {
         if (reorder)
@@ -408,7 +408,10 @@ NR_GPU inline void tracePrimary(PathTracePayload& payload)
     else if (sbtRecord == PathAnalyticLightSbtRecord)
     {
         // The custom-light closest-hit program performs the terminal light
-        // contribution. It must not be interpreted as a mesh hit here.
+        // contribution. Keep analytic-light invocations together rather than
+        // leaving them interleaved with mesh-material invocations.
+        if (reorder)
+            optixReorder(CoherenceHintAnalytic, CoherenceHintBits);
     }
     else
     {
@@ -440,7 +443,10 @@ NR_GPU inline void trace(Ray ray, PathState& state, const uint32_t pixel)
     {
         payload.ray = ray;
         payload.gaussianSampleIndex = gaussianEnabled()
-            ? hashCombine32(pixel, segment) : pixel;
+            ? (params.frame.sampleSeed == 0u
+                ? hashCombine32(pixel, segment)
+                : hashCombine32(hashCombine32(pixel, segment), params.frame.sampleSeed))
+            : pixel;
         payload.gaussianTMax = Ray::DefaultMaxDistance;
         payload.status = PathTraceStatus::Terminate;
         tracePrimary(payload);
@@ -493,11 +499,17 @@ extern "C" __global__ void __raygen__pathTrace()
     const uint32_t y = launchIndex.y;
     const uint32_t pixel = y * params.frame.width + x;
     const bool aovQuery = params.frame.aovQuery != 0u;
-    const OwenSobolSampler sampler({
-        params.frame.totalAccumulated, hashCombine32(x, y)});
+    const uint32_t pixelScramble = params.frame.sampleSeed == 0u
+        ? hashCombine32(x, y)
+        : hashCombine32(hashCombine32(x, y), params.frame.sampleSeed);
+    const OwenSobolSampler sampler({params.frame.totalAccumulated, pixelScramble});
     SampledWavelengths wavelengths = SampledWavelengths::sampleVisible(
         sampler.sample1D(SampleDimension::Wavelength));
-    const glm::vec2 jitter = params.frame.frameIndex == 0u
+    // Keep the very first accumulated sample centered for a stable initial
+    // viewport, but let every later sample cover the pixel domain. The CLI
+    // submits all spp in one frame, so using frameIndex here would otherwise
+    // repeat the center sample for the entire offline render.
+    const glm::vec2 jitter = params.frame.totalAccumulated == 0u
         ? glm::vec2(0.5f) : sampler.sample2D(PixelSampleDimensions);
     const glm::vec2 lensSample = sampler.sample2D(LensSampleDimensions);
     const float nx = (static_cast<float>(x) + jitter.x)

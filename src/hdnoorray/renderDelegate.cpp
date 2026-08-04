@@ -244,6 +244,7 @@ HdNoorRayRenderDelegate::GetRenderSettingDescriptors() const
     return {
         {"Samples", TfToken("samples"), VtValue(64)},
         {"Maximum Bounces", TfToken("maxBounces"), VtValue(8)},
+        {"Indirect Light Clamp", TfToken("indirectLightClamp"), VtValue(10.0f)},
         {"OptiX Denoiser", TfToken("optixDenoiserEnabled"), VtValue(0)},
         {"Denoiser Min Samples", TfToken("optixDenoiserMinSamples"), VtValue(1)},
         {"Transparent Background", TfToken("transparentBackground"), VtValue(0)},

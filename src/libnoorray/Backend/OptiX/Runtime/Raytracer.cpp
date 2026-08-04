@@ -734,6 +734,7 @@ void Raytracer::freeSceneData() noexcept
     lightAliasDevice.reset();
     lightTreeDevice.reset();
     directLightCandidateDevice.reset();
+    meshLightGeometryDevice.reset();
     meshLightCandidateOffsetsDevice.reset();
     meshLightCandidateIndicesDevice.reset();
     analyticLightBvhCandidateDevice.reset();
@@ -957,6 +958,7 @@ void Raytracer::updateLights()
         + spotLightCount + rectLightCount;
 
     std::vector<DirectLightCandidate> candidates;
+    std::vector<MeshLightGeometry> meshLightGeometry;
     std::vector<float> weights;
     std::vector<OptixAabb> analyticLightBvhAabbs;
     std::vector<uint32_t> analyticLightBvhCandidateIndices;
@@ -964,6 +966,7 @@ void Raytracer::updateLights()
     std::vector<uint32_t> meshLightBvhCandidateIndices;
     candidates.reserve(static_cast<size_t>(pointLightCount)
         + spotLightCount + rectLightCount + directionalLightCount);
+    meshLightGeometry.reserve(candidates.capacity());
     weights.reserve(candidates.capacity());
     analyticLightBvhAabbs.reserve(candidates.capacity());
     analyticLightBvhCandidateIndices.reserve(candidates.capacity());
@@ -1011,6 +1014,7 @@ void Raytracer::updateLights()
         candidate.height = height;
         candidate.twoSided = twoSided;
         candidates.push_back(candidate);
+        meshLightGeometry.push_back({});
         weights.push_back(weight);
         return static_cast<uint32_t>(candidates.size() - 1u);
     };
@@ -1385,6 +1389,7 @@ void Raytracer::updateLights()
             candidate.powerBound = fmaxf(powerBound, 0.0f);
             candidate.spatialRadius = radius;
             candidate.orientationBound = 1.0f;
+            meshLightGeometry.push_back({a, b, c});
             meshCandidateIndices[lookupBegin + primitive] =
                 static_cast<uint32_t>(candidates.size());
             const uint32_t candidateIndex =
@@ -1399,38 +1404,17 @@ void Raytracer::updateLights()
         meshCandidateOffsets.push_back(static_cast<uint32_t>(meshCandidateIndices.size()));
     }
 
-    double meshEmissionArea = 0.0;
-    for (uint32_t i = analyticCandidateCount;
-         i < static_cast<uint32_t>(candidates.size()); ++i)
-    {
-        meshEmissionArea += std::max(static_cast<double>(candidates[i].area), 0.0);
-    }
-
-    if (meshEmissionArea > 0.0 && analyticCandidateCount > 0u)
-    {
-        // Equal total probability for analytic and triangle emitters.
-        const float analyticWeight = static_cast<float>(
-            meshEmissionArea / static_cast<double>(analyticCandidateCount));
-        for (uint32_t i = 0; i < analyticCandidateCount; ++i)
-            weights[i] = analyticWeight;
-        for (uint32_t i = analyticCandidateCount;
-             i < static_cast<uint32_t>(candidates.size()); ++i)
-            weights[i] = candidates[i].area;
-    }
-    else if (analyticCandidateCount > 0u)
-    {
-        // With no emissive triangles Cycles samples the finite lights
-        // uniformly, independently of their radiometric power.
-        for (uint32_t i = 0; i < analyticCandidateCount; ++i)
-            weights[i] = 1.0f;
-    }
-    else
-    {
-        for (float& weight : weights)
-            weight = 0.0f;
-        for (uint32_t i = analyticCandidateCount;
-             i < static_cast<uint32_t>(candidates.size()); ++i)
-            weights[i] = candidates[i].area;
+    // Keep the proposal distribution radiometric. The previous area-only
+    // mesh fallback discarded the material emission bound here, making a
+    // small bright triangle and a large dim triangle equally likely per unit
+    // area. Conservative bounds are still clamped below, while zero-power
+    // candidates retain a tiny geometric fallback so they cannot poison the
+    // alias/tree construction.
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        const float fallback = candidates[i].type == DirectLightType::MeshTriangle
+            ? candidates[i].area : 1.0f;
+        weights[i] = candidates[i].powerBound > 0.0f
+            ? candidates[i].powerBound : fallback;
     }
 
     double finiteWeightDouble = 0.0;
@@ -1472,6 +1456,7 @@ void Raytracer::updateLights()
     gpuCache.data.lightTreeNodes = nullptr;
     gpuCache.data.lightTreeNodeCount = 0;
     directLightCandidateDevice.reset();
+    meshLightGeometryDevice.reset();
     meshLightCandidateOffsetsDevice.reset();
     meshLightCandidateIndicesDevice.reset();
     analyticLightBvhCandidateDevice.reset();
@@ -1483,6 +1468,7 @@ void Raytracer::updateLights()
     gpuCache.data.meshLightCandidateIndexCount = 0;
     gpuCache.data.meshLightInstanceCount = 0;
     gpuCache.data.directLightCandidates = nullptr;
+    gpuCache.data.meshLightGeometry = nullptr;
     gpuCache.data.directLightCandidateCount = static_cast<uint32_t>(candidates.size());
     gpuCache.data.analyticLightBvhCandidateIndices = nullptr;
     gpuCache.data.meshLightBvhCandidateIndices = nullptr;
@@ -1505,6 +1491,13 @@ void Raytracer::updateLights()
             sizeof(DirectLightCandidate) * candidates.size(), cudaMemcpyHostToDevice));
         gpuCache.data.directLightCandidates =
             static_cast<const DirectLightCandidate*>(directLightCandidateDevice.get());
+        meshLightGeometryDevice.allocate(
+            sizeof(MeshLightGeometry) * meshLightGeometry.size());
+        NR_GPU_CHECK(cudaMemcpy(meshLightGeometryDevice.get(), meshLightGeometry.data(),
+            sizeof(MeshLightGeometry) * meshLightGeometry.size(),
+            cudaMemcpyHostToDevice));
+        gpuCache.data.meshLightGeometry =
+            static_cast<const MeshLightGeometry*>(meshLightGeometryDevice.get());
     }
     if (!meshCandidateOffsets.empty())
     {
@@ -1682,7 +1675,8 @@ void Raytracer::launchProxyOverdraw(
 }
 
 void Raytracer::renderFrame(
-    const uint32_t frameIndex, const uint32_t accumulatedSamples)
+    const uint32_t frameIndex, const uint32_t accumulatedSamples,
+    const uint32_t sampleSeed)
 {
     // Synchronize the GPU stream once per frame if any mutation occurred since
     // the last render. This replaces the old per-mutation waitForRender barrier
@@ -1805,6 +1799,7 @@ void Raytracer::renderFrame(
     params.frame.width = width;
     params.frame.height = height;
     params.frame.frameIndex = frameIndex;
+    params.frame.sampleSeed = sampleSeed;
     // SER has a fixed reorder/invoke cost. It pays off once several distinct
     // SVM programs compete in the same launch, but is measurably slower for
     // one-to-three-material scenes where rays are already coherent. Keep the

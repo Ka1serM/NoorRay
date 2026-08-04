@@ -140,10 +140,11 @@ NR_GPU inline bool evaluateMeshEmission(
     hit.primitiveIndex = candidate.primitiveIndex;
     const Surface surface = Surface::fromHit(params.scene, hit);
     conditionalPdf = nr::direct_light::meshLightConditionalPdf(
-        candidate, ray.origin(), surface.position, surface.geometricNormal);
+        candidateIndex, candidate, ray.origin(), surface.position,
+        surface.geometricNormal);
 
     MaterialEvaluation evaluation{};
-    nr::shading::NoorRayCompositeBsdf bsdf(
+    nr::shading::NoorRayShadowData bsdf(
         surface.geometricNormal, surface.normal, -ray.direction());
     MaterialShadingContext context{};
     context.position = surface.position;
@@ -160,11 +161,11 @@ NR_GPU inline bool evaluateMeshEmission(
     context.objectToWorld = instance.objectToWorld;
     context.worldToObject = instance.worldToObject;
     context.normalToWorld = instance.normalToWorld;
-    if (!nr::svm::svmEvalNodes(
+    if (!nr::svm::svmEvalReduced(
         params.scene, surface.material->svmBytecodeOffset,
         surface.material->svmBytecodeLength, surface.material->svmTextureOffset,
         surface.material->svmTextureCount, context, wavelengths, false,
-        evaluation, bsdf, true)
+        evaluation, bsdf, surface.material->svmStackSize)
         || !evaluation.has(MaterialEvaluationFlags::HasEmission))
         return false;
 
@@ -238,7 +239,9 @@ NR_GPU inline void handleClosestHit(PathTracePayload& payload)
         misWeight = powerHeuristic(state.lastBsdfPdf,
             nr::direct_light::lightPdf(
                 candidateIndex, ray.origin(), conditionalPdf));
-    state.radiance += state.throughput * contribution * misWeight;
+    state.radiance += nr::lighting::clampIndirectLightContribution(
+        state.throughput * contribution * misWeight,
+        params.scene.renderSettings.indirectLightClamp, state.depth);
     payload.status = PathTraceStatus::Terminate;
 }
 

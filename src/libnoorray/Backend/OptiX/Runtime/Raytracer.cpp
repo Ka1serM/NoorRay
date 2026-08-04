@@ -25,6 +25,7 @@
 #include "Backend/CUDA/Checks.h"
 #include "Backend/CUDA/rstd/Memory.h"
 #include "Backend/OptiX/ABI/SceneData.h"
+#include "Backend/OptiX/LightTreeBuilder.h"
 #include "Log.h"
 #include "Geometry/Mesh/Assets/MeshAsset.h"
 #include "Scene/Objects/MeshInstance.h"
@@ -731,6 +732,7 @@ void Raytracer::freeSceneData() noexcept
     cieYDevice.reset();
     cieZDevice.reset();
     lightAliasDevice.reset();
+    lightTreeDevice.reset();
     directLightCandidateDevice.reset();
     meshLightCandidateOffsetsDevice.reset();
     meshLightCandidateIndicesDevice.reset();
@@ -744,7 +746,6 @@ void Raytracer::freeSceneData() noexcept
 void Raytracer::updateTextures()
 {
     const auto& cpuTextures = scene.getTextures();
-    const auto& registry = scene.getTextureRegistry();
     const size_t count = cpuTextures.size();
     auto& cudaTextures = gpuCache.textures;
     auto& mirroredHandles = gpuCache.textureHandles;
@@ -753,11 +754,11 @@ void Raytracer::updateTextures()
         cudaTextures.size() != count || mirroredHandles.size() != count;
     const size_t commonCount = std::min(mirroredHandles.size(), count);
     for (size_t i = 0; i < commonCount && !changed; ++i)
-        changed = mirroredHandles[i] != registry.handleAt(
+        changed = mirroredHandles[i] != scene.getTextureHandle(
             static_cast<uint32_t>(i));
 
     if (!changed) {
-        gpuCache.textureRegistryRevision = registry.revision();
+        gpuCache.textureRevision = scene.getTextureRevision();
         return;
     }
 
@@ -769,16 +770,16 @@ void Raytracer::updateTextures()
     mirroredHandles.resize(count);
 
     for (size_t i = 0; i < count; ++i) {
-        const TextureHandle current =
-            registry.handleAt(static_cast<uint32_t>(i));
+        const TextureHandle current = scene.getTextureHandle(
+            static_cast<uint32_t>(i));
         if (mirroredHandles[i] == current)
             continue;
 
         cudaTextures[i].reset();
         mirroredHandles[i] = current;
-        // A released texture leaves an empty slot behind. It keeps its index so
-        // the live textures around it stay addressable, but there is nothing to
-        // upload and nothing left referencing it.
+        // Texture slots are scene-owned and remain dense until the scene is
+        // cleared, but keep this validity check for stale handles during a
+        // scene-generation transition.
         if (!current.isValid() || cpuTextures[i].getWidth() <= 0
             || cpuTextures[i].getHeight() <= 0) {
             continue;
@@ -805,7 +806,7 @@ void Raytracer::updateTextures()
     }
     gpuCache.data.textures = cudaTextures.data();
     gpuCache.data.textureCount = static_cast<uint32_t>(cpuTextures.size());
-    gpuCache.textureRegistryRevision = registry.revision();
+    gpuCache.textureRevision = scene.getTextureRevision();
 
     // SVM instructions store scene texture indices, not CUDA texture objects.
     // Reloading therefore only updates the scene texture array above; no
@@ -1451,6 +1452,8 @@ void Raytracer::updateLights()
     }
     for (size_t i = 0; i < candidates.size(); ++i)
         candidates[i].selectionWeight = weights[i];
+    std::vector<LightTreeNode> lightTreeNodes;
+    nr::light_tree::build(candidates, lightTreeNodes);
     const float finiteWeight = static_cast<float>(finiteWeightDouble);
     gpuCache.data.lightSelectionWeight = finiteWeight;
     const float environmentWeight = std::max(
@@ -1463,8 +1466,11 @@ void Raytracer::updateLights()
     gpuCache.data.allMaterialsOpaque = allMaterialsOpaque ? 1u : 0u;
 
     lightAliasDevice.reset();
+    lightTreeDevice.reset();
     gpuCache.data.lightAliases = nullptr;
     gpuCache.data.lightAliasCount = 0;
+    gpuCache.data.lightTreeNodes = nullptr;
+    gpuCache.data.lightTreeNodeCount = 0;
     directLightCandidateDevice.reset();
     meshLightCandidateOffsetsDevice.reset();
     meshLightCandidateIndicesDevice.reset();
@@ -1482,6 +1488,16 @@ void Raytracer::updateLights()
     gpuCache.data.meshLightBvhCandidateIndices = nullptr;
     gpuCache.data.analyticLightBvhPrimitiveCount = 0;
     gpuCache.data.meshLightBvhPrimitiveCount = 0;
+    if (!lightTreeNodes.empty())
+    {
+        lightTreeDevice.allocate(sizeof(LightTreeNode) * lightTreeNodes.size());
+        NR_GPU_CHECK(cudaMemcpy(lightTreeDevice.get(), lightTreeNodes.data(),
+            sizeof(LightTreeNode) * lightTreeNodes.size(), cudaMemcpyHostToDevice));
+        gpuCache.data.lightTreeNodes =
+            static_cast<const LightTreeNode*>(lightTreeDevice.get());
+        gpuCache.data.lightTreeNodeCount =
+            static_cast<uint32_t>(lightTreeNodes.size());
+    }
     if (!candidates.empty())
     {
         directLightCandidateDevice.allocate(sizeof(DirectLightCandidate) * candidates.size());
@@ -1674,13 +1690,12 @@ void Raytracer::renderFrame(
     if (scene.consumeGpuSync())
         NR_GPU_CHECK(cudaStreamSynchronize(stream));
 
-    const bool textureRegistryChanged =
-        gpuCache.textureRegistryRevision
-        != scene.getTextureRegistry().revision();
-    const bool sceneDirty = scene.isAnyDirty() || textureRegistryChanged;
+    const bool textureLibraryChanged =
+        gpuCache.textureRevision != scene.getTextureRevision();
+    const bool sceneDirty = scene.isAnyDirty() || textureLibraryChanged;
     // Camera motion changes which geometry each pixel sees, so the AOV images
     // must be regenerated along with the beauty accumulation.
-    const bool aovSceneDirty = textureRegistryChanged
+    const bool aovSceneDirty = textureLibraryChanged
         || scene.isDirty(TLAS) || scene.isDirty(Meshes)
         || scene.isDirty(Textures) || scene.isDirty(EnvironmentCdf)
         || scene.isDirty(Lights) || scene.isDirty(CameraState)
@@ -1741,7 +1756,7 @@ void Raytracer::renderFrame(
         && (aovSceneDirty || aovStale || (useDenoiserGuides && denoiserGuidesStale));
 
     if (scene.isDirty(Meshes)) updateMeshes();
-    if (scene.isDirty(Textures) || textureRegistryChanged)
+    if (scene.isDirty(Textures) || textureLibraryChanged)
         updateTextures();
     if (scene.isDirty(EnvironmentCdf))
         updateEnvironmentCdf();

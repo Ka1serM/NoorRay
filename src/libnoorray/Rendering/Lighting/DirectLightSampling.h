@@ -13,28 +13,18 @@ NR_GPU inline float finiteNonNegative(const float value)
     return isfinite(value) && value > 0.0f ? value : 0.0f;
 }
 
-// These bounds are uploaded with each candidate. The current flat alias
-// sampler follows Cycles' non-light-tree proposal (area-weighted mesh
-// emitters and uniform analytic lights); a hierarchical sampler can use this
-// conservative bound to tighten a position-dependent proposal without
-// changing the exact conditional PDFs below.
-NR_GPU inline float conservativeSpatialWeight(
-    const glm::vec3 position, const DirectLightCandidate& candidate)
+NR_GPU inline float lightTreeImportance(
+    const glm::vec3 position, const LightTreeNode& node)
 {
-    const float power = fmaxf(finiteNonNegative(candidate.powerBound),
-        finiteNonNegative(candidate.selectionWeight));
-    if (power <= 0.0f)
+    const float weight = finiteNonNegative(node.selectionWeight);
+    if (weight <= 0.0f)
         return 0.0f;
-    if (candidate.type == DirectLightType::Directional)
-        return power * finiteNonNegative(candidate.orientationBound);
-
-    const glm::vec3 delta = position - candidate.position;
+    if ((node.flags & LightTreeHasDirectional) != 0u)
+        return weight;
+    const glm::vec3 delta = position - glm::vec3(node.sphere);
     const float distance = sqrtf(fmaxf(glm::dot(delta, delta), 0.0f));
-    const float nearestDistance = fmaxf(distance - candidate.spatialRadius, 0.0f);
-    const float orientation = candidate.area > 0.0f
-        ? finiteNonNegative(candidate.orientationBound) : 1.0f;
-    return power * orientation
-        / fmaxf(nearestDistance * nearestDistance, 1.0e-6f);
+    const float nearestDistance = fmaxf(distance - node.sphere.w, 0.0f);
+    return weight / fmaxf(nearestDistance * nearestDistance, 1.0e-6f);
 }
 
 NR_GPU inline float finiteLightMixtureProbability()
@@ -47,8 +37,45 @@ NR_GPU inline float environmentLightMixtureProbability()
     return finiteNonNegative(params.scene.environmentLightProbability);
 }
 
-NR_GPU inline float candidateSelectionPdf(const uint32_t candidateIndex)
+NR_GPU inline float candidateSelectionPdf(
+    const uint32_t candidateIndex, const glm::vec3 position)
 {
+    if (params.scene.lightTreeNodes != nullptr
+        && params.scene.directLightCandidates != nullptr
+        && candidateIndex < params.scene.directLightCandidateCount)
+    {
+        const DirectLightCandidate& candidate =
+            params.scene.directLightCandidates[candidateIndex];
+        uint32_t nodeIndex = candidate.lightTreeLeaf;
+        if (nodeIndex != InvalidIndex
+            && nodeIndex < params.scene.lightTreeNodeCount)
+        {
+            float pdf = 1.0f;
+            while (params.scene.lightTreeNodes[nodeIndex].parent != InvalidIndex)
+            {
+                const LightTreeNode& node = params.scene.lightTreeNodes[nodeIndex];
+                const uint32_t parentIndex = node.parent;
+                if (parentIndex >= params.scene.lightTreeNodeCount)
+                    return 0.0f;
+                const LightTreeNode& parent = params.scene.lightTreeNodes[parentIndex];
+                const uint32_t leftIndex = parentIndex + 1u;
+                const uint32_t rightIndex = parent.childOrLightIndex;
+                if (leftIndex >= params.scene.lightTreeNodeCount
+                    || rightIndex >= params.scene.lightTreeNodeCount)
+                    return 0.0f;
+                const float left = lightTreeImportance(
+                    position, params.scene.lightTreeNodes[leftIndex]);
+                const float right = lightTreeImportance(
+                    position, params.scene.lightTreeNodes[rightIndex]);
+                const float total = left + right;
+                if (total <= 0.0f)
+                    return 0.0f;
+                pdf *= nodeIndex == leftIndex ? left / total : right / total;
+                nodeIndex = parentIndex;
+            }
+            return finiteNonNegative(pdf);
+        }
+    }
     if (params.scene.lightAliases != nullptr
         && candidateIndex < params.scene.lightAliasCount)
         return finiteNonNegative(
@@ -65,12 +92,13 @@ NR_GPU inline float candidateSelectionPdf(const uint32_t candidateIndex)
 // The one canonical finite-light PDF used by direct-light samples and paths
 // that hit an analytic or emissive light through BSDF sampling.
 NR_GPU inline float lightPdf(
-    const uint32_t candidateIndex, const float conditionalPdf)
+    const uint32_t candidateIndex, const glm::vec3 position,
+    const float conditionalPdf)
 {
     if (conditionalPdf <= 0.0f)
         return 0.0f;
     return finiteLightMixtureProbability()
-        * candidateSelectionPdf(candidateIndex) * conditionalPdf;
+        * candidateSelectionPdf(candidateIndex, position) * conditionalPdf;
 }
 
 // The one canonical environment PDF used by direct samples and path misses.
@@ -189,7 +217,7 @@ NR_GPU inline float meshLightHitPdf(
         return 0.0f;
     const DirectLightCandidate candidate =
         params.scene.directLightCandidates[candidateIndex];
-    return lightPdf(candidateIndex, meshLightConditionalPdf(
+    return lightPdf(candidateIndex, origin, meshLightConditionalPdf(
         candidate, origin, hitPosition, normal));
 }
 
@@ -579,6 +607,56 @@ NR_GPU inline bool sampleCandidate(
 }
 
 template <typename Rng>
+NR_GPU inline bool sampleLightTree(
+    const glm::vec3 position, Rng& rng,
+    uint32_t& candidateIndex, float& selectionPdf)
+{
+    if (params.scene.lightTreeNodes == nullptr
+        || params.scene.lightTreeNodeCount == 0u)
+        return false;
+
+    const uint32_t count = params.scene.lightTreeNodeCount;
+    uint32_t nodeIndex = 0u;
+    selectionPdf = 1.0f;
+    for (uint32_t depth = 0u; depth < 64u; ++depth)
+    {
+        if (nodeIndex >= count)
+            return false;
+        const LightTreeNode& node = params.scene.lightTreeNodes[nodeIndex];
+        if ((node.flags & LightTreeLeaf) != 0u)
+        {
+            candidateIndex = node.childOrLightIndex;
+            return candidateIndex < params.scene.directLightCandidateCount
+                && selectionPdf > 0.0f;
+        }
+
+        const uint32_t leftIndex = nodeIndex + 1u;
+        const uint32_t rightIndex = node.childOrLightIndex;
+        if (leftIndex >= count || rightIndex >= count)
+            return false;
+        const float left = lightTreeImportance(
+            position, params.scene.lightTreeNodes[leftIndex]);
+        const float right = lightTreeImportance(
+            position, params.scene.lightTreeNodes[rightIndex]);
+        const float total = left + right;
+        if (total <= 0.0f)
+            return false;
+        const float leftPdf = left / total;
+        if (randomFloat(rng) < leftPdf)
+        {
+            selectionPdf *= leftPdf;
+            nodeIndex = leftIndex;
+        }
+        else
+        {
+            selectionPdf *= right / total;
+            nodeIndex = rightIndex;
+        }
+    }
+    return false;
+}
+
+template <typename Rng>
 NR_GPU inline bool sampleLight(
     const glm::vec3 position,
     const SampledWavelengths& wavelengths,
@@ -600,7 +678,10 @@ NR_GPU inline bool sampleLight(
         && randomFloat(rng) < finiteProbability)
     {
         uint32_t candidateIndex = InvalidIndex;
-        if (params.scene.lightAliases != nullptr
+        float treeSelectionPdf = 0.0f;
+        const bool sampledTree = sampleLightTree(
+            position, rng, candidateIndex, treeSelectionPdf);
+        if (!sampledTree && params.scene.lightAliases != nullptr
             && params.scene.lightAliasCount > 0)
         {
             const uint32_t count = params.scene.lightAliasCount;
@@ -610,11 +691,11 @@ NR_GPU inline bool sampleLight(
             const LightAliasEntry entry = params.scene.lightAliases[slot];
             candidateIndex = fraction < entry.threshold ? slot : entry.alias;
         }
-        else if (params.scene.directLightCandidates != nullptr)
+        else if (!sampledTree && params.scene.directLightCandidates != nullptr)
         {
-            // Defensive fallback for a transient scene-upload failure. The
-            // normal path is O(1) alias sampling; this preserves the exact
-            // proposal distribution if only the alias buffer is unavailable.
+            // Defensive fallback for a transient scene-upload failure. This
+            // preserves the exact flat proposal if neither tree nor alias
+            // data is available.
             const float target = randomFloat(rng)
                 * finiteNonNegative(params.scene.lightSelectionWeight);
             float cumulative = 0.0f;
@@ -624,7 +705,7 @@ NR_GPU inline bool sampleLight(
                     params.scene.directLightCandidates[i].selectionWeight);
                 if (target <= cumulative)
                 {
-            candidateIndex = i;
+                    candidateIndex = i;
                     break;
                 }
             }
@@ -633,7 +714,9 @@ NR_GPU inline bool sampleLight(
             || !sampleCandidate(candidateIndex, position, wavelengths, rng, light))
             return false;
 
-        const float selectionPdf = lightPdf(candidateIndex, 1.0f);
+        const float selectionPdf = sampledTree
+            ? finiteProbability * treeSelectionPdf
+            : lightPdf(candidateIndex, position, 1.0f);
         if (selectionPdf <= 0.0f)
             return false;
         if (light.pdf > 0.0f)

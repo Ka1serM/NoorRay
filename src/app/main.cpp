@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <filesystem>
+#include <iomanip>
 #include <thread>
 #include "Materials/MaterialX/MaterialXSceneRuntime.h"
 #include "NoorRaySession.h"
@@ -147,8 +148,14 @@ CliOptions parseOptions(const int argc, char* argv[])
 
 void runCli(const CliOptions& options)
 {
+    const auto sceneLoadStarted = std::chrono::steady_clock::now();
+    std::cerr << "Loading scene: " << options.scenePath << '\n';
     noorray::NoorRaySession session;
     session.scene.load(options.scenePath);
+    const double sceneLoadSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - sceneLoadStarted).count();
+    std::cerr << "Scene loaded in " << std::fixed << std::setprecision(1)
+              << sceneLoadSeconds << "s\n";
     if (!session.scene.getActiveCamera())
     {
         auto camera = std::make_unique<PerspectiveCamera>();

@@ -134,6 +134,7 @@ private:
     nr::cuda::UniqueDeviceBuffer cieYDevice;
     nr::cuda::UniqueDeviceBuffer cieZDevice;
     nr::cuda::UniqueDeviceBuffer lightAliasDevice;
+    nr::cuda::UniqueDeviceBuffer lightTreeDevice;
     nr::cuda::UniqueDeviceBuffer directLightCandidateDevice;
     nr::cuda::UniqueDeviceBuffer meshLightCandidateOffsetsDevice;
     nr::cuda::UniqueDeviceBuffer meshLightCandidateIndicesDevice;

@@ -63,5 +63,4 @@ void bindHandles(nb::module_& module)
     bindRef<MeshAssetRegistry>(module, "MeshAssetRef");
     bindRef<GaussianAssetRegistry>(module, "GaussianAssetRef");
     bindRef<MaterialRegistry>(module, "MaterialRef");
-    bindRef<TextureRegistry>(module, "TextureRef");
 }

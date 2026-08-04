@@ -192,6 +192,8 @@ HybridPsfCamera::HybridPsfCamera(const HybridPsfCamera& other)
     apertureDiameterMm = other.apertureDiameterMm;
     rayLutStepSize = other.rayLutStepSize;
     samplesPerDimension = other.samplesPerDimension;
+    rayLutRasterWidth = other.rayLutRasterWidth;
+    rayLutRasterHeight = other.rayLutRasterHeight;
 
     if (other.rossLens) {
         rossLens = nr::rstd::make_unique<ross::CameraLens>(*other.rossLens);
@@ -240,7 +242,7 @@ void HybridPsfCamera::loadLensSensorAndPsf(
 
         ross::CameraLens loadedLens =
             ross::CameraLensSystemReader::readCameraLens(
-                lensPath, catalogs, ross::ReadOptions{1.0f, false});
+                lensPath, catalogs, ross::ReadOptions{1.0f, true});
         sourceRossLens = nr::rstd::make_unique<ross::CameraLens>(loadedLens);
         if (resetLensSettings)
             focusDistanceCm = 500.0f;
@@ -261,6 +263,8 @@ void HybridPsfCamera::loadLensSensorAndPsf(
             loadedSensor.dimensions.width.millimeter(),
             loadedSensor.dimensions.height.millimeter());
         sensor.setResolution(loadedSensor.resolution.width, loadedSensor.resolution.height);
+        rayLutRasterWidth = loadedSensor.resolution.width;
+        rayLutRasterHeight = loadedSensor.resolution.height;
         sensor.loadImageSensorDimensions();
         const uint32_t psfBinCount = sensor.reloadPsfGrid();
 

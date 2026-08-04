@@ -236,7 +236,8 @@ NR_GPU inline void handleClosestHit(PathTracePayload& payload)
     float misWeight = 1.0f;
     if (state.lastBsdfPdf > 0.0f && conditionalPdf > 0.0f)
         misWeight = powerHeuristic(state.lastBsdfPdf,
-            nr::direct_light::lightPdf(candidateIndex, conditionalPdf));
+            nr::direct_light::lightPdf(
+                candidateIndex, ray.origin(), conditionalPdf));
     state.radiance += state.throughput * contribution * misWeight;
     payload.status = PathTraceStatus::Terminate;
 }

@@ -39,10 +39,9 @@ void Scene::synchronizeBeforeMutation()
 void Scene::reclaimUnusedResources()
 {
     // A mesh asset releasing its material references reclaims those materials
-    // inside the registry, without the Scene being told. Dropping the matching
-    // texture references here is what lets the texture memory go too. Consume
-    // only release events instead of walking the complete material high-water
-    // mark before every Scene mutation.
+    // inside the registry, without the Scene being told. Consume only release
+    // events instead of walking the complete material high-water mark before
+    // every Scene mutation.
     materials.consumeReleasedSlots([this](const uint32_t slot) {
         if (slot < materialxSourcePaths.size())
             materialxSourcePaths[slot].clear();
@@ -183,13 +182,15 @@ void Scene::clear() {
     }
     gaussianInstances.clear();
     gaussianCount = 0;
-    environmentTexture.reset();
-    standaloneTextureOwners.clear();
     materialOwners.clear();
     meshAssets.clear();
     materials.clear();
     gaussianAssets.clear();
     textures.clear();
+    meshAssetsByPath_.clear();
+    texturesByKey_.clear();
+    ++textureGeneration_;
+    ++textureRevision_;
     pointLights.clear();
     spotLights.clear();
     rectLights.clear();
@@ -224,12 +225,23 @@ SceneObjectHandle Scene::add(std::unique_ptr<SceneObject> sceneObject) {
     return sceneObjects[index]->getHandle();
 }
 
-MeshAssetRef Scene::add(MeshAsset meshAsset) {
+MeshAssetRef Scene::add(MeshAsset meshAsset, const bool reuseExisting) {
+    const std::string key = meshAsset.getPath();
+    if (reuseExisting && !key.empty()) {
+        if (const auto found = meshAssetsByPath_.find(key);
+            found != meshAssetsByPath_.end()) {
+            if (meshAssets.isValid(found->second))
+                return {meshAssets, found->second};
+            meshAssetsByPath_.erase(found);
+        }
+    }
     synchronizeBeforeMutation();
     const MeshAssetHandle handle = meshAssets.emplace(std::move(meshAsset));
     // The asset caches its own slot index; the shading kernels read it back
     // out of the mesh when they resolve a hit.
     meshAssets[handle].setMeshIndex(handle.index());
+    if (!key.empty())
+        meshAssetsByPath_.insert_or_assign(key, handle);
     setDirtyFlag(Meshes);
     return {meshAssets, handle};
 }
@@ -303,19 +315,27 @@ GaussianAssetRef Scene::add(GaussianAsset gaussianAsset) {
     return {gaussianAssets, handle};
 }
 
-TextureRef Scene::add(Texture texture) {
+TextureHandle Scene::addTexture(Texture texture) {
+    const std::string key = texture.getPath().empty()
+        ? texture.getName() : texture.getPath();
+    if (!key.empty()) {
+        if (const auto found = texturesByKey_.find(key);
+            found != texturesByKey_.end()) {
+            if (getTexture(found->second))
+                return found->second;
+            texturesByKey_.erase(found);
+        }
+    }
     synchronizeBeforeMutation();
-    const TextureHandle handle = textures.emplace(std::move(texture));
-    textures[handle].sceneIndex = static_cast<int>(handle.index());
+    textures.push_back(std::move(texture));
+    const TextureHandle handle(
+        static_cast<uint32_t>(textures.size() - 1), textureGeneration_);
+    textures.back().sceneIndex = static_cast<int>(handle.index());
+    if (!key.empty())
+        texturesByKey_.insert_or_assign(key, handle);
     setDirtyFlag(Textures);
-    return {textures, handle};
-}
-
-TextureRef Scene::addStandaloneTexture(Texture texture)
-{
-    TextureRef reference = add(std::move(texture));
-    standaloneTextureOwners.push_back(reference);
-    return reference;
+    ++textureRevision_;
+    return handle;
 }
 
 void Scene::reserveForImport(
@@ -332,26 +352,24 @@ void Scene::reserveForImport(
 
 std::vector<std::string> Scene::getTextureNames() const {
     std::vector<std::string> names;
-    names.reserve(textures.storage().size());
-    for (const Texture& texture : textures.storage())
+    names.reserve(textures.size());
+    for (const Texture& texture : textures)
         names.push_back(texture.getName());
     return names;
 }
 
-void Scene::setEnvironmentTexture(const TextureRef& texture) {
-    const Texture* resolved = texture.get();
+void Scene::setEnvironmentTexture(const TextureHandle texture) {
+    const Texture* resolved = getTexture(texture);
     if (resolved == nullptr) {
         clearEnvironmentTexture();
         return;
     }
-    environmentTexture = texture;
     environment->setHdriTexture(*resolved);
     setDirtyFlag(EnvironmentCdf);
     setDirtyFlag(Accumulation);
 }
 
 void Scene::clearEnvironmentTexture() {
-    environmentTexture.reset();
     environment->clearHdriTexture();
     setDirtyFlag(EnvironmentCdf);
     setDirtyFlag(Accumulation);
@@ -819,11 +837,16 @@ uint32_t Scene::getActiveCryptomatteId(const uint32_t selectedGaussianIndex) con
     return ~0u;
 }
 
+TextureHandle Scene::findTexture(const std::string& key) const {
+    const auto found = texturesByKey_.find(key);
+    return found != texturesByKey_.end() && getTexture(found->second)
+        ? found->second : TextureHandle{};
+}
+
 MeshAssetHandle Scene::findMeshAsset(const std::string& path) const {
-    for (uint32_t slot = 0; slot < meshAssets.slotCount(); ++slot)
-        if (meshAssets.isLiveSlot(slot) && meshAssets.storage()[slot].getPath() == path)
-            return meshAssets.handleAt(slot);
-    return {};
+    const auto found = meshAssetsByPath_.find(path);
+    return found != meshAssetsByPath_.end() && meshAssets.isValid(found->second)
+        ? found->second : MeshAssetHandle{};
 }
 
 SceneObjectHandle Scene::findImportedFileRoot(const std::string& resolvedPath) const {

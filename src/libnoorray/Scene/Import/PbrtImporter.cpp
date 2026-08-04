@@ -2,8 +2,11 @@
 #include "Scene/Import/SceneImporter.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iomanip>
+#include <iostream>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
@@ -14,6 +17,7 @@
 #include <glm/gtx/quaternion.hpp>
 
 #include "Rendering/Camera/CameraInstance.h"
+#include "Rendering/Camera/RectangularSensor.h"
 #include "Rendering/Camera/RealisticCamera.h"
 #include "Rendering/Camera/HybridPsfCamera.h"
 #include "Rendering/Camera/ThinLensCamera.h"
@@ -36,6 +40,58 @@
 namespace {
 using nr::pbrt::Command;
 using nr::pbrt::Parameter;
+
+class PbrtLoadProgress {
+public:
+    explicit PbrtLoadProgress(const size_t total)
+        : total(total), nextUpdate(total > 0 ? std::max<size_t>(1, total / 100) : 1),
+          started(std::chrono::steady_clock::now())
+    {
+        if (this->total > 0) render(0);
+    }
+
+    ~PbrtLoadProgress()
+    {
+        if (total > 0 && !finished) std::cerr << '\n';
+    }
+
+    void update(const size_t completed)
+    {
+        if (total == 0 || (completed < total && completed < nextUpdate)) return;
+        render(completed);
+        while (nextUpdate <= completed) nextUpdate += std::max<size_t>(1, total / 100);
+    }
+
+    void finish()
+    {
+        if (total == 0 || finished) return;
+        render(total);
+        std::cerr << '\n';
+        finished = true;
+    }
+
+private:
+    void render(const size_t completed) const
+    {
+        constexpr size_t barWidth = 30;
+        const double fraction = total == 0
+            ? 1.0 : static_cast<double>(std::min(completed, total)) / static_cast<double>(total);
+        const size_t filled = static_cast<size_t>(fraction * barWidth);
+        const auto elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        std::cerr << '\r' << "Loading PBRT assets [";
+        for (size_t i = 0; i < barWidth; ++i)
+            std::cerr << (i < filled ? '=' : (i == filled && filled < barWidth ? '>' : ' '));
+        std::cerr << "] " << std::setw(3) << static_cast<int>(fraction * 100.0)
+                  << "% (" << std::min(completed, total) << '/' << total << ", "
+                  << std::fixed << std::setprecision(1) << elapsed << "s)" << std::flush;
+    }
+
+    size_t total{};
+    size_t nextUpdate{};
+    bool finished{};
+    std::chrono::steady_clock::time_point started;
+};
 
 std::filesystem::path resolvePbrtPath(const std::string& filepath)
 {
@@ -129,7 +185,7 @@ OpticalSettings opticalSettings(const Command& command, const std::string& lensP
     std::ranges::replace(catalogList, ';', ',');
     if (!catalogList.empty()) catalogs.loadCatalogsFromCommaSeperatedString(catalogList);
     ross::CameraLens lens = ross::CameraLensSystemReader::readCameraLens(
-        lensPath, catalogs, ross::ReadOptions{1.0f, false});
+        lensPath, catalogs, ross::ReadOptions{1.0f, true});
     if (result.apertureDiameterMm > 0.f)
         lens.changeAperture_mm(result.apertureDiameterMm);
     else
@@ -271,8 +327,14 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
     const std::string& type = shape.command.arguments.front();
     const std::string name = type + "_" + std::to_string(index);
     MaterialAuthoring material = shape.material;
+    const auto texturePathResolver = [&scene](const int textureIndex) {
+        const auto& textures = scene.getTextures();
+        if (textureIndex < 0 || static_cast<size_t>(textureIndex) >= textures.size())
+            return std::string{};
+        return textures[static_cast<size_t>(textureIndex)].getName();
+    };
     const MaterialX::DocumentPtr materialDocument =
-        nr::materialx::documentFromAuthoring(material);
+        nr::materialx::documentFromAuthoring(material, texturePathResolver);
     glm::mat4 transform = shape.transform;
     MeshAssetRef meshAsset;
 
@@ -391,9 +453,6 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
     std::unordered_map<std::string, glm::mat4> coordinateSystems;
     std::unordered_map<std::string, MaterialAuthoring> namedMaterials;
     std::unordered_map<std::string, int> textures;
-    // Materials carry bare texture slot indices, so the importer holds a
-    // reference per texture until the materials using them reach the scene.
-    std::vector<TextureRef> importedTextures;
     std::unordered_map<std::string, std::vector<ShapeRecord>> objectDefinitions;
     std::vector<ShapeRecord> shapes;
     std::vector<ShapeRecord>* shapeTarget = &shapes;
@@ -403,6 +462,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
     float cameraFov = 90.f;
     float lensRadius = 0.f;
     float focalDistance = 5.f;
+    std::string filmPsfGridPath;
     uint32_t resolutionX = 1280, resolutionY = 720;
     bool hasCamera = false;
     std::optional<Command> cameraCommand;
@@ -434,6 +494,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
         } else if (name == "Film") {
             resolutionX = static_cast<uint32_t>(std::max(1.f, scalar(command, "xresolution", 1280.f)));
             resolutionY = static_cast<uint32_t>(std::max(1.f, scalar(command, "yresolution", 720.f)));
+            filmPsfGridPath = relativeAssetPath(command, "psfgrid");
         } else if (name == "Camera") {
             hasCamera = true;
             cameraFromWorld = state.transform;
@@ -452,10 +513,10 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                         LOG_WARN("PBRT texture not found; skipping: " << texturePath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
-                        importedTextures.push_back(scene.add(Texture(
-                            texturePath.string(), TextureEncoding::Srgb8)));
+                        const TextureHandle texture = scene.addTexture(Texture(
+                            texturePath.string(), TextureEncoding::Srgb8));
                         textures[command.arguments[0]] =
-                            static_cast<int>(importedTextures.back().index());
+                            static_cast<int>(texture.index());
                     }
                 }
             }
@@ -527,7 +588,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
                         scene.setEnvironmentTexture(
-                            scene.add(Texture(hdriPath.string())));
+                            scene.addTexture(Texture(hdriPath.string())));
                         environment.setEqualAreaMapping(glm::mat3(glm::inverse(state.transform)));
                     }
                 }
@@ -560,7 +621,12 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
         }
     }
 
-    for (size_t i = 0; i < shapes.size(); ++i) addShape(scene, shapes[i], i);
+    PbrtLoadProgress progress(shapes.size());
+    for (size_t i = 0; i < shapes.size(); ++i) {
+        addShape(scene, shapes[i], i);
+        progress.update(i + 1);
+    }
+    progress.finish();
 
     if (hasCamera) {
         std::unique_ptr<Camera> camera;
@@ -573,7 +639,9 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
         else if (cameraType == "rossrealistic")
             camera = std::make_unique<RealisticCamera>();
         else if (cameraType == "rosspsf" || cameraType == "rosspsfcamera")
-            camera = std::make_unique<HybridPsfCamera>();
+            camera = filmPsfGridPath.empty()
+                ? std::make_unique<HybridPsfCamera>(std::make_unique<RectangularSensor>())
+                : std::make_unique<HybridPsfCamera>();
         else
             throw std::runtime_error("PBRT camera '" + cameraType + "' is not supported by NoorRay");
         camera->setFocalLengthMm(camera->focalLengthMmForFovDegrees(cameraFov));
@@ -597,6 +665,9 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                 camera->getSensor().setDimensionsMm(
                     std::max(0.001f, scalar(source, "sensorwidthmm", camera->getSensor().width())),
                     std::max(0.001f, scalar(source, "sensorheightmm", camera->getSensor().height())));
+            if (auto* hybridPsf = dynamic_cast<HybridPsfCamera*>(camera.get());
+                hybridPsf && !filmPsfGridPath.empty())
+                hybridPsf->getSensor().setPsfGridPath(filmPsfGridPath);
             const OpticalSettings settings = opticalSettings(source, lens, sensor, catalogs);
             if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get())) {
                 realistic->setOpticsPaths(lens, catalogs);

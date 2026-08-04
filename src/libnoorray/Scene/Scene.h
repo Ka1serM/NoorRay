@@ -83,20 +83,16 @@ class Scene {
     // memory and its slot is recycled. Slot indices stay stable while a
     // resource lives, which is what lets GPU-side data address them by index.
     //
-    // Declaration order is destruction order reversed, and references must not
-    // outlive the registry they point into: textures are referenced by
-    // materials, materials by mesh assets, and all of them by scene objects
-    // (declared further down), so each holder is declared after its target.
-    TextureRegistry textures;
-    // Images imported as standalone assets have no material owner. Keep them
-    // alive so the environment picker can use them later rather than exposing
-    // a released, empty registry slot.
-    std::vector<TextureRef> standaloneTextureOwners;
+    // Textures are scene-owned assets rather than reference-counted resources.
+    // Handles carry the scene generation so references from an old file can
+    // never alias a texture in the next file.
+    std::vector<Texture> textures;
+    uint32_t textureGeneration_{1};
+    uint64_t textureRevision_{1};
     MaterialRegistry materials;
     // Scene ownership keeps materials available in the global material list
     // even when no mesh slot currently references them.
     std::vector<MaterialRef> materialOwners;
-    TextureRef environmentTexture;
     MeshAssetRegistry meshAssets;
     GaussianAssetRegistry gaussianAssets;
 
@@ -144,6 +140,12 @@ class Scene {
     std::vector<uint32_t> freeObjectSlots;
     std::vector<std::shared_ptr<GaussianInstance>> gaussianInstances;
     uint32_t gaussianCount{};
+
+    // Scene-wide identity indexes. Meshes use their asset path/name and
+    // textures use their source path/name. The values are handles only; the
+    // actual resources remain owned by the scene containers above.
+    std::unordered_map<std::string, MeshAssetHandle> meshAssetsByPath_;
+    std::unordered_map<std::string, TextureHandle> texturesByKey_;
 
     std::shared_ptr<CameraInstance> viewportCamera;
     std::weak_ptr<CameraInstance> activeCamera;
@@ -203,10 +205,14 @@ public:
     bool removeObject(SceneObjectHandle handle);
     bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
 
-    // Resource lifetime. The returned reference owns the resource: it stays
-    // alive for as long as any reference to it does, and releases its GPU
-    // memory as soon as the last one is dropped.
-    MeshAssetRef add(MeshAsset meshAsset);
+    // Resource lifetime. Meshes/materials use reference-counted lifetime, but
+    // textures are part of the scene-wide image library: Scene owns every
+    // texture added here until clear() opens a new file. Returned handles can
+    // therefore be used freely by materials, MaterialX nodes, and the
+    // environment without an importer-local owner.
+    // Reuses an existing asset with the same path/name by default. Import
+    // paths that intentionally alter the material can opt out.
+    MeshAssetRef add(MeshAsset meshAsset, bool reuseExisting = true);
     MaterialRef add(Material material);
     // Adds a native material. Importers that only carry the simple authoring
     // record lower it to a canonical MaterialX document first
@@ -223,10 +229,9 @@ public:
     // material is lowered on demand).
     void updateMaterialDocument(MaterialHandle handle, MaterialX::DocumentPtr document);
     GaussianAssetRef add(GaussianAsset gaussianAsset);
-    TextureRef add(Texture texture);
-    // Adds a user-imported image to the scene texture library. Unlike a
-    // material texture, it has no other resource that owns its lifetime.
-    TextureRef addStandaloneTexture(Texture texture);
+    // Adds an image to the scene-wide texture library. Scene owns it until
+    // clear(); callers retain only this stable, non-owning registry handle.
+    TextureHandle addTexture(Texture texture);
     void updateMaterial(MaterialHandle handle, const Material& material);
     void invalidateMaterial(MaterialHandle handle);
     // Pre-allocates the registries and dense object arrays used by an import
@@ -256,6 +261,7 @@ public:
     std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
     std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
     uint32_t getActiveCryptomatteId(uint32_t selectedGaussianIndex) const;
+    TextureHandle findTexture(const std::string& key) const;
     MeshAssetHandle findMeshAsset(const std::string& path) const;
     // Returns the root of a previously imported file's hierarchy (see
     // importedFileRoots_), or an invalid handle if this path has never been
@@ -290,15 +296,19 @@ public:
     const __half* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
     const uint32_t* getGaussianInstanceOffsets() const { return gaussianInstanceOffsets.data(); }
     uint32_t getGaussianShCoefficientCount() const { return gaussianShCoefficientCount; }
-    const std::vector<Texture>& getTextures() const { return textures.storage(); }
-    const TextureRegistry& getTextureRegistry() const { return textures; }
-    const Texture* getTexture(TextureHandle handle) const { return textures.find(handle); }
-    TextureRef getTextureRef(TextureHandle handle) {
-        return textures.isValid(handle) ? TextureRef(textures, handle) : TextureRef{};
+    const std::vector<Texture>& getTextures() const { return textures; }
+    TextureHandle getTextureHandle(uint32_t index) const {
+        return index < textures.size()
+            ? TextureHandle(index, textureGeneration_) : TextureHandle{};
     }
-    // One entry per texture slot; released slots read as empty names.
+    uint64_t getTextureRevision() const { return textureRevision_; }
+    const Texture* getTexture(TextureHandle handle) const {
+        return handle.isValid() && handle.generation() == textureGeneration_
+            && handle.index() < textures.size() ? &textures[handle.index()] : nullptr;
+    }
+    // One entry per scene-owned texture.
     std::vector<std::string> getTextureNames() const;
-    void setEnvironmentTexture(const TextureRef& texture);
+    void setEnvironmentTexture(TextureHandle texture);
     void clearEnvironmentTexture();
 
     // Active object

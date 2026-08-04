@@ -264,6 +264,32 @@ TEST_CASE("MaterialX image color4 keeps alpha contiguous in the SVM stack",
     REQUIRE(instruction.resultAlphaOffset == instruction.resultColorOffset + 3);
 }
 
+TEST_CASE("Authoring albedo textures stay connected through SVM compilation",
+    "[svm][materialx][image][authoring]")
+{
+    MaterialAuthoring material;
+    material.albedo = {0.1f, 0.2f, 0.3f};
+    material.albedoIndex = 7;
+    const MaterialX::DocumentPtr document = nr::materialx::documentFromAuthoring(
+        material, [](const int index) {
+            return index == 7 ? std::string("grass004_diff") : std::string{};
+        });
+
+    const MaterialX::NodePtr principled = document->getNode("nr_synthetic_disney");
+    REQUIRE(principled);
+    const MaterialX::NodePtr image =
+        principled->getInput("baseColor")->getConnectedNode();
+    REQUIRE(image);
+    REQUIRE(image->getCategory() == "image");
+    REQUIRE(image->getInput("file")->getValueString() == "grass004_diff");
+    REQUIRE(image->getInput("file")->getAttribute("colorspace") == "srgb_texture");
+
+    nr::svm::SvmCompiler compiler;
+    const nr::svm::CompiledSvmProgram program = compiler.compile(
+        document, {}, {{"grass004_diff", 42}});
+    REQUIRE(program.textureIndices == std::vector<std::uint32_t>{42});
+}
+
 TEST_CASE("MaterialX matrix and space transforms lower to typed SVM instructions",
     "[svm][materialx][transform]")
 {

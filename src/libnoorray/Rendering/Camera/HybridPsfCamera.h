@@ -24,6 +24,8 @@ public:
     float apertureDiameterMm{};
     int rayLutStepSize{32};
     int samplesPerDimension{8};
+    uint32_t rayLutRasterWidth{};
+    uint32_t rayLutRasterHeight{};
 
     NR_CPU_GPU bool invalidRayIsOpaque() const { return true; }
 
@@ -36,8 +38,10 @@ public:
 
         wavelengths.terminateSecondary();
         const Sensor& sensor = getSensor();
-        const float width = static_cast<float>(sensor.resolutionX());
-        const float height = static_cast<float>(sensor.resolutionY());
+        const float width = static_cast<float>(rayLutRasterWidth);
+        const float height = static_cast<float>(rayLutRasterHeight);
+        if (width <= 0.0f || height <= 0.0f)
+            return nr::rstd::nullopt;
         // The LUT is built in physical sensor coordinates. Sensor-fit may
         // crop that film for the current render target, so map the fitted
         // film coordinates back into the native LUT extent before lookup.

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <future>
+#include <unordered_map>
 #include <vector>
 
 #include <MaterialXCore/Document.h>
@@ -30,6 +31,46 @@ struct MaterialXSceneRuntime::Impl
     std::vector<PendingCompile> pending;
     std::vector<std::pair<std::size_t, nr::svm::CompiledSvmProgram>> ready;
 };
+
+namespace {
+std::string normalizedPath(const std::string& value)
+{
+    const std::filesystem::path path(value);
+    std::error_code error;
+    if (std::filesystem::exists(path))
+        return std::filesystem::weakly_canonical(path, error).string();
+    return path.lexically_normal().string();
+}
+
+std::unordered_map<std::string, std::uint32_t> resolveSceneTextures(
+    const mx::DocumentPtr& document, const Scene& scene,
+    const std::string& sceneDirectory)
+{
+    std::unordered_map<std::string, std::uint32_t> resolved;
+    for (const nr::materialx::MaterialXImageNode& image :
+        nr::materialx::collectImageNodes(document)) {
+        std::vector<std::string> candidates{image.rawFilePath};
+        const std::filesystem::path rawPath(image.rawFilePath);
+        if (!rawPath.is_absolute() && !sceneDirectory.empty())
+            candidates.push_back((std::filesystem::path(sceneDirectory) / rawPath).string());
+
+        for (std::size_t textureIndex = 0; textureIndex < scene.getTextures().size(); ++textureIndex) {
+            const std::string texturePath = scene.getTextures()[textureIndex].getName();
+            const std::string normalizedTexturePath = normalizedPath(texturePath);
+            const bool matches = std::ranges::any_of(candidates,
+                [&](const std::string& candidate) {
+                    return candidate == texturePath
+                        || normalizedPath(candidate) == normalizedTexturePath;
+                });
+            if (matches) {
+                resolved[image.rawFilePath] = static_cast<std::uint32_t>(textureIndex);
+                break;
+            }
+        }
+    }
+    return resolved;
+}
+} // namespace
 
 MaterialXSceneRuntime::MaterialXSceneRuntime()
     : impl_(std::make_unique<Impl>())
@@ -62,13 +103,15 @@ void MaterialXSceneRuntime::compilePending(Scene& scene, Raytracer& raytracer,
     bool changed = false;
 
     const auto schedule = [this](const std::size_t materialIndex,
-                              mx::DocumentPtr document) {
+                              mx::DocumentPtr document,
+                              std::unordered_map<std::string, std::uint32_t> resolvedTextures) {
         impl_->pending.push_back(Impl::PendingCompile{
             materialIndex,
             std::async(std::launch::async,
-                [document = std::move(document)]() {
+                [document = std::move(document),
+                    resolvedTextures = std::move(resolvedTextures)]() {
                     nr::svm::SvmCompiler compiler;
-                    return compiler.compile(document);
+                    return compiler.compile(document, {}, resolvedTextures);
                 })});
     };
 
@@ -104,7 +147,7 @@ void MaterialXSceneRuntime::compilePending(Scene& scene, Raytracer& raytracer,
     {
         LOG_WARN("Falling back to the default MaterialX material for material "
             << materialIndex);
-        schedule(materialIndex, nr::materialx::defaultMaterial());
+        schedule(materialIndex, nr::materialx::defaultMaterial(), {});
     }
     if (impl_->pending.empty() && !impl_->ready.empty())
     {
@@ -158,7 +201,10 @@ void MaterialXSceneRuntime::compilePending(Scene& scene, Raytracer& raytracer,
             LOG_INFO("Compiling synthetic MaterialX program for native material " << i);
             document = nr::materialx::defaultMaterial();
         }
-        schedule(i, std::move(document));
+        auto resolvedTextures = document
+            ? resolveSceneTextures(document, scene, sceneDirectory)
+            : std::unordered_map<std::string, std::uint32_t>{};
+        schedule(i, std::move(document), std::move(resolvedTextures));
     }
     if (changed)
     {

@@ -36,6 +36,23 @@ struct LightAliasEntry
     float selectionPdf{};
 };
 
+// Flat, GPU-resident light-tree node. Interior nodes use the implicit left
+// child (nodeIndex + 1) and store the right child explicitly. Keeping the
+// layout pointer-free makes stochastic descent cheap in CUDA and lets the
+// host build a balanced tree without mirroring any device-side objects.
+struct LightTreeNode
+{
+    glm::vec4 sphere{}; // xyz = center, w = conservative radius
+    float selectionWeight{};
+    uint32_t childOrLightIndex{InvalidIndex};
+    uint32_t parent{InvalidIndex};
+    uint32_t flags{};
+};
+static_assert(sizeof(LightTreeNode) == 32);
+
+inline constexpr uint32_t LightTreeLeaf = 1u << 0u;
+inline constexpr uint32_t LightTreeHasDirectional = 1u << 1u;
+
 enum class DirectLightType : uint32_t
 {
     Point,
@@ -47,10 +64,9 @@ enum class DirectLightType : uint32_t
 
 // Host-built light candidates. Analytic entries use `index` in their family
 // array; mesh entries use instance/primitive to address the scene geometry.
-// `selectionWeight` is the flat, Cycles-compatible proposal weight: mesh
-// emitters are weighted by area and analytic lights are uniform. The remaining
-// bounds are retained for a future hierarchical sampler without changing the
-// exact per-sample solid-angle PDFs.
+// `selectionWeight` is the base proposal weight: mesh emitters are weighted by
+// area and analytic lights are uniform when both classes are present. The
+// light tree applies a conservative spatial bound to this weight at runtime.
 struct DirectLightCandidate
 {
     DirectLightType type{};
@@ -79,6 +95,7 @@ struct DirectLightCandidate
     float barnDoorExpansion{};
     uint32_t twoSided{};
     uint32_t barnDoorEnabled{};
+    uint32_t lightTreeLeaf{InvalidIndex};
 };
 
 struct GpuSceneData
@@ -88,6 +105,7 @@ struct GpuSceneData
     const GpuInstance* instances{};
     const LightAliasEntry* lightAliases{};
     const DirectLightCandidate* directLightCandidates{};
+    const LightTreeNode* lightTreeNodes{};
     // Primitive-to-candidate mappings for the separate analytic and mesh-light
     // GAS instances. Mesh-light visibility is opt-in for path rays because
     // emissive triangles are already present in the regular mesh TLAS.
@@ -123,6 +141,7 @@ struct GpuSceneData
     // bytecode contains no opacity-producing surface nodes.
     uint32_t allMaterialsOpaque{1};
     uint32_t lightAliasCount{};
+    uint32_t lightTreeNodeCount{};
     uint32_t directLightCandidateCount{};
     uint32_t meshLightCandidateIndexCount{};
     uint32_t meshLightInstanceCount{};

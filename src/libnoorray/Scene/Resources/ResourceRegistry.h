@@ -21,7 +21,7 @@ void releaseResource(T& value)
 // A reference-counted slot map for scene resources.
 //
 // Storage stays dense and slot indices stay stable, because GPU-side data
-// (GpuInstance::meshIndex, Material texture indices, ...) addresses resources
+// (GpuInstance::meshIndex, material indices, ...) addresses resources
 // by raw index and must keep working across unrelated add/remove traffic.
 // Dropping the last reference does not erase the element -- that would shift
 // every later index -- it calls releaseResources() on it, which frees the
@@ -144,7 +144,7 @@ public:
     }
 
     // Visits only slots reclaimed since the previous call. Consumers that
-    // own sidecar state (for example Scene's per-material TextureRefs) can
+    // own sidecar state (for example Scene's material metadata) can
     // clean that state without scanning the registry's full high-water mark
     // on every mutation. Events for slots reused in the meantime are filtered
     // here, so a delayed consumer cannot discard a new resource's sidecar.

@@ -10,14 +10,12 @@
 #include "Scene/Resources/Texture.h"
 
 // Mesh, material and Gaussian storage is shared with the CUDA kernels, so it
-// uses the managed-memory vector; textures are host-side staging data that the
-// renderer turns into CUDA texture objects of its own.
+// uses the managed-memory vector. Textures are host-side scene assets and are
+// stored directly by Scene; the renderer turns them into CUDA texture objects.
 using MeshAssetRegistry =
     nr::ResourceRegistry<MeshAsset, nr::rstd::vector<MeshAsset>>;
 using GaussianAssetRegistry =
     nr::ResourceRegistry<GaussianAsset, nr::rstd::vector<GaussianAsset>>;
-using TextureRegistry = nr::ResourceRegistry<Texture, std::vector<Texture>>;
 
 using MeshAssetRef = nr::ResourceRef<MeshAssetRegistry>;
 using GaussianAssetRef = nr::ResourceRef<GaussianAssetRegistry>;
-using TextureRef = nr::ResourceRef<TextureRegistry>;

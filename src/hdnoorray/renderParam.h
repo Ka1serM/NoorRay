@@ -73,9 +73,9 @@ public:
         const std::string& materialLeaf) const;
 
     // Textures are shared between the materials that name the same file. The
-    // returned reference owns its share; dropping every one of them frees the
-    // texture. Returns an empty reference when the file cannot be loaded.
-    TextureRef GetOrCreateTexture(
+    // retained by the Scene-wide image library until the scene is cleared.
+    // Returns an invalid handle when the file cannot be loaded.
+    TextureHandle GetOrCreateTexture(
         const std::string& filePath, TextureEncoding encoding,
         bool flipY = true);
     // The cache stores generation-checked handles rather than owning
@@ -107,7 +107,6 @@ public:
     // its own Hydra material prim). Caller must hold `mutex`.
     void QueueSceneMaterialCompilation(MaterialRef slot);
     void QueueMaterialCompilation(const SdfPath& id, MaterialX::DocumentPtr document,
-        std::vector<TextureRef> textures,
         std::function<MaterialCompilationOutput()> compile);
     // Returns true when a completed background compile changed renderer state.
     // This is the one kind of change that happens outside Hydra's dirty-bit
@@ -237,7 +236,6 @@ private:
         SdfPath id;
         uint64_t generation{};
         MaterialX::DocumentPtr document;
-        std::vector<TextureRef> textures;
         MaterialCompilationOutput output;
         std::string error;
     };
@@ -246,7 +244,7 @@ private:
     DecodedTextureData GetOrDecodeTexture(
         const std::string& filePath, const ContentIdentity& content,
         bool flipY);
-    TextureRef GetOrCreateMemoryTexture(
+    TextureHandle GetOrCreateMemoryTexture(
         const std::string& dataUri, TextureEncoding encoding);
 
     std::atomic<double> progress_{};
@@ -255,7 +253,6 @@ private:
     std::unordered_map<std::string, MaterialXDocument> materialXDocuments_;
     uint64_t nextMaterialXDocumentRevision_{};
     std::map<SdfPath, MaterialRef> materials_;
-    std::map<SdfPath, std::vector<TextureRef>> materialTextures_;
     // One entry per (mesh, slot) currently bound to this material path -- a
     // mesh can appear more than once if it binds the same material at
     // several slots (or, via HdGeomSubsets, different slots point at
@@ -270,6 +267,8 @@ private:
     std::unordered_map<DecodedTextureCacheKey,
         std::shared_future<DecodedTextureData>, DecodedTextureCacheKeyHash>
         decodedTextureFlights_;
+    // Non-owning deduplication index. Texture bytes live only in Scene;
+    // these handles are discarded when the scene invalidates them.
     std::unordered_map<TextureCacheKey, TextureHandle, TextureCacheKeyHash>
         textureCache_;
     std::counting_semaphore<64> materialSyncSlots_{4};

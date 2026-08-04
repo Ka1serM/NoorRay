@@ -96,6 +96,43 @@ TEST_CASE("assets are reclaimed once the last instance referencing them is gone"
     CHECK(scene.getGaussianAsset(assetHandle) == nullptr);
 }
 
+TEST_CASE("scene owns every imported texture until it is cleared", "[scene][texture]")
+{
+    noorray::NoorRaySession session;
+    Scene& scene = session.scene;
+    std::vector<uint8_t> pixels{255, 64, 32, 255};
+
+    const TextureHandle imported = scene.addTexture(Texture(
+        "shared/imported.png", std::move(pixels), 1, 1, TextureEncoding::Srgb8));
+
+    REQUIRE(scene.getTexture(imported) != nullptr);
+
+    const TextureHandle duplicate = scene.addTexture(Texture(
+        "shared/imported.png", std::vector<uint8_t>{1, 2, 3, 255}, 1, 1,
+        TextureEncoding::Srgb8));
+    CHECK(duplicate == imported);
+    CHECK(scene.getTextures().size() == 1);
+
+    const TextureHandle encodingVariant = scene.addTexture(Texture(
+        "shared/imported.png", std::vector<uint8_t>{1, 2, 3, 255}, 1, 1,
+        TextureEncoding::Linear8));
+    CHECK(encodingVariant == imported);
+    CHECK(scene.getTextures().size() == 1);
+
+    // The caller owns no texture reference. Scene ownership keeps this handle
+    // valid until the scene is replaced.
+    CHECK(scene.getTexture(imported) != nullptr);
+
+    scene.clear();
+    CHECK(scene.getTexture(imported) == nullptr);
+
+    const TextureHandle replacement = scene.addTexture(Texture(
+        "replacement.png", std::vector<uint8_t>{32, 64, 128, 255}, 1, 1,
+        TextureEncoding::Srgb8));
+    CHECK(scene.getTexture(imported) == nullptr);
+    CHECK(scene.getTexture(replacement) != nullptr);
+}
+
 TEST_CASE("removing the last splat instance releases its device memory", "[scene][gaussian]")
 {
     // Splat data and the per-instance acceleration structure built from it are

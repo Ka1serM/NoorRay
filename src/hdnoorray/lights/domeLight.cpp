@@ -30,8 +30,8 @@ void HdNoorRayDomeLight::Sync(
         ? LightIntensity(delegate, GetId()) : 0.0f;
     const std::string texturePath = AssetPathParam(
         delegate, GetId(), HdLightTokens->textureFile);
-    const TextureRef texture = texturePath.empty()
-        ? TextureRef{}
+    const TextureHandle texture = texturePath.empty()
+        ? TextureHandle{}
         // Material images use bottom-origin rows to match Blender's UV
         // buffers. Dome maps are sampled by the environment's own
         // equirectangular convention and must retain their source row order.
@@ -56,7 +56,7 @@ void HdNoorRayDomeLight::Sync(
         glm::vec3(1.0f, 0.0f, 0.0f)));
     environment.setEquirectangularMapping(blenderWorldToNoorRay);
 
-    if (!texture.isValid())
+    if (!scene.getTexture(texture))
         scene.clearEnvironmentTexture();
     else
         scene.setEnvironmentTexture(texture);

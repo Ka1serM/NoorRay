@@ -47,6 +47,13 @@ MaterialX::DocumentPtr defaultMaterial();
 // pipeline as authored .mtlx graphs.
 MaterialX::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material);
 
+// Variant used by importers whose authoring record references a scene texture
+// slot. The resolver returns that scene texture's registry name so the
+// resulting MaterialX graph can retain the authored image connection.
+using AuthoringTexturePathResolver = std::function<std::string(int)>;
+MaterialX::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material,
+    const AuthoringTexturePathResolver& texturePathResolver);
+
 // Resolves an <image> node's (already filesystem-resolved) file path to
 // a slot in the host's texture registry (Scene::getTextures()). The
 // caller is expected to have already loaded every image node's file

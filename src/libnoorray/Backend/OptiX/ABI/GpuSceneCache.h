@@ -18,13 +18,13 @@ struct GpuSceneCache
     // Generation-checked CPU registry handles mirrored by each CUDA slot.
     // They let texture membership changes update only the affected arrays.
     std::vector<TextureHandle> textureHandles;
-    uint64_t textureRegistryRevision{};
+    uint64_t textureRevision{};
 
     void clearSceneResources()
     {
         textures.clear();
         textureHandles.clear();
-        textureRegistryRevision = 0;
+        textureRevision = 0;
         instances.clear();
         materials.clear();
         data = {};

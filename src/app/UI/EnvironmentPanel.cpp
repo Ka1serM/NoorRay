@@ -20,13 +20,14 @@ void EnvironmentPanel::renderUi() {
         ImGuiManager::tableRowLabel("HDRI Texture");
         
         const auto& textures = scene.getTextures();
-        const auto& textureRegistry = scene.getTextureRegistry();
         const int oldHdriTexture = environment.textureIndex;
         int selectedHdriTexture = oldHdriTexture;
 
         if (selectedHdriTexture < 0
             || selectedHdriTexture >= static_cast<int>(textures.size())
-            || !textureRegistry.isLiveSlot(static_cast<uint32_t>(selectedHdriTexture)))
+            || scene.getTexture(selectedHdriTexture >= 0
+                ? scene.getTextureHandle(static_cast<uint32_t>(selectedHdriTexture))
+                : TextureHandle{}) == nullptr)
             selectedHdriTexture = -1;
 
         const char* comboPreview = "No Texture";
@@ -43,8 +44,6 @@ void EnvironmentPanel::renderUi() {
 
             // Add all available textures from the scene
             for (int i = 0; i < static_cast<int>(textures.size()); ++i) {
-                if (!textureRegistry.isLiveSlot(static_cast<uint32_t>(i)))
-                    continue;
                 const bool isSelected = (selectedHdriTexture == i);
                 const std::string label = textures[i].getName().empty()
                     ? "Texture " + std::to_string(i)
@@ -63,8 +62,8 @@ void EnvironmentPanel::renderUi() {
             if (selectedHdriTexture == -1)
                 scene.clearEnvironmentTexture();
             else
-                scene.setEnvironmentTexture(scene.getTextureRef(
-                    textureRegistry.handleAt(static_cast<uint32_t>(selectedHdriTexture))));
+                scene.setEnvironmentTexture(scene.getTextureHandle(
+                    static_cast<uint32_t>(selectedHdriTexture)));
             anyChanged = true;
         }
 

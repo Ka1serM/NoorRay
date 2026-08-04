@@ -39,12 +39,10 @@ public:
         std::shared_ptr<const std::vector<float>> data, int width,
         int height, TextureEncoding encoding = TextureEncoding::Float32);
 
-    // Frees the decoded pixels once no material or environment refers to this
-    // texture. The zero size also tells the renderer to skip the slot when it
-    // rebuilds its CUDA texture objects.
-    void releaseResources();
-
     const std::string& getName() const { return name; }
+    // Stable source identity used by Scene's deduplication index. File-backed
+    // textures use their path; in-memory textures use the supplied name/URI.
+    const std::string& getPath() const { return path; }
     int getWidth() const { return width; }
     int getHeight() const { return height; }
     int getSceneIndex() const { return sceneIndex; }
@@ -74,6 +72,7 @@ private:
     void validateStorageSize(size_t valueCount) const;
 
     std::string name;
+    std::string path;
     int width{};
     int height{};
     int sceneIndex{-1};

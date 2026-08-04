@@ -261,19 +261,17 @@ bool QueueMaterialXDocument(mx::DocumentPtr doc, const SdfPath& materialId,
     // this material's own handful of elements.
     auto resolvedTextures = std::make_shared<
         std::unordered_map<std::string, std::uint32_t>>();
-    std::vector<TextureRef> parsedTextures;
     for (const nr::materialx::MaterialXImageNode& image :
         nr::materialx::collectImageNodes(doc)) {
-        TextureRef texture = param.GetOrCreateTexture(
+        const TextureHandle texture = param.GetOrCreateTexture(
             image.rawFilePath,
             image.colorSpace == nr::materialx::MaterialXImageColorSpace::Srgb
                 ? TextureEncoding::Srgb8
                 : TextureEncoding::Linear8);
-        if (!texture.isValid())
+        if (!param.session.scene.getTexture(texture))
             continue;
         (*resolvedTextures)[image.rawFilePath] =
             static_cast<std::uint32_t>(texture.index());
-        parsedTextures.push_back(std::move(texture));
     }
 
     // A data library is resolved transparently by MaterialX but remains one
@@ -285,7 +283,6 @@ bool QueueMaterialXDocument(mx::DocumentPtr doc, const SdfPath& materialId,
     // handed to the compile queue (which publishes it to the Scene slot).
     const mx::DocumentPtr compileDocument = doc;
     param.QueueMaterialCompilation(materialId, std::move(doc),
-        std::move(parsedTextures),
         [compileDocument, resolvedTextures]() {
             HdNoorRayRenderParam::MaterialCompilationOutput output;
             nr::svm::SvmCompiler compiler;

@@ -66,7 +66,8 @@ mx::DocumentPtr getSharedStandardLibraries()
     return libraries;
 }
 
-mx::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material)
+mx::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material,
+    const AuthoringTexturePathResolver& texturePathResolver)
 {
     mx::DocumentPtr document = mx::createDocument();
     const mx::NodePtr principled = addDisneyPrincipled(document,
@@ -77,11 +78,27 @@ mx::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material)
     principled->setInputValue("specular", material.specular);
     principled->setInputValue("roughness", material.roughness);
     principled->setInputValue("specTrans", material.transmission);
+    if (texturePathResolver && material.albedoIndex >= 0) {
+        const std::string texturePath = texturePathResolver(material.albedoIndex);
+        if (!texturePath.empty()) {
+            const mx::NodePtr image = document->addNode(
+                "image", "nr_albedo_texture", "color3");
+            image->setInputValue("file", texturePath);
+            if (const mx::InputPtr file = image->getInput("file"))
+                file->setAttribute("colorspace", "srgb_texture");
+            principled->setConnectedNode("baseColor", image);
+        }
+    }
     const mx::NodePtr surfaceMaterial = document->addNode(
         "surfacematerial", "nr_synthetic_material", "material");
     surfaceMaterial->setConnectedNode("surfaceshader", principled);
     document->setDataLibrary(getSharedStandardLibraries());
     return document;
+}
+
+mx::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material)
+{
+    return documentFromAuthoring(material, {});
 }
 
 mx::DocumentPtr defaultMaterial()

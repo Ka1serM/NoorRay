@@ -237,11 +237,10 @@ NR_GPU inline LightHit intersectAnalyticLights(
 NR_GPU inline float analyticLightHitMisWeightAt(
     const LightHit& light, const glm::vec3 position, const float bsdfPdf)
 {
-    (void)position;
     if (bsdfPdf <= 0.0f || light.pdf <= 0.0f)
         return 1.0f;
     return powerHeuristic(bsdfPdf,
-        nr::direct_light::lightPdf(light.lightIndex, light.pdf));
+        nr::direct_light::lightPdf(light.lightIndex, position, light.pdf));
 }
 
 NR_GPU inline SampledSpectrum environmentRadiance(

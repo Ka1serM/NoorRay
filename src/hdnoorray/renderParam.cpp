@@ -113,7 +113,6 @@ HdNoorRayRenderParam::~HdNoorRayRenderParam() noexcept
     assetHashFlights_.clear();
     assetFingerprintCache_.clear();
     materialBindings_.clear();
-    materialTextures_.clear();
     materials_.clear();
     if (session.raytracer)
         session.raytracer.reset();
@@ -345,7 +344,7 @@ HdNoorRayRenderParam::GetOrDecodeTexture(
     }
 }
 
-TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
+TextureHandle HdNoorRayRenderParam::GetOrCreateTexture(
     const std::string& filePath, const TextureEncoding encoding,
     const bool flipY)
 {
@@ -368,10 +367,8 @@ TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
             std::scoped_lock lock(mutex);
             const auto existing = textureCache_.find(cacheKey);
             if (existing != textureCache_.end()) {
-                TextureRef texture =
-                    session.scene.getTextureRef(existing->second);
-                if (texture.isValid())
-                    return texture;
+                if (session.scene.getTexture(existing->second))
+                    return existing->second;
                 textureCache_.erase(existing);
             }
         }
@@ -395,14 +392,12 @@ TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
         std::scoped_lock lock(mutex);
         const auto existing = textureCache_.find(cacheKey);
         if (existing != textureCache_.end()) {
-            TextureRef texture =
-                session.scene.getTextureRef(existing->second);
-            if (texture.isValid())
-                return texture;
+            if (session.scene.getTexture(existing->second))
+                return existing->second;
             textureCache_.erase(existing);
         }
-        TextureRef texture = session.scene.add(std::move(*textureData));
-        textureCache_.insert_or_assign(cacheKey, texture.handle());
+        const TextureHandle texture = session.scene.addTexture(std::move(*textureData));
+        textureCache_.insert_or_assign(cacheKey, texture);
         return texture;
     } catch (const std::exception& error) {
         TF_WARN("hdNoorRay could not load texture '%s': %s",
@@ -411,7 +406,7 @@ TextureRef HdNoorRayRenderParam::GetOrCreateTexture(
     }
 }
 
-TextureRef HdNoorRayRenderParam::GetOrCreateMemoryTexture(
+TextureHandle HdNoorRayRenderParam::GetOrCreateMemoryTexture(
     const std::string& uri, const TextureEncoding encoding)
 {
     (void) encoding;
@@ -434,9 +429,8 @@ TextureRef HdNoorRayRenderParam::GetOrCreateMemoryTexture(
         std::scoped_lock lock(mutex);
         const auto existing = textureCache_.find(cacheKey);
         if (existing != textureCache_.end()) {
-            TextureRef texture = session.scene.getTextureRef(existing->second);
-            if (texture.isValid())
-                return texture;
+            if (session.scene.getTexture(existing->second))
+                return existing->second;
             textureCache_.erase(existing);
         }
     }
@@ -446,13 +440,12 @@ TextureRef HdNoorRayRenderParam::GetOrCreateMemoryTexture(
     std::scoped_lock lock(mutex);
     const auto existing = textureCache_.find(cacheKey);
     if (existing != textureCache_.end()) {
-        TextureRef existingTexture = session.scene.getTextureRef(existing->second);
-        if (existingTexture.isValid())
-            return existingTexture;
+        if (session.scene.getTexture(existing->second))
+            return existing->second;
         textureCache_.erase(existing);
     }
-    TextureRef result = session.scene.add(std::move(texture));
-    textureCache_.insert_or_assign(cacheKey, result.handle());
+    const TextureHandle result = session.scene.addTexture(std::move(texture));
+    textureCache_.insert_or_assign(cacheKey, result);
     return result;
 }
 
@@ -460,7 +453,7 @@ void HdNoorRayRenderParam::PruneTextureCache()
 {
     std::scoped_lock lock(mutex);
     std::erase_if(textureCache_, [this](const auto& entry) {
-        return !session.scene.getTextureRef(entry.second).isValid();
+        return session.scene.getTexture(entry.second) == nullptr;
     });
     std::erase_if(decodedTextureCache_, [](const auto& entry) {
         switch (entry.second.pixelType) {
@@ -476,7 +469,7 @@ void HdNoorRayRenderParam::PruneTextureCache()
 }
 
 void HdNoorRayRenderParam::QueueMaterialCompilation(
-    const SdfPath& id, MaterialX::DocumentPtr document, std::vector<TextureRef> textures,
+    const SdfPath& id, MaterialX::DocumentPtr document,
     std::function<MaterialCompilationOutput()> compile)
 {
     uint64_t generation;
@@ -494,10 +487,9 @@ void HdNoorRayRenderParam::QueueMaterialCompilation(
     }
     pendingMaterialCompiles_.fetch_add(1, std::memory_order_relaxed);
     materialCompileTasks_.run(
-        [this, id, generation, document, textures = std::move(textures),
-            compile = std::move(compile)]() {
+        [this, id, generation, document, compile = std::move(compile)]() {
             MaterialCompilationResult result{
-                id, generation, document, std::move(textures), {}, {}};
+                id, generation, document, {}, {}};
             {
                 // Scene imports can replace a material several times while
                 // older jobs are still sitting in TBB's queue. Discard a
@@ -554,7 +546,6 @@ bool HdNoorRayRenderParam::ProcessMaterialCompilations()
             && previousMaterial->svmBytecodeLength != 0
             ? session.raytracer->replaceMaterialXProgram(result.output.program)
             : session.raytracer->registerMaterialXProgram(result.output.program);
-        materialTextures_[result.id] = std::move(result.textures);
         PublishMaterial(result.id, result.document);
         Material& compiled = session.scene.getMaterial(
             materials_[result.id].handle());
@@ -587,7 +578,6 @@ bool HdNoorRayRenderParam::ProcessMaterialCompilations()
                 nr::svm::SvmCompiler compiler;
                 result.output.program = compiler.compile(fallbackDocument);
                 result.document = std::move(fallbackDocument);
-                result.textures.clear();
                 result.error.clear();
                 if (publishCompiledProgram(result))
                     materialsChanged = true;
@@ -764,7 +754,6 @@ void HdNoorRayRenderParam::PublishFallbackMaterial(
     // the material after its empty transport tombstone was processed.
     ++materialCompileGenerations_[id];
 
-    materialTextures_.erase(id);
     PublishMaterial(id, document);
 
     // PublishMaterial only swaps the document in place; a stale program from
@@ -807,7 +796,6 @@ void HdNoorRayRenderParam::ReleaseMaterial(const SdfPath& id)
         QueueSceneMaterialCompilation(slot);
         materials_.erase(published);
     }
-    materialTextures_.erase(id);
 }
 
 void HdNoorRayRenderParam::BindMaterial(

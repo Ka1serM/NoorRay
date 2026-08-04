@@ -68,6 +68,12 @@ target_link_libraries(composite_bsdf_test PRIVATE glm CUDA::cudart)
 add_noorray_test(light_sampling_test unit/shading/LightSamplingTest.cpp light)
 target_link_libraries(light_sampling_test PRIVATE glm CUDA::cudart)
 
+add_noorray_test(light_tree_test unit/lighting/LightTreeTest.cpp light)
+target_include_directories(light_tree_test PRIVATE
+    "${OPTIX_INCLUDE_DIR}" "${CUDAToolkit_INCLUDE_DIRS}")
+target_compile_definitions(light_tree_test PRIVATE NR_BACKEND_CUDA=1)
+target_link_libraries(light_tree_test PRIVATE glm CUDA::cudart)
+
 add_noorray_test(shadow_terminator_test unit/raytracing/ShadowTerminatorTest.cpp raytracing)
 target_link_libraries(shadow_terminator_test PRIVATE glm)
 

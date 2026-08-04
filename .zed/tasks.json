@@ -91,7 +91,7 @@
   },
   {
     "label": "run NoorRay Release",
-    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake --build build/release --target NoorRay -j$(nproc) && ./build/release/NoorRay --scene $ZED_WORKTREE_ROOT/tests/assets/hotel_old_mill_realistic.nrscene",
+    "command": "VULKAN_SDK=/home/marcel/Programs/VulkanSDK/current cmake --build build/release --target NoorRay -j$(nproc) && ./build/release/NoorRay",
     "cwd": "$ZED_WORKTREE_ROOT",
     "use_new_terminal": true,
     "allow_concurrent_runs": false,

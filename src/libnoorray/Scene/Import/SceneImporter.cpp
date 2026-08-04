@@ -210,9 +210,9 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
     // A second import of the same file (e.g. two scene-graph entries
     // pointing at the same asset) clones the hierarchy this call already
-    // built instead of re-parsing the glTF and re-uploading every mesh and
-    // texture. Cloning shares the underlying MeshAssetRef/TextureRef/etc --
-    // see Scene::cloneHierarchy -- so this is a genuine dedup, not a copy.
+    // built instead of re-parsing the glTF and re-uploading every mesh. The
+    // scene-wide texture library is already shared by handle, so cloning does
+    // not duplicate image resources either.
     if (const SceneObjectHandle cached = scene.findImportedFileRoot(resolvedFilepath);
         cached.isValid())
     {
@@ -242,14 +242,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
     // Load Materials
     std::vector<MaterialAuthoring> globalMaterials;
-    // The materials below only carry texture slot indices. Holding a reference
-    // per imported texture keeps them alive until Scene::add(Material) takes
-    // over their ownership.
-    std::vector<TextureRef> importedTextures;
     // Keyed by (glTF image index, encoding) so two materials that sample the
     // same source image (a common texture-atlas pattern) upload it once
     // instead of decoding and uploading a duplicate copy per material.
-    std::map<std::pair<int, int>, TextureRef> imageTextureCache;
+    std::map<std::pair<int, int>, TextureHandle> imageTextureCache;
     for (const auto& mat : model.materials) {
         MaterialAuthoring material{};
         const auto& pbr = mat.pbrMetallicRoughness;
@@ -301,10 +297,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             if (!image.uri.empty()) {
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
-                    importedTextures.push_back(
-                        scene.add(Texture(texturePath.string(), encoding)));
-                    materialIndex = static_cast<int>(importedTextures.back().index());
-                    imageTextureCache[cacheKey] = importedTextures.back();
+                    const TextureHandle texture = scene.addTexture(
+                        Texture(texturePath.string(), encoding));
+                    materialIndex = static_cast<int>(texture.index());
+                    imageTextureCache[cacheKey] = texture;
                 } else {
                     LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
                 }
@@ -312,10 +308,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 const std::string texName = image.name.empty()
                     ? "texture_" + std::to_string(textureIndex)
                     : image.name;
-                importedTextures.push_back(scene.add(Texture(texName,
-                    image.image.data(), image.width, image.height, encoding)));
-                materialIndex = static_cast<int>(importedTextures.back().index());
-                imageTextureCache[cacheKey] = importedTextures.back();
+                const TextureHandle texture = scene.addTexture(Texture(texName,
+                    image.image.data(), image.width, image.height, encoding));
+                materialIndex = static_cast<int>(texture.index());
+                imageTextureCache[cacheKey] = texture;
             } else {
                 LOG_ERROR("Warning: Embedded texture has no decoded data");
             }
@@ -697,7 +693,6 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     scene.registerImportedFileRoot(resolvedFilepath, rootHandle);
     loadedMeshAssets.clear();
     globalMaterialRefs.clear();
-    importedTextures.clear();
     scene.reclaimUnusedResources();
 }
 
@@ -744,14 +739,12 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
 
     // Load Global Materials from the MTL file (if it was found)
     std::vector<MaterialAuthoring> globalMaterials;
-    // The materials below only carry texture slot indices. Holding a reference
-    // per imported texture keeps them alive until Scene::add(Material) takes
-    // over their ownership.
-    std::vector<TextureRef> importedTextures;
+    // The materials below carry scene texture slot indices. Scene owns the
+    // corresponding image data for the lifetime of this scene.
     // Keyed by (resolved texture path, encoding) so multiple materials that
     // reuse the same texture file upload it once instead of decoding and
     // uploading a duplicate copy per material.
-    std::map<std::pair<std::string, int>, TextureRef> imageTextureCache;
+    std::map<std::pair<std::string, int>, TextureHandle> imageTextureCache;
     for (const auto& mat : mats) {
         MaterialAuthoring material{};
         material.albedo = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
@@ -783,10 +776,10 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                     return;
                 }
                 if (std::filesystem::exists(texturePath)) {
-                    importedTextures.push_back(
-                        scene.add(Texture(resolvedTexturePath, encoding)));
-                    index = static_cast<int>(importedTextures.back().index());
-                    imageTextureCache[cacheKey] = importedTextures.back();
+                    const TextureHandle texture = scene.addTexture(
+                        Texture(resolvedTexturePath, encoding));
+                    index = static_cast<int>(texture.index());
+                    imageTextureCache[cacheKey] = texture;
                 } else
                    LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
             }
@@ -1007,7 +1000,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
         const std::string instanceName = shape.name;
         const MeshAssetRef meshAsset = scene.add(MeshAsset(scene,
             std::move(shape.name), std::move(shape.geometry),
-            std::move(localMaterials)));
+            std::move(localMaterials)), materialOverride == nullptr);
         Transform transform;
         transform.setPosition(shape.center);
         auto instance = std::make_unique<MeshInstance>(
@@ -1021,7 +1014,6 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     if (materialOverride == nullptr)
         scene.registerImportedFileRoot(resolvedFilepath, parentHandle);
     globalMaterialRefs.clear();
-    importedTextures.clear();
     scene.reclaimUnusedResources();
 }
 
@@ -1088,11 +1080,12 @@ void SceneImporter::ImportFile(Scene& scene, const std::string& filepath)
         ImportGaussianScene(scene, filepath);
     } else if (path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".jpeg") ||
                path.ends_with(".bmp") || path.ends_with(".tga") || path.ends_with(".psd") ||
-               path.ends_with(".gif") || path.ends_with(".hdr") || path.ends_with(".pic")) {
+               path.ends_with(".gif") || path.ends_with(".hdr") || path.ends_with(".exr") ||
+               path.ends_with(".pic")) {
         // Standalone images have no material reference to retain them. Keep
         // an explicit scene-library owner so they remain available to the
         // HDRI picker after this importer returns.
-        scene.addStandaloneTexture(Texture(filepath));
+        scene.addTexture(Texture(filepath));
     } else {
         throw std::runtime_error("Unsupported import file type: " + filepath);
     }

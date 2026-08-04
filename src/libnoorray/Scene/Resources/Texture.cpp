@@ -103,6 +103,7 @@ Texture::Texture(
         bytePixels = std::make_shared<const std::vector<uint8_t>>(
             source.get(), source.get() + valueCount);
     }
+    path = filepath;
     name = SceneImporter::nameFromPath(filepath);
 }
 
@@ -135,19 +136,6 @@ const std::vector<float>& Texture::getPixels() const
     return expandedPixels;
 }
 
-void Texture::releaseResources()
-{
-    name.clear();
-    width = 0;
-    height = 0;
-    sceneIndex = -1;
-    encoding = TextureEncoding::Linear8;
-    bytePixels.reset();
-    halfPixels.reset();
-    floatPixels.reset();
-    expandedPixels = std::vector<float>{};
-}
-
 Texture::Texture(std::string textureName, const void* data,
     const int textureWidth, const int textureHeight, const TextureEncoding encoding)
     : name(std::move(textureName))
@@ -155,6 +143,7 @@ Texture::Texture(std::string textureName, const void* data,
     , height(textureHeight)
     , encoding(encoding)
 {
+    path = name;
     if (width <= 0 || height <= 0)
         throw std::runtime_error("Texture has invalid dimensions: " + name);
     if (!data)
@@ -214,6 +203,7 @@ Texture::Texture(std::string textureName,
     , encoding(textureEncoding)
     , bytePixels(std::move(data))
 {
+    path = name;
     if (encoding != TextureEncoding::Linear8
         && encoding != TextureEncoding::Srgb8) {
         throw std::runtime_error(
@@ -232,6 +222,7 @@ Texture::Texture(std::string textureName,
     , encoding(textureEncoding)
     , halfPixels(std::move(data))
 {
+    path = name;
     if (encoding != TextureEncoding::Float16)
         throw std::runtime_error(
             "Half texture has a non-half encoding: " + name);
@@ -248,6 +239,7 @@ Texture::Texture(std::string textureName,
     , encoding(textureEncoding)
     , floatPixels(std::move(data))
 {
+    path = name;
     if (encoding != TextureEncoding::Float32)
         throw std::runtime_error(
             "Float texture has a non-float encoding: " + name);

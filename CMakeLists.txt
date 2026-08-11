@@ -45,9 +45,17 @@ set(NR_CORE_DIR "${PROJECT_SOURCE_DIR}/src/libnoorray")
 set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
 set(NR_PTX_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/build/generated")
 
-set(NR_USD_ROOT "${PROJECT_SOURCE_DIR}/external/blender-usd" CACHE PATH
-    "Blender USD SDK root (auto-vendored by default)")
-include(cmake/NoorRayUSD.cmake)
+# USD provides scene import/export only. Hosts that just drive the renderer -
+# an embedded viewport, for instance - never reach that path, and USD is by far
+# the heaviest thing in the dependency graph: it pulls a Blender-provided
+# libusd_ms.so and libpython into every link. Keeping it optional lets those
+# hosts build and ship without either.
+option(NR_ENABLE_USD "Build USD scene import/export" ON)
+if(NR_ENABLE_USD)
+    set(NR_USD_ROOT "${PROJECT_SOURCE_DIR}/external/blender-usd" CACHE PATH
+        "Blender USD SDK root (auto-vendored by default)")
+    include(cmake/NoorRayUSD.cmake)
+endif()
 
 function(nr_header_only target dir)
     add_library(${target} INTERFACE)
@@ -264,7 +272,7 @@ add_dependencies(NoorRayCuda NoorRayOptixIr NoorRayOptixMissIr)
 set_target_properties(NoorRayCuda PROPERTIES
     CUDA_ARCHITECTURES "${NR_CUDA_ARCH}"
     CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
     POSITION_INDEPENDENT_CODE ON)
 target_compile_features(NoorRayCuda PUBLIC cxx_std_20 cuda_std_20)
 target_compile_definitions(NoorRayCuda PUBLIC NR_BACKEND_CUDA=1 VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
@@ -295,14 +303,24 @@ set(NR_CORE_X
     "/Backend/OptiX/Acceleration/" "/Backend/OptiX/Denoising/"
     "/IO/BitmapReader\\.cpp$" "/IO/BitmapWriter\\.cpp$" "/StbImpl\\.cpp$"
     "/Materials/SVM/references/" "/Materials/SVM/SvmProgramTable\\.cpp$")
+if(NOT NR_ENABLE_USD)
+    # The stub beside it implements the same three entry points, so callers in
+    # SceneReader/SceneWriter/SceneImporter need no conditional compilation.
+    list(APPEND NR_CORE_X "/Scene/Import/SceneUsd\\.cpp$")
+else()
+    list(APPEND NR_CORE_X "/Scene/Import/SceneUsdDisabled\\.cpp$")
+endif()
 foreach(p IN LISTS NR_CORE_X)
     list(FILTER NR_CORE_FILES EXCLUDE REGEX "${p}")
 endforeach()
+# Plain C++ despite living under Backend/CUDA, which the filter above drops
+# wholesale: it only dlopens the driver and must not be compiled by nvcc.
+list(APPEND NR_CORE_FILES "${NR_CORE_DIR}/Backend/CUDA/CudaDriverApi.cpp")
 add_library(libnoorray STATIC ${NR_CORE_FILES})
 add_dependencies(libnoorray NoorRayShaders)
 set_target_properties(libnoorray PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS OFF
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
     POSITION_INDEPENDENT_CODE ON)
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(libnoorray PRIVATE -Wno-c23-extensions)
@@ -318,7 +336,10 @@ target_link_libraries(libnoorray PUBLIC
     NoorRayCuda NoorRayIO portable_file_dialogs glm Vulkan::Vulkan
     tinygltf tinyobjloader tinyply tinyexr stb gauss_forge_readers
     GPUOpen::VulkanMemoryAllocator glaze TBB::tbb
-    NoorRayMaterialX MaterialXFormat MaterialXCore NoorRayUsd)
+    NoorRayMaterialX MaterialXFormat MaterialXCore)
+if(NR_ENABLE_USD)
+    target_link_libraries(libnoorray PUBLIC NoorRayUsd)
+endif()
 
 # ---------------------------------------------------------------------------
 # MaterialX
@@ -374,30 +395,36 @@ add_custom_target(NoorRayShaders DEPENDS ${NR_SHADER_OUT})
 # ---------------------------------------------------------------------------
 # hdnoorray (Blender Hydra render delegate)
 # ---------------------------------------------------------------------------
-add_subdirectory(src/hdnoorray)
+option(NR_BUILD_BLENDER "Build the Blender Hydra render delegate" ON)
+if(NR_BUILD_BLENDER)
+    add_subdirectory(src/hdnoorray)
+endif()
 
 # ---------------------------------------------------------------------------
 # NoorRay (standalone application)
 # ---------------------------------------------------------------------------
-file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS "${NR_APP_DIR}/*.cpp" "${NR_APP_DIR}/*.h")
-add_executable(NoorRay ${NR_APP_FILES})
-set_target_properties(NoorRay PROPERTIES
-    PREFIX "" CUDA_SEPARABLE_COMPILATION ON CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-add_dependencies(NoorRay NoorRayShaders)
-target_include_directories(NoorRay PRIVATE
-    "${NR_APP_DIR}" "${NR_CORE_DIR}" "${PROJECT_SOURCE_DIR}/external/materialx/source")
-target_link_libraries(NoorRay PRIVATE
-    libnoorray NoorRayCuda libross portable_file_dialogs glm imgui imnodeflow Vulkan::Vulkan
-    SDL3::SDL3-static tinygltf tinyobjloader tinyexr stb gauss_forge_readers
-    ImViewGuizmo GPUOpen::VulkanMemoryAllocator glaze TBB::tbb NoorRayMaterialX
-    NoorRayUsdStandalone)
-target_compile_definitions(NoorRay PRIVATE
-    SDL_MAIN_HANDLED NR_BACKEND_CUDA=1 VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-    NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(NoorRay PRIVATE -Wno-c23-extensions)
+option(NR_BUILD_APPLICATION "Build the standalone NoorRay application" ON)
+if(NR_BUILD_APPLICATION)
+    file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS "${NR_APP_DIR}/*.cpp" "${NR_APP_DIR}/*.h")
+    add_executable(NoorRay ${NR_APP_FILES})
+    set_target_properties(NoorRay PROPERTIES
+        PREFIX "" CUDA_SEPARABLE_COMPILATION ON CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+    add_dependencies(NoorRay NoorRayShaders)
+    target_include_directories(NoorRay PRIVATE
+        "${NR_APP_DIR}" "${NR_CORE_DIR}" "${PROJECT_SOURCE_DIR}/external/materialx/source")
+    target_link_libraries(NoorRay PRIVATE
+        libnoorray NoorRayCuda libross portable_file_dialogs glm imgui imnodeflow Vulkan::Vulkan
+        SDL3::SDL3-static tinygltf tinyobjloader tinyexr stb gauss_forge_readers
+        ImViewGuizmo GPUOpen::VulkanMemoryAllocator glaze TBB::tbb NoorRayMaterialX
+        NoorRayUsdStandalone)
+    target_compile_definitions(NoorRay PRIVATE
+        SDL_MAIN_HANDLED NR_BACKEND_CUDA=1 VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+        NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(NoorRay PRIVATE -Wno-c23-extensions)
+    endif()
+    target_link_options(NoorRay PRIVATE -static-libstdc++)
 endif()
-target_link_options(NoorRay PRIVATE -static-libstdc++)
 
 # ---------------------------------------------------------------------------
 # _pynoorray (Python bindings)
@@ -444,3 +471,39 @@ if(NR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# ---------------------------------------------------------------------------
+# Link manifest for consumers that import libnoorray as a prebuilt archive
+# ---------------------------------------------------------------------------
+# A project that cannot add NoorRay as a subdirectory - because NoorRay defines
+# global targets such as imgui and SDL3-static that would collide with its own -
+# has to reproduce libnoorray's static dependency closure on its own link line.
+# Doing that by hand means duplicating this file's knowledge in another
+# repository, where it silently rots the moment a dependency is added here.
+#
+# Emit the closure instead. The archives are written in dependency order and
+# wrapped in a linker group by the consumer, so the single-pass Unix linker does
+# not care about the exact ordering within it.
+set(NR_LINK_MANIFEST_TARGETS
+    libnoorray NoorRayCuda NoorRayIO NoorRayMaterialX libross
+    gauss_forge_readers tinyply tinyexr TBB::tbb fmt spdlog cpptrace-lib
+    dwarf libzstd_static openlensfileio text_encoding_detect
+    OpenEXR IlmThread Iex OpenEXRCore Imath lodepng hash-library spz
+    webp sharpyuv zlibstatic
+    MaterialXGenShader MaterialXFormat MaterialXCore)
+
+set(NR_LINK_MANIFEST_ENTRIES "")
+foreach(nr_target IN LISTS NR_LINK_MANIFEST_TARGETS)
+    if(TARGET ${nr_target})
+        # Interface targets have no archive of their own; their usage
+        # requirements are already baked into the archives above.
+        get_target_property(nr_type ${nr_target} TYPE)
+        if(NOT nr_type STREQUAL "INTERFACE_LIBRARY")
+            list(APPEND NR_LINK_MANIFEST_ENTRIES "$<TARGET_FILE:${nr_target}>")
+        endif()
+    endif()
+endforeach()
+
+file(GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/libnoorray-link.txt"
+    CONTENT "$<JOIN:${NR_LINK_MANIFEST_ENTRIES},\n>\n")

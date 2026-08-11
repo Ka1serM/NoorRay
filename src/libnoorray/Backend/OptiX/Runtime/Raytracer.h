@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -81,6 +83,13 @@ public:
     cudaStream_t getCudaStream() const { return stream; }
 
     InteropFrame getInteropFrame() const;
+    // Returns the completed frame exactly once, or nullopt when none is ready.
+    //
+    // isFrameReady()/getInteropFrame() keep reporting the last frame forever, so
+    // every host driving the viewport has to remember which value it already
+    // presented; getting that wrong presents a single frame and then appears to
+    // freeze while overlays keep animating. This does that bookkeeping here.
+    std::optional<InteropFrame> consumeInteropFrame();
     bool isRenderInFlight() const;
     void waitForRender() const;
     bool isFrameReady() const;
@@ -147,6 +156,9 @@ private:
     AnalyticLightBlas meshLightBlas;
     GpuSceneCache gpuCache;
     uint64_t lastReadyValue{};
+    // Highest value handed out by consumeInteropFrame(), so a completed frame is
+    // only ever adopted once.
+    uint64_t consumedReadyValue{};
     uint64_t submittedFrame{};
     nr::cuda::UniqueEvent m_startEvent;
     nr::cuda::UniqueEvent m_stopEvent;

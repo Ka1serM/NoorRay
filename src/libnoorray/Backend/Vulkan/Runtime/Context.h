@@ -44,6 +44,7 @@ class Context {
     };
 
     bool headless = false;
+    bool raytracingAvailable = false;
     VulkanSurfaceProvider* surfaceProvider{};
     bool validationEnabled = false;
 
@@ -98,6 +99,12 @@ public:
     const vk::DescriptorPool& getDescriptorPool() const { return descriptorPool.get(); }
     VmaAllocator getAllocator() const { return allocator; }
     bool isHeadless() const { return headless; }
+    // False when CUDA or OptiX could not be brought up on this machine - no
+    // NVIDIA driver, no compatible device, or an OptiX version mismatch. Vulkan
+    // is still fully usable in that state, so a host can keep its UI running and
+    // present something other than a raytraced image. Anything that touches the
+    // Raytracer, interop images or CUDA streams must check this first.
+    bool supportsRaytracing() const { return raytracingAvailable; }
 
     OptixDeviceContext getOptixContext() const { return optixCtx.get(); }
     cudaStream_t getCudaStream() const { return cudaStream.get(); }

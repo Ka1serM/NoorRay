@@ -13,6 +13,7 @@
 #include <optix_stubs.h>
 
 #include "Backend/CUDA/Checks.h"
+#include "Backend/CUDA/CudaDriverApi.h"
 #include "Log.h"
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
@@ -150,22 +151,42 @@ Context::Context(VulkanSurfaceProvider* provider)
 
         createAllocator();
 
-        // Initialize CUDA + OptiX
-        selectCudaDeviceForVulkan(physicalDevice);
-        int leastPriority = 0, greatestPriority = 0;
-        NR_GPU_CHECK(cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority));
-        cudaStream.createWithPriority(cudaStreamNonBlocking, greatestPriority);
+        // Initialize CUDA + OptiX. Failure here is not fatal: Vulkan is already
+        // up and fully usable, and a host on a machine without a usable NVIDIA
+        // stack should still get its window and UI. Raytracing simply reports
+        // itself unavailable through supportsRaytracing().
+        try
+        {
+            selectCudaDeviceForVulkan(physicalDevice);
+            int leastPriority = 0, greatestPriority = 0;
+            NR_GPU_CHECK(cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority));
+            cudaStream.createWithPriority(cudaStreamNonBlocking, greatestPriority);
 
-        CUcontext currentCtx{};
-        if (cuCtxGetCurrent(&currentCtx) != CUDA_SUCCESS || currentCtx == nullptr)
-            throw std::runtime_error("CUDA primary context is unavailable");
+            // Through the dlopen shim: linking libcuda directly would make the
+            // NVIDIA driver a load-time requirement for the whole executable.
+            if (!nr::cuda::driverAvailable())
+                throw std::runtime_error("the NVIDIA driver (libcuda.so.1) is not present");
 
-        NR_OPTIX_CHECK(optixInit());
+            CUcontext currentCtx{};
+            if (nr::cuda::ctxGetCurrent(&currentCtx) != CUDA_SUCCESS || currentCtx == nullptr)
+                throw std::runtime_error("CUDA primary context is unavailable");
 
-        OptixDeviceContextOptions ctxOpts{};
-        ctxOpts.logCallbackFunction = optixLogCallback;
-        ctxOpts.logCallbackLevel = 3;
-        NR_OPTIX_CHECK(optixDeviceContextCreate(currentCtx, &ctxOpts, optixCtx.put()));
+            NR_OPTIX_CHECK(optixInit());
+
+            OptixDeviceContextOptions ctxOpts{};
+            ctxOpts.logCallbackFunction = optixLogCallback;
+            ctxOpts.logCallbackLevel = 3;
+            NR_OPTIX_CHECK(optixDeviceContextCreate(currentCtx, &ctxOpts, optixCtx.put()));
+            raytracingAvailable = true;
+        }
+        catch (const std::exception& cudaError)
+        {
+            LOG_WARN("Raytracing unavailable: " << cudaError.what()
+                << ". Vulkan is up; the renderer will be disabled.");
+            optixCtx.reset();
+            cudaStream.reset();
+            raytracingAvailable = false;
+        }
 
     } catch (const vk::Error& e) {
         LOG_FATAL("Vulkan Error in Context constructor: " << e.what());

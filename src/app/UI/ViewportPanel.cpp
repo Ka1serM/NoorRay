@@ -440,7 +440,13 @@ void ViewportPanel::handleViewGizmo() const {
     // own (unlike ImGuizmo::Manipulate), so on a small/narrow viewport its fixed
     // pixel offsets can push it outside the rendered image. Clip to the viewport
     // image bounds, same as renderToolbar() does.
-    ImGui::PushClipRect(viewportPos, ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y), true);
+    // Draw-list clipping, never ImGui::PushClipRect: the ImGui clip stack also
+    // governs item hit-testing, and these gizmos leave it unbalanced, so every
+    // widget submitted after the viewport in the same window silently stops
+    // responding to the mouse. Invisible while the viewport owns its own ImGui
+    // window, fatal the moment it shares one with other controls.
+    ImDrawList* viewGizmoDrawList = ImGui::GetWindowDrawList();
+    viewGizmoDrawList->PushClipRect(viewportPos, ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y), true);
 
     ImVec2 gizmoPos = {viewportPos.x + viewportSize.x - 110.f * uiScale, viewportPos.y + 110.f * uiScale};
     wasModified |= ImViewGuizmo::Rotate(position, rotation, pivot, gizmoPos);
@@ -451,7 +457,7 @@ void ViewportPanel::handleViewGizmo() const {
     gizmoPos.y += 60.f * uiScale;
     wasModified |= ImViewGuizmo::Pan(position, rotation, gizmoPos);
 
-    ImGui::PopClipRect();
+    viewGizmoDrawList->PopClipRect();
 
     if (wasModified && !ImGuizmo::IsUsing()) {
         camera->setPosition(position);
@@ -460,9 +466,12 @@ void ViewportPanel::handleViewGizmo() const {
 }
 
 void ViewportPanel::renderToolbar() {
-    // Clip to the viewport image bounds, same as ImGuizmo::Manipulate does internally,
-    // so the buttons can't spill outside the rendered image.
-    ImGui::PushClipRect(viewportPos, ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y), true);
+    // Clip to the viewport image bounds, same as ImGuizmo::Manipulate does
+    // internally, so the buttons can't spill outside the rendered image.
+    // Draw-list level: an ImGui::PushClipRect here would also affect item
+    // hit-testing for everything submitted afterwards.
+    ImDrawList* toolbarDrawList = ImGui::GetWindowDrawList();
+    toolbarDrawList->PushClipRect(viewportPos, ImVec2(viewportPos.x + viewportSize.x, viewportPos.y + viewportSize.y), true);
 
     const ImVec2 toolbarOffset(25.0f * uiScale, 25.0f * uiScale);
     ImGui::SetCursorScreenPos(ImVec2(viewportPos.x + toolbarOffset.x, viewportPos.y + toolbarOffset.y));
@@ -506,7 +515,7 @@ void ViewportPanel::renderToolbar() {
 
     ImGui::PopStyleVar(2);
 
-    ImGui::PopClipRect();
+    toolbarDrawList->PopClipRect();
 }
 
 void ViewportPanel::renderUi() {

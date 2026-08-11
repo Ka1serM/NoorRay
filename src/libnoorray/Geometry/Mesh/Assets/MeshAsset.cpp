@@ -1,4 +1,5 @@
-﻿#include "MeshAsset.h"
+﻿#include "Log.h"
+#include "MeshAsset.h"
 #include <cstring>
 #include <type_traits>
 #include <utility>
@@ -317,13 +318,24 @@ void MeshAsset::buildBlas()
 {
     scene->synchronizeBeforeMutation();
     const auto& ctx = scene->getContext();
-    if (ctx.getOptixContext() != nullptr && ctx.getCudaStream() != nullptr)
-        blas.build(
-            ctx.getOptixContext(), ctx.getCudaStream(),
-            this->vertices.data(), static_cast<uint32_t>(this->vertices.size()), sizeof(Vertex),
-            this->indices.data(), static_cast<uint32_t>(this->indices.size() / 3),
-            this->faces.empty() ? nullptr : &this->faces.data()->materialIndex,
-            sizeof(Face), static_cast<uint32_t>(materialIds.size()));
+    if (ctx.getOptixContext() == nullptr || ctx.getCudaStream() == nullptr)
+    {
+        // Skipping the build leaves this asset with a null traversable, so
+        // every instance referencing it is silently missing from the TLAS and
+        // the mesh simply never appears. That is near-impossible to diagnose
+        // from the resulting image, so say so here: the usual cause is building
+        // scene content before the Raytracer that brings CUDA and OptiX up.
+        LOG_WARN("MeshAsset '" << path << "': no OptiX context or CUDA stream yet, "
+            "skipping BLAS build. Create the Raytracer before adding geometry, "
+            "or this mesh will not be traced.");
+        return;
+    }
+    blas.build(
+        ctx.getOptixContext(), ctx.getCudaStream(),
+        this->vertices.data(), static_cast<uint32_t>(this->vertices.size()), sizeof(Vertex),
+        this->indices.data(), static_cast<uint32_t>(this->indices.size() / 3),
+        this->faces.empty() ? nullptr : &this->faces.data()->materialIndex,
+        sizeof(Face), static_cast<uint32_t>(materialIds.size()));
 }
 
 MeshAsset::MeshAsset(MeshAsset&& other) noexcept

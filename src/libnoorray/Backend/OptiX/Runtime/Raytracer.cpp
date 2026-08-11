@@ -671,6 +671,7 @@ void Raytracer::resize(const uint32_t newWidth, const uint32_t newHeight)
     // scenes). Dirty scene resources are handled once below in renderFrame().
     NR_GPU_CHECK(cudaStreamSynchronize(stream));
     lastReadyValue = 0;
+    consumedReadyValue = 0;
 }
 
 void Raytracer::ensureAovImages()
@@ -1983,6 +1984,14 @@ void Raytracer::debugSave(const std::string& path) const
 InteropFrame Raytracer::getInteropFrame() const
 {
     return {0, lastReadyValue, renderReady.get(), bufferReleased.get()};
+}
+
+std::optional<InteropFrame> Raytracer::consumeInteropFrame()
+{
+    if (!isFrameReady() || lastReadyValue <= consumedReadyValue)
+        return std::nullopt;
+    consumedReadyValue = lastReadyValue;
+    return getInteropFrame();
 }
 
 bool Raytracer::isRenderInFlight() const

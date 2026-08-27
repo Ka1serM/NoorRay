@@ -8,8 +8,6 @@
 #include "UI/Window.h"
 
 class ImGuiManager;
-class MaterialXSceneRuntime;
-class Viewport;
 
 class NoorRayUi
 {
@@ -22,7 +20,5 @@ public:
 private:
     Window window;
     noorray::NoorRaySession session;
-    std::unique_ptr<MaterialXSceneRuntime> materialxRuntime;
-    std::unique_ptr<Viewport> viewport;
     std::unique_ptr<ImGuiManager> imGuiManager;
 };

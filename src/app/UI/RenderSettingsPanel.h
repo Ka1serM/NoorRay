@@ -17,6 +17,5 @@ public:
 
 private:
     Scene& scene;
-    std::optional<BufferVisualization> previousDenoiserBuffer;
     std::optional<BufferVisualization> previousProxyOverdrawBuffer;
 };

@@ -1,17 +1,18 @@
 ﻿#pragma once
 
-#include "Backend/Vulkan/Runtime/Context.h"
-#include "Backend/Vulkan/Runtime/Image.h"
+#include <gpu/interop.hpp>
+#include <vulkan/vulkan.hpp>
 #include "UI/ImGuiComponent.h"
+#include <memory>
 #include <string>
 #include "imgui.h" //needed here for ImGuizmo!
 #include "ImGuizmo.h"
 #include "Scene/Scene.h"
-#include "Backend/Vulkan/Runtime/Buffer.h"
 #include <SDL3/SDL_events.h>
 
 class Window;
-class Raytracer;
+class VulkanRaytracer;
+class Viewport;
 
 class ViewportPanel : public ImGuiComponent {
 public:
@@ -20,9 +21,6 @@ public:
     void handleObjectPicking();
     bool handleBillboardPicking() const;
     void handlePositionPicking() const;
-    void onComputeFinished(vk::CommandBuffer cmd, Image& srcImage);
-    void setAovImages(Image& crypto, Image& position);
-    void resize(uint32_t width, uint32_t height, vk::Format imageFormat);
     // Returns true when the viewport owns this event and it must not be sent to ImGui.
     bool processEvent(const SDL_Event& event);
     ~ViewportPanel() override;
@@ -31,40 +29,23 @@ public:
     bool needsContinuousRedraw() const { return isCapturingMouse; }
     uint32_t getSelectedGaussianIndex() const { return selectedGaussianIndex; }
 
-    ViewportPanel(const std::string& name, Window& window, Context& context, Scene& scene,
-        Raytracer& raytracer, const Image& outputColor, Image& outputCrypto,
-        Image& outputPosition, uint32_t width, uint32_t height);
+    ViewportPanel(const std::string& name, Window& window, Scene& scene,
+        VulkanRaytracer& raytracer);
     void updateLayout();
+    void recordPresentation();
 
 private:
-    // Reads an AOV texel back through a blocking one-time submit. Returns false
-    // when the image is unavailable or the copy region would leave its extent.
-    bool readbackAovTexel(Image* image, const Buffer& staging) const;
-
     Window& window;
-    Context& context;
     Scene& scene;
-    // AOV images are Vulkan/CUDA interop images. Readbacks transition their
-    // layout, so they must not overlap an OptiX launch writing to them.
-    Raytracer& raytracer;
-    Image* outputCrypto;
-    Image* outputPosition;
+    VulkanRaytracer& raytracer;
+    std::unique_ptr<Viewport> compositor;
     
     uint32_t width;
     uint32_t height;
 
     vk::UniqueSampler sampler;
-    vk::UniqueDescriptorSetLayout descriptorSetLayout;
-    vk::UniqueDescriptorSet outputImageDescriptorSet;
-
-    Image displayImage;
-    
-    Buffer cryptoStagingBuffer; // Staging buffer for picking
-    void* cryptoStagingBufferMappedPtr = nullptr;
-    bool  pickingRequested = false;
-
-    Buffer positionStagingBuffer; // Staging buffer for picking
-    void* positionStagingBufferMappedPtr = nullptr;
+    VkDescriptorSet outputImageDescriptorSet{};
+    vk::ImageView observedImageView{};
     
     bool isCapturingMouse = false;
     bool imguiMouseWasDisabled = false;

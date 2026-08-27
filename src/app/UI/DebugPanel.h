@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "ImGuiComponent.h"
 #include <chrono>
 #include <string>
@@ -6,8 +6,16 @@
 class DebugPanel : public ImGuiComponent {
 public:
     explicit DebugPanel(std::string name);
-    
-    void onComputeFinished(float raytraceMs);
+
+    // Called once per presented frame by the UI loop.
+    //   frameSeconds     wall-clock duration of the loop iteration, which only
+    //                    advances the render timer. FPS is raytracer throughput
+    //                    (1000 / raytraceMs), not application frame rate.
+    //   raytraceMs       GPU time of a single path-tracing dispatch.
+    //   samplesThisFrame dispatches recorded this frame; zero once the sample
+    //                    budget is reached and the renderer idles, which is what
+    //                    freezes the render timer and the raytrace average.
+    void onFrameCompleted(double frameSeconds, float raytraceMs, int samplesThisFrame);
     void setSampleInfo(int current, int max);
     void resetRenderTimer();
     void renderUi() override;
@@ -20,8 +28,11 @@ private:
     int m_currentSample = 0;
     int m_maxSamples = 0;
 
+    // Averaged over a one-second window so the readout stays legible instead of
+    // flickering with per-frame jitter.
     double m_accumMs = 0.0;
-    int m_frameCount = 0;
+    int m_dispatchCount = 0;
+    bool m_published = false;
     std::chrono::steady_clock::time_point m_lastResetTime = std::chrono::steady_clock::now();
 
     double m_renderTimeSeconds = 0.0;

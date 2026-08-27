@@ -26,7 +26,7 @@
 #include <string_view>
 #include <utility>
 
-#include "Backend/OptiX/Runtime/Raytracer.h"
+#include "Backend/Vulkan/Raytracer/RaytracerRenderer.h"
 #include "Scene/Resources/Texture.h"
 
 namespace mx = MaterialX;
@@ -80,12 +80,6 @@ std::string AssetFlightKey(const std::string& resolvedPath,
 
 HdNoorRayRenderParam::HdNoorRayRenderParam()
 {
-    // Mutations no longer block on render completion. The GPU stream is
-    // synchronized once per frame in Raytracer::renderFrame() via the
-    // Scene::consumeGpuSync() mechanism, which batches all changes from a
-    // single Hydra commit into one sync point.
-    if (session.raytracer)
-        session.raytracer->setTimingEnabled(true);
 }
 
 HdNoorRayRenderParam::~HdNoorRayRenderParam() noexcept
@@ -101,10 +95,8 @@ HdNoorRayRenderParam::~HdNoorRayRenderParam() noexcept
             "[hdNoorRay] a background material compile failed during "
             "shutdown: unknown exception\n");
     }
-    session.scene.setMutationBarrier({});
-    if (session.raytracer) {
-        session.raytracer->waitForRender();
-    }
+    if (session.raytracer)
+        session.raytracer->device().synchronize();
     // Give up every reference before the session (and with it the registries
     // they point into) is destroyed.
     textureCache_.clear();
@@ -523,39 +515,15 @@ bool HdNoorRayRenderParam::ProcessMaterialCompilations()
         readyMaterialCompiles_.push_back(std::move(result));
     }
     // A scene import can enqueue hundreds of materials. Registering each
-    // wave as soon as it finishes would relink the entire OptiX pipeline once
-    // per frame. Commit the wave together after its last compiler job ends.
+    // Commit a completed wave together so libnoorray uploads one immutable
+    // Vulkan material table rather than replacing it for each material.
     if (pendingMaterialCompiles_.load(std::memory_order_relaxed) != 0)
         return false;
 
-    // Fallback documents published straight into scene slots (the shared
-    // native grey, released materials) have no Hydra material prim behind
-    // them, so the queue above never compiles them. Install their programs
-    // here; the graphs are tiny so this stays off the async path.
-    if (CompileSceneMaterials())
-        materialsChanged = true;
-
-    const auto publishCompiledProgram = [this](MaterialCompilationResult& result) {
-        if (!session.raytracer)
-            return false;
-        const auto published = materials_.find(result.id);
-        const Material* previousMaterial =
-            published != materials_.end() && published->second.isValid()
-            ? &session.scene.getMaterials()[published->second.index()] : nullptr;
-        const nr::svm::SvmProgramRecord record = previousMaterial
-            && previousMaterial->svmBytecodeLength != 0
-            ? session.raytracer->replaceMaterialXProgram(result.output.program)
-            : session.raytracer->registerMaterialXProgram(result.output.program);
-        PublishMaterial(result.id, result.document);
-        Material& compiled = session.scene.getMaterial(
-            materials_[result.id].handle());
-        compiled.svmBytecodeOffset = record.wordOffset;
-        compiled.svmBytecodeLength = record.wordCount;
-        compiled.svmTextureOffset = record.textureOffset;
-        compiled.svmTextureCount = record.textureCount;
-        return true;
-    };
-
+    // libnoorray owns the material program table now. Hydra's worker jobs
+    // remain useful for validating documents, but publication invalidates the
+    // scene slot and lets MaterialXSceneRuntime compile/upload one immutable
+    // Vulkan table for the completed batch.
     for (MaterialCompilationResult& result : readyMaterialCompiles_) {
         std::scoped_lock lock(mutex);
         const auto generation = materialCompileGenerations_.find(result.id);
@@ -575,12 +543,11 @@ bool HdNoorRayRenderParam::ProcessMaterialCompilations()
                     nr::materialx::defaultMaterial();
                 fallbackDocument->setDataLibrary(
                     nr::materialx::getSharedStandardLibraries());
-                nr::svm::SvmCompiler compiler;
-                result.output.program = compiler.compile(fallbackDocument);
                 result.document = std::move(fallbackDocument);
                 result.error.clear();
-                if (publishCompiledProgram(result))
-                    materialsChanged = true;
+                PublishMaterial(result.id, result.document);
+                session.scene.invalidateMaterial(materials_[result.id].handle());
+                materialsChanged = true;
             } catch (const std::exception& error) {
                 TF_WARN(
                     "hdNoorRay: default MaterialX fallback also failed for %s: %s",
@@ -588,10 +555,13 @@ bool HdNoorRayRenderParam::ProcessMaterialCompilations()
             }
             continue;
         }
-        if (publishCompiledProgram(result))
-            materialsChanged = true;
+        PublishMaterial(result.id, result.document);
+        session.scene.invalidateMaterial(materials_[result.id].handle());
+        materialsChanged = true;
     }
     readyMaterialCompiles_.clear();
+    if (materialsChanged && session.raytracer)
+        session.rebuildNativeMaterials();
     return materialsChanged;
 }
 
@@ -683,40 +653,10 @@ bool HdNoorRayRenderParam::CompileSceneMaterials()
     if (toCompile.empty())
         return false;
 
-    bool materialsChanged = false;
-    const std::vector<MaterialX::DocumentPtr>& documents =
-        session.scene.getMaterialXDocuments();
-    for (const MaterialRef& slot : toCompile) {
-        if (!slot.isValid() || !session.raytracer)
-            continue;
-        const size_t index = slot.index();
-        if (index >= documents.size() || !documents[index])
-            continue;
-        Material& material = session.scene.getMaterial(slot.handle());
-        if (material.svmBytecodeLength != 0)
-            continue;
-        try {
-            // The graph is a shared immutable fallback document; setDataLibrary
-            // only stores a reference to the process-wide standard libraries.
-            const MaterialX::DocumentPtr& document = documents[index];
-            document->setDataLibrary(nr::materialx::getSharedStandardLibraries());
-            nr::svm::SvmCompiler compiler;
-            const nr::svm::SvmProgramRecord record =
-                session.raytracer->registerMaterialXProgram(
-                    compiler.compile(document));
-            material.svmBytecodeOffset = record.wordOffset;
-            material.svmBytecodeLength = record.wordCount;
-            material.svmTextureOffset = record.textureOffset;
-            material.svmTextureCount = record.textureCount;
-            session.scene.setDirtyFlag(Meshes);
-            session.scene.setDirtyFlag(Accumulation);
-            materialsChanged = true;
-        } catch (const std::exception& error) {
-            TF_WARN("hdNoorRay: could not compile fallback material for slot %zu: %s",
-                index, error.what());
-        }
-    }
-    return materialsChanged;
+    if (!session.raytracer)
+        return false;
+    session.rebuildNativeMaterials();
+    return true;
 }
 
 void HdNoorRayRenderParam::PublishMaterial(

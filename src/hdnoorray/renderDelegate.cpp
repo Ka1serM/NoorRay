@@ -243,10 +243,9 @@ HdNoorRayRenderDelegate::GetRenderSettingDescriptors() const
 {
     return {
         {"Samples", TfToken("samples"), VtValue(64)},
+        {"AOVs During Camera Motion", TfToken("aovEnabled"), VtValue(1)},
         {"Maximum Bounces", TfToken("maxBounces"), VtValue(8)},
         {"Indirect Light Clamp", TfToken("indirectLightClamp"), VtValue(10.0f)},
-        {"OptiX Denoiser", TfToken("optixDenoiserEnabled"), VtValue(0)},
-        {"Denoiser Min Samples", TfToken("optixDenoiserMinSamples"), VtValue(1)},
         {"Transparent Background", TfToken("transparentBackground"), VtValue(0)},
         {"Gaussian Cutoff Sigma", TfToken("gaussianCutoffSigma"), VtValue(3.0f)},
         {"Gaussian Proxy Type", TfToken("gaussianProxyType"), VtValue(3)},

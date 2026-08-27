@@ -18,19 +18,13 @@ NB_MODULE(_pynoorray, module)
     bindMeshInstance(module);
     bindSensor(module);
     bindRectangularSensor(module);
-    bindScatterPsfSensor(module);
-    bindGatherPsfSensor(module);
     bindCamera(module);
     bindPerspectiveCamera(module);
     bindThinLensCamera(module);
     bindOrthographicCamera(module);
     bindFisheyeCamera(module);
     bindRealisticCamera(module);
-    bindHybridPsfCamera(module);
     bindCameraInstance(module);
     bindScene(module);
-    bindContext(module);
-    bindImage(module);
-    bindRaytracer(module);
     bindNoorRaySession(module);
 }

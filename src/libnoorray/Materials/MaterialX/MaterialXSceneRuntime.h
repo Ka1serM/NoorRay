@@ -3,7 +3,8 @@
 #include <memory>
 #include <string>
 
-class Raytracer;
+#include "Materials/SVM/SvmProgramTable.h"
+
 class Scene;
 
 // Owns asynchronous MaterialX-to-SVM compilation for one application session.
@@ -16,8 +17,8 @@ public:
     MaterialXSceneRuntime(const MaterialXSceneRuntime&) = delete;
     MaterialXSceneRuntime& operator=(const MaterialXSceneRuntime&) = delete;
 
-    void compilePending(
-        Scene& scene, Raytracer& raytracer, const std::string& sceneDirectory = {});
+    void compilePending(Scene& scene, const std::string& sceneDirectory = {});
+    const nr::svm::SvmProgramTable& programs() const;
     bool needsCompilation(const Scene& scene) const;
     bool hasPendingCompilations() const;
 

@@ -5,7 +5,7 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Sampling/RandomSampler.h"
 #include "Materials/Shading/BsdfClosure.h"
 #include "Materials/Shading/Lobes/ConductorLobe.h"

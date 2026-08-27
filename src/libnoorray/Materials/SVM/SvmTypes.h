@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 // Shader Virtual Machine bytecode format for MaterialX graphs.
 namespace nr::svm

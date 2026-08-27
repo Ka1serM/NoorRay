@@ -8,7 +8,7 @@
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Ray.h"
 #include "Materials/SVM/SvmTypes.h"
 

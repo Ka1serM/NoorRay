@@ -14,20 +14,39 @@ void DebugPanel::resetRenderTimer() {
     m_renderTimeSeconds = 0.0;
 }
 
-void DebugPanel::onComputeFinished(const float raytraceMs) {
-    m_renderTimeSeconds += static_cast<double>(raytraceMs) / 1000.0;
-    m_accumMs += raytraceMs;
-    m_frameCount++;
+void DebugPanel::onFrameCompleted(const double frameSeconds, const float raytraceMs,
+    const int samplesThisFrame) {
+    if (samplesThisFrame > 0) {
+        m_accumMs += raytraceMs;
+        m_dispatchCount++;
+        // Wall clock spent converging, so the timer stops on its own once the
+        // sample budget is reached rather than counting idle frames.
+        m_renderTimeSeconds += frameSeconds;
+    }
 
     const auto now = std::chrono::steady_clock::now();
     const auto elapsed = std::chrono::duration<double>(now - m_lastResetTime).count();
-    if (elapsed >= 1.0) {
-        m_avgMs = static_cast<float>(m_accumMs / m_frameCount);
+    const bool windowComplete = elapsed >= 1.0;
+    // Until the first window closes, publish the growing average every frame.
+    // Waiting the full second instead left the panel reading a flat 0.00 on
+    // startup, which is exactly what a broken readout looks like.
+    if (!windowComplete && m_published)
+        return;
+    // Hold the last measurement while the renderer idles; a completed render
+    // has no new dispatches to average and zeroing it would just read as broken.
+    if (m_dispatchCount > 0) {
+        m_avgMs = static_cast<float>(m_accumMs / m_dispatchCount);
+        // Raytracer throughput, not application frame rate: this is how many
+        // samples per second the path-tracing dispatch itself sustains, with
+        // UI, composite and present cost excluded.
         m_avgFps = m_avgMs > 0.0f ? 1000.0f / m_avgMs : 0.0f;
-        m_accumMs = 0.0;
-        m_frameCount = 0;
-        m_lastResetTime = now;
     }
+    if (!windowComplete)
+        return;
+    m_accumMs = 0.0;
+    m_dispatchCount = 0;
+    m_lastResetTime = now;
+    m_published = true;
 }
 
 void DebugPanel::renderUi() {

@@ -10,7 +10,7 @@
 
 #include <glm/vec3.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Ray.h"
 
 static constexpr int NrSpectrumSamples = 4;

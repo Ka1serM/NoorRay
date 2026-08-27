@@ -4,10 +4,7 @@
 #include <cmath>
 #include <cstdint>
 
-#include <cuda_runtime.h>
-
-#include "Backend/CUDA/Annotations.h"
-#include "Backend/CUDA/Unique/Texture.h"
+#include "Backend/Host/Platform.h"
 #include "Materials/Shading/EnergyLut/EnergyLutConfig.h"
 
 namespace nr::shading::energy_lut
@@ -49,27 +46,19 @@ inline constexpr uint16_t GlassAverageAlbedo[
 
 struct Textures
 {
-    cudaTextureObject_t ggxDirectional{};
-    cudaTextureObject_t ggxAverage{};
-    cudaTextureObject_t dielectricDirectional{};
-    cudaTextureObject_t dielectricAverage{};
-    cudaTextureObject_t glassDirectional{};
-    cudaTextureObject_t glassAverage{};
+    const uint16_t* ggxDirectional{};
+    const uint16_t* ggxAverage{};
+    const uint16_t* dielectricDirectional{};
+    const uint16_t* dielectricAverage{};
+    const uint16_t* glassDirectional{};
+    const uint16_t* glassAverage{};
 };
 
 class Storage
 {
 public:
-    Textures upload(cudaStream_t stream);
+    Textures upload() noexcept;
     Textures textures() const noexcept;
-
-private:
-    nr::cuda::UniqueTexture ggxDirectional_;
-    nr::cuda::UniqueTexture ggxAverage_;
-    nr::cuda::UniqueTexture dielectricDirectional_;
-    nr::cuda::UniqueTexture dielectricAverage_;
-    nr::cuda::UniqueTexture glassDirectional_;
-    nr::cuda::UniqueTexture glassAverage_;
 };
 
 NR_CPU_GPU inline float clampUnit(const float value)
@@ -132,25 +121,19 @@ NR_CPU_GPU inline float sample3dHost(
 }
 
 NR_CPU_GPU inline float sample2d(
-    const cudaTextureObject_t texture,
+    const uint16_t* texture,
     const uint16_t* hostValues,
     const int width,
     const int height,
     const float x,
     const float y)
 {
-#if defined(__CUDA_ARCH__)
-    return tex2D<float>(texture,
-        clampUnit(x) * static_cast<float>(width - 1) + 0.5f,
-        clampUnit(y) * static_cast<float>(height - 1) + 0.5f);
-#else
-    (void)texture;
-    return sample2dHost(hostValues, width, height, x, y);
-#endif
+    return sample2dHost(hostValues ? hostValues : texture,
+        width, height, x, y);
 }
 
 NR_CPU_GPU inline float sample3d(
-    const cudaTextureObject_t texture,
+    const uint16_t* texture,
     const uint16_t* hostValues,
     const int width,
     const int height,
@@ -159,15 +142,8 @@ NR_CPU_GPU inline float sample3d(
     const float y,
     const float z)
 {
-#if defined(__CUDA_ARCH__)
-    return tex3D<float>(texture,
-        clampUnit(x) * static_cast<float>(width - 1) + 0.5f,
-        clampUnit(y) * static_cast<float>(height - 1) + 0.5f,
-        clampUnit(z) * static_cast<float>(depth - 1) + 0.5f);
-#else
-    (void)texture;
-    return sample3dHost(hostValues, width, height, depth, x, y, z);
-#endif
+    return sample3dHost(hostValues ? hostValues : texture,
+        width, height, depth, x, y, z);
 }
 
 NR_CPU_GPU inline float cosineCoordinate(const float cosine)
@@ -197,12 +173,8 @@ NR_CPU_GPU inline float glassIorCoordinate(const float relativeIor)
 NR_CPU_GPU inline float ggxDirectionalAlbedo(
     const Textures* textures, const float roughness, const float cosine)
 {
-#if defined(__CUDA_ARCH__)
-    const uint16_t* hostValues = nullptr;
-#else
     const uint16_t* hostValues = data::GgxDirectionalAlbedo;
-#endif
-    return sample2d(textures ? textures->ggxDirectional : 0, hostValues,
+    return sample2d(textures ? textures->ggxDirectional : hostValues, hostValues,
         GgxCosineSize, GgxRoughnessSize,
         cosineCoordinate(cosine), clampUnit(roughness));
 }
@@ -210,12 +182,8 @@ NR_CPU_GPU inline float ggxDirectionalAlbedo(
 NR_CPU_GPU inline float ggxAverageAlbedo(
     const Textures* textures, const float roughness)
 {
-#if defined(__CUDA_ARCH__)
-    const uint16_t* hostValues = nullptr;
-#else
     const uint16_t* hostValues = data::GgxAverageAlbedo;
-#endif
-    return sample2d(textures ? textures->ggxAverage : 0, hostValues,
+    return sample2d(textures ? textures->ggxAverage : hostValues, hostValues,
         GgxRoughnessSize, 1, clampUnit(roughness), 0.0f);
 }
 
@@ -225,12 +193,8 @@ NR_CPU_GPU inline float dielectricDirectionalAlbedo(
     const float cosine,
     const float normalReflectance)
 {
-#if defined(__CUDA_ARCH__)
-    const uint16_t* hostValues = nullptr;
-#else
     const uint16_t* hostValues = data::DielectricDirectionalAlbedo;
-#endif
-    return sample3d(textures ? textures->dielectricDirectional : 0, hostValues,
+    return sample3d(textures ? textures->dielectricDirectional : hostValues, hostValues,
         DielectricCosineSize, DielectricRoughnessSize, DielectricF0Size,
         cosineCoordinate(cosine), clampUnit(roughness),
         dielectricF0Coordinate(normalReflectance));
@@ -241,12 +205,8 @@ NR_CPU_GPU inline float dielectricAverageAlbedo(
     const float roughness,
     const float normalReflectance)
 {
-#if defined(__CUDA_ARCH__)
-    const uint16_t* hostValues = nullptr;
-#else
     const uint16_t* hostValues = data::DielectricAverageAlbedo;
-#endif
-    return sample2d(textures ? textures->dielectricAverage : 0, hostValues,
+    return sample2d(textures ? textures->dielectricAverage : hostValues, hostValues,
         DielectricRoughnessSize, DielectricF0Size,
         clampUnit(roughness), dielectricF0Coordinate(normalReflectance));
 }
@@ -259,12 +219,8 @@ NR_CPU_GPU inline float glassDirectionalAlbedo(
 {
     if (fabsf(relativeIor - 1.0f) < 1.0e-4f)
         return 1.0f;
-#if defined(__CUDA_ARCH__)
-    const uint16_t* hostValues = nullptr;
-#else
     const uint16_t* hostValues = data::GlassDirectionalAlbedo;
-#endif
-    return sample3d(textures ? textures->glassDirectional : 0, hostValues,
+    return sample3d(textures ? textures->glassDirectional : hostValues, hostValues,
         GlassCosineSize, GlassRoughnessSize, GlassIorSize,
         cosineCoordinate(cosine), clampUnit(roughness),
         glassIorCoordinate(relativeIor));
@@ -277,12 +233,8 @@ NR_CPU_GPU inline float glassAverageAlbedo(
 {
     if (fabsf(relativeIor - 1.0f) < 1.0e-4f)
         return 1.0f;
-#if defined(__CUDA_ARCH__)
-    const uint16_t* hostValues = nullptr;
-#else
     const uint16_t* hostValues = data::GlassAverageAlbedo;
-#endif
-    return sample2d(textures ? textures->glassAverage : 0, hostValues,
+    return sample2d(textures ? textures->glassAverage : hostValues, hostValues,
         GlassRoughnessSize, GlassIorSize,
         clampUnit(roughness), glassIorCoordinate(relativeIor));
 }

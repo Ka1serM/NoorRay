@@ -4,7 +4,7 @@
 
 #include <glm/vec3.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 // Standard visible Fraunhofer lines used by optical-glass catalogs.
 inline constexpr float FraunhoferRedNm   = 656.2725f; // C line, H

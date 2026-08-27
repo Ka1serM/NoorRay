@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Camera/Camera.h"
 #include "Rendering/Sampling/RandomSampler.h"
 
-class ThinLensCamera : public Camera::Type<ThinLensCamera> {
+class ThinLensCamera : public Camera {
 public:
     ThinLensCamera();
     explicit ThinLensCamera(std::unique_ptr<Sensor> sensor);
@@ -13,7 +13,7 @@ public:
     float apertureDiameterMm{};
     float bokehBias{1.f};
 
-    NR_CPU_GPU nr::rstd::optional<CameraSample> generateRay(
+    NR_CPU_GPU std::optional<CameraSample> generateRay(
         float nx, float ny, const glm::vec2 lensSample, uint32_t, SampledWavelengths&,
         bool centered = false) const
     {

@@ -4,6 +4,9 @@ cmake_minimum_required(VERSION 3.25)
 # Automatic setup of the vendored Blender USD SDK
 # --------------------------------------------------------------------------
 set(NR_VENDORED_USD_DIR "${PROJECT_SOURCE_DIR}/external/blender-usd")
+if(NOT NR_USD_ROOT)
+    set(NR_USD_ROOT "${NR_VENDORED_USD_DIR}")
+endif()
 
 if(NR_USD_ROOT STREQUAL NR_VENDORED_USD_DIR)
     # Vendored headers — fetch from Blender's dependency package if missing.
@@ -183,8 +186,6 @@ target_include_directories(hdnoorray PRIVATE
 target_compile_definitions(hdnoorray PRIVATE
         NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
 if(UNIX AND NOT APPLE)
-    # The Blender Flatpak does not provide CUDA's user-mode runtime. Bundle it
-    # beside the delegate and let the dynamic loader resolve it locally.
     target_link_options(hdnoorray PRIVATE "LINKER:-rpath,$ORIGIN")
     # Blender and its USD/OIIO dependencies load their own TBB ABI, so
     # exporting the statically linked oneTBB runtime from this module would
@@ -265,9 +266,6 @@ add_custom_command(TARGET hdnoorray POST_BUILD
                 "$<TARGET_FILE:hdnoorray>"
                 "${CMAKE_BINARY_DIR}/hdnoorray/plugin/plugInfo.json"
                 "${HDNOORRAY_BLENDER_EXTENSION_DIR}/plugin"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "$<TARGET_FILE:CUDA::cudart>"
-                "${HDNOORRAY_BLENDER_EXTENSION_DIR}/plugin/libcudart.so.13"
         COMMAND "${CMAKE_COMMAND}" -E tar cf
                 "${CMAKE_BINARY_DIR}/hdnoorray/hdnoorray-blender-5.2.zip"
                 --format=zip

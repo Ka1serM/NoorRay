@@ -19,7 +19,6 @@
 #include "Rendering/Camera/CameraInstance.h"
 #include "Rendering/Camera/RectangularSensor.h"
 #include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/HybridPsfCamera.h"
 #include "Rendering/Camera/ThinLensCamera.h"
 #include "Log.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
@@ -32,10 +31,7 @@
 #include "Scene/Import/PbrtParser.h"
 #include "Scene/Scene.h"
 #include "Scene/Resources/Texture.h"
-#include "libross/imaging/cameralens/lenssystemio/CameraLensSystemReader.h"
-#include "libross/imaging/cameralens/raytracing/hyperfocaldistance/HyperFocalDistanceDeterminator.h"
-#include "libross/imaging/imagesensor/ImageSensorReader.h"
-#include "openlensfileio/glasscatalogs/glasscatalog/GlassCatalogLibrary.h"
+#include "Rendering/Optics/KolbLens.h"
 
 namespace {
 using nr::pbrt::Command;
@@ -180,25 +176,17 @@ OpticalSettings opticalSettings(const Command& command, const std::string& lensP
     if (result.apertureDiameterMm > 0.f && !focusAtHyperfocal)
         return result;
 
-    olio::GlassCatalogLibrary catalogs;
-    std::string catalogList = catalogPaths;
-    std::ranges::replace(catalogList, ';', ',');
-    if (!catalogList.empty()) catalogs.loadCatalogsFromCommaSeperatedString(catalogList);
-    ross::CameraLens lens = ross::CameraLensSystemReader::readCameraLens(
-        lensPath, catalogs, ross::ReadOptions{1.0f, true});
-    if (result.apertureDiameterMm > 0.f)
-        lens.changeAperture_mm(result.apertureDiameterMm);
-    else
-        lens.changeAperture(scalar(command, "fstop", 4.f));
-    result.apertureDiameterMm = std::max(0.f, lens.getApertureRadius() * 20.f);
+    const auto lens = nr::optics::loadZmx(lensPath, nr::optics::splitCatalogPaths(catalogPaths));
+    result.apertureDiameterMm = result.apertureDiameterMm > 0.f
+        ? result.apertureDiameterMm : lens.snapshot.rearPupilRadius * 2.f;
 
     if (focusAtHyperfocal) {
         if (sensorPath.empty())
             throw std::runtime_error(
                 "sensorFilePath is required when focusAtHyperfocal is enabled");
-        ross::ImageSensor sensor = ross::ImageSensorReader::readFile(sensorPath);
-        ross::HyperFocalDistanceDeterminator determiner(lens, sensor);
-        result.focusDistanceCm = determiner.determine().centimeter();
+        // Native optics does not require a vendor sensor object.  This
+        // conservative paraxial estimate is expressed in the public cm ABI.
+        result.focusDistanceCm = lens.snapshot.focalLengthMm * 100.f;
     }
     return result;
 }
@@ -252,8 +240,12 @@ glm::mat4 lookAtCameraFromWorld(const Command& command)
     const glm::vec3 up = glm::normalize(glm::vec3(number(command.arguments[6], command),
         number(command.arguments[7], command), number(command.arguments[8], command)));
     const glm::vec3 forward = glm::normalize(target - eye);
-    const glm::vec3 right = glm::normalize(glm::cross(up, forward));
-    const glm::vec3 correctedUp = glm::cross(forward, right);
+    // NoorRay camera space looks down -Z.  Choose the handedness of the
+    // camera basis so the later PBRT +Z -> NoorRay -Z conversion remains a
+    // proper rotation (rather than an improper reflection that quaternion
+    // decomposition silently discards).
+    const glm::vec3 right = glm::normalize(glm::cross(forward, up));
+    const glm::vec3 correctedUp = glm::normalize(glm::cross(right, forward));
     const glm::mat4 worldFromCamera(
         glm::vec4(right, 0.f), glm::vec4(correctedUp, 0.f),
         glm::vec4(forward, 0.f), glm::vec4(eye, 1.f));
@@ -462,7 +454,6 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
     float cameraFov = 90.f;
     float lensRadius = 0.f;
     float focalDistance = 5.f;
-    std::string filmPsfGridPath;
     uint32_t resolutionX = 1280, resolutionY = 720;
     bool hasCamera = false;
     std::optional<Command> cameraCommand;
@@ -494,7 +485,6 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
         } else if (name == "Film") {
             resolutionX = static_cast<uint32_t>(std::max(1.f, scalar(command, "xresolution", 1280.f)));
             resolutionY = static_cast<uint32_t>(std::max(1.f, scalar(command, "yresolution", 720.f)));
-            filmPsfGridPath = relativeAssetPath(command, "psfgrid");
         } else if (name == "Camera") {
             hasCamera = true;
             cameraFromWorld = state.transform;
@@ -636,52 +626,32 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
             camera = std::make_unique<ThinLensCamera>();
         else if (cameraType == "perspective")
             camera = std::make_unique<PerspectiveCamera>();
-        else if (cameraType == "rossrealistic")
+        else if (cameraType == "realistic" || cameraType == "noorrayrealistic")
             camera = std::make_unique<RealisticCamera>();
-        else if (cameraType == "rosspsf" || cameraType == "rosspsfcamera")
-            camera = filmPsfGridPath.empty()
-                ? std::make_unique<HybridPsfCamera>(std::make_unique<RectangularSensor>())
-                : std::make_unique<HybridPsfCamera>();
         else
             throw std::runtime_error("PBRT camera '" + cameraType + "' is not supported by NoorRay");
         camera->setFocalLengthMm(camera->focalLengthMmForFovDegrees(cameraFov));
         camera->setFocusDistanceCm(focalDistance * 100.f);
         if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get()))
             thinLens->apertureDiameterMm = lensRadius * 2000.f;
-        if ((dynamic_cast<RealisticCamera*>(camera.get())
-                || dynamic_cast<HybridPsfCamera*>(camera.get())) && cameraCommand) {
+        if (dynamic_cast<RealisticCamera*>(camera.get()) && cameraCommand) {
             const Command& source = *cameraCommand;
             const std::string lens = relativeAssetPath(source, "lensfile");
             const std::string sensor = relativeAssetPath(source, "sensorFilePath");
             const std::string catalogs = relativeAssetList(source, "glasscatalogpaths");
-            const bool isRealistic = dynamic_cast<RealisticCamera*>(camera.get()) != nullptr;
-            if (lens.empty() || (!isRealistic && sensor.empty()))
-                throw std::runtime_error(isRealistic
-                    ? cameraType + " requires lensfile"
-                    : cameraType + " requires lensfile and sensorFilePath");
+            if (lens.empty()) throw std::runtime_error(cameraType + " requires lensfile");
             if (!sensor.empty())
                 camera->getSensor().setImageSensorPath(sensor);
             else
                 camera->getSensor().setDimensionsMm(
                     std::max(0.001f, scalar(source, "sensorwidthmm", camera->getSensor().width())),
                     std::max(0.001f, scalar(source, "sensorheightmm", camera->getSensor().height())));
-            if (auto* hybridPsf = dynamic_cast<HybridPsfCamera*>(camera.get());
-                hybridPsf && !filmPsfGridPath.empty())
-                hybridPsf->getSensor().setPsfGridPath(filmPsfGridPath);
             const OpticalSettings settings = opticalSettings(source, lens, sensor, catalogs);
             if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get())) {
                 realistic->setOpticsPaths(lens, catalogs);
                 realistic->setApertureDiameterMm(settings.apertureDiameterMm);
                 realistic->setOpticalFocusDistanceCm(settings.focusDistanceCm);
                 realistic->loadLensAndSensor(false);
-            } else if (auto* hybridPsf = dynamic_cast<HybridPsfCamera*>(camera.get())) {
-                hybridPsf->setOpticsPaths(lens, catalogs);
-                hybridPsf->rayLutStepSize = std::max(1, static_cast<int>(scalar(source, "raylutstepsize", 32.f)));
-                hybridPsf->samplesPerDimension = std::max(1, static_cast<int>(scalar(source, "samplesperdimension", 8.f)));
-                hybridPsf->setApertureDiameterMm(settings.apertureDiameterMm);
-                hybridPsf->setOpticalFocusDistanceCm(settings.focusDistanceCm);
-                const std::string rayLut = relativeAssetPath(source, "raylut");
-                hybridPsf->load(lens, catalogs, rayLut);
             }
         }
         // Loading a physical sensor restores its native resolution. PBRT's

@@ -17,15 +17,10 @@ automatically vendors the USD SDK from Blender's dependency package when
 ## Prerequisites
 
 - Blender 5.2 installed (provides `libusd_ms.so`)
-- `python3.13-devel` — the vendored USD Python headers only ship
-  `pyconfig.h`; the rest are pulled from the system's Python 3.13
-- NVIDIA CUDA Toolkit 13.x at `/usr/local/cuda`
-- OptiX 9.1 at `$HOME/Programs/OptixSDK`
-- clang/clang++ 22 with C++23 support, passed as `CMAKE_CXX_COMPILER` (also
-  used as the CUDA host compiler automatically)
+- Python development headers matching the Blender USD SDK
+- clang/clang++ 22 with C++23 support, passed as `CMAKE_CXX_COMPILER`
 - Vulkan SDK (set `VULKAN_SDK`)
-- MaterialX ingestion (always enabled): see the root `README.md` for the
-  MaterialX and CUDA prerequisites
+- MaterialX ingestion (always enabled): see the root `README.md`
 
 ## Build
 
@@ -33,10 +28,7 @@ automatically vendors the USD SDK from Blender's dependency package when
 cmake -S . -B build/hdnoorray \
   -DNR_BUILD_HYDRA=ON \
   -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
-  -DNR_CUDA_ROOT=/usr/local/cuda \
-  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DNR_CUDA_ARCH='86;89' \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
 cmake --build build/hdnoorray --target hdnoorray -j"$(nproc)"
@@ -44,7 +36,7 @@ cmake --build build/hdnoorray --target hdnoorray -j"$(nproc)"
 
 The vendored USD SDK is automatically fetched from Blender's
 `lib-linux_x64` repository on first configure. The Blender extension is
-assembled at `build/hdnoorray/hdnoorray/blender_extension/hdnoorray/`.
+assembled at `build/hdnoorray/blender_extension/hdnoorray/`.
 
 ## Install in Blender
 
@@ -52,7 +44,7 @@ Link the built extension into Blender's user extension directory:
 
 ```sh
 mkdir -p ~/.config/blender/5.2/extensions/user_default
-ln -sfn "$PWD/build/hdnoorray/hdnoorray/blender_extension/hdnoorray" \
+ln -sfn "$PWD/build/hdnoorray/blender_extension/hdnoorray" \
   ~/.config/blender/5.2/extensions/user_default/hdnoorray
 ```
 

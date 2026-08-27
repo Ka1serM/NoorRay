@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 namespace nr::shading::dielectric
 {

@@ -4,6 +4,7 @@
 #include <ranges>
 
 #include "imgui.h"
+#include "backends/imgui_impl_vulkan.h"
 #include "ImGuizmo.h"
 #define IMVIEWGUIZMO_IMPLEMENTATION
 #include "ImViewGuizmo.h"
@@ -15,8 +16,8 @@
 #include "Scene/Objects/GaussianInstance.h"
 #include "Geometry/Mesh/Assets/GaussianAsset.h"
 #include "Scene/Objects/LightInstance.h"
+#include "Backend/Vulkan/Raytracer/RaytracerRenderer.h"
 #include "Backend/Vulkan/Viewport/Viewport.h"
-#include "Backend/OptiX/Runtime/Raytracer.h"
 #include "UI/Window.h"
 
 namespace
@@ -37,42 +38,25 @@ CameraInstance::InputState cameraInputState()
 }
 }
 
-ViewportPanel::ViewportPanel(const std::string& name, Window& window, Context& context,
-    Scene& scene, Raytracer& raytracer, const Image& outputColor, Image& outputCrypto,
-    Image& outputPosition, const uint32_t width, const uint32_t height)
-    : ImGuiComponent(name), window(window), context(context), scene(scene),
-    raytracer(raytracer),
-    outputCrypto(&outputCrypto), outputPosition(&outputPosition), width(width), height(height),
-    displayImage(context, width, height, outputColor.getFormat(), vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst),
-    cryptoStagingBuffer(context, Buffer::Type::Custom, sizeof(uint32_t), nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
-    positionStagingBuffer(context, Buffer::Type::Custom, sizeof(float) * 4, nullptr, vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)
+ViewportPanel::ViewportPanel(const std::string& name, Window& window,
+    Scene& scene, VulkanRaytracer& raytracer)
+    : ImGuiComponent(name), window(window), scene(scene),
+    raytracer(raytracer), width(raytracer.width()), height(raytracer.height()),
+    uiScale(window.getDpiScale())
 {
-    const vk::MemoryRequirements cryptoReq =context.getDevice().getBufferMemoryRequirements(cryptoStagingBuffer.getBuffer());
-    cryptoStagingBufferMappedPtr = context.getDevice().mapMemory(cryptoStagingBuffer.getMemory(), 0, cryptoReq.size);
-    
-    const vk::MemoryRequirements positionReq = context.getDevice().getBufferMemoryRequirements(positionStagingBuffer.getBuffer());
-    positionStagingBufferMappedPtr = context.getDevice().mapMemory(positionStagingBuffer.getMemory(), 0, positionReq.size);
-    
+    const ViewportInputs inputs{raytracer.colorHandle(), raytracer.albedoHandle(),
+        raytracer.normalHandle(), raytracer.cryptomatteHandle(),
+        raytracer.positionHandle(), raytracer.gaussianOverdrawHandle()};
+    compositor = std::make_unique<Viewport>(raytracer.device(), width, height,
+        inputs, gpu::ImageFormat::Bgra8Unorm);
     vk::SamplerCreateInfo samplerInfo{};
     samplerInfo.magFilter = vk::Filter::eLinear;
     samplerInfo.minFilter = vk::Filter::eLinear;
     samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    sampler = context.getDevice().createSamplerUnique(samplerInfo);
-    
-    constexpr vk::DescriptorSetLayoutBinding binding{0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment};
-    vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
-    descriptorSetLayout = context.getDevice().createDescriptorSetLayoutUnique(layoutInfo);
-    
-    vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.descriptorPool = context.getDescriptorPool();
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &descriptorSetLayout.get();
-    auto sets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
-    outputImageDescriptorSet = std::move(sets.front());
+    const auto handles = gpu::interop::device_handles(raytracer.device());
+    sampler = vk::Device(reinterpret_cast<VkDevice>(handles.device)).createSamplerUnique(samplerInfo);
     
     updateDisplayDescriptor();
 
@@ -121,26 +105,35 @@ ViewportPanel::ViewportPanel(const std::string& name, Window& window, Context& c
 
 void ViewportPanel::updateDisplayDescriptor()
 {
-    const vk::DescriptorImageInfo imageInfo{sampler.get(), displayImage.getView(), vk::ImageLayout::eShaderReadOnlyOptimal};
-    vk::WriteDescriptorSet write{};
-    write.dstSet = outputImageDescriptorSet.get();
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.pImageInfo = &imageInfo;
-    context.getDevice().updateDescriptorSets(write, nullptr);
+    const vk::ImageView view(reinterpret_cast<VkImageView>(gpu::interop::image_view(
+        raytracer.device(), compositor->getOutputImage().handle())));
+    width = compositor->getOutputImage().width();
+    height = compositor->getOutputImage().height();
+    if (!view || view == observedImageView)
+        return;
+    if (outputImageDescriptorSet != VK_NULL_HANDLE)
+        ImGui_ImplVulkan_RemoveTexture(outputImageDescriptorSet);
+    outputImageDescriptorSet = ImGui_ImplVulkan_AddTexture(
+        sampler.get(), view, VK_IMAGE_LAYOUT_GENERAL);
+    observedImageView = view;
 }
 
-void ViewportPanel::resize(const uint32_t newWidth, const uint32_t newHeight, const vk::Format imageFormat)
+void ViewportPanel::recordPresentation()
 {
-    if (newWidth == 0 || newHeight == 0 || (newWidth == width && newHeight == height && displayImage.getFormat() == imageFormat))
-        return;
-
-    context.getDevice().waitIdle();
-    width = newWidth;
-    height = newHeight;
-    displayImage = Image(context, width, height, imageFormat, vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst);
-    updateDisplayDescriptor();
+    const ViewportInputs inputs{raytracer.colorHandle(), raytracer.albedoHandle(),
+        raytracer.normalHandle(), raytracer.cryptomatteHandle(),
+        raytracer.positionHandle(), raytracer.gaussianOverdrawHandle()};
+    compositor->resize(raytracer.width(), raytracer.height(), inputs,
+        gpu::ImageFormat::Bgra8Unorm);
+    compositor->updateBillboards(scene);
+    glm::mat4 viewProjection(1.0f);
+    if (const CameraInstance* camera = scene.getRenderCamera())
+        viewProjection = camera->getProjectionMatrix() * camera->getViewMatrix();
+    const RenderSettings& settings = scene.getRenderSettings();
+    compositor->dispatch(~0u, viewProjection,
+        0.0f, static_cast<int>(settings.bufferVisualization),
+        settings.gaussianProxyOverdrawMax,
+        settings.tonemappingEnabled, m_showOverlays);
 }
 
 void ViewportPanel::updateLayout() {
@@ -177,11 +170,12 @@ ivec2 ViewportPanel::screenToPixel() const {
     const float normY = std::clamp(relativePos.y / viewportSize.y, 0.f, 1.f);
 
     // The rightmost/bottommost half pixel maps to width/height, which is one
-    // past the last valid texel. AOV readbacks copy from CUDA-shared images, so
+    // past the last valid texel. AOV readbacks copy from renderer-owned images, so
     // an out-of-bounds copy region reads past the shared allocation.
     const int pixelX = std::clamp(static_cast<int>(normX * static_cast<float>(width)),
         0, static_cast<int>(width) - 1);
-    const int pixelY = std::clamp(static_cast<int>(normY * static_cast<float>(height)),
+    const int pixelY = std::clamp(static_cast<int>((1.0f - normY)
+        * static_cast<float>(height)),
         0, static_cast<int>(height) - 1);
 
     return ivec2(pixelX, pixelY);
@@ -195,7 +189,12 @@ void ViewportPanel::drawBackground() const {
 }
 
 void ViewportPanel::drawImageAndUpdateState() {
-    ImGui::Image(static_cast<VkDescriptorSet>(outputImageDescriptorSet.get()), viewportSize);
+    updateDisplayDescriptor();
+    // Raygen stores rows in the same bottom-left convention as the former
+    // renderer output. ImGui texture UVs are top-left, so presentation alone
+    // flips V; the render and camera math remain unchanged.
+    ImGui::Image(reinterpret_cast<ImTextureID>(outputImageDescriptorSet),
+        viewportSize, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
     isViewportHovered = ImGui::IsItemHovered();
 }
 
@@ -545,53 +544,19 @@ void ViewportPanel::renderUi() {
     ImGui::End();
 }
 
-bool ViewportPanel::readbackAovTexel(Image* image, const Buffer& staging) const {
-    if (!image || !image->getImage())
-        return false;
-
-    const ivec2 pixel = screenToPixel();
-    if (pixel.x < 0 || pixel.y < 0
-        || static_cast<uint32_t>(pixel.x) >= image->getWidth()
-        || static_cast<uint32_t>(pixel.y) >= image->getHeight())
-    {
-        return false;
-    }
-
-    // AOV images are backed by memory shared with CUDA, and this readback both
-    // reads them and transitions their layout. An OptiX launch writing to the
-    // same images through their surface objects must therefore be finished
-    // first: overlapping the two faults the device, and the resulting sticky
-    // "unspecified launch failure" then kills every later CUDA call.
-    raytracer.waitForRender();
-
-    vk::BufferImageCopy copyRegion{};
-    copyRegion.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.imageOffset = vk::Offset3D{pixel.x, pixel.y, 0};
-    copyRegion.imageExtent = vk::Extent3D{1, 1, 1};
-
-    context.oneTimeSubmit([&](const vk::CommandBuffer cmd) {
-        image->setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-        cmd.copyImageToBuffer(image->getImage(), vk::ImageLayout::eTransferSrcOptimal,
-            staging.getBuffer(), copyRegion);
-        image->setImageLayout(cmd, vk::ImageLayout::eGeneral);
-    });
-    return true;
-}
-
 void ViewportPanel::handlePositionPicking() const {
 
     auto* camera = scene.getRenderCamera();
     if (!camera)
         return;
 
-    if (!readbackAovTexel(outputPosition, positionStagingBuffer))
+    const ivec2 pixel = screenToPixel();
+    const std::vector<gpu::float4> positions = raytracer.readPosition();
+    const size_t index = static_cast<size_t>(pixel.y) * width + pixel.x;
+    if (index >= positions.size())
         return;
-
-    vec3 position{0.f};
-    if (positionStagingBufferMappedPtr) {
-        const float* f = static_cast<float*>(positionStagingBufferMappedPtr);
-        position = vec3(f[0], f[1], f[2]);
-    }
+    const gpu::float4 value = positions[index];
+    const vec3 position(value.x, value.y, value.z);
 
     LOG_INFO( "Picked Position: (" << position.x << ", " << position.y << ", " << position.z << ")");
     
@@ -619,14 +584,10 @@ bool ViewportPanel::handleBillboardPicking() const {
         if (!light)
             continue;
 
-        const vec4 clip = viewProjection * vec4(light->getWorldTransform().getPosition(), 1.0f);
-        if (clip.w <= 0.0f)
+        vec2 center;
+        if (!projectViewportBillboard(viewProjection,
+                light->getWorldTransform().getPosition(), width, height, center))
             continue; // behind the camera
-
-        const vec2 ndc = vec2(clip) / clip.w;
-        const vec2 center(
-            (ndc.x * 0.5f + 0.5f) * static_cast<float>(width),
-            (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(height));
 
         const vec2 delta = pixel - center;
         const float distSq = dot(delta, delta);
@@ -647,12 +608,10 @@ void ViewportPanel::handleObjectPicking() {
     if (m_showOverlays && handleBillboardPicking())
         return;
 
-    if (!readbackAovTexel(outputCrypto, cryptoStagingBuffer))
-        return;
-
-    uint32_t instanceId = ~0u;
-    if (cryptoStagingBufferMappedPtr)
-        instanceId = *static_cast<uint32_t*>(cryptoStagingBufferMappedPtr);
+    const ivec2 pixel = screenToPixel();
+    const std::vector<uint32_t> ids = raytracer.readCryptomatte();
+    const size_t pixelIndex = static_cast<size_t>(pixel.y) * width + pixel.x;
+    const uint32_t instanceId = pixelIndex < ids.size() ? ids[pixelIndex] : ~0u;
 
     LOG_INFO( "Picked instance ID: " << instanceId);
     
@@ -684,36 +643,11 @@ void ViewportPanel::handleObjectPicking() {
     }
 }
 
-void ViewportPanel::setAovImages(Image& crypto, Image& position)
-{
-    outputCrypto = &crypto;
-    outputPosition = &position;
-}
-
-void ViewportPanel::onComputeFinished(const vk::CommandBuffer cmd, Image& srcImage) {
-    srcImage.setImageLayout(cmd, vk::ImageLayout::eTransferSrcOptimal);
-    displayImage.setImageLayout(cmd, vk::ImageLayout::eTransferDstOptimal);
-
-    vk::ImageCopy copyRegion{};
-    copyRegion.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
-    copyRegion.extent = vk::Extent3D{width, height, 1};
-
-    cmd.copyImage(srcImage.getImage(), vk::ImageLayout::eTransferSrcOptimal, displayImage.getImage(), vk::ImageLayout::eTransferDstOptimal, copyRegion);
-
-    srcImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
-    displayImage.setImageLayout(cmd, vk::ImageLayout::eShaderReadOnlyOptimal);
-}
-
-
 ViewportPanel::~ViewportPanel() {
     if (isCapturingMouse)
         endMouseCapture();
-    if (cryptoStagingBufferMappedPtr)
-        context.getDevice().unmapMemory(cryptoStagingBuffer.getMemory());
-    
-    if (positionStagingBufferMappedPtr)
-        context.getDevice().unmapMemory(positionStagingBuffer.getMemory());
+    if (outputImageDescriptorSet != VK_NULL_HANDLE)
+        ImGui_ImplVulkan_RemoveTexture(outputImageDescriptorSet);
 
     LOG_INFO( "Destroying ViewportPanel");
 }

@@ -6,7 +6,7 @@
 
 #include <glm/ext/matrix_float4x3.hpp>
 
-#include "Backend/CUDA/rstd/Vector.h"
+#include <vector>
 #include "Materials/Shading/SphericalHarmonics.h"
 #include "Scene/Inspectable.h"
 
@@ -53,8 +53,12 @@ public:
 
     uint32_t getGaussianCount() const { return static_cast<uint32_t>(gaussians.size()); }
     Gaussian getGaussian(uint32_t index) const { return gaussians[index]; }
-    const nr::rstd::vector<Gaussian>& getGaussians() const { return gaussians; }
-    nr::rstd::vector<Gaussian>& getGaussians() { return gaussians; }
+    const std::vector<Gaussian>& getGaussians() const { return gaussians; }
+    std::vector<Gaussian>& getGaussians() { return gaussians; }
+    // Backend-neutral snapshot used by Vulkan upload. Vulkan keeps the host
+    // vector above for the existing path; native renderers must not depend on
+    // managed-memory accessibility during scene publication.
+    const std::vector<Gaussian>& getHostGaussians() const { return hostGaussians; }
 
     // Direct mutations own their synchronization and invalidation. A bulk
     // replacement performs each exactly once, which is the trainer path.
@@ -72,6 +76,7 @@ private:
     std::string name;
     std::string path;
     bool dirty = false;
-    nr::rstd::vector<Gaussian> gaussians;
+    std::vector<Gaussian> gaussians;
+    std::vector<Gaussian> hostGaussians;
 
 };

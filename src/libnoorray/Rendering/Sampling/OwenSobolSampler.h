@@ -46,9 +46,6 @@ public:
 private:
     NR_CPU_GPU static uint32_t reverseBits(uint32_t value)
     {
-#if defined(__CUDA_ARCH__)
-        return __brev(value);
-#else
         constexpr uint32_t AlternatingBits = 0x55555555u;
         constexpr uint32_t AlternatingPairs = 0x33333333u;
         constexpr uint32_t AlternatingNibbles = 0x0f0f0f0fu;
@@ -62,14 +59,11 @@ private:
         value = ((value & AlternatingBytes) << 8u)
             | ((value >> 8u) & AlternatingBytes);
         return (value << 16u) | (value >> 16u);
-#endif
     }
 
     NR_CPU_GPU static uint32_t trailingZeroCount(const uint32_t value)
     {
-#if defined(__CUDA_ARCH__)
-        return static_cast<uint32_t>(__ffs(value) - 1);
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER)
         unsigned long bit;
         _BitScanForward(&bit, value);
         return static_cast<uint32_t>(bit);
@@ -81,11 +75,7 @@ private:
     NR_CPU_GPU static uint32_t directionNumber(
         const uint32_t dimension, const uint32_t bit)
     {
-#if defined(__CUDA_ARCH__)
-        return owen_sobol_detail::DeviceDirectionNumbers[dimension - 1u][bit];
-#else
         return owen_sobol_detail::DirectionNumbers[dimension - 1u][bit];
-#endif
     }
 
     NR_CPU_GPU static uint32_t sampleBits(

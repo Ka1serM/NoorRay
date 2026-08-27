@@ -5,18 +5,14 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 namespace nr
 {
 
 NR_CPU_GPU inline bool isFinite(const float value)
 {
-#if defined(__CUDA_ARCH__)
-    return isfinite(value);
-#else
     return std::isfinite(value);
-#endif
 }
 
 NR_CPU_GPU inline bool isFinite(const glm::vec3& value)

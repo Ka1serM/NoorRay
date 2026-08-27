@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 using RandomState = uint64_t;
 

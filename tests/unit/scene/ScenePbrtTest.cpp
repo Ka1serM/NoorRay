@@ -53,7 +53,7 @@ TEST_CASE("PBRT scene export is readable by the PBRT importer", "[scene][pbrt]")
         return command.name == "LightSource";
     }) == 2);
 
-    Scene reloaded(session.context);
+    Scene reloaded;
     SceneImporter::ImportPbrtScene(reloaded, path.string());
     REQUIRE(reloaded.getMeshInstances().size() == 1);
     REQUIRE(reloaded.getActiveCamera() != nullptr);

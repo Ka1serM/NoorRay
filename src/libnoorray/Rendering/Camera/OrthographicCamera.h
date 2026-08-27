@@ -1,15 +1,15 @@
 #pragma once
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Camera/Camera.h"
 
-class OrthographicCamera : public Camera::Type<OrthographicCamera> {
+class OrthographicCamera : public Camera {
 public:
     OrthographicCamera();
     explicit OrthographicCamera(std::unique_ptr<Sensor> sensor);
     OrthographicCamera(const OrthographicCamera& other);
     ~OrthographicCamera();
-    NR_CPU_GPU nr::rstd::optional<CameraSample> generateRay(
+    NR_CPU_GPU std::optional<CameraSample> generateRay(
         float nx, float ny, const glm::vec2&, uint32_t, SampledWavelengths&,
         bool = false) const
     {

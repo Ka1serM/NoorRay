@@ -5,7 +5,6 @@
 
 #include <imgui.h>
 
-#include "Backend/OptiX/Acceleration/GaussianProxyBlas.h"
 #include "Scene/RenderSettings.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
@@ -19,9 +18,6 @@ BufferVisualization restoreBuffer(
 {
     const BufferVisualization candidate =
         previous.value_or(BufferVisualization::Beauty);
-    if (candidate == BufferVisualization::Denoised
-        && !settings.optixDenoiserEnabled)
-        return BufferVisualization::Beauty;
     if (candidate == BufferVisualization::ProxyOverdraw
         && !settings.gaussianProxyOverdrawVisualization)
         return BufferVisualization::Beauty;
@@ -69,51 +65,9 @@ void RenderSettingsPanel::renderUi()
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("OptiX Denoiser");
-        ImGui::TableSetColumnIndex(1);
-        if (ImGui::Checkbox(
-                "##OptixDenoiser", &settings.optixDenoiserEnabled))
-        {
-            // Enabling generation also selects its separate presentation
-            // buffer. The reverse is deliberately not true: choosing the
-            // Denoised buffer must never enable the denoiser implicitly.
-            if (settings.optixDenoiserEnabled) {
-                previousDenoiserBuffer =
-                    settings.bufferVisualization == BufferVisualization::Denoised
-                    ? BufferVisualization::Beauty
-                    : settings.bufferVisualization;
-                settings.bufferVisualization = BufferVisualization::Denoised;
-            } else {
-                if (settings.bufferVisualization == BufferVisualization::Denoised)
-                    settings.bufferVisualization = restoreBuffer(
-                        previousDenoiserBuffer, settings);
-                // If Proxy Overdraw temporarily covered Denoised, make its
-                // eventual restore skip the now-disabled denoiser buffer.
-                if (previousProxyOverdrawBuffer == BufferVisualization::Denoised)
-                    previousProxyOverdrawBuffer = restoreBuffer(
-                        previousDenoiserBuffer, settings);
-                previousDenoiserBuffer.reset();
-            }
-            changed = true;
-        }
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("AOVs During Camera Motion");
         ImGui::TableSetColumnIndex(1);
         changed |= ImGui::Checkbox("##AovEnabled", &settings.aovEnabled);
-
-        if (settings.optixDenoiserEnabled)
-        {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("Denoiser Min Samples");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            changed |= MathInput::DragInt(
-                "##OptixDenoiserMinSamples", &settings.optixDenoiserMinSamples,
-                1.0f, 1, 100000, "%d", ImGuiSliderFlags_AlwaysClamp);
-        }
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -198,8 +152,6 @@ void RenderSettingsPanel::renderUi()
         if (ImGui::Checkbox("##ProxyOverdraw",
                 &settings.gaussianProxyOverdrawVisualization))
         {
-            // Match the denoiser control: enabling generation selects its
-            // buffer, while selecting the buffer never enables generation.
             if (settings.gaussianProxyOverdrawVisualization) {
                 previousProxyOverdrawBuffer =
                     settings.bufferVisualization
@@ -212,11 +164,6 @@ void RenderSettingsPanel::renderUi()
                 if (settings.bufferVisualization
                     == BufferVisualization::ProxyOverdraw)
                     settings.bufferVisualization = restoreBuffer(
-                        previousProxyOverdrawBuffer, settings);
-                // Apply the same nested-toggle rule in the other direction.
-                if (previousDenoiserBuffer
-                    == BufferVisualization::ProxyOverdraw)
-                    previousDenoiserBuffer = restoreBuffer(
                         previousProxyOverdrawBuffer, settings);
                 previousProxyOverdrawBuffer.reset();
             }
@@ -242,7 +189,7 @@ void RenderSettingsPanel::renderUi()
 
         static constexpr const char* kBufferVisNames[] = {
             "Beauty", "Albedo", "Normal", "Cryptomatte", "Position",
-            "Denoised", "Proxy Overdraw"
+            "Proxy Overdraw"
         };
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);

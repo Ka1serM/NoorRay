@@ -43,6 +43,10 @@ struct CompiledSvmProgram
 
     std::uint32_t stackSize{StackSize};
 
+    // Conservative host classification for direct-light candidate discovery.
+    // Actual emission remains dynamically evaluated by SVM in the shader.
+    bool mayEmit{};
+
     // Scene texture registry index per SVM texture slot referenced by
     // NodeImageTexture::textureSlot in `bytecode`, in the order textures
     // were first encountered while compiling. Populated from the caller-

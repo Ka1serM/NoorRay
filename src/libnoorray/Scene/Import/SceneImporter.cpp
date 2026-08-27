@@ -46,7 +46,7 @@ void boundedParallelFor(const size_t count, Function&& function)
     // Mesh preparation is memory-bandwidth and allocation heavy. Four workers
     // overlap accessor decoding well without allowing one import to consume
     // the application's complete TBB pool or issue dozens of concurrent
-    // cudaMallocManaged calls.
+    // calls.
     constexpr size_t MaxMeshPreparationWorkers = 4;
     const int concurrency = static_cast<int>(
         std::min(count, MaxMeshPreparationWorkers));

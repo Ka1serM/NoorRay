@@ -6,7 +6,7 @@
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Materials/Shading/Spectrum.h"
 
 inline constexpr float BsdfEpsilon = 1.0e-5f;

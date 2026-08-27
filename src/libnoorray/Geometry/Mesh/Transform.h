@@ -4,7 +4,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include "Backend/Vulkan/Runtime/Context.h"
+#include <gpu/types.hpp>
 
 class Transform {
 
@@ -23,7 +23,7 @@ public:
 
     glm::mat4 getMatrix() const;
 
-    vk::TransformMatrixKHR getVkTransformMatrix() const;
+    gpu::float4x4 getGpuTransform() const;
 
     void setRotationEuler(const glm::vec3& eulerDegrees);
     glm::vec3 getRotationEuler() const;

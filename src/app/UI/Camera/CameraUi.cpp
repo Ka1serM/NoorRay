@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "Backend/CUDA/ManagedMemory.h"
+#include "Backend/Host/MutationBarrier.h"
 #include "UI/ImGuiManager.h"
 
 bool Camera::renderUi()

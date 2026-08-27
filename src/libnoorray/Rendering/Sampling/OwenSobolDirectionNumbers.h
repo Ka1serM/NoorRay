@@ -2,10 +2,10 @@
 
 #include <cstdint>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 // Joe-Kuo direction numbers for Sobol dimensions 2 through 6. Keeping the
-// initializer shared prevents the CPU and CUDA lookup tables from drifting.
+// Shared constexpr table keeps every sampling path on the same sequence.
 #define NR_OWEN_SOBOL_DIRECTION_NUMBERS \
     { \
         { \
@@ -45,12 +45,6 @@ namespace owen_sobol_detail
 inline constexpr uint32_t DirectionNumbers[5][32] =
     NR_OWEN_SOBOL_DIRECTION_NUMBERS;
 
-#if defined(__CUDACC__)
-// Rendering uses a frame-wide sample index, allowing warp-wide broadcasts
-// from CUDA constant memory instead of one table per thread.
-static __device__ __constant__ uint32_t DeviceDirectionNumbers[5][32] =
-    NR_OWEN_SOBOL_DIRECTION_NUMBERS;
-#endif
 }
 
 #undef NR_OWEN_SOBOL_DIRECTION_NUMBERS

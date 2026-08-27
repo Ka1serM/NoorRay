@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 #include <MaterialXCore/Document.h>
 #include <MaterialXCore/Node.h>
@@ -48,7 +49,6 @@
 
 #include "Rendering/Camera/CameraInstance.h"
 #include "Rendering/Camera/FisheyeCamera.h"
-#include "Rendering/Camera/HybridPsfCamera.h"
 #include "Rendering/Camera/OrthographicCamera.h"
 #include "Rendering/Camera/PerspectiveCamera.h"
 #include "Rendering/Camera/RealisticCamera.h"
@@ -374,8 +374,9 @@ void writeCamera(const CameraInstance& instance, const UsdStageRefPtr& stage,
     const Camera* camera = instance.getCamera();
     const pxr::UsdGeomCamera usdCamera = pxr::UsdGeomCamera::Define(stage, path);
     writeTransform(usdCamera, instance);
-    usdCamera.CreateProjectionAttr().Set(TfToken(
-        instance.getProjectionType() == CameraProjectionType::Orthographic ? "orthographic" : "perspective"));
+    const auto projection = instance.getProjectionType() == CameraProjectionType::Orthographic ? "orthographic"
+        : instance.getProjectionType() == CameraProjectionType::Realistic ? "realistic" : "perspective";
+    usdCamera.CreateProjectionAttr().Set(TfToken(projection));
     usdCamera.CreateFocalLengthAttr().Set(camera->getFocalLengthMm());
     usdCamera.CreateFocusDistanceAttr().Set(camera->getFocusDistanceCm() * 10.0f);
     usdCamera.CreateHorizontalApertureAttr().Set(camera->getSensor().width());
@@ -385,9 +386,12 @@ void writeCamera(const CameraInstance& instance, const UsdStageRefPtr& stage,
     const auto resolution = camera->getSensor().resolution();
     setAttr(usdCamera.GetPrim(), "nr:resolution", pxr::SdfValueTypeNames->Int2,
         pxr::GfVec2i(resolution.x, resolution.y));
-    setAttr(usdCamera.GetPrim(), "nr:sensorType", pxr::SdfValueTypeNames->String,
-        camera->getSensor().getType() == SensorType::Rectangular ? "rectangular" :
-        camera->getSensor().getType() == SensorType::ScatterPsf ? "scatter_psf" : "gather_psf");
+    setAttr(usdCamera.GetPrim(), "nr:sensorType", pxr::SdfValueTypeNames->String, "rectangular");
+    if (const auto realistic = camera->CastOrNullptr<RealisticCamera>()) {
+        setAttr(usdCamera.GetPrim(), "nr:lensPath", pxr::SdfValueTypeNames->String, realistic->getLensPath());
+        setAttr(usdCamera.GetPrim(), "nr:glassCatalogPaths", pxr::SdfValueTypeNames->String, realistic->getGlassCatalogPaths());
+        setAttr(usdCamera.GetPrim(), "nr:apertureDiameterMm", pxr::SdfValueTypeNames->Float, realistic->apertureDiameterMm);
+    }
 }
 
 void writeLight(const LightInstance& instance, const UsdStageRefPtr& stage, const SdfPath& path)
@@ -555,9 +559,9 @@ void readMesh(Scene& scene, const pxr::UsdGeomMesh& mesh, const std::string& nam
         materialRefs.push_back(loadMaterial(stage, path, scene, materials));
     if (materialRefs.empty()) materialRefs.push_back(scene.addMaterial(nr::materialx::defaultMaterial()));
     MeshGeometry geometry;
-    geometry.vertices = nr::rstd::vector<Vertex>(vertices.begin(), vertices.end());
-    geometry.indices = nr::rstd::vector<uint32_t>(triangleIndices.begin(), triangleIndices.end());
-    geometry.faces = nr::rstd::vector<Face>(faces.begin(), faces.end());
+    geometry.vertices = std::vector<Vertex>(vertices.begin(), vertices.end());
+    geometry.indices = std::vector<uint32_t>(triangleIndices.begin(), triangleIndices.end());
+    geometry.faces = std::vector<Face>(faces.begin(), faces.end());
     auto asset = scene.add(MeshAsset(scene, name, std::move(geometry), materialRefs));
     scene.add(std::make_unique<MeshInstance>(scene, name, asset, transform));
 }
@@ -590,22 +594,30 @@ void readObject(Scene& scene, const UsdPrim& prim, const UsdStageRefPtr& stage,
         pxr::GfVec2i resolution(1280, 720);
         if (getAttr(prim, "nr:resolution", &resolution))
             file.resolution = {static_cast<uint32_t>(std::max(resolution[0], 1)), static_cast<uint32_t>(std::max(resolution[1], 1))};
-        std::string sensorType;
-        if (getAttr(prim, "nr:sensorType", &sensorType)) file.sensor_type = sensorType;
         // Reuse the mature legacy camera construction path by authoring the
         // small in-memory record it already understands.
         std::unique_ptr<Sensor> sensor;
-        if (file.sensor_type == "scatter_psf") sensor = std::make_unique<ScatterPsfSensor>();
-        else if (file.sensor_type == "gather_psf") sensor = std::make_unique<GatherPsfSensor>();
-        else sensor = std::make_unique<RectangularSensor>();
+        sensor = std::make_unique<RectangularSensor>();
         std::unique_ptr<Camera> cameraObject;
         if (file.projection == "orthographic") cameraObject = std::make_unique<OrthographicCamera>(std::move(sensor));
+        else if (file.projection == "realistic" || file.projection == "noorrayrealistic")
+            cameraObject = std::make_unique<RealisticCamera>(std::move(sensor));
         else cameraObject = std::make_unique<PerspectiveCamera>(std::move(sensor));
         cameraObject->setFocalLengthMm(file.focal_length_mm.value_or(50.0f));
         cameraObject->setFocusDistanceCm(file.focus_distance_cm);
         cameraObject->exposure = file.exposure;
         cameraObject->getSensor().setDimensionsMm(file.sensor_width_mm, file.sensor_height_mm);
         cameraObject->getSensor().setResolution(file.resolution[0], file.resolution[1]);
+        if (auto realistic = cameraObject->CastOrNullptr<RealisticCamera>()) {
+            std::string lensPath, catalogs;
+            float aperture = 0.f;
+            getAttr(prim, "nr:lensPath", &lensPath);
+            getAttr(prim, "nr:glassCatalogPaths", &catalogs);
+            getAttr(prim, "nr:apertureDiameterMm", &aperture);
+            realistic->setOpticsPaths(std::move(lensPath), std::move(catalogs));
+            realistic->setApertureDiameterMm(aperture);
+            if (!realistic->getLensPath().empty()) realistic->loadLensAndSensor(false);
+        }
         auto instance = std::make_unique<CameraInstance>(std::move(cameraObject), name, transform);
         CameraInstance* result = instance.get();
         scene.add(std::move(instance));
@@ -689,8 +701,6 @@ void writeUsd(const Scene& scene, const std::string& filepath)
         scene.getEnvironment().visibleExposure);
     setAttr(root.GetPrim(), "nr:maxSamples", pxr::SdfValueTypeNames->Int, scene.getRenderSettings().maxSamples);
     setAttr(root.GetPrim(), "nr:aovEnabled", pxr::SdfValueTypeNames->Bool, scene.getRenderSettings().aovEnabled);
-    setAttr(root.GetPrim(), "nr:optixDenoiserEnabled", pxr::SdfValueTypeNames->Bool, scene.getRenderSettings().optixDenoiserEnabled);
-    setAttr(root.GetPrim(), "nr:optixDenoiserMinSamples", pxr::SdfValueTypeNames->Int, scene.getRenderSettings().optixDenoiserMinSamples);
     setAttr(root.GetPrim(), "nr:indirectLightClamp", pxr::SdfValueTypeNames->Float, scene.getRenderSettings().indirectLightClamp);
     MaterialTable materialTable;
     for (const auto& object : scene.getRootObjects())
@@ -713,8 +723,6 @@ void readUsd(Scene& scene, const std::string& filepath)
     getAttr(root, "nr:visibleExposure", &scene.getEnvironment().visibleExposure);
     getAttr(root, "nr:maxSamples", &scene.getRenderSettings().maxSamples);
     getAttr(root, "nr:aovEnabled", &scene.getRenderSettings().aovEnabled);
-    getAttr(root, "nr:optixDenoiserEnabled", &scene.getRenderSettings().optixDenoiserEnabled);
-    getAttr(root, "nr:optixDenoiserMinSamples", &scene.getRenderSettings().optixDenoiserMinSamples);
     getAttr(root, "nr:indirectLightClamp", &scene.getRenderSettings().indirectLightClamp);
     scene.getRenderSettings().indirectLightClamp = std::max(
         scene.getRenderSettings().indirectLightClamp, 0.0f);

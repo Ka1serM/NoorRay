@@ -14,7 +14,6 @@
 
 #include "Log.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Backend/OptiX/Runtime/Raytracer.h"
 #include "Scene/Scene.h"
 #include "Materials/SVM/SvmCompiler.h"
 
@@ -30,6 +29,7 @@ struct MaterialXSceneRuntime::Impl
 
     std::vector<PendingCompile> pending;
     std::vector<std::pair<std::size_t, nr::svm::CompiledSvmProgram>> ready;
+    nr::svm::SvmProgramTable programs;
 };
 
 namespace {
@@ -59,8 +59,21 @@ std::unordered_map<std::string, std::uint32_t> resolveSceneTextures(
             const std::string normalizedTexturePath = normalizedPath(texturePath);
             const bool matches = std::ranges::any_of(candidates,
                 [&](const std::string& candidate) {
+                    const std::string normalizedCandidate = normalizedPath(candidate);
+                    // Imported scenes commonly keep MaterialX image paths
+                    // relative to the scene file while Scene owns the
+                    // resolved absolute texture path.  Accept an exact
+                    // normalized match or a path-boundary suffix match; the
+                    // latter preserves deduplication without requiring the
+                    // UI session to carry a second scene-directory ABI.
+                    const bool suffixMatch = normalizedTexturePath.size()
+                        > normalizedCandidate.size()
+                        && normalizedTexturePath.ends_with(normalizedCandidate)
+                        && normalizedTexturePath[normalizedTexturePath.size()
+                            - normalizedCandidate.size() - 1] == '/';
                     return candidate == texturePath
-                        || normalizedPath(candidate) == normalizedTexturePath;
+                        || normalizedCandidate == normalizedTexturePath
+                        || suffixMatch;
                 });
             if (matches) {
                 resolved[image.rawFilePath] = static_cast<std::uint32_t>(textureIndex);
@@ -94,7 +107,12 @@ bool MaterialXSceneRuntime::needsCompilation(const Scene& scene) const
     return false;
 }
 
-void MaterialXSceneRuntime::compilePending(Scene& scene, Raytracer& raytracer,
+const nr::svm::SvmProgramTable& MaterialXSceneRuntime::programs() const
+{
+    return impl_->programs;
+}
+
+void MaterialXSceneRuntime::compilePending(Scene& scene,
     const std::string& sceneDirectory)
 {
     auto& materials = scene.getMaterials();
@@ -155,13 +173,14 @@ void MaterialXSceneRuntime::compilePending(Scene& scene, Raytracer& raytracer,
             if (materialIndex >= materials.size()
                 || materials[materialIndex].svmBytecodeLength != 0)
                 continue;
-            const nr::svm::SvmProgramRecord record =
-                raytracer.registerMaterialXProgram(program);
+            impl_->programs.append(program);
+            const nr::svm::SvmProgramRecord record = impl_->programs.records().back();
             materials[materialIndex].svmBytecodeOffset = record.wordOffset;
             materials[materialIndex].svmBytecodeLength = record.wordCount;
             materials[materialIndex].svmTextureOffset = record.textureOffset;
             materials[materialIndex].svmTextureCount = record.textureCount;
             materials[materialIndex].svmStackSize = record.stackSize;
+            materials[materialIndex].mayEmit = program.mayEmit ? 1u : 0u;
             changed = true;
         }
         impl_->ready.clear();
@@ -173,6 +192,9 @@ void MaterialXSceneRuntime::compilePending(Scene& scene, Raytracer& raytracer,
             continue;
         if (std::ranges::any_of(impl_->pending,
             [i](const Impl::PendingCompile& pending) { return pending.materialIndex == i; }))
+            continue;
+        if (std::ranges::any_of(impl_->ready,
+            [i](const auto& ready) { return ready.first == i; }))
             continue;
 
         const bool hasSource = i < paths.size() && !paths[i].empty();

@@ -6,7 +6,7 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 ### Features
 
-- **CUDA/OptiX Backend:** Implements an OptiX path tracer with CUDA 13 and OptiX 9.1, with Vulkan/CUDA external-memory interop for the interactive viewport.
+- **Vulkan Backend:** Implements the interactive path tracer and viewport with Vulkan and Slang compute/ray-query shaders.
 
 - **Path Tracing with MIS:** Uses **unidirectional path tracing** with **multiple importance sampling (MIS)**. Supports combined **Lambertian diffuse** and **GGX specular** materials.  
 
@@ -16,28 +16,18 @@ My personal path tracer for exploring graphics programming and testing out new r
 
 - **ImGui Interface:** Provides a user interface to edit scene parameters, including camera settings, scene graph, and material properties in real-time.  
 
-- **Platform:** The current backend targets Linux with an NVIDIA GPU. The former macOS and Windows release paths were removed when CUDA/OptiX became mandatory.
+- **Platform:** The current backend targets Linux with a Vulkan-capable GPU.
 
-- **Blender Hydra Delegate (hdNoorRay):** A Hydra render-delegate plugin for
-  Blender 5.2, built to the exact OpenUSD ABI of its host. Supports polygon
-  meshes, transforms, cameras, and color/depth AOVs in the viewport.
 
 ### Build Instructions
 
 #### Prerequisites
 
 - **Vulkan SDK:** Set `VULKAN_SDK` to the active SDK installation.
-- **CUDA Toolkit:** CUDA 13.x installed at `/usr/local/cuda`, with the compiler
-  at `/usr/local/cuda/bin/nvcc`.
-- **OptiX SDK:** OptiX 9.1 installed at `$HOME/Programs/OptixSDK`, with headers
-  under `$HOME/Programs/OptixSDK/include`.
 - **CMake:** Version 3.25 or newer.
 - **Compiler:** clang/clang++ 22 with C++23 support, passed once as
   `CMAKE_CXX_COMPILER` (CMake requires it explicitly rather than defaulting).
-  It is also used as the CUDA host compiler automatically.
 - **Python bindings:** `uv` and Python 3.12.
-- **Hydra delegate (optional):** `python3.13-devel` for the vendored USD
-  Python headers, and Blender 5.2 installed (see `src/hdnoorray/README.md`).
 - **MaterialX:** the vendored MaterialX standard library is compiled as part
   of the NoorRay build (see `docs/MaterialX.md`).
 
@@ -78,11 +68,8 @@ and RTX 40-series (`sm_89`) GPUs:
 ```bash
 cmake -S . -B build/release \
   -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
-  -DNR_CUDA_ROOT=/usr/local/cuda \
-  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
   -DPython_EXECUTABLE="$PWD/.venv/bin/python" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DNR_CUDA_ARCH='86;89' \
   -DNR_BUILD_PYTHON=ON \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
@@ -99,51 +86,17 @@ cmake --build build/release --target NoorRay -j"$(nproc)"
 ./build/release/NoorRay
 ```
 
-Build and run the Python example:
-
-```bash
-cmake --build build/release --target _pynoorray -j"$(nproc)"
-PYTHONPATH="$PWD/build/release/lib" \
-  .venv/bin/python src/pynoorray/examples/pynoorray_render.py
-```
-
-The extension is copied to `build/release/lib/pynoorray/` and its filename must
-contain the `cpython-312` ABI suffix when used with this environment.
-
 Build and run the test suite:
 
 ```bash
 cmake -S . -B build/release \
   -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
-  -DNR_CUDA_ROOT=/usr/local/cuda \
-  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
   -DNR_BUILD_TESTS=ON
 cmake --build build/release -j"$(nproc)"
 ctest --test-dir build/release --output-on-failure
 ```
 
 Tests are enabled by default. Set `NR_BUILD_TESTS=OFF` for a production-only build.
-
-#### Build hdNoorRay (Blender Hydra Delegate)
-
-See `src/hdnoorray/README.md` for full details. Quick build:
-
-```bash
-cmake -S . -B build/hdnoorray \
-  -DNR_BUILD_HYDRA=ON \
-  -DCMAKE_CXX_COMPILER=/usr/bin/clang++-22 \
-  -DNR_CUDA_ROOT=/usr/local/cuda \
-  -DOPTIX_ROOT="$HOME/Programs/OptixSDK" \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DNR_CUDA_ARCH='86;89' \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build build/hdnoorray --target hdnoorray -j"$(nproc)"
-```
-
-This requires `python3.13-devel` for the vendored USD Python headers. The
-plugin is built at `build/hdnoorray/hdnoorray/plugin/libhdnoorray.so` and
-bundled as a Blender extension at `build/hdnoorray/hdnoorray/blender_extension/`.
-
 
 ### Shader Compilation
 

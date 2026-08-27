@@ -8,12 +8,11 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#include "Backend/CUDA/Annotations.h"
-#include "Backend/CUDA/Unique/Texture.h"
+#include "Backend/Host/Platform.h"
 #include "Materials/Shading/RgbToSpectrum.h"
 #include "Materials/Shading/Sellmeier.h"
 #include "Materials/SVM/SvmTypes.h"
-#include "Backend/OptiX/ABI/Types.h"
+#include "Backend/Host/Platform.h"
 
 struct GpuSceneData;
 struct Surface;
@@ -68,4 +67,5 @@ struct Material
     // Host-classified fast path for opaque, non-transmissive shadow hits.
     // Vertex alpha is still checked at the hit site.
     std::uint32_t shadowOpaque{};
+    std::uint32_t mayEmit{};
 };

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 // Veach's multiple importance sampling weighting heuristics, used to combine
 // BSDF and light sampling strategies.

@@ -2,7 +2,7 @@
 
 NoorRay compiles MaterialX documents and Blender-exported MaterialX graphs
 directly to shared SVM bytecode. The fixed SVM interpreter evaluates that
-bytecode on CPU and CUDA; the graph does not create a per-material GPU program.
+bytecode on the host and Vulkan; the graph does not create a per-material GPU program.
 
 ## Data flow
 

@@ -213,18 +213,6 @@ class NoorRaySettings(PropertyGroup):
         min=0.0,
         max=1.0e8,
     )
-    optix_denoiser_enabled: BoolProperty(
-        name="Use OptiX Denoiser",
-        description="Apply the OptiX AI denoiser as a post-process",
-        default=False,
-    )
-    optix_denoiser_min_samples: IntProperty(
-        name="Denoiser Start Sample",
-        description="First sample at which the denoiser runs",
-        default=1,
-        min=1,
-        max=1_000_000,
-    )
     transparent_background: BoolProperty(
         name="Transparent Background",
         description="Render the background as transparent instead of solid color",
@@ -239,7 +227,7 @@ class NoorRaySettings(PropertyGroup):
     )
     gaussian_proxy_type: EnumProperty(
         name="Gaussian Proxy",
-        description="Gaussian proxy mesh type for OptiX intersection",
+        description="Gaussian proxy mesh type for Vulkan ray intersection",
         items=[
             ("ICOSPHERE", "Icosphere", ""),
             ("OCTAHEDRON", "Octahedron", ""),
@@ -274,7 +262,6 @@ class NoorRaySettings(PropertyGroup):
         description="Full-frame output mode for the Hydra colour AOV",
         items=[
             ("BEAUTY", "Beauty", "Progressive path-traced beauty output"),
-            ("DENOISED", "Denoised", "OptiX-denoised beauty output"),
             ("PROXY_OVERDRAW", "Proxy Overdraw", "Gaussian proxy intersection count"),
         ],
         default="BEAUTY",
@@ -295,7 +282,7 @@ class NoorRaySettings(PropertyGroup):
 class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
     bl_idname = "NOORRAY_HYDRA"
     bl_label = "NoorRay"
-    bl_info = "CUDA/OptiX Hydra render delegate"
+    bl_info = "Vulkan Hydra render delegate"
 
     bl_use_preview = True
     bl_use_gpu_context = True
@@ -353,9 +340,6 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             "samples": settings.samples,
             "maxBounces": settings.max_bounces,
             "indirectLightClamp": settings.indirect_light_clamp,
-            "optixDenoiserEnabled": int(
-                settings.optix_denoiser_enabled or view_mode == "DENOISED"),
-            "optixDenoiserMinSamples": settings.optix_denoiser_min_samples,
             "transparentBackground": int(settings.transparent_background),
             "gaussianCutoffSigma": settings.gaussian_cutoff_sigma,
             "gaussianProxyType": ["ICOSPHERE", "OCTAHEDRON", "ICOSAHEDRON", "ICOSPHERE_L2"].index(gauss),
@@ -364,7 +348,6 @@ class NoorRayHydraRenderEngine(bpy.types.HydraRenderEngine):
             "gaussianProxyOverdrawMax": settings.gaussian_proxy_overdraw_max,
             "bufferVisualization": {
                 "BEAUTY": 0,
-                "DENOISED": 5,
                 "PROXY_OVERDRAW": 6,
             }[view_mode],
             "gaussianRenderSphericalHarmonics": int(settings.gaussian_sh_degree),
@@ -492,31 +475,6 @@ class NOORRAY_PT_light_paths(Panel):
         settings = context.scene.hdnoorray
         layout.prop(settings, "max_bounces")
         layout.prop(settings, "indirect_light_clamp")
-
-
-class NOORRAY_PT_denoising(Panel):
-    bl_label = "Denoising"
-    bl_idname = "NOORRAY_PT_denoising"
-    bl_space_type = "PROPERTIES"
-    bl_region_type = "WINDOW"
-    bl_context = "render"
-
-    @classmethod
-    def poll(cls, context):
-        return context.engine == NoorRayHydraRenderEngine.bl_idname
-
-    def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False
-        settings = context.scene.hdnoorray
-        layout.prop(settings, "optix_denoiser_enabled")
-        row = layout.row()
-        row.enabled = (
-            settings.optix_denoiser_enabled
-            or settings.buffer_visualization == "DENOISED")
-        row.prop(settings, "optix_denoiser_min_samples")
-        layout.prop(settings, "buffer_visualization")
 
 
 class NOORRAY_PT_output(Panel):
@@ -817,7 +775,6 @@ _CLASSES = (
     NOORRAY_OT_add_gaussian_splat,
     NOORRAY_PT_sampling,
     NOORRAY_PT_light_paths,
-    NOORRAY_PT_denoising,
     NOORRAY_PT_output,
     NOORRAY_PT_gaussians,
     NOORRAY_PT_camera,

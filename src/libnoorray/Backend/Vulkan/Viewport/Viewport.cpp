@@ -1,5 +1,8 @@
 #include "Viewport.h"
-#include <iostream>
+
+#include <algorithm>
+#include <cstddef>
+#include <span>
 
 #include "Log.h"
 #include "Scene/Scene.h"
@@ -19,218 +22,102 @@ constexpr std::size_t noorRayViewportBillboardsSpvLength = sizeof(noorRayViewpor
 
 constexpr uint32_t ViewportGroupSize = 16;
 
-struct ViewportPushConstants
+std::span<const std::byte> shader_bytes(const unsigned char* data, const std::size_t size)
+{
+    return {reinterpret_cast<const std::byte*>(data), size};
+}
+
+struct ViewportArguments
 {
     uint32_t selectedCryptomatteId;
     float    exposure;
     int32_t  bufferVisualization;
     int32_t  tonemappingEnabled;
+    uint32_t colorImage;
+    uint32_t outputImage;
+    uint32_t idImage;
+    uint32_t albedoImage;
+    uint32_t normalImage;
+    uint32_t positionImage;
+    uint32_t overdrawImage;
+    uint32_t overdrawMax;
 };
 
-struct BillboardPushConstants
+struct BillboardArguments
 {
     glm::mat4 viewProjection;
     glm::vec2 screenSize;
     float     radius;
+    uint32_t  billboards;
 };
+
+uint32_t index_of(const gpu::ImageHandle handle)
+{
+    return static_cast<uint32_t>(handle.value);
 }
 
-Viewport::Viewport(Context& context, const uint32_t width, const uint32_t height,
-                   const Image& color,    const Image& albedo,
-                   const Image& normal,   const Image& crypto,
-                   const Image& position,
-                   const nr::cuda::UniqueSharedBuffer& denoised,
-                   const vk::Format outputImageFormat)
-: context(context),
-  outputImage(context, width, height, outputImageFormat,
-      vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
-      vk::ImageUsageFlagBits::eColorAttachment |
-      vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst),
-  billboards(context)
+uint32_t index_of(const gpu::ResourceHandle handle)
 {
-    shaderModule = context.getDevice().createShaderModuleUnique(
-        {{}, noorRayViewportSpvLength, reinterpret_cast<const uint32_t*>(noorRayViewportSpv)});
+    return static_cast<uint32_t>(handle.value);
+}
+}
 
-    std::vector<vk::DescriptorSetLayoutBinding> bindings = {
-        {0, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // color
-        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // output
-        {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // cryptomatte
-        {3, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // albedo
-        {4, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // normal
-        {5, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}, // position
-        {6, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute}, // denoised
-    };
-
-    descriptorSetLayout = context.getDevice().createDescriptorSetLayoutUnique(
-        {{}, static_cast<uint32_t>(bindings.size()), bindings.data()});
-
-    const vk::PushConstantRange pushConstantRange(
-        vk::ShaderStageFlagBits::eCompute, 0, sizeof(ViewportPushConstants));
-    pipelineLayout = context.getDevice().createPipelineLayoutUnique(
-        {{}, 1, &*descriptorSetLayout, 1, &pushConstantRange});
-
-    vk::PipelineShaderStageCreateInfo shaderStage({}, vk::ShaderStageFlagBits::eCompute, *shaderModule, "main");
-    pipeline = context.getDevice().createComputePipelineUnique({}, {{}, shaderStage, *pipelineLayout}).value;
-
-    const std::array layouts{descriptorSetLayout.get()};
-    const vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 1, layouts.data());
-    auto descriptorSets = context.getDevice().allocateDescriptorSetsUnique(allocInfo);
-    this->descriptorSets[0] = std::move(descriptorSets[0]);
-
-    writeDescriptors(color, albedo, normal, crypto, position, denoised);
-
+Viewport::Viewport(gpu::Device& gpu_device, const uint32_t width, const uint32_t height,
+                   const ViewportInputs& inputs, const gpu::ImageFormat outputImageFormat)
+: gpuDevice(gpu_device), inputs(inputs)
+{
+    createOutputImage(width, height, outputImageFormat);
+    shader = gpuDevice.create_shader(
+        shader_bytes(noorRayViewportSpv, noorRayViewportSpvLength));
+    pipeline = gpuDevice.compute(shader);
     createBillboardPipeline();
     reserveBillboards(1);
 }
 
-void Viewport::writeDescriptors(
-    const Image& color, const Image& albedo, const Image& normal,
-    const Image& crypto, const Image& position,
-    const nr::cuda::UniqueSharedBuffer& denoised)
+Viewport::~Viewport()
 {
-    // Every binding is a storage image the compute pass reads or writes, so a
-    // set is only usable once all of them exist. Before the first resize, or
-    // with AOVs switched off, some do not — leave the set unwritten and let
-    // dispatch() skip until a later call supplies the full complement.
-    descriptorsValid = color.getView() && outputImage.getView()
-        && crypto.getView() && albedo.getView() && normal.getView()
-        && position.getView() && denoised.vulkanBuffer();
-    if (!descriptorsValid)
-        return;
+    LOG_INFO("Destroying Viewport");
+}
 
-    std::vector imageInfos = {
-        vk::DescriptorImageInfo({}, color.getView(),      vk::ImageLayout::eGeneral),
-        vk::DescriptorImageInfo({}, outputImage.getView(),vk::ImageLayout::eGeneral),
-        vk::DescriptorImageInfo({}, crypto.getView(),     vk::ImageLayout::eGeneral),
-        vk::DescriptorImageInfo({}, albedo.getView(),     vk::ImageLayout::eGeneral),
-        vk::DescriptorImageInfo({}, normal.getView(),     vk::ImageLayout::eGeneral),
-        vk::DescriptorImageInfo({}, position.getView(),   vk::ImageLayout::eGeneral),
-    };
-
-    std::vector<vk::WriteDescriptorSet> writes;
-    for (uint32_t i = 0; i < static_cast<uint32_t>(imageInfos.size()); ++i)
-    {
-        writes.push_back(vk::WriteDescriptorSet()
-            .setDstSet(descriptorSets[0].get())
-            .setDstBinding(i)
-            .setDescriptorType(vk::DescriptorType::eStorageImage)
-            .setImageInfo(imageInfos[i])
-            .setDescriptorCount(1));
-    }
-
-    writes.push_back(vk::WriteDescriptorSet()
-        .setDstSet(descriptorSets[0].get())
-        .setDstBinding(6)
-        .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-        .setBufferInfo(denoised.descriptorInfo())
-        .setDescriptorCount(1));
-
-    context.getDevice().updateDescriptorSets(writes, {});
+void Viewport::createOutputImage(const uint32_t width, const uint32_t height,
+                                 const gpu::ImageFormat format)
+{
+    outputImage = gpuDevice.image<std::byte>(width, height,
+        gpu::ImageUsage::Sampled | gpu::ImageUsage::Storage
+            | gpu::ImageUsage::ColorAttachment,
+        format);
+    outputFormat = format;
 }
 
 void Viewport::createBillboardPipeline()
 {
-    billboardShaderModule = context.getDevice().createShaderModuleUnique(
-        {{}, noorRayViewportBillboardsSpvLength, reinterpret_cast<const uint32_t*>(noorRayViewportBillboardsSpv)});
-
-    const vk::DescriptorSetLayoutBinding billboardBinding{
-        0, vk::DescriptorType::eStorageBuffer, 1,
-        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment};
-    billboardDescriptorSetLayout = context.getDevice().createDescriptorSetLayoutUnique(
-        {{}, 1, &billboardBinding});
-
-    const vk::PushConstantRange pushConstantRange(
-        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-        0, sizeof(BillboardPushConstants));
-    billboardPipelineLayout = context.getDevice().createPipelineLayoutUnique(
-        {{}, 1, &*billboardDescriptorSetLayout, 1, &pushConstantRange});
-
-    const vk::DescriptorSetAllocateInfo allocInfo(context.getDescriptorPool(), 1, &*billboardDescriptorSetLayout);
-    billboardDescriptorSet = std::move(context.getDevice().allocateDescriptorSetsUnique(allocInfo).front());
-
-    const std::array stages{
-        vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eVertex, *billboardShaderModule, "vertMain"),
-        vk::PipelineShaderStageCreateInfo({}, vk::ShaderStageFlagBits::eFragment, *billboardShaderModule, "fragMain"),
-    };
-
-    // No vertex buffers — the vertex shader builds a screen-facing quad from
-    // SV_VertexID/SV_InstanceID and reads billboard data straight out of the
-    // storage buffer.
-    constexpr vk::PipelineVertexInputStateCreateInfo vertexInput{};
-    constexpr vk::PipelineInputAssemblyStateCreateInfo inputAssembly(
-        {}, vk::PrimitiveTopology::eTriangleStrip, false);
-
-    constexpr vk::PipelineViewportStateCreateInfo viewportState({}, 1, nullptr, 1, nullptr);
-
-    vk::PipelineRasterizationStateCreateInfo rasterization{};
-    rasterization.polygonMode = vk::PolygonMode::eFill;
-    rasterization.cullMode = vk::CullModeFlagBits::eNone;
-    rasterization.lineWidth = 1.0f;
-
-    vk::PipelineMultisampleStateCreateInfo multisample{};
-    multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
-
-    vk::PipelineColorBlendAttachmentState blendAttachment{};
-    blendAttachment.blendEnable = true;
-    blendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
-    blendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
-    blendAttachment.colorBlendOp = vk::BlendOp::eAdd;
-    blendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
-    blendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eZero;
-    blendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
-    blendAttachment.colorWriteMask =
-        vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-    const vk::PipelineColorBlendStateCreateInfo colorBlend({}, false, vk::LogicOp::eCopy, 1, &blendAttachment);
-
-    const std::array dynamicStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
-    const vk::PipelineDynamicStateCreateInfo dynamicState({}, dynamicStates);
-
-    const vk::Format colorFormat = outputImage.getFormat();
-    vk::PipelineRenderingCreateInfo renderingCreateInfo{};
-    renderingCreateInfo.colorAttachmentCount = 1;
-    renderingCreateInfo.pColorAttachmentFormats = &colorFormat;
-
-    vk::GraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.pNext = &renderingCreateInfo;
-    pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
-    pipelineInfo.pStages = stages.data();
-    pipelineInfo.pVertexInputState = &vertexInput;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterization;
-    pipelineInfo.pMultisampleState = &multisample;
-    pipelineInfo.pColorBlendState = &colorBlend;
-    pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = *billboardPipelineLayout;
-
-    billboardPipeline = context.getDevice().createGraphicsPipelineUnique({}, pipelineInfo).value;
+    const auto bytes = shader_bytes(noorRayViewportBillboardsSpv,
+        noorRayViewportBillboardsSpvLength);
+    billboardVertexShader = gpuDevice.create_shader(bytes, "vertMain");
+    billboardFragmentShader = gpuDevice.create_shader(bytes, "fragMain");
+    gpu::GraphicsState state{};
+    state.cull = gpu::CullMode::None;
+    state.depth_test = false;
+    state.depth_write = false;
+    state.blend.enabled = true;
+    billboardPipeline = gpuDevice.graphics({billboardVertexShader,
+        billboardFragmentShader, state, outputFormat});
 }
 
 void Viewport::reserveBillboards(const uint32_t capacity)
 {
-    if (capacity <= billboards.capacity())
+    if (capacity <= billboardCapacity)
         return;
 
-    // The descriptor set may still be referenced by an in-flight command buffer from
-    // a previous frame; growth is rare (only when the light count exceeds the current
-    // capacity), so a wait here is cheap insurance against rewriting a live binding.
-    if (billboards.capacity() > 0)
-        context.getDevice().waitIdle();
-
-    billboards.reserve(capacity);
-    writeBillboardDescriptor();
-}
-
-void Viewport::writeBillboardDescriptor()
-{
-    const vk::WriteDescriptorSet write = vk::WriteDescriptorSet()
-        .setDstSet(billboardDescriptorSet.get())
-        .setDstBinding(0)
-        .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-        .setBufferInfo(billboards.buffer().descriptorInfo())
-        .setDescriptorCount(1);
-    context.getDevice().updateDescriptorSets(write, {});
+    // The buffer may still be referenced by an in-flight command buffer from a
+    // previous frame; growth is rare (only when the light count exceeds the
+    // current capacity), so waiting here is cheap insurance.
+    if (billboardCapacity > 0)
+        gpuDevice.synchronize();
+    billboardBuffer = gpuDevice.buffer<std::byte>(
+        static_cast<std::size_t>(capacity) * sizeof(ViewportBillboard));
+    billboardCapacity = capacity;
+    billboardEntry = billboardBuffer.handle();
 }
 
 void Viewport::updateBillboards(const Scene& scene)
@@ -243,118 +130,96 @@ void Viewport::updateBillboards(const Scene& scene)
         + scene.getRectLightCount()
         + scene.getDirectionalLightCount();
     reserveBillboards(std::max(1u, lightCount));
-    billboards.clear();
+    billboardData.clear();
     for (const auto& obj : scene.getSceneObjects())
     {
         if (const auto* light = dynamic_cast<LightInstance*>(obj.get()))
         {
-            billboards.push_back(ViewportBillboard{
-                glm::vec4(light->getWorldTransform().getPosition(), static_cast<float>(light->lightType)),
+            billboardData.push_back(ViewportBillboard{
+                glm::vec4(light->getWorldTransform().getPosition(),
+                    static_cast<float>(light->lightType)),
                 glm::vec4(light->getColor(), 1.0f)});
         }
     }
-    billboardCount = static_cast<uint32_t>(billboards.size());
+    billboardCount = static_cast<uint32_t>(billboardData.size());
+    if (billboardCount > 0)
+        gpuDevice.upload(billboardBuffer, std::as_bytes(
+            std::span<const ViewportBillboard>(billboardData.data(), billboardCount)));
     observedLightRevision = scene.getLightRevision();
 }
 
-Viewport::~Viewport()
+void Viewport::drawBillboards(const glm::mat4& viewProjection)
 {
-    LOG_INFO("Destroying Viewport");
-}
-
-void Viewport::drawBillboards(const vk::CommandBuffer commandBuffer, const glm::mat4& viewProjection)
-{
-    vk::RenderingAttachmentInfo colorAttachment{};
-    colorAttachment.setImageView(outputImage.getView());
-    colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
-    colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
-    colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
-
-    vk::RenderingInfo renderingInfo{};
-    renderingInfo.setRenderArea(vk::Rect2D({0, 0}, {outputImage.getWidth(), outputImage.getHeight()}));
-    renderingInfo.setLayerCount(1);
-    renderingInfo.setColorAttachments(colorAttachment);
-
-    commandBuffer.beginRendering(renderingInfo);
-
-    // Negative height flips Vulkan's Y-down viewport convention back to the Y-up
-    // NDC that glm::perspective() (used for the camera matrix) assumes.
-    commandBuffer.setViewport(0, vk::Viewport(
-        0.0f, static_cast<float>(outputImage.getHeight()),
-        static_cast<float>(outputImage.getWidth()), -static_cast<float>(outputImage.getHeight()), 0.0f, 1.0f));
-    commandBuffer.setScissor(0, vk::Rect2D({0, 0}, {outputImage.getWidth(), outputImage.getHeight()}));
-
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *billboardPipeline);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *billboardPipelineLayout, 0,
-                                     billboardDescriptorSet.get(), {});
-
-    const BillboardPushConstants pushConstants{
-        // Slang emits this push-constant matrix with row-major storage. GLM
+    // The path-traced image uses bottom-left row order and is flipped once by
+    // ImGui. Draw overlays into that same raw orientation so their projected
+    // position receives the identical presentation flip. clear=false keeps the
+    // composite pass's output that this draws on top of.
+    const BillboardArguments arguments{
+        // Slang emits this root-argument matrix with row-major storage. GLM
         // stores matrices column-major, so transpose once at the ABI boundary
         // to preserve the same mathematical matrix in the shader.
         glm::transpose(viewProjection),
-        glm::vec2(static_cast<float>(outputImage.getWidth()), static_cast<float>(outputImage.getHeight())),
-        ViewportBillboardPixelRadius};
-    commandBuffer.pushConstants(
-        *billboardPipelineLayout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-        0, sizeof(pushConstants), &pushConstants);
-
-    commandBuffer.draw(4, billboardCount, 0, 0);
-
-    commandBuffer.endRendering();
+        glm::vec2(static_cast<float>(outputImage.width()),
+                  static_cast<float>(outputImage.height())),
+        ViewportBillboardPixelRadius,
+        static_cast<uint32_t>(billboardEntry.value)};
+    gpuDevice.render({.color = outputImage.handle(), .clear = false, .flip_y = false},
+        [this, &arguments] {
+            billboardPipeline.draw_instanced(6, billboardCount, arguments);
+        });
 }
 
 void Viewport::dispatch(
-    const vk::CommandBuffer commandBuffer,
     const uint32_t selectedCryptomatteId,
     const glm::mat4& viewProjection,
     const float exposure,
     const int bufferVisualization,
+    const int gaussianOverdrawMax,
     const bool tonemappingEnabled,
     const bool showBillboards)
 {
-    if (!descriptorsValid)
+    // Before the first resize, or with AOVs switched off, some inputs do not
+    // exist yet; skip until a later call supplies the full complement.
+    if (!inputs || !outputImage)
         return;
 
-    outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eGeneral);
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *pipelineLayout, 0,
-                                     descriptorSets[0].get(), {});
-    const ViewportPushConstants pushConstants{
-        selectedCryptomatteId, exposure, bufferVisualization, tonemappingEnabled ? 1 : 0};
-    commandBuffer.pushConstants(
-        *pipelineLayout, vk::ShaderStageFlagBits::eCompute,
-        0, sizeof(pushConstants), &pushConstants);
-    const uint32_t groupCountX = (outputImage.getWidth()  + ViewportGroupSize - 1) / ViewportGroupSize;
-    const uint32_t groupCountY = (outputImage.getHeight() + ViewportGroupSize - 1) / ViewportGroupSize;
-    commandBuffer.dispatch(groupCountX, groupCountY, 1);
+    const ViewportArguments arguments{
+        selectedCryptomatteId, exposure, bufferVisualization, tonemappingEnabled ? 1 : 0,
+        index_of(inputs.color),
+        index_of(outputImage.storage_handle()),
+        index_of(inputs.crypto),
+        index_of(inputs.albedo),
+        index_of(inputs.normal),
+        index_of(inputs.position),
+        index_of(inputs.overdraw),
+        static_cast<uint32_t>(std::max(gaussianOverdrawMax, 1))};
+    const uint32_t groupCountX =
+        (outputImage.width() + ViewportGroupSize - 1) / ViewportGroupSize;
+    const uint32_t groupCountY =
+        (outputImage.height() + ViewportGroupSize - 1) / ViewportGroupSize;
+    pipeline.launch({groupCountX, groupCountY, 1}, arguments);
 
     if (showBillboards && billboardCount > 0)
-    {
-        outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal);
-        drawBillboards(commandBuffer, viewProjection);
-    }
-    outputImage.setImageLayout(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+        drawBillboards(viewProjection);
 }
 
 void Viewport::resize(const uint32_t width, const uint32_t height,
-                      const Image& color,    const Image& albedo,
-                      const Image& normal,   const Image& crypto,
-                      const Image& position,
-                      const nr::cuda::UniqueSharedBuffer& denoised,
-                      const vk::Format outputImageFormat)
+                      const ViewportInputs& newInputs,
+                      const gpu::ImageFormat outputImageFormat)
 {
     if (width == 0 || height == 0)
         return;
 
-    context.getDevice().waitIdle();
-    if (outputImage.getWidth() != width || outputImage.getHeight() != height ||
-        outputImage.getFormat() != outputImageFormat)
+    gpuDevice.synchronize();
+    if (outputImage.width() != width || outputImage.height() != height
+        || outputFormat != outputImageFormat)
     {
-        outputImage = Image(context, width, height, outputImageFormat,
-            vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
-            vk::ImageUsageFlagBits::eColorAttachment |
-            vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst);
+        const gpu::ImageFormat previousFormat = outputFormat;
+        createOutputImage(width, height, outputImageFormat);
+        // The billboard pipeline bakes in its color-attachment format, so it
+        // only has to be rebuilt when that format actually changes.
+        if (outputImageFormat != previousFormat)
+            createBillboardPipeline();
     }
-    writeDescriptors(color, albedo, normal, crypto, position, denoised);
+    inputs = newInputs;
 }

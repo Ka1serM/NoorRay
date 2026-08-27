@@ -14,13 +14,8 @@
 #include "Scene/Import/SceneImporter.h"
 #include "Scene/Import/SceneReader.h"
 
-Scene::Scene(Context& context)
-    : context(context),
-      environment(nr::rstd::make_unique<Environment>()),
-      pointLights(context),
-      spotLights(context),
-      rectLights(context),
-      directionalLights(context)
+Scene::Scene()
+    : environment(std::make_unique<Environment>())
 {
     auto camera = std::make_unique<PerspectiveCamera>();
     viewportCamera = std::make_shared<CameraInstance>(
@@ -303,6 +298,7 @@ void Scene::invalidateMaterial(const MaterialHandle handle)
     materials[handle].svmTextureOffset = 0;
     materials[handle].svmTextureCount = 0;
     materials[handle].svmStackSize = nr::svm::StackSize;
+    materials[handle].mayEmit = 0;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
 }
@@ -752,9 +748,9 @@ void Scene::buildGaussianRenderData()
     {
         // The packed SH array is the largest managed allocation in a splat
         // scene. resize(0) would keep its capacity, so hand the memory back.
-        gaussianOpacities = nr::rstd::vector<float>{};
-        gaussianShCoeffs = nr::rstd::vector<__half>{};
-        gaussianInstanceOffsets = nr::rstd::vector<uint32_t>{};
+        gaussianOpacities = std::vector<float>{};
+        gaussianShCoeffs = std::vector<uint16_t>{};
+        gaussianInstanceOffsets = std::vector<uint32_t>{};
         return;
     }
     gaussianOpacities.resize(total);
@@ -777,14 +773,14 @@ void Scene::buildGaussianRenderData()
             }
             const Gaussian& gaussian = span->gaussians[globalIndex - span->offset];
             gaussianOpacities[globalIndex] = gaussian.opacity;
-            __half* coefficients = gaussianShCoeffs.data()
+            uint16_t* coefficients = gaussianShCoeffs.data()
                 + static_cast<size_t>(globalIndex) * coefficientsPerGaussian
                     * SphericalHarmonicsChannelCount;
             std::fill_n(coefficients,
-                coefficientsPerGaussian * SphericalHarmonicsChannelCount, __half{});
+                coefficientsPerGaussian * SphericalHarmonicsChannelCount, uint16_t{});
             const uint32_t count = std::min(
                 gaussian.sphericalHarmonics.count, coefficientsPerGaussian);
-            const __half* source = gaussian.sphericalHarmonics.values.data();
+            const uint16_t* source = gaussian.sphericalHarmonics.values.data();
             for (uint32_t coefficient = 0; coefficient < count; ++coefficient)
             {
                 std::copy_n(source + coefficient * 3, 3,

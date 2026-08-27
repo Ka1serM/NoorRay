@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <cuda_runtime_api.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -92,22 +91,7 @@ void HdNoorRayRenderBuffer::ClearFloat(
         WriteFloatPixel(pixel, values, componentCount);
 }
 
-bool HdNoorRayRenderBuffer::CopyFromCudaArray(cudaArray_t source)
-{
-    if (source == nullptr || format_ != HdFormatFloat32Vec4 || data_.empty())
-        return false;
-    return cudaMemcpy2DFromArray(
-        data_.data(),
-        static_cast<size_t>(width_) * sizeof(float) * 4,
-        source,
-        0,
-        0,
-        static_cast<size_t>(width_) * sizeof(float) * 4,
-        height_,
-        cudaMemcpyDeviceToHost) == cudaSuccess;
-}
-
-bool HdNoorRayRenderBuffer::CopyFromCudaBuffer(
+bool HdNoorRayRenderBuffer::CopyFromHost(
     const void* source, const size_t bytes)
 {
     const size_t expectedBytes = static_cast<size_t>(width_) * height_
@@ -115,9 +99,8 @@ bool HdNoorRayRenderBuffer::CopyFromCudaBuffer(
     if (source == nullptr || bytes < expectedBytes
         || format_ != HdFormatFloat32Vec4 || data_.empty())
         return false;
-    return cudaMemcpy(
-        data_.data(), source, expectedBytes,
-        cudaMemcpyDeviceToHost) == cudaSuccess;
+    std::memcpy(data_.data(), source, expectedBytes);
+    return true;
 }
 
 void HdNoorRayRenderBuffer::_Deallocate()

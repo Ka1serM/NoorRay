@@ -8,9 +8,8 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
-#include "Backend/CUDA/rstd/Vector.h"
-#include "Backend/CUDA/rstd/UniquePtr.h"
-#include "Backend/CUDA/Unique/SharedVector.h"
+#include <vector>
+#include <memory>
 #include "Scene/Handle.h"
 #include "Scene/RenderSettings.h"
 #include "Scene/Resources/SceneResources.h"
@@ -20,7 +19,6 @@
 #include "Rendering/Lighting/SpotLight.h"
 #include "Rendering/Lighting/RectLight.h"
 #include "Rendering/Lighting/DirectionalLight.h"
-#include "Backend/Vulkan/Runtime/Context.h"
 #include "Scene/Resources/Texture.h"
 
 #include <glm/mat4x4.hpp>
@@ -75,7 +73,6 @@ enum DirtyFlag : uint8_t {
 
 class Scene {
     friend class LightInstance;
-    Context& context;
 
     // Every resource is reference counted: Scene::add hands out an owning
     // reference, instances and assets keep the references they use alive, and
@@ -109,22 +106,21 @@ class Scene {
     std::vector<MaterialX::DocumentPtr> materialxDocuments;
     uint32_t selectedMaterialSlot{0};
 
-    nr::rstd::unique_ptr<Environment> environment;
+    std::unique_ptr<Environment> environment;
     RenderSettings renderSettings{};
 
-    // VMA owns these allocations. Host code uses the persistent VMA mapping,
-    // while Backend/CUDA/OptiX uses the separately imported external-memory address.
-    nr::cuda::SharedVector<PointLight> pointLights;
-    nr::cuda::SharedVector<SpotLight> spotLights;
-    nr::cuda::SharedVector<RectLight> rectLights;
-    nr::cuda::SharedVector<DirectionalLight> directionalLights;
+    // Lighting data is host-owned and uploaded by the native Vulkan renderer.
+    std::vector<PointLight> pointLights;
+    std::vector<SpotLight> spotLights;
+    std::vector<RectLight> rectLights;
+    std::vector<DirectionalLight> directionalLights;
 
-    // Render-ready Gaussian attributes shared with CUDA kernels.
-    nr::rstd::vector<float> gaussianOpacities;
+    // Render-ready Gaussian attributes shared with the Vulkan renderer.
+    std::vector<float> gaussianOpacities;
     // Coefficient-major RGB binary16 values. Opacity remains float because it
     // directly controls stochastic acceptance and benefits less from packing.
-    nr::rstd::vector<__half> gaussianShCoeffs;
-    nr::rstd::vector<uint32_t> gaussianInstanceOffsets;
+    std::vector<uint16_t> gaussianShCoeffs;
+    std::vector<uint32_t> gaussianInstanceOffsets;
     uint32_t gaussianShCoefficientCount{MaxSphericalHarmonicsCoefficientCount};
 
     // Objects live in a dense array so iteration and the TLAS build stay
@@ -180,7 +176,7 @@ class Scene {
     void reparent(SceneObject* objectToMove, SceneObject* newParent);
     void notifyGeometryChanged();
 public:
-    Scene(Context& context);
+    Scene();
     ~Scene();
 
     void setMutationBarrier(std::function<void()> barrier) {
@@ -272,10 +268,10 @@ public:
     MeshAsset* getMeshAsset(MeshAssetHandle handle) { return meshAssets.find(handle); }
     const MeshAsset* getMeshAsset(MeshAssetHandle handle) const { return meshAssets.find(handle); }
     MeshAssetRef getMeshAssetRef(MeshAssetHandle handle) { return {meshAssets, handle}; }
-    const nr::rstd::vector<MeshAsset>& getMeshAssets() const { return meshAssets.storage(); }
-    nr::rstd::vector<MeshAsset>& getMeshAssets() { return meshAssets.storage(); }
-    const nr::rstd::vector<Material>& getMaterials() const { return materials.storage(); }
-    nr::rstd::vector<Material>& getMaterials() { return materials.storage(); }
+    const std::vector<MeshAsset>& getMeshAssets() const { return meshAssets.storage(); }
+    std::vector<MeshAsset>& getMeshAssets() { return meshAssets.storage(); }
+    const std::vector<Material>& getMaterials() const { return materials.storage(); }
+    std::vector<Material>& getMaterials() { return materials.storage(); }
     const MaterialRegistry& getMaterialRegistry() const { return materials; }
     MaterialRef getMaterialRef(const MaterialHandle handle) { return {materials, handle}; }
     const Material& getMaterial(MaterialHandle handle) const { return materials[handle]; }
@@ -284,8 +280,8 @@ public:
     GaussianAsset* getGaussianAsset(GaussianAssetHandle handle) { return gaussianAssets.find(handle); }
     const GaussianAsset* getGaussianAsset(GaussianAssetHandle handle) const { return gaussianAssets.find(handle); }
     GaussianAssetRef getGaussianAssetRef(GaussianAssetHandle handle) { return {gaussianAssets, handle}; }
-    const nr::rstd::vector<GaussianAsset>& getGaussianAssets() const { return gaussianAssets.storage(); }
-    nr::rstd::vector<GaussianAsset>& getGaussianAssets() { return gaussianAssets.storage(); }
+    const std::vector<GaussianAsset>& getGaussianAssets() const { return gaussianAssets.storage(); }
+    std::vector<GaussianAsset>& getGaussianAssets() { return gaussianAssets.storage(); }
     const GaussianAssetRegistry& getGaussianAssetRegistry() const { return gaussianAssets; }
     const std::vector<std::shared_ptr<GaussianInstance>>& getGaussianInstances() const {
         return gaussianInstances;
@@ -293,7 +289,7 @@ public:
     uint32_t getGaussianCount() const { return gaussianCount; }
     void buildGaussianRenderData();
     const float* getGaussianOpacities() const { return gaussianOpacities.data(); }
-    const __half* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
+    const uint16_t* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
     const uint32_t* getGaussianInstanceOffsets() const { return gaussianInstanceOffsets.data(); }
     uint32_t getGaussianShCoefficientCount() const { return gaussianShCoefficientCount; }
     const std::vector<Texture>& getTextures() const { return textures; }
@@ -329,17 +325,17 @@ public:
     }
     bool setActiveCamera(CameraInstance* camera);
 
-    // Light GPU data, Vulkan/CUDA-shared. Host pointers (below) are for CPU-side use
+    // Light GPU data, uploaded by Vulkan. Host pointers (below) are for CPU-side use
     // (UI, transform updates, host-side selection-weight sums); the *Device variants
-    // are the CUDA-mapped view and are the only ones safe to dereference in kernels.
+    // are host views used to stage native GPU buffers.
     const PointLight* getPointLights() const { return pointLights.data(); }
     const SpotLight* getSpotLights() const { return spotLights.data(); }
     const RectLight* getRectLights() const { return rectLights.data(); }
     const DirectionalLight* getDirectionalLights() const { return directionalLights.data(); }
-    const PointLight* getPointLightsDevice() const { return pointLights.devicePointer(); }
-    const SpotLight* getSpotLightsDevice() const { return spotLights.devicePointer(); }
-    const RectLight* getRectLightsDevice() const { return rectLights.devicePointer(); }
-    const DirectionalLight* getDirectionalLightsDevice() const { return directionalLights.devicePointer(); }
+    const PointLight* getPointLightsDevice() const { return pointLights.data(); }
+    const SpotLight* getSpotLightsDevice() const { return spotLights.data(); }
+    const RectLight* getRectLightsDevice() const { return rectLights.data(); }
+    const DirectionalLight* getDirectionalLightsDevice() const { return directionalLights.data(); }
     uint32_t getPointLightCount() const { return static_cast<uint32_t>(pointLights.size()); }
     uint32_t getSpotLightCount() const { return static_cast<uint32_t>(spotLights.size()); }
     uint32_t getRectLightCount() const { return static_cast<uint32_t>(rectLights.size()); }
@@ -358,7 +354,6 @@ public:
     void setSelectedMaterialSlot(const uint32_t slot) { selectedMaterialSlot = slot; }
 
     // Context
-    Context& getContext() const { return context; }
     Environment& getEnvironment() { return *environment; }
     const Environment& getEnvironment() const { return *environment; }
     RenderSettings& getRenderSettings() { return renderSettings; }

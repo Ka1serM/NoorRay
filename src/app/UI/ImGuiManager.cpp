@@ -5,7 +5,7 @@
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_vulkan.h"
 #include "glm/gtc/type_ptr.inl"
-#include "Backend/Vulkan/Runtime/Context.h"
+#include <gpu/interop.hpp>
 #include "UI/Window.h"
 #include <array>
 #include <cstddef>
@@ -24,8 +24,9 @@ constexpr unsigned char noorRayImGuiLayout[] = {
 constexpr std::size_t noorRayImGuiLayoutLength = sizeof(noorRayImGuiLayout);
 }
 
-ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numImages,
-    const vk::SurfaceFormatKHR targetFormat)
+ImGuiManager::ImGuiManager(Window& window, gpu::Device& device, const uint32_t numImages,
+    const gpu::ImageFormat targetFormat)
+    : device(device)
 {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -38,14 +39,12 @@ ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numI
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigDragClickToInputText = true;
 
-#ifdef NDEBUG // Release mode: embed ini into binary
-    io.IniFilename = nullptr;  // don't use external file
+    // The application layout is an asset, not per-working-directory state.
+    // Loading ./imgui.ini in debug builds made a stale local single-pane
+    // layout silently replace the embedded editor arrangement.
+    io.IniFilename = nullptr;
     ImGui::LoadIniSettingsFromMemory(
         reinterpret_cast<const char*>(noorRayImGuiLayout), noorRayImGuiLayoutLength);
-#else
-    // Debug mode: use external file for easy tweaking
-    io.IniFilename = "imgui.ini";  // ImGui will load and save this file
-#endif
 
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
@@ -63,13 +62,26 @@ ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numI
 
     ImGui_ImplSDL3_InitForVulkan(window.nativeHandle());
 
+    const auto handles = gpu::interop::device_handles(device);
+    const vk::Device nativeDevice(reinterpret_cast<VkDevice>(handles.device));
+    const std::array poolSizes{
+        vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 64},
+        vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, 10000},
+        vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 64},
+        vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 64},
+        vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 128},
+        vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 30128},
+    };
+    descriptorPool = nativeDevice.createDescriptorPoolUnique({
+        vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 210,
+        static_cast<std::uint32_t>(poolSizes.size()), poolSizes.data()});
     ImGui_ImplVulkan_InitInfo init_info = {};
-    init_info.Instance = context.getInstance();
-    init_info.PhysicalDevice = context.getPhysicalDevice();
-    init_info.Device = context.getDevice();
-    init_info.QueueFamily = context.getGraphicsFamilyIndex();
-    init_info.Queue = context.getGraphicsQueue();
-    init_info.DescriptorPool = context.getDescriptorPool();
+    init_info.Instance = reinterpret_cast<VkInstance>(handles.instance);
+    init_info.PhysicalDevice = reinterpret_cast<VkPhysicalDevice>(handles.physical_device);
+    init_info.Device = reinterpret_cast<VkDevice>(handles.device);
+    init_info.QueueFamily = handles.queue_family;
+    init_info.Queue = reinterpret_cast<VkQueue>(handles.queue);
+    init_info.DescriptorPool = descriptorPool.get();
     init_info.MinImageCount = 2;
     init_info.ImageCount = numImages;
     init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
@@ -77,13 +89,17 @@ ImGuiManager::ImGuiManager(Window& window, Context& context, const uint32_t numI
     init_info.UseDynamicRendering = true;
     init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
     init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-    const auto renderTargetFormat = static_cast<VkFormat>(targetFormat.format);
+    const auto renderTargetFormat = static_cast<VkFormat>(gpu::interop::native_format(targetFormat));
     init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &renderTargetFormat;
     
     ImGui_ImplVulkan_Init(&init_info);
 }
 
 ImGuiManager::~ImGuiManager() {
+    // Components may own ImGui Vulkan texture registrations. Destroy them
+    // while the backend is still alive; otherwise their destructors would
+    // call RemoveTexture after ImGui_ImplVulkan_Shutdown.
+    components.clear();
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -125,18 +141,28 @@ void ImGuiManager::updateUi() {
     ImGui::Render();
 }
 
-void ImGuiManager::renderDrawData(vk::CommandBuffer commandBuffer, const vk::ImageView targetView, const vk::Extent2D targetExtent) {
+void ImGuiManager::renderDrawData(const gpu::Frame& frame) {
+    const vk::CommandBuffer commandBuffer(reinterpret_cast<VkCommandBuffer>(
+        gpu::interop::command_buffer(frame)));
+    const vk::ImageView targetView(reinterpret_cast<VkImageView>(
+        gpu::interop::image_view(device, frame.target())));
 
     // Vulkan dynamic rendering
     vk::RenderingAttachmentInfo colorAttachment{};
     colorAttachment.setImageView(targetView);
-    colorAttachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
-    colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear);
+    // gpu keeps presentation images in GENERAL under
+    // VK_KHR_unified_image_layouts.  The external ImGui draw is part of that
+    // same frame, so it must use the layout the device established.
+    colorAttachment.setImageLayout(vk::ImageLayout::eGeneral);
+    // The raytracer pass (and the optional compositor copy) has already written
+    // the acquired swapchain image. Loading it is required to preserve the
+    // renderer output underneath the ImGui overlay.
+    colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
     colorAttachment.setStoreOp(vk::AttachmentStoreOp::eStore);
     colorAttachment.setClearValue(vk::ClearValue{std::array{0.0f, 0.0f, 0.0f, 0.0f}});
 
     vk::RenderingInfo renderingInfo{};
-    renderingInfo.setRenderArea(vk::Rect2D({0, 0}, targetExtent));
+    renderingInfo.setRenderArea(vk::Rect2D({0, 0}, {frame.width(), frame.height()}));
     renderingInfo.setLayerCount(1);
     renderingInfo.setColorAttachments(colorAttachment);
 

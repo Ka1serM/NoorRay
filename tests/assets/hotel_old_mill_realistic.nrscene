@@ -12,9 +12,9 @@
         "focus_distance_cm": 500.0,
         "exposure": 4.0,
         "resolution": [1928, 1088],
-        "lens": "/home/marcel/GitRepositories/ROSS/resources/lenses/samy_gao/Samy&Gao-1(220deg).zmx",
-        "sensor": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/sensors/onsemi_AR0237.json",
-        "glass_catalogs": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/glasscatalogs/ohara.AGF;/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/glasscatalogs/schott.AGF"
+        "lens": "/home/marcel/GitRepositories/NoorRay/resources/lenses/samy_gao/Samy&Gao-1(220deg).zmx",
+        "sensor": "/home/marcel/GitRepositories/NoorRay/resources/sensors/onsemi_AR0237.json",
+        "glass_catalogs": "/home/marcel/GitRepositories/NoorRay/resources/glasscatalogs/ohara.AGF;/home/marcel/GitRepositories/NoorRay/resources/glasscatalogs/schott.AGF"
       }
     },
     {
@@ -29,9 +29,9 @@
         "focus_distance_cm": 500.0,
         "exposure": 2.5,
         "resolution": [1928, 1088],
-        "lens": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/lenses/bosch_rueckfahrkamera/bosch_rueckfahrkamera.zmx",
-        "sensor": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/sensors/onsemi_AR0237.json",
-        "glass_catalogs": "/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/glasscatalogs/ohara.AGF;/home/marcel/GitRepositories/NoorRay/external/ROSS/resources/glasscatalogs/schott.AGF"
+        "lens": "/home/marcel/GitRepositories/NoorRay/resources/lenses/bosch_rueckfahrkamera/bosch_rueckfahrkamera.zmx",
+        "sensor": "/home/marcel/GitRepositories/NoorRay/resources/sensors/onsemi_AR0237.json",
+        "glass_catalogs": "/home/marcel/GitRepositories/NoorRay/resources/glasscatalogs/ohara.AGF;/home/marcel/GitRepositories/NoorRay/resources/glasscatalogs/schott.AGF"
       }
     },
     {

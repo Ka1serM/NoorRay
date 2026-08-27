@@ -37,6 +37,12 @@ public:
         const std::size_t begin = words_.size();
         words_.resize(begin + wordCount);
         std::memcpy(words_.data() + begin, &node, sizeof(T));
+        if constexpr (std::is_same_v<T, NodeClosureUniformEdf>)
+            mayEmit_ = mayEmit_ || isStackOffset(node.strength)
+                || std::bit_cast<float>(node.strength) != 0.0f;
+        else if constexpr (std::is_same_v<T, NodeClosureOpenPbrSurface>)
+            mayEmit_ = mayEmit_ || isStackOffset(node.emissionLuminance)
+                || std::bit_cast<float>(node.emissionLuminance) != 0.0f;
     }
 
     void end() { words_.push_back(static_cast<std::uint32_t>(NodeType::End)); }
@@ -48,9 +54,11 @@ public:
         words_[index] = value;
     }
     std::vector<std::uint32_t> take() { return std::move(words_); }
+    bool mayEmit() const { return mayEmit_; }
 
 private:
     std::vector<std::uint32_t> words_;
+    bool mayEmit_{};
 };
 
 std::uint32_t floatWord(const float value)
@@ -2530,7 +2538,8 @@ CompiledSvmProgram SvmCompiler::compile(const mx::DocumentPtr& document,
     emitClosure(emitter, graph, surface,
         ValueRef{floatWord(1.0f), floatWord(1.0f), floatWord(1.0f), true});
     emitter.end();
-    return {emitter.take(),
-        static_cast<std::uint32_t>(graph.maxStackSize()), graph.textures()};
+    const bool mayEmit = emitter.mayEmit();
+    return {emitter.take(), static_cast<std::uint32_t>(graph.maxStackSize()),
+        mayEmit, graph.textures()};
 }
 } // namespace nr::svm

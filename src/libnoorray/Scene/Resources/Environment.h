@@ -3,15 +3,13 @@
 #include <cstdint>
 #include <vector>
 
-#include <cuda_runtime_api.h>
 #include <glm/mat3x3.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 using glm::vec3;
 
-#include "Backend/CUDA/Annotations.h"
-#include "Backend/CUDA/Unique/Texture.h"
+#include "Backend/Host/Platform.h"
 #include "Materials/Shading/RgbToSpectrum.h"
 #include "Rendering/Sampling/RandomSampler.h"
 
@@ -43,7 +41,7 @@ public:
     float rotation{};
     float visibleExposure{};
     float lightingExposure{1.0f};
-    nr::cuda::UniqueTexture cdfTexture;
+    uint64_t cdfTexture{};
     int cdfWidth{};
     int cdfHeight{};
     float importanceWeight{};
@@ -135,7 +133,7 @@ public:
 
 #if defined(NR_GPU_CODE)
     NR_GPU glm::vec3 rgbRadiance(
-        const nr::cuda::UniqueTexture* textures, const uint32_t textureCount,
+        const void* textures, const uint32_t textureCount,
         const glm::vec3 direction, const bool cameraRay) const
     {
         glm::vec3 rgb = color;
@@ -233,7 +231,7 @@ public:
     // Spectral radiance of the environment along `direction`. Intensity applies
     // to every ray; camera rays additionally receive the visible-exposure offset.
     NR_GPU SampledSpectrum radiance(
-        const nr::cuda::UniqueTexture* textures, const uint32_t textureCount,
+        const void* textures, const uint32_t textureCount,
         const glm::vec3 direction, const bool cameraRay,
         const SampledWavelengths& wl,
         const float* spectrumScale, const float* spectrumCoeffs, const float* d65Table) const

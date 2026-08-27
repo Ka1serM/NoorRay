@@ -7,7 +7,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Ray.h"
 #include "Rendering/Sampling/HemisphereSampler.h"
 #include "Materials/Shading/Spectrum.h"

@@ -27,7 +27,7 @@ struct HDNOORRAY_API HdNoorRayDecodedImage
     HdNoorRayImagePixelType pixelType{HdNoorRayImagePixelType::Rgba8};
     std::vector<uint8_t> rgba8;
     // IEEE-754 binary16 bit patterns. Keeping Hio's native representation
-    // avoids doubling EXR memory and lets CUDA upload a half4 array directly.
+    // avoids doubling EXR memory before libnoorray uploads it to Vulkan.
     std::vector<uint16_t> rgba16Float;
     std::vector<float> rgba32Float;
 

@@ -5,7 +5,7 @@
 
 #include <glm/vec2.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Sampling/RandomSampler.h"
 
 enum class SampleDimension : uint32_t

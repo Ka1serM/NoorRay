@@ -15,7 +15,7 @@ public:
 
     struct SurfaceHit {
         glm::vec2 position;  // (z, height), in the lens' native units
-        glm::vec2 normal;    // libross intersection normal in the same (z, height) frame
+        glm::vec2 normal;    // native optics intersection normal in the same (z, height) frame
         glm::vec2 outgoing;  // post-refraction ray direction; zero when refraction failed
     };
 

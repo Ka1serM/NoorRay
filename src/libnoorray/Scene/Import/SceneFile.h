@@ -20,8 +20,6 @@ struct EnvironmentFile {
 struct RenderSettingsFile {
     int max_samples{3000};
     bool aov_enabled{true};
-    bool optix_denoiser_enabled{false};
-    int optix_denoiser_min_samples{1};
     float indirect_light_clamp{10.0f};
     int gaussian_shading_mode{};
     int gaussian_render_sh_degree{3};
@@ -41,9 +39,6 @@ struct CameraFile {
     std::string lens;
     std::string sensor;
     std::string glass_catalogs;
-    std::string sensor_type{"rectangular"};
-    std::string psf;
-    std::string ray_lut;
 };
 
 struct MaterialFile {

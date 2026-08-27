@@ -10,13 +10,8 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-#include "Backend/CUDA/Annotations.h"
-#include "Backend/CUDA/TaggedPointer.h"
+#include "Backend/Host/Platform.h"
 #include "Materials/Shading/Spectrum.h"
-
-namespace ross {
-class InterpolatedPsfGrid;
-}
 
 namespace pfd {
 class open_file;
@@ -24,15 +19,11 @@ class save_file;
 }
 
 class RectangularSensor;
-class ScatterPsfSensor;
-class GatherPsfSensor;
 class Sensor;
 
 enum class SensorType : int
 {
     Rectangular,
-    ScatterPsf,
-    GatherPsf,
 };
 
 enum class SensorOrigin : uint8_t {
@@ -48,14 +39,8 @@ enum class SensorFit : uint8_t {
     Vertical,
 };
 
-struct PsfGatherBucketSample {
-    double rgbSum[3]{};
-    double count{};
-};
-
 struct SensorSampleContext {
     glm::vec4* accumulation{};
-    PsfGatherBucketSample* psfBuckets{};
     uint32_t width{};
     uint32_t height{};
     uint32_t totalAccumulated{};
@@ -66,16 +51,17 @@ struct SensorSampleContext {
     const float* cieZ{};
 };
 
-using TaggedSensor = nr::TaggedObject<Sensor,
-    RectangularSensor, ScatterPsfSensor, GatherPsfSensor>;
-
-class Sensor : public TaggedSensor {
+class Sensor {
 public:
-    using TaggedSensor::TaggedSensor;
     Sensor() = default;
     Sensor(const Sensor& other);
     Sensor& operator=(const Sensor& other);
     virtual ~Sensor();
+    Sensor* ptr() { return this; }
+    const Sensor* ptr() const { return this; }
+    explicit operator bool() const { return true; }
+    template <typename F> decltype(auto) DispatchCPU(F&& f) { return f(this); }
+    template <typename F> decltype(auto) DispatchCPU(F&& f) const { return f(this); }
 
     float widthMm{5.784f};
     float heightMm{3.264f};
@@ -113,10 +99,6 @@ public:
     void setImageSensorPath(std::string_view path);
     bool loadImageSensorDimensions();
     SensorType getType() const;
-    std::string getPsfGridPath() const;
-    void setPsfGridPath(std::string path);
-    void loadPsfGrid(std::string path);
-    uint32_t reloadPsfGrid();
     void requestType(SensorType type) { requestedType = static_cast<int>(type); }
     bool consumeRequestedType(SensorType& type)
     {
@@ -142,25 +124,15 @@ NR_CPU_GPU inline glm::vec3 sensorRGBFromSpectrum(
 
 NR_CPU_GPU inline void sensorAtomicAdd(double* ptr, double value)
 {
-#if defined(__CUDA_ARCH__)
-    atomicAdd(ptr, value);
-#else
     *ptr += value;
-#endif
 }
 
 NR_CPU_GPU inline void sensorAtomicAdd(float* ptr, float value)
 {
-#if defined(__CUDA_ARCH__)
-    atomicAdd(ptr, value);
-#else
     *ptr += value;
-#endif
 }
 
 #include "Rendering/Camera/RectangularSensor.h"
-#include "Rendering/Camera/ScatterPsfSensor.h"
-#include "Rendering/Camera/GatherPsfSensor.h"
 
 NR_CPU_GPU inline float Sensor::width() const
 {

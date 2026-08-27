@@ -13,8 +13,7 @@ void CameraInstance::accept(SceneObjectVisitor& visitor)
     visitor.visit(static_cast<SceneObject&>(*this));
     visitor.visit(*this);
 }
-#include "Rendering/Camera/HybridPsfCamera.h"
-#include "Backend/CUDA/ManagedMemory.h"
+#include "Backend/Host/MutationBarrier.h"
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtx/quaternion.hpp"
 #include "Scene/Scene.h"
@@ -32,9 +31,6 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
     if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
         sharedLensPath = realistic->getLensPath();
         sharedGlassCatalogPaths = realistic->getGlassCatalogPaths();
-    } else if (const auto* hybrid = camera->CastOrNullptr<HybridPsfCamera>()) {
-        sharedLensPath = hybrid->getLensPath();
-        sharedGlassCatalogPaths = hybrid->getGlassCatalogPaths();
     }
     std::unique_ptr<Camera> replacement;
     switch (type) {
@@ -46,8 +42,6 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
         replacement = std::make_unique<FisheyeCamera>(std::move(transferredSensor)); break;
     case CameraProjectionType::Realistic:
         replacement = std::make_unique<RealisticCamera>(std::move(transferredSensor)); break;
-    case CameraProjectionType::HybridPsf:
-        replacement = std::make_unique<HybridPsfCamera>(std::move(transferredSensor)); break;
     case CameraProjectionType::Perspective:
         replacement = std::make_unique<PerspectiveCamera>(std::move(transferredSensor)); break;
     }
@@ -56,8 +50,6 @@ void CameraInstance::allocateCamera(CameraProjectionType type)
 
     if (auto* realistic = camera->CastOrNullptr<RealisticCamera>())
         realistic->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
-    else if (auto* hybrid = camera->CastOrNullptr<HybridPsfCamera>())
-        hybrid->setOpticsPaths(sharedLensPath, sharedGlassCatalogPaths);
 
 }
 
@@ -80,10 +72,18 @@ CameraInstance::CameraInstance(const CameraInstance& other)
       arcballMode(other.arcballMode)
 {
     nr::synchronizeBeforeManagedMutation("Camera clone");
-    other.camera->DispatchCPU([&](const auto* source) {
-        using CameraType = std::remove_cvref_t<decltype(*source)>;
-        camera.reset(new CameraType(*source));
-    });
+    if (const auto* source = other.camera->CastOrNullptr<PerspectiveCamera>())
+        camera = std::make_unique<PerspectiveCamera>(*source);
+    else if (const auto* source = other.camera->CastOrNullptr<ThinLensCamera>())
+        camera = std::make_unique<ThinLensCamera>(*source);
+    else if (const auto* source = other.camera->CastOrNullptr<OrthographicCamera>())
+        camera = std::make_unique<OrthographicCamera>(*source);
+    else if (const auto* source = other.camera->CastOrNullptr<FisheyeCamera>())
+        camera = std::make_unique<FisheyeCamera>(*source);
+    else if (const auto* source = other.camera->CastOrNullptr<RealisticCamera>())
+        camera = std::make_unique<RealisticCamera>(*source);
+    else
+        camera = std::make_unique<Camera>(*other.camera);
     rebuildCamera();
 }
 
@@ -151,7 +151,6 @@ CameraProjectionType CameraInstance::getProjectionType() const
     if (camera->Is<OrthographicCamera>()) return CameraProjectionType::Orthographic;
     if (camera->Is<FisheyeCamera>())     return CameraProjectionType::Fisheye;
     if (camera->Is<RealisticCamera>())   return CameraProjectionType::Realistic;
-    if (camera->Is<HybridPsfCamera>())   return CameraProjectionType::HybridPsf;
     return CameraProjectionType::Perspective;
 }
 
@@ -161,7 +160,6 @@ const char* CameraInstance::getProjectionName() const
     if (camera->Is<OrthographicCamera>()) return "Orthographic";
     if (camera->Is<FisheyeCamera>())     return "Fisheye";
     if (camera->Is<RealisticCamera>())   return "Realistic";
-    if (camera->Is<HybridPsfCamera>())   return "Hybrid PSF";
     return "Perspective";
 }
 

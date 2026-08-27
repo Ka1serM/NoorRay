@@ -74,8 +74,6 @@ nr::sceneio::RenderSettingsFile makeRenderSettingsFile(const RenderSettings& set
     return {
         .max_samples = settings.maxSamples,
         .aov_enabled = settings.aovEnabled,
-        .optix_denoiser_enabled = settings.optixDenoiserEnabled,
-        .optix_denoiser_min_samples = settings.optixDenoiserMinSamples,
         .indirect_light_clamp = settings.indirectLightClamp,
         .gaussian_shading_mode = static_cast<int>(settings.gaussianShadingMode),
         .gaussian_render_sh_degree = static_cast<int>(settings.gaussianRenderSphericalHarmonics),
@@ -92,11 +90,10 @@ nr::sceneio::CameraFile makeCameraFile(
     case CameraProjectionType::Fisheye: file.projection = "fisheye"; break;
     case CameraProjectionType::ThinLens: file.projection = "thinlens"; break;
     case CameraProjectionType::Realistic: file.projection = "realistic"; break;
-    case CameraProjectionType::HybridPsf: file.projection = "hybridpsf"; break;
     case CameraProjectionType::Perspective: file.projection = "perspective"; break;
     }
     file.active = active;
-    if (!camera->Is<RealisticCamera>() && !camera->Is<HybridPsfCamera>())
+    if (!camera->Is<RealisticCamera>())
         file.focal_length_mm = camera->getFocalLengthMm();
     file.focus_distance_cm = camera->getFocusDistanceCm();
     file.exposure = camera->exposure;
@@ -108,27 +105,16 @@ nr::sceneio::CameraFile makeCameraFile(
         file.bokeh_bias = fisheye->bokehBias;
     } else if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
         file.aperture_diameter_mm = realistic->apertureDiameterMm;
-    } else if (const auto* hybridPsf = camera->CastOrNullptr<HybridPsfCamera>()) {
-        file.aperture_diameter_mm = hybridPsf->apertureDiameterMm;
     }
     file.sensor_width_mm = camera->getSensor().width();
     file.sensor_height_mm = camera->getSensor().height();
     const glm::uvec2 resolution = camera->getSensor().resolution();
     file.resolution = {resolution.x, resolution.y};
     file.sensor = std::string(camera->getSensor().getImageSensorPath());
-    switch (camera->getSensor().getType()) {
-    case SensorType::ScatterPsf: file.sensor_type = "scatter_psf"; break;
-    case SensorType::GatherPsf: file.sensor_type = "gather_psf"; break;
-    case SensorType::Rectangular: file.sensor_type = "rectangular"; break;
-    }
-    file.psf = camera->getSensor().getPsfGridPath();
+
     if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
         file.lens = realistic->getLensPath();
         file.glass_catalogs = realistic->getGlassCatalogPaths();
-    } else if (const auto* hybridPsf = camera->CastOrNullptr<HybridPsfCamera>()) {
-        file.lens = hybridPsf->getLensPath();
-        file.glass_catalogs = hybridPsf->getGlassCatalogPaths();
-        file.ray_lut = hybridPsf->getRayLutPath();
     }
     return file;
 }
@@ -517,7 +503,7 @@ void writePbrtCamera(std::ostream& out, const CameraInstance& instance,
     out << ' ';
     // PBRT camera rays travel along +Z, whereas NoorRay camera rays travel
     // along -Z. The importer applies the matching Z flip after LookAt.
-    writeVec3(out, position - direction);
+    writeVec3(out, position + direction);
     out << ' ';
     writeVec3(out, up);
     out << "\n";
@@ -543,24 +529,10 @@ void writePbrtCamera(std::ostream& out, const CameraInstance& instance,
             out << "# NoorRay: realistic camera has no lens path; exported as perspective\n";
             out << "Camera \"perspective\" \"float fov\" [" << pbrtNumber(fov) << "]\n";
         } else {
-            out << "Camera \"rossrealistic\" \"string lensfile\" ["
+            out << "Camera \"noorrayrealistic\" \"string lensfile\" ["
                 << pbrtQuote(std::filesystem::path(realistic->getLensPath()).generic_string())
                 << "] \"float aperturediameter\" ["
                 << pbrtNumber(realistic->apertureDiameterMm) << "] \"float focusdistance\" ["
-                << pbrtNumber(camera.getFocusDistanceCm() / 100.f) << "]\n";
-        }
-    } else if (instance.getProjectionType() == CameraProjectionType::HybridPsf) {
-        const auto* hybrid = camera.CastOrNullptr<HybridPsfCamera>();
-        if (!hybrid || hybrid->getLensPath().empty() || hybrid->getSensor().getImageSensorPath().empty()) {
-            out << "# NoorRay: hybrid PSF camera is missing optical assets; exported as perspective\n";
-            out << "Camera \"perspective\" \"float fov\" [" << pbrtNumber(fov) << "]\n";
-        } else {
-            out << "Camera \"rosspsf\" \"string lensfile\" ["
-                << pbrtQuote(std::filesystem::path(hybrid->getLensPath()).generic_string())
-                << "] \"string sensorFilePath\" ["
-                << pbrtQuote(std::filesystem::path(hybrid->getSensor().getImageSensorPath()).generic_string())
-                << "] \"float aperturediameter\" ["
-                << pbrtNumber(hybrid->apertureDiameterMm) << "] \"float focusdistance\" ["
                 << pbrtNumber(camera.getFocusDistanceCm() / 100.f) << "]\n";
         }
     } else {

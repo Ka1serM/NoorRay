@@ -1,11 +1,11 @@
 # MaterialX SVM
 
 This directory contains NoorRay's MaterialX-to-bytecode compiler and its
-CPU/CUDA interpreter.
+host and Vulkan SVM interpreter.
 
 - `SvmMaterialXCompiler.cpp` walks a MaterialX document and emits bytecode.
 - `SvmTypes.h` defines the stable instruction and payload formats.
-- `SvmEval.h` evaluates those instructions at shading time.
+- `MaterialSVM.slang` evaluates those instructions at shading time.
 - `SvmMaterialXCatalog.{h,cpp}` exposes the standard-library node catalog to
   tooling and tests.
 - The helper headers implement MaterialX standard-library math, color,

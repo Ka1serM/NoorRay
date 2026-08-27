@@ -48,15 +48,15 @@ void Transform::setFromMatrix(const glm::mat4& mat) {
     rotationEulerDegrees = degrees(eulerAngles(rotation));
 }
 
-vk::TransformMatrixKHR Transform::getVkTransformMatrix() const {
+gpu::float4x4 Transform::getGpuTransform() const {
     glm::mat4 mat = getMatrix();
-    vk::TransformMatrixKHR vkTransform{};
-    // VkTransformMatrixKHR is a row-major 3x4 matrix. Keep this explicit
-    // conversion independent of GLM's internal column-major representation.
-    vkTransform.matrix[0][0] = mat[0][0]; vkTransform.matrix[0][1] = mat[1][0]; vkTransform.matrix[0][2] = mat[2][0]; vkTransform.matrix[0][3] = mat[3][0];
-    vkTransform.matrix[1][0] = mat[0][1]; vkTransform.matrix[1][1] = mat[1][1]; vkTransform.matrix[1][2] = mat[2][1]; vkTransform.matrix[1][3] = mat[3][1];
-    vkTransform.matrix[2][0] = mat[0][2]; vkTransform.matrix[2][1] = mat[1][2]; vkTransform.matrix[2][2] = mat[2][2]; vkTransform.matrix[2][3] = mat[3][2];
-    return vkTransform;
+    gpu::float4x4 transform{};
+    // The GPU API uses explicit row-major records; GLM stores columns.
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t column = 0; column < 4; ++column)
+            transform.values[row][column] = mat[column][row];
+    transform.values[3][3] = 1.0f;
+    return transform;
 }
 
 void Transform::setRotationEuler(const glm::vec3& eulerDegrees) {

@@ -8,7 +8,7 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 
 // Compact non-scattering results from material evaluation.
 

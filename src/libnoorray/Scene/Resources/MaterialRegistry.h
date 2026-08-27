@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Backend/CUDA/rstd/Vector.h"
+#include <vector>
 #include "Scene/Resources/ResourceRegistry.h"
 #include "Materials/Shading/Material.h"
 
@@ -13,5 +13,5 @@ inline void releaseResource(Material& material)
     material = Material{};
 }
 
-using MaterialRegistry = nr::ResourceRegistry<Material, nr::rstd::vector<Material>>;
+using MaterialRegistry = nr::ResourceRegistry<Material, std::vector<Material>>;
 using MaterialRef = nr::ResourceRef<MaterialRegistry>;

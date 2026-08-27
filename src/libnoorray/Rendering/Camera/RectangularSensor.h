@@ -4,7 +4,7 @@
 
 #include "Rendering/Camera/Sensor.h"
 
-class RectangularSensor : public Sensor::Type<RectangularSensor> {
+class RectangularSensor : public Sensor {
 public:
     RectangularSensor() = default;
     explicit RectangularSensor(const Sensor& other);

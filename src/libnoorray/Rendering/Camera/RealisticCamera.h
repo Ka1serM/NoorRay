@@ -1,120 +1,46 @@
 #pragma once
 
-#include "Backend/CUDA/Annotations.h"
-#include "Backend/CUDA/rstd/UniquePtr.h"
+#include "Backend/Host/Platform.h"
 #include "Rendering/Camera/Camera.h"
-#include "libross/imaging/cameralens/CameraLens.h"
-#include "libross/imaging/cameralens/raytracing/sequential/FromFilmToWorldRaytracer.h"
-#include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupil.h"
-#include "libross/imaging/imagesensor/ImageSensor.h"
-#include <glm/vec2.hpp>
+#include "Rendering/Optics/KolbLens.h"
 #include <memory>
 #include <string>
 #include <vector>
-using glm::vec2;
 
-class RealisticCamera : public Camera::Type<RealisticCamera> {
+class RealisticCamera : public Camera {
 public:
-    nr::rstd::unique_ptr<ross::CameraLens> rossLens;
-    nr::rstd::unique_ptr<ross::CameraLens> sourceRossLens;
-    nr::rstd::unique_ptr<ross::ExitPupil> exitPupil;
-    float sensorWidthCm{};
-    float sensorHeightCm{};
-    float filmDiagonalCm{};
-
+    nr::optics::LensSnapshot optics{};
+    float sensorWidthCm{}, sensorHeightCm{}, filmDiagonalCm{};
+    float apertureDiameterMm{};
     NR_CPU_GPU bool invalidRayIsOpaque() const { return true; }
-
-    // Construct the libross film ray used by generateRay. Keeping this public lets diagnostic
-    // views exercise exactly the same film mapping and exit-pupil sampling as rendered rays.
-    NR_CPU_GPU bool makeFilmRay(ross::Ray& filmRay, float nx, float ny,
-        const ross::Vector2f& pupilSample, float* sampleBoundsArea = nullptr) const
-    {
-        if (!rossLens || !exitPupil || exitPupil->pupilBounds.empty())
-            return false;
-
-        const Sensor& sensor = getSensor();
-        const ross::Vector2f filmPos(
-            -nx * sensor.filmWidth() * 0.1f * 0.5f,
-            -ny * sensor.filmHeight() * 0.1f * 0.5f);
-        const auto pupil = exitPupil->samplePupil(filmPos, filmDiagonalCm, pupilSample);
-        if (sampleBoundsArea != nullptr)
-            *sampleBoundsArea = pupil.sampleBoundsArea;
-        filmRay = ross::Ray::betweenPoints(
-            ross::Vector3f(filmPos.x, filmPos.y, 0.0f),
-            ross::Vector3f(pupil.point.x, pupil.point.y,
-                rossLens->getLastSurface().center));
-        return true;
-    }
-
-    NR_CPU_GPU nr::rstd::optional<CameraSample> generateRay(
-        float nx, float ny, const glm::vec2 lensSample, uint32_t,
-        SampledWavelengths& wavelengths,
-        bool centered = false) const
+    NR_CPU_GPU std::optional<CameraSample> generateRay(float nx, float ny,
+        glm::vec2 lensSample, uint32_t, SampledWavelengths& wavelengths, bool centered = false) const
     {
         wavelengths.terminateSecondary();
-        const ross::Vector2f sample(
-            centered ? 0.5f : lensSample.x,
-            centered ? 0.5f : lensSample.y);
-        ross::Ray filmRay;
-        float sampleBoundsArea;
-        if (!makeFilmRay(filmRay, nx, ny, sample, &sampleBoundsArea))
-            return nr::rstd::nullopt;
-
-        ross::FromFilmToWorldRaytracer raytracer(*rossLens);
-        const auto traced = raytracer.trace(filmRay, wavelengths[0]);
-        if (!traced)
-            return nr::rstd::nullopt;
-
-        // Match ROSS's RossRealisticCamera importance weighting: the sampled exit-pupil
-        // area, cosine-fourth falloff, and inverse-square pupil-plane distance.
-        const float cosTheta = filmRay.direction.z;
-        const float cosTheta2 = cosTheta * cosTheta;
-        const float pupilPlaneDistance = rossLens->getLastSurface().center;
+        if (!optics.surfaceCount || optics.rearPupilRadius <= 0.f) return std::nullopt;
+        const float sx = centered ? .5f : lensSample.x, sy = centered ? .5f : lensSample.y;
+        const float a = 2.f * sx - 1.f, b = 2.f * sy - 1.f;
+        const float r = fabsf(a) > fabsf(b) ? a : b;
+        const float phi = fabsf(a) > fabsf(b) ? .785398163f * b / (a == 0.f ? 1.f : a) : 1.570796327f - .785398163f * a / (b == 0.f ? 1.f : b);
+        const glm::vec2 pupil = optics.rearPupilRadius * r * glm::vec2(cosf(phi), sinf(phi));
+        const Sensor& sensor = getSensor();
+        const glm::vec3 origin(-nx * sensor.filmWidth() * .5f, -ny * sensor.filmHeight() * .5f, 0.f);
+        glm::vec3 tracedOrigin = origin;
+        glm::vec3 direction = glm::normalize(glm::vec3(pupil, optics.rearPupilZ) - origin);
+        if (!nr::optics::traceFilmToWorld(optics, tracedOrigin, direction, wavelengths[0])) return std::nullopt;
+        const float area = 3.141592654f * optics.rearPupilRadius * optics.rearPupilRadius;
         CameraSample result{};
-        result.weight = (cosTheta2 * cosTheta2) /
-            ((1.0f / sampleBoundsArea) * (pupilPlaneDistance * pupilPlaneDistance));
-
-        result.ray = transformRay(Ray(
-            glm::vec3(traced->startPoint.x * 0.01f,
-                traced->startPoint.y * 0.01f, -traced->startPoint.z * 0.01f),
-            glm::normalize(glm::vec3(
-                traced->direction.x, traced->direction.y, -traced->direction.z))));
+        result.weight = area * direction.z * direction.z * direction.z * direction.z / fmaxf(1e-6f, optics.rearPupilZ * optics.rearPupilZ);
+        result.ray = transformRay(Ray(tracedOrigin * .001f, glm::normalize(glm::vec3(direction.x, direction.y, -direction.z))));
         return result;
     }
-
-    RealisticCamera();
-    explicit RealisticCamera(std::unique_ptr<Sensor> sensor);
-    RealisticCamera(const RealisticCamera& other);
-    ~RealisticCamera();
-    bool renderUi();
-    void load(std::string lensPath, std::string glassCatalogPaths);
-    void load(std::string lensPath, const std::vector<std::string>& glassCatalogPaths);
-    void setApertureDiameterMm(float apertureDiameterMm);
-    void setOpticalFocusDistanceCm(float focusDistanceCm);
-    void prepareOptics();
-    void setOpticsPaths(std::string lensPath, std::string glassCatalogPaths);
-    const std::string& getLensPath() const { return lensPath; }
-    const std::string& getGlassCatalogPaths() const { return glassCatalogPaths; }
-    float derivedFocalLengthMm() const { return focalLengthMm; }
-    float apertureDiameterMm{0.f};
-    bool loadLensAndSensor(bool resetLensSettings = false);
-    bool consumeOpticsDirty()
-    {
-        const bool wasDirty = opticsDirty;
-        opticsDirty = false;
-        return wasDirty;
-    }
-
+    RealisticCamera(); explicit RealisticCamera(std::unique_ptr<Sensor> sensor); RealisticCamera(const RealisticCamera& other); ~RealisticCamera();
+    bool renderUi(); void load(std::string lensPath, std::string glassCatalogPaths); void load(std::string lensPath, const std::vector<std::string>& glassCatalogPaths);
+    void setApertureDiameterMm(float apertureDiameterMm); void setOpticalFocusDistanceCm(float focusDistanceCm); void prepareOptics(); void setOpticsPaths(std::string lensPath, std::string glassCatalogPaths);
+    const std::string& getLensPath() const { return lensPath; } const std::string& getGlassCatalogPaths() const { return glassCatalogPaths; } float derivedFocalLengthMm() const { return focalLengthMm; }
+    bool loadLensAndSensor(bool resetLensSettings = false); bool consumeOpticsDirty() { const bool result = opticsDirty; opticsDirty = false; return result; }
 private:
-    std::string lensPath;
-    std::string glassCatalogPaths;
-    std::string loadStatus;
-    bool opticsDirty = true;
-    bool opticsUpdatePending = false;
-
-    std::unique_ptr<pfd::open_file> lensDialog;
-    std::unique_ptr<pfd::open_file> glassCatalogDialog;
-
-    void freeRossLens();
+    std::string lensPath, glassCatalogPaths, loadStatus; bool opticsDirty{true}, opticsUpdatePending{}; nr::optics::LensSnapshot sourceOptics{};
+    std::unique_ptr<pfd::open_file> lensDialog; std::unique_ptr<pfd::open_file> glassCatalogDialog;
     void updateLensSettings();
 };

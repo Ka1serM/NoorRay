@@ -11,8 +11,6 @@
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 
-#include "Backend/OptiX/Runtime/Raytracer.h"
-
 #include <MaterialXCore/Document.h>
 #include <MaterialXFormat/XmlIo.h>
 

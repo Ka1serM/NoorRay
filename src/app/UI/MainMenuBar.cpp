@@ -18,9 +18,9 @@
 
 #include "ImGuiManager.h"
 
-MainMenuBar::MainMenuBar(std::string name, Context& context, Scene& scene,
+MainMenuBar::MainMenuBar(std::string name, Scene& scene,
     ImGuiManager& imGuiManager, std::string currentScenePath)
-    : ImGuiComponent(std::move(name)), scene(scene), context(context),
+    : ImGuiComponent(std::move(name)), scene(scene),
       imGuiManager(imGuiManager), currentScenePath(std::move(currentScenePath))
 {}
 
@@ -233,7 +233,7 @@ void MainMenuBar::renderFileMenu() {
                 ".",
                 std::vector<std::string>{
                     "Supported Assets",
-                    "*.obj *.gltf *.glb *.mtx *.mtlx *.ply *.compressed.ply *.splat *.ksplat *.spz *.sog *.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
+                    "*.obj *.gltf *.glb *.mtx *.mtlx *.ply *.compressed.ply *.splat *.ksplat *.spz *.sog *.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.exr *.pic",
                     "Gaussian Splats",
                     "*.ply *.compressed.ply *.splat *.ksplat *.spz *.sog",
                     "Meshes",
@@ -241,7 +241,7 @@ void MainMenuBar::renderFileMenu() {
                     "MaterialX",
                     "*.mtx *.mtlx",
                     "Images",
-                    "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.pic",
+                    "*.png *.jpg *.jpeg *.bmp *.tga *.psd *.gif *.hdr *.exr *.pic",
                     "All Files",
                     "*"});
         }

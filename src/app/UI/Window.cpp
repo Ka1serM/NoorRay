@@ -30,8 +30,8 @@ Window::Window(const uint32_t requestedWidth, const uint32_t requestedHeight)
     const SDL_DisplayID primaryDisplay = SDL_GetPrimaryDisplay();
 
     if (requestedWidth > 0 && requestedHeight > 0) {
-        width = requestedWidth;
-        height = requestedHeight;
+        pixelWidth = requestedWidth;
+        pixelHeight = requestedHeight;
     } else {
         // Choose a logical startup size from the usable monitor area, like
         // other desktop applications. The actual drawable pixel size is
@@ -40,13 +40,13 @@ Window::Window(const uint32_t requestedWidth, const uint32_t requestedHeight)
         if (SDL_GetDisplayUsableBounds(primaryDisplay, &usableBounds)
             && usableBounds.w > 0 && usableBounds.h > 0) {
             constexpr float startupAreaFraction = 2.0f / 3.0f;
-            width = static_cast<uint32_t>(usableBounds.w * startupAreaFraction);
-            height = static_cast<uint32_t>(usableBounds.h * startupAreaFraction);
+            pixelWidth = static_cast<uint32_t>(usableBounds.w * startupAreaFraction);
+            pixelHeight = static_cast<uint32_t>(usableBounds.h * startupAreaFraction);
         }
     }
 
-    window = SDL_CreateWindow("NoorRay by Marcel K.", static_cast<int>(width),
-        static_cast<int>(height),
+    window = SDL_CreateWindow("NoorRay by Marcel K.", static_cast<int>(pixelWidth),
+        static_cast<int>(pixelHeight),
         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!window)
     {
@@ -67,8 +67,8 @@ Window::Window(const uint32_t requestedWidth, const uint32_t requestedHeight)
     int pixelHeight = 0;
     if (!SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight))
         throw std::runtime_error(std::string("Failed to query SDL window pixel size: ") + SDL_GetError());
-    width = static_cast<uint32_t>(std::max(pixelWidth, 0));
-    height = static_cast<uint32_t>(std::max(pixelHeight, 0));
+    this->pixelWidth = static_cast<uint32_t>(std::max(pixelWidth, 0));
+    this->pixelHeight = static_cast<uint32_t>(std::max(pixelHeight, 0));
 }
 
 Window::~Window()
@@ -79,12 +79,12 @@ Window::~Window()
     SDL_Quit();
 }
 
-PFN_vkGetInstanceProcAddr Window::getVulkanInstanceProcAddr() const
+std::uintptr_t Window::instance_proc_address() const
 {
-    return reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+    return reinterpret_cast<std::uintptr_t>(SDL_Vulkan_GetVkGetInstanceProcAddr());
 }
 
-std::vector<const char*> Window::getRequiredVulkanInstanceExtensions() const
+std::vector<const char*> Window::instance_extensions() const
 {
     unsigned int count{};
     const char* const* extensions = SDL_Vulkan_GetInstanceExtensions(&count);
@@ -93,12 +93,12 @@ std::vector<const char*> Window::getRequiredVulkanInstanceExtensions() const
     return {extensions, extensions + count};
 }
 
-vk::SurfaceKHR Window::createVulkanSurface(const vk::Instance instance) const
+std::uintptr_t Window::create_surface(const std::uintptr_t instance) const
 {
     VkSurfaceKHR surface{};
-    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
+    if (!SDL_Vulkan_CreateSurface(window, reinterpret_cast<VkInstance>(instance), nullptr, &surface))
         throw std::runtime_error(std::string("Failed to create SDL Vulkan surface: ") + SDL_GetError());
-    return vk::SurfaceKHR(surface);
+    return reinterpret_cast<std::uintptr_t>(surface);
 }
 
 bool Window::pollEvent(SDL_Event& event) const

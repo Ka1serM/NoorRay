@@ -1,0 +1,16 @@
+Film "rgb" "integer xresolution" [96] "integer yresolution" [96]
+Sampler "sobol" "integer pixelsamples" [16]
+LookAt 0 1 -5  0 0 0  0 1 0
+Camera "perspective" "float fov" [42]
+
+WorldBegin
+Material "diffuse" "rgb reflectance" [0.7 0.7 0.7]
+Shape "sphere" "float radius" [1]
+
+AttributeBegin
+AreaLightSource "diffuse" "rgb L" [12 10 8]
+Shape "trianglemesh"
+    "point3 P" [-1 2 -1  1 2 -1  0 2 1]
+    "integer indices" [0 1 2]
+AttributeEnd
+WorldEnd

@@ -16,5 +16,5 @@ directly with lower `--directional-samples` and `--average-samples`; committed
 tables should use the defaults documented by `--help`.
 
 The files under `Generated/` contain comma-separated normalized `uint16_t`
-values. CUDA uploads them as linearly filtered normalized textures; CPU tests
+values. native uploads use filtered normalized images; CPU tests
 use matching manual interpolation over the same arrays.

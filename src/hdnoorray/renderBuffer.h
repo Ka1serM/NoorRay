@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-#include <cuda_runtime_api.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -36,8 +35,10 @@ public:
     void SetConverged(bool converged);
     void WriteFloatPixel(size_t pixel, const float* values, size_t componentCount);
     void ClearFloat(const float* values, size_t componentCount);
-    bool CopyFromCudaArray(cudaArray_t source);
-    bool CopyFromCudaBuffer(const void* source, size_t bytes);
+    // Copy an already synchronized CPU image into this Hydra AOV buffer.
+    // libnoorray owns all GPU transfers; the delegate never exposes backend
+    // resources.
+    bool CopyFromHost(const void* source, size_t bytes);
 
 protected:
     void _Deallocate() override;

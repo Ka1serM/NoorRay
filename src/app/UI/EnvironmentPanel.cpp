@@ -85,6 +85,10 @@ void EnvironmentPanel::renderUi() {
     
     if (anyChanged) {
         environment.updateDerivedSettings();
+        // The Vulkan renderer consumes an immutable environment snapshot.
+        // Every editor change must publish that snapshot, not only reset the
+        // accumulation buffer.
+        scene.setDirtyFlag(EnvironmentCdf);
         scene.setDirtyFlag(Accumulation);
     }
     

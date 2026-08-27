@@ -13,9 +13,7 @@ using namespace nb::literals;
 void bindSensor(nb::module_& module)
 {
     nb::enum_<SensorType>(module, "SensorType")
-        .value("RECTANGULAR", SensorType::Rectangular)
-        .value("SCATTER_PSF", SensorType::ScatterPsf)
-        .value("GATHER_PSF", SensorType::GatherPsf);
+        .value("RECTANGULAR", SensorType::Rectangular);
 
     nb::class_<Sensor>(module, "Sensor")
         .def_prop_rw("resolution",
@@ -32,11 +30,9 @@ void bindSensor(nb::module_& module)
             [](const Sensor& sensor) { return std::string(sensor.getImageSensorPath()); },
             [](Sensor& sensor, const std::string& path) { sensor.setImageSensorPath(path); })
         .def_prop_ro("type", &Sensor::getType)
-        .def_prop_rw("psf_grid_path", &Sensor::getPsfGridPath, &Sensor::setPsfGridPath)
         .def("load", [](Sensor& sensor, const std::string& path) {
             sensor.setImageSensorPath(path);
             if (!sensor.loadImageSensorDimensions())
                 throw std::runtime_error("Failed to load image sensor: " + path);
-        }, "path"_a)
-        .def("load_psf_grid", &Sensor::loadPsfGrid, "path"_a);
+        }, "path"_a);
 }

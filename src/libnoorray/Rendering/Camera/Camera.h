@@ -1,17 +1,14 @@
 #pragma once
 
-#include "Backend/CUDA/Annotations.h"
-#include "Backend/CUDA/TaggedPointer.h"
-#include "Backend/CUDA/rstd/Optional.h"
-#include "Backend/CUDA/rstd/UniquePtr.h"
-#include "Backend/OptiX/ABI/Types.h"
+#include "Backend/Host/Platform.h"
+#include <memory>
+#include <optional>
 
 #include <glm/glm.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,8 +20,13 @@ class ThinLensCamera;
 class OrthographicCamera;
 class FisheyeCamera;
 class RealisticCamera;
-class HybridPsfCamera;
 class Camera;
+
+struct CameraSample
+{
+    Ray ray{};
+    float weight{1.0f};
+};
 
 enum class CameraProjectionType : int {
     Perspective,
@@ -32,25 +34,24 @@ enum class CameraProjectionType : int {
     Fisheye,
     ThinLens,
     Realistic,
-    HybridPsf,
 };
 
-using TaggedCamera = nr::TaggedObject<Camera,
-    PerspectiveCamera,
-    ThinLensCamera,
-    OrthographicCamera,
-    FisheyeCamera,
-    RealisticCamera,
-    HybridPsfCamera>;
-
-class Camera : public TaggedCamera {
+class Camera {
 public:
-    using TaggedCamera::TaggedCamera;
     Camera() = default;
     explicit Camera(std::unique_ptr<Sensor> sensor);
     Camera(const Camera& other);
     Camera& operator=(const Camera& other);
     virtual ~Camera();
+    bool renderUi();
+    Camera* ptr() { return this; }
+    const Camera* ptr() const { return this; }
+    explicit operator bool() const { return true; }
+    template <typename Concrete> bool Is() const { return dynamic_cast<const Concrete*>(this) != nullptr; }
+    template <typename Concrete> Concrete* CastOrNullptr() { return dynamic_cast<Concrete*>(this); }
+    template <typename Concrete> const Concrete* CastOrNullptr() const { return dynamic_cast<const Concrete*>(this); }
+    template <typename F> decltype(auto) DispatchCPU(F&& f) { return f(this); }
+    template <typename F> decltype(auto) DispatchCPU(F&& f) const { return f(this); }
     std::unique_ptr<Sensor> releaseSensor();
     void setSensor(std::unique_ptr<Sensor> sensor);
 
@@ -60,8 +61,7 @@ public:
     float exposure{};
 
 private:
-    nr::rstd::unique_ptr<Sensor> sensor;
-    char retainedPsfGridPath[512]{};
+    std::unique_ptr<Sensor> sensor;
 public:
 
     NR_CPU_GPU Ray transformRay(const Ray& ray) const
@@ -87,7 +87,6 @@ public:
     void setCameraToWorld(const glm::mat4& m);
     void prepareForRender();
     Camera cloneBaseState() const;
-    bool renderUi();
     float focalLengthMmForFovDegrees(float fovDegrees) const;
     float fovDegreesForFocalLengthMm(float focalLengthMm) const;
 
@@ -98,4 +97,3 @@ public:
 #include "Rendering/Camera/OrthographicCamera.h"
 #include "Rendering/Camera/FisheyeCamera.h"
 #include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/HybridPsfCamera.h"

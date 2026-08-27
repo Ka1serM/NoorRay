@@ -26,5 +26,8 @@ void MeshInstance::onTransformUpdated() {
     if (!scene)
         return;
     scene->setDirtyFlag(TLAS);
+    // A mesh may contribute emissive triangles to the light sampler. Their
+    // cached world-space vertices must follow the instance transform too.
+    scene->setDirtyFlag(Lights);
     scene->markMeshInstanceTransformDirty(scene->getMeshInstanceIndex(this));
 }

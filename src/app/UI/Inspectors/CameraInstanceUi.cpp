@@ -17,11 +17,11 @@ bool renderCameraInstance(CameraInstance& instance)
     ImGuiManager::tableRowLabel("Type");
     static constexpr CameraProjectionType types[] = {
         CameraProjectionType::Perspective, CameraProjectionType::ThinLens,
-        CameraProjectionType::Realistic, CameraProjectionType::HybridPsf,
+        CameraProjectionType::Realistic,
         CameraProjectionType::Orthographic, CameraProjectionType::Fisheye,
     };
     static const char* names[] = {
-        "Perspective", "Thin Lens", "Realistic", "Hybrid PSF", "Orthographic", "Fisheye"};
+        "Perspective", "Thin Lens", "Realistic", "Orthographic", "Fisheye"};
     int selected = 0;
     for (int index = 0; index < static_cast<int>(std::size(types)); ++index)
         if (types[index] == instance.getProjectionType()) {
@@ -34,18 +34,11 @@ bool renderCameraInstance(CameraInstance& instance)
     }
 
     Camera* camera = instance.getCamera();
-    changed |= camera->DispatchCPU([](auto* concrete) { return concrete->renderUi(); });
-    SensorType requestedType{};
-    if (camera->getSensor().consumeRequestedType(requestedType)) {
-        const Sensor& current = camera->getSensor();
-        if (requestedType == SensorType::ScatterPsf)
-            camera->setSensor(std::make_unique<ScatterPsfSensor>(current));
-        else if (requestedType == SensorType::GatherPsf)
-            camera->setSensor(std::make_unique<GatherPsfSensor>(current));
-        else
-            camera->setSensor(std::make_unique<RectangularSensor>(current));
-        changed = true;
-    }
+    if (auto* concrete = camera->CastOrNullptr<PerspectiveCamera>()) changed |= concrete->renderUi();
+    else if (auto* concrete = camera->CastOrNullptr<ThinLensCamera>()) changed |= concrete->renderUi();
+    else if (auto* concrete = camera->CastOrNullptr<OrthographicCamera>()) changed |= concrete->renderUi();
+    else if (auto* concrete = camera->CastOrNullptr<FisheyeCamera>()) changed |= concrete->renderUi();
+    else if (auto* concrete = camera->CastOrNullptr<RealisticCamera>()) changed |= concrete->renderUi();
     if (changed)
         instance.markDirty();
     return changed;

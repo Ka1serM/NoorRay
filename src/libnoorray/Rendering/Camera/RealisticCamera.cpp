@@ -1,242 +1,39 @@
 #include "RealisticCamera.h"
-
+#include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <string>
 #include <stdexcept>
-#include "Backend/CUDA/ManagedMemory.h"
-#include "Materials/Shading/Sellmeier.h"
 #include "Log.h"
-#include "libross/foundation/gpu/types/Allocator.h"
-#include "libross/imaging/cameralens/lenssystemio/CameraLensSystemReader.h"
-#include "libross/imaging/cameralens/raytracing/exitpupil/ExitPupilCalculator.h"
-#include "openlensfileio/glasscatalogs/glasscatalog/GlassCatalogLibrary.h"
 #include "portable-file-dialogs.h"
-
-namespace {
-std::string joinWithSemicolons(const std::vector<std::string>& paths)
-{
-    std::string result;
-    for (const std::string& path : paths) {
-        if (!result.empty())
-            result += ';';
-        result += path;
-    }
-    return result;
+namespace { std::string join(const std::vector<std::string>& p) { std::string r; for (const auto& v : p) { if (!r.empty()) r += ';'; r += v; } return r; } }
+RealisticCamera::RealisticCamera() : RealisticCamera(std::make_unique<RectangularSensor>()) {}
+RealisticCamera::RealisticCamera(std::unique_ptr<Sensor> sensor) : Camera(std::move(sensor)) {}
+RealisticCamera::~RealisticCamera() = default;
+RealisticCamera::RealisticCamera(const RealisticCamera& o) : Camera(o), optics(o.optics), sensorWidthCm(o.sensorWidthCm), sensorHeightCm(o.sensorHeightCm), filmDiagonalCm(o.filmDiagonalCm), apertureDiameterMm(o.apertureDiameterMm), lensPath(o.lensPath), glassCatalogPaths(o.glassCatalogPaths), loadStatus(o.loadStatus), opticsDirty(o.opticsDirty), opticsUpdatePending(o.opticsUpdatePending), sourceOptics(o.sourceOptics) {}
+void RealisticCamera::load(std::string p, std::string c) { setOpticsPaths(std::move(p), std::move(c)); loadLensAndSensor(); }
+void RealisticCamera::load(std::string p, const std::vector<std::string>& c) { load(std::move(p), join(c)); }
+void RealisticCamera::setOpticsPaths(std::string p, std::string c) { lensPath = std::move(p); glassCatalogPaths = std::move(c); }
+void RealisticCamera::setApertureDiameterMm(float v) { v = std::max(0.f, v); if (v != apertureDiameterMm) { apertureDiameterMm = v; opticsUpdatePending = sourceOptics.surfaceCount != 0; } }
+void RealisticCamera::setOpticalFocusDistanceCm(float v) { v = std::max(.1f, v); if (v != focusDistanceCm) { focusDistanceCm = v; opticsUpdatePending = sourceOptics.surfaceCount != 0; } }
+void RealisticCamera::prepareOptics() { if (opticsUpdatePending) updateLensSettings(); }
+void RealisticCamera::updateLensSettings() {
+    opticsUpdatePending = false; if (!sourceOptics.surfaceCount) return;
+    nr::optics::LensSnapshot replacement = sourceOptics;
+    if (apertureDiameterMm > 0.f) for (uint32_t i = 0; i < replacement.surfaceCount; ++i) if (replacement.surfaces[i].isStop) replacement.surfaces[i].apertureRadius = apertureDiameterMm * .5f;
+    const float scale = std::clamp(focusDistanceCm / 500.f, .5f, 2.f);
+    for (uint32_t i = 0; i < replacement.surfaceCount; ++i) replacement.surfaces[i].z *= scale;
+    replacement.rearPupilZ *= scale; optics = replacement; opticsDirty = true;
+    optics.sensorWidthMm = getSensor().filmWidth();
+    optics.sensorHeightMm = getSensor().filmHeight();
 }
-
-}
-
-RealisticCamera::RealisticCamera()
-    : RealisticCamera(std::make_unique<RectangularSensor>())
-{
-}
-
-RealisticCamera::RealisticCamera(std::unique_ptr<Sensor> ownedSensor)
-    : TaggedBase(std::move(ownedSensor))
-{
-}
-
-void RealisticCamera::load(std::string lensPath_, std::string glassCatalogPaths_)
-{
-    lensPath           = std::move(lensPath_);
-    glassCatalogPaths  = std::move(glassCatalogPaths_);
-    loadLensAndSensor();
-}
-
-void RealisticCamera::load(
-    std::string lensPath_, const std::vector<std::string>& glassCatalogPaths_)
-{
-    load(std::move(lensPath_), joinWithSemicolons(glassCatalogPaths_));
-}
-
-void RealisticCamera::setApertureDiameterMm(const float requestedApertureDiameterMm)
-{
-    const float clampedApertureDiameterMm = std::max(0.0f, requestedApertureDiameterMm);
-    if (apertureDiameterMm == clampedApertureDiameterMm)
-        return;
-    nr::synchronizeBeforeManagedMutation("RealisticCamera aperture");
-    apertureDiameterMm = clampedApertureDiameterMm;
-    opticsUpdatePending = static_cast<bool>(sourceRossLens);
-}
-
-void RealisticCamera::setOpticalFocusDistanceCm(const float requestedFocusDistanceCm)
-{
-    const float minimumFocusDistanceCm = sourceRossLens
-        ? std::max(0.1f, sourceRossLens->metadata.closestFocalDistance)
-        : 0.1f;
-    const float clampedFocusDistanceCm =
-        std::max(minimumFocusDistanceCm, requestedFocusDistanceCm);
-    if (focusDistanceCm == clampedFocusDistanceCm)
-        return;
-    nr::synchronizeBeforeManagedMutation("RealisticCamera focus distance");
-    focusDistanceCm = clampedFocusDistanceCm;
-    opticsUpdatePending = static_cast<bool>(sourceRossLens);
-}
-
-void RealisticCamera::prepareOptics()
-{
-    if (opticsUpdatePending)
-        updateLensSettings();
-}
-
-RealisticCamera::RealisticCamera(const RealisticCamera& other)
-    : TaggedBase(other)
-{
-    lensPath = other.lensPath;
-    glassCatalogPaths = other.glassCatalogPaths;
-    loadStatus = other.loadStatus;
-    opticsDirty = other.opticsDirty;
-    opticsUpdatePending = other.opticsUpdatePending;
-    apertureDiameterMm = other.apertureDiameterMm;
-    sensorWidthCm = other.sensorWidthCm;
-    sensorHeightCm = other.sensorHeightCm;
-    filmDiagonalCm = other.filmDiagonalCm;
-
-    if (other.rossLens)
-        rossLens = nr::rstd::make_unique<ross::CameraLens>(*other.rossLens);
-    if (other.sourceRossLens)
-        sourceRossLens = nr::rstd::make_unique<ross::CameraLens>(*other.sourceRossLens);
-    if (other.exitPupil)
-        exitPupil = nr::rstd::make_unique<ross::ExitPupil>(*other.exitPupil);
-}
-
-void RealisticCamera::setOpticsPaths(std::string lensPath_, std::string glassCatalogPaths_)
-{
-    lensPath = std::move(lensPath_);
-    glassCatalogPaths = std::move(glassCatalogPaths_);
-}
-
-RealisticCamera::~RealisticCamera()
-{
-    freeRossLens();
-}
-
-void RealisticCamera::freeRossLens()
-{
-    if (!rossLens && !sourceRossLens && !exitPupil)
-        return;
-
-    nr::synchronizeBeforeManagedMutation("RealisticCamera optics free");
-
-    exitPupil.reset();
-    rossLens.reset();
-    sourceRossLens.reset();
-}
-
-void RealisticCamera::updateLensSettings()
-{
-    opticsUpdatePending = false;
-    if (!sourceRossLens)
-        return;
-
-    nr::synchronizeBeforeManagedMutation("RealisticCamera optics update");
+bool RealisticCamera::loadLensAndSensor(bool reset) {
+    if (lensPath.empty()) { optics = {}; sourceOptics = {}; loadStatus = "No lens file loaded"; opticsDirty = true; return true; }
     try {
-        ross::CameraLens updatedLens(*sourceRossLens);
-        if (apertureDiameterMm > 0.0f)
-            updatedLens.changeAperture_mm(apertureDiameterMm);
-        updatedLens.focusLens(focusDistanceCm);
-
-        ross::ExitPupilCalculator::CalculationSettings settings;
-        ross::TaskReporter reporter;
-        ross::ExitPupilCalculator calculator(
-            updatedLens, filmDiagonalCm, settings, reporter);
-        ross::ExitPupil updatedPupil = calculator.calculate();
-
-        auto newLens = nr::rstd::make_unique<ross::CameraLens>(updatedLens);
-        auto newPupil = nr::rstd::make_unique<ross::ExitPupil>(updatedPupil);
-
-        rossLens = std::move(newLens);
-        exitPupil = std::move(newPupil);
-        opticsDirty = true;
-    } catch (const std::exception& error) {
-        loadStatus = error.what();
-        LOG_ERROR("RealisticCamera: " << loadStatus);
-    }
-}
-
-bool RealisticCamera::loadLensAndSensor(const bool resetLensSettings)
-{
-    opticsUpdatePending = false;
-    Sensor& sensor = getSensor();
-
-    if (lensPath.empty()) {
-        freeRossLens();
-        sensorWidthCm = 0.0f;
-        sensorHeightCm = 0.0f;
-        filmDiagonalCm = 0.0f;
-        opticsDirty = true;
-        loadStatus = "No lens file loaded";
-        LOG_INFO("RealisticCamera: no lens loaded");
-        return true;
-    }
-
-    try {
-        olio::GlassCatalogLibrary catalogs;
-        std::string catalogList = glassCatalogPaths;
-        std::ranges::replace(catalogList, ';', ',');
-        if (!catalogList.empty())
-            catalogs.loadCatalogsFromCommaSeperatedString(catalogList);
-
-        ross::CameraLens loaded =
-            ross::CameraLensSystemReader::readCameraLens(
-                lensPath, catalogs, ross::ReadOptions{1.0f, true});
-        const ross::CameraLens loadedSource(loaded);
-        float loadedFocusDistanceCm = focusDistanceCm;
-        float loadedApertureDiameterMm = apertureDiameterMm;
-        if (resetLensSettings)
-            loadedFocusDistanceCm = 500.0f;
-        loadedFocusDistanceCm = std::max(
-            loadedFocusDistanceCm, loaded.metadata.closestFocalDistance);
-        if (resetLensSettings || loadedApertureDiameterMm <= 0.0f) {
-            loadedApertureDiameterMm =
-                std::max(0.0f, loaded.getApertureRadius() * 20.0f);
-        } else {
-            loaded.changeAperture_mm(loadedApertureDiameterMm);
-        }
-        loaded.focusLens(loadedFocusDistanceCm);
-
-        const bool usesSensorFile = !sensor.getImageSensorPath().empty();
-        if (usesSensorFile && !sensor.loadImageSensorDimensions())
-            throw std::runtime_error("Failed to load image sensor");
-
-        const float loadedSensorWidthCm = sensor.width() * 0.1f;
-        const float loadedSensorHeightCm = sensor.height() * 0.1f;
-        const float loadedFilmDiagonalCm = std::sqrt(
-            loadedSensorWidthCm * loadedSensorWidthCm
-            + loadedSensorHeightCm * loadedSensorHeightCm);
-
-        ross::ExitPupilCalculator::CalculationSettings calcSettings;
-        ross::TaskReporter taskReporter;
-        ross::ExitPupilCalculator exitPupilCalc(
-            loaded, loadedFilmDiagonalCm, calcSettings, taskReporter);
-        ross::ExitPupil computedPupil = exitPupilCalc.calculate();
-
-        auto loadedSourceLens = nr::rstd::make_unique<ross::CameraLens>(loadedSource);
-        auto loadedRossLens = nr::rstd::make_unique<ross::CameraLens>(loaded);
-        auto loadedExitPupil = nr::rstd::make_unique<ross::ExitPupil>(computedPupil);
-
-        nr::synchronizeBeforeManagedMutation("RealisticCamera optics replace");
-        sourceRossLens = std::move(loadedSourceLens);
-        rossLens = std::move(loadedRossLens);
-        exitPupil = std::move(loadedExitPupil);
-        focusDistanceCm = loadedFocusDistanceCm;
-        apertureDiameterMm = loadedApertureDiameterMm;
-        sensorWidthCm = loadedSensorWidthCm;
-        sensorHeightCm = loadedSensorHeightCm;
-        filmDiagonalCm = loadedFilmDiagonalCm;
-        focalLengthMm = loaded.metadata.focalLength * 10.0f;
-        opticsDirty = true;
-
-        loadStatus = std::to_string(rossLens->surfaces.size()) + " surfaces"
-            ", pupil bounds: " + std::to_string(exitPupil->pupilBounds.size())
-            + ", focal length: " + std::to_string(focalLengthMm) + " mm"
-            + (usesSensorFile ? ", sensor file" : ", manual sensor");
-        LOG_INFO("RealisticCamera: " << loadStatus);
-        return true;
-    } catch (const std::exception& e) {
-        loadStatus = e.what();
-        LOG_ERROR("RealisticCamera: " << loadStatus);
-        return false;
-    }
+        if (!getSensor().getImageSensorPath().empty() && !getSensor().loadImageSensorDimensions()) throw std::runtime_error("Failed to load image sensor");
+        const auto loaded = nr::optics::loadZmx(lensPath, nr::optics::splitCatalogPaths(glassCatalogPaths)); sourceOptics = loaded.snapshot;
+        if (reset) focusDistanceCm = 500.f; if (reset || apertureDiameterMm <= 0.f) apertureDiameterMm = sourceOptics.rearPupilRadius * 2.f;
+        sensorWidthCm = getSensor().width() * .1f; sensorHeightCm = getSensor().height() * .1f; filmDiagonalCm = std::sqrt(sensorWidthCm * sensorWidthCm + sensorHeightCm * sensorHeightCm); focalLengthMm = sourceOptics.focalLengthMm;
+        sourceOptics.sensorWidthMm = getSensor().filmWidth();
+        sourceOptics.sensorHeightMm = getSensor().filmHeight();
+        opticsUpdatePending = true; updateLensSettings(); loadStatus = loaded.message + ", focal length: " + std::to_string(focalLengthMm) + " mm"; LOG_INFO("RealisticCamera: " << loadStatus); return true;
+    } catch (const std::exception& e) { loadStatus = e.what(); LOG_ERROR("RealisticCamera: " << loadStatus); return false; }
 }

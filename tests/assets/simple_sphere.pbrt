@@ -12,7 +12,7 @@ WorldBegin
 LightSource "infinite" "rgb L" [0.15 0.2 0.3]
 
 Texture "chart" "spectrum" "imagemap"
-    "string filename" "../../external/ROSS/resources/testcharts/sfr_chart_10deg_2x.exr"
+    "string filename" "../../resources/testcharts/sfr_chart_10deg_2x.exr"
 Material "diffuse" "texture reflectance" "chart"
 Shape "sphere" "float radius" 1
 

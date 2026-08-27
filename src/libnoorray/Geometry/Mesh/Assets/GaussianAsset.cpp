@@ -273,6 +273,7 @@ GaussianAsset GaussianAsset::CreateFromFile(
 
 GaussianAsset::GaussianAsset(Scene& scene, std::string name, std::vector<Gaussian> gaussians)
     : scene(&scene), name(std::move(name)), gaussians(gaussians.begin(), gaussians.end())
+    , hostGaussians(std::move(gaussians))
 {
 }
 
@@ -283,13 +284,15 @@ void GaussianAsset::releaseResources()
     dirty = false;
     // Move-assign from an empty vector: clear() would keep the managed
     // allocation alive, and freeing it is the entire point here.
-    gaussians = nr::rstd::vector<Gaussian>{};
+    gaussians = std::vector<Gaussian>{};
+    hostGaussians.clear();
 }
 
 void GaussianAsset::setGaussian(const uint32_t index, const Gaussian& gaussian)
 {
     scene->synchronizeBeforeMutation();
     gaussians[index] = gaussian;
+    hostGaussians[index] = gaussian;
     notifyGaussiansChanged();
 }
 
@@ -304,6 +307,7 @@ void GaussianAsset::notifyGaussiansChanged()
 void GaussianAsset::setGaussians(const std::vector<Gaussian>& gaussians)
 {
     scene->synchronizeBeforeMutation();
-    this->gaussians = nr::rstd::vector<Gaussian>(gaussians.begin(), gaussians.end());
+    this->gaussians = std::vector<Gaussian>(gaussians.begin(), gaussians.end());
+    this->hostGaussians = gaussians;
     notifyGaussiansChanged();
 }

@@ -1,0 +1,12 @@
+Film "rgb" "integer xresolution" [128] "integer yresolution" [128]
+Sampler "sobol" "integer pixelsamples" [16]
+LookAt 0 0 -4  0 0 0  0 1 0
+Camera "perspective" "float fov" [42]
+
+WorldBegin
+LightSource "infinite" "rgb L" [0 0 0]
+LightSource "point" "point from" [-2 2 -3] "rgb I" [1 1 1]
+    "float scale" [35]
+Material "diffuse" "rgb reflectance" [0.7 0.7 0.7]
+Shape "sphere" "float radius" [1]
+WorldEnd

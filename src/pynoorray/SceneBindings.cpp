@@ -38,7 +38,7 @@ void bindScene(nb::module_& module)
             return scene.add(std::move(*asset));
         }, "asset"_a)
         .def("add", [](Scene& scene, std::unique_ptr<Texture> texture) {
-            return scene.add(std::move(*texture));
+            return scene.addTexture(std::move(*texture));
         }, "texture"_a)
         .def("remove", &Scene::removeObject, "handle"_a)
         .def("reparent", &Scene::reparentObject, "handle"_a,

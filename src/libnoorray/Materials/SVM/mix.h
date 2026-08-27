@@ -6,7 +6,7 @@
 
 #include <glm/common.hpp>
 
-#include "Backend/CUDA/Annotations.h"
+#include "Backend/Host/Platform.h"
 #include "Materials/SVM/SvmTypes.h"
 
 namespace nr::svm::detail

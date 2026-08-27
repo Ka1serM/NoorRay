@@ -15,9 +15,7 @@ void bindCamera(nb::module_& module)
         .value("ORTHOGRAPHIC", CameraProjectionType::Orthographic)
         .value("FISHEYE", CameraProjectionType::Fisheye)
         .value("THIN_LENS", CameraProjectionType::ThinLens)
-        .value("REALISTIC", CameraProjectionType::Realistic)
-        .value("ROSS_PSF", CameraProjectionType::HybridPsf)
-        .value("HYBRID_PSF", CameraProjectionType::HybridPsf);
+        .value("REALISTIC", CameraProjectionType::Realistic);
 
     nb::class_<Camera>(module, "Camera")
         .def_prop_rw("sensor_resolution",

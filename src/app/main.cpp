@@ -1,21 +1,91 @@
 #include <chrono>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <filesystem>
-#include <iomanip>
 #include <thread>
-#include "Materials/MaterialX/MaterialXSceneRuntime.h"
-#include "NoorRaySession.h"
 #include "UI/NoorRayUi.h"
-#include "Rendering/Camera/CameraInstance.h"
 #include "Log.h"
-#include "Backend/OptiX/Runtime/Raytracer.h"
+#include "Backend/Vulkan/Raytracer/RaytracerRenderer.h"
+#include "Backend/Vulkan/Raytracer/CameraSnapshot.h"
+#include <gpu/gpu.hpp>
+#include "Materials/MaterialX/MaterialXSceneRuntime.h"
+#include "Rendering/Camera/CameraInstance.h"
+#include "Rendering/Camera/RealisticCamera.h"
+#include "Rendering/Camera/ThinLensCamera.h"
+#include "Rendering/Camera/FisheyeCamera.h"
+#include "Scene/Scene.h"
+#include "IO/BitmapWriter.h"
+#include "IO/Bitmap.h"
 
 namespace
 {
+
+Bitmap readColor(VulkanRaytracer& renderer)
+{
+    const auto beauty = renderer.readBeauty();
+    std::vector<glm::vec4> pixels(static_cast<std::size_t>(renderer.width())
+        * renderer.height());
+    for (std::size_t i = 0; i < pixels.size(); ++i)
+    {
+        pixels[i] = {beauty[i].x, beauty[i].y, beauty[i].z, beauty[i].w};
+    }
+    return Bitmap(renderer.width(), renderer.height(), std::move(pixels));
+}
+
+void uploadActiveCamera(VulkanRaytracer& renderer, const Scene& scene)
+{
+    VulkanCameraSnapshot snapshot{};
+    nr::optics::LensSnapshot lens{};
+    if (const CameraInstance* instance = scene.getRenderCamera())
+    {
+        const Camera* camera = instance->getCamera();
+        for (uint32_t row = 0; row < 4; ++row)
+            for (uint32_t column = 0; column < 4; ++column)
+                snapshot.cameraToWorld[row * 4u + column]
+                    = camera->cameraToWorld[column][row];
+        snapshot.projection = static_cast<uint32_t>(instance->getProjectionType());
+        snapshot.sensorWidthMm = camera->getSensor().filmWidth();
+        snapshot.sensorHeightMm = camera->getSensor().filmHeight();
+        snapshot.focalLengthMm = camera->getFocalLengthMm();
+        snapshot.focusDistanceCm = camera->getFocusDistanceCm();
+        snapshot.sensorOrigin = static_cast<uint32_t>(
+            camera->getSensor().origin());
+        snapshot.exposure = camera->exposure;
+        if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>())
+        {
+            snapshot.apertureDiameterMm = realistic->apertureDiameterMm;
+            lens = realistic->optics;
+        }
+        else if (const auto* thinLens = camera->CastOrNullptr<ThinLensCamera>())
+            snapshot.apertureDiameterMm = thinLens->apertureDiameterMm;
+        else if (const auto* fisheye = camera->CastOrNullptr<FisheyeCamera>())
+            snapshot.apertureDiameterMm = fisheye->apertureDiameterMm;
+    }
+    renderer.uploadLensSnapshot(lens);
+    renderer.uploadCameraSnapshot(snapshot);
+}
+
+void uploadCompiledMaterials(VulkanRaytracer& renderer, Scene& scene,
+    const std::string& scenePath)
+{
+    MaterialXSceneRuntime materialRuntime;
+    const std::string sceneDirectory =
+        std::filesystem::path(scenePath).parent_path().string();
+    do
+    {
+        materialRuntime.compilePending(scene, sceneDirectory);
+        if (materialRuntime.hasPendingCompilations())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (materialRuntime.hasPendingCompilations());
+    renderer.uploadMaterials(scene, materialRuntime.programs().words(),
+        materialRuntime.programs().textureIndices());
+    renderer.uploadEnvironment(scene);
+}
 
 struct CliOptions
 {
@@ -32,8 +102,8 @@ struct CliOptions
     std::optional<GaussianProxyType> gaussianProxyType;
     bool aovEnabled{};
     bool statsEnabled{};
-    bool denoiserEnabled{};
     bool cliMode{};
+    bool vulkanRaytracerSmoke{};
     bool showHelp{};
 };
 
@@ -56,9 +126,9 @@ void printUsage()
         << "                       Override the scene's Gaussian shading mode\n"
         << "  --gaussian-proxy <icosphere|octahedron|icosahedron|icosphere2>\n"
         << "                       Override the Gaussian tracing proxy geometry\n"
-        << "  --denoise            Apply the OptiX HDR beauty denoiser\n"
         << "  --aov                Render surface AOVs (for profiling or diagnostics)\n"
-        << "  --stats              Print a per-kernel GPU timing breakdown after rendering\n";
+        << "  --stats              Print a per-kernel GPU timing breakdown after rendering\n"
+        << "  --vulkan-raytracer-smoke  Run one native Vulkan raytracer dispatch and save it\n";
 }
 
 const char* requireValue(const int argc, char* argv[], int& index)
@@ -79,6 +149,11 @@ CliOptions parseOptions(const int argc, char* argv[])
             options.showHelp = true;
         else if (arg == "--cli")
             options.cliMode = true;
+        else if (arg == "--vulkan-raytracer-smoke")
+        {
+            options.vulkanRaytracerSmoke = true;
+            options.cliMode = true;
+        }
         else if (arg == "--scene" || arg == "--import" || arg == "--ply")
             options.scenePath = requireValue(argc, argv, i);
         else if (arg == "--spp")
@@ -125,8 +200,6 @@ CliOptions parseOptions(const int argc, char* argv[])
         }
         else if (arg == "--stats")
             options.statsEnabled = true;
-        else if (arg == "--denoise")
-            options.denoiserEnabled = true;
         else if (arg == "--aov")
             options.aovEnabled = true;
         else if (arg.starts_with("--"))
@@ -135,7 +208,7 @@ CliOptions parseOptions(const int argc, char* argv[])
             throw std::invalid_argument("Unexpected positional argument: " + arg);
     }
 
-    if (!options.showHelp && options.scenePath.empty())
+    if (!options.showHelp && options.scenePath.empty() && !options.vulkanRaytracerSmoke)
         throw std::invalid_argument("No scene file specified. Use --scene.");
     if (options.samplesPerPixel < 1)
         throw std::invalid_argument("--spp must be greater than zero");
@@ -152,58 +225,96 @@ CliOptions parseOptions(const int argc, char* argv[])
 
 void runCli(const CliOptions& options)
 {
-    const auto sceneLoadStarted = std::chrono::steady_clock::now();
-    std::cerr << "Loading scene: " << options.scenePath << '\n';
-    noorray::NoorRaySession session;
-    session.scene.load(options.scenePath);
-    const double sceneLoadSeconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - sceneLoadStarted).count();
-    std::cerr << "Scene loaded in " << std::fixed << std::setprecision(1)
-              << sceneLoadSeconds << "s\n";
-    if (!session.scene.getActiveCamera())
+    if (options.vulkanRaytracerSmoke)
     {
-        auto camera = std::make_unique<PerspectiveCamera>();
-        auto instance = std::make_unique<CameraInstance>(std::move(camera), "Camera",
-            Transform{glm::vec3(0.0f, 2.0f, 5.0f)});
-        session.scene.add(std::move(instance));
-    }
-    if (auto* camera = session.scene.getActiveCamera();
-        camera && (options.width > 0 || options.height > 0))
-    {
-        Sensor& sensor = camera->getCamera()->getSensor();
-        const glm::uvec2 resolution = sensor.resolution();
-        sensor.setResolution(
-            options.width > 0 ? static_cast<uint32_t>(options.width) : resolution.x,
-            options.height > 0 ? static_cast<uint32_t>(options.height) : resolution.y);
-    }
+        const uint32_t width = options.width > 0 ? static_cast<uint32_t>(options.width) : 128u;
+        const uint32_t height = options.height > 0 ? static_cast<uint32_t>(options.height) : 72u;
+        gpu::Device device;
+        // The scene-less smoke mode uses the tiny native triangle scene to
+        // validate the AS/query layer before a full imported scene is added.
+        VulkanRaytracer renderer(device, width, height,
+            options.scenePath.empty());
+        std::unique_ptr<Scene> nativeScene;
+        if (!options.scenePath.empty())
+        {
+            nativeScene = std::make_unique<Scene>();
+            nativeScene->load(options.scenePath);
+            if (options.gaussianShadingMode)
+                nativeScene->getRenderSettings().gaussianShadingMode =
+                    *options.gaussianShadingMode;
+            if (options.gaussianProxyType)
+                nativeScene->getRenderSettings().gaussianProxyType =
+                    *options.gaussianProxyType;
+            renderer.uploadScene(*nativeScene);
+            uploadCompiledMaterials(renderer, *nativeScene, options.scenePath);
+            uploadActiveCamera(renderer, *nativeScene);
+        }
+        LOG_INFO("Vulkan raytracer smoke: recording dispatch");
+        renderer.render(0, 0);
+        LOG_INFO("Vulkan raytracer smoke: waiting for dispatch");
+        device.synchronize();
 
-    Raytracer& raytracer = *session.raytracer;
-    MaterialXSceneRuntime materialx;
-    const std::string sceneDirectory =
-        std::filesystem::path(options.scenePath).parent_path().string();
-    do {
-        materialx.compilePending(session.scene, raytracer, sceneDirectory);
-        if (materialx.hasPendingCompilations())
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    } while (materialx.hasPendingCompilations());
-    raytracer.setAovEnabled(options.aovEnabled);
-    raytracer.setStatsEnabled(options.statsEnabled);
-    raytracer.setTimingEnabled(options.statsEnabled);
-    session.scene.getRenderSettings().samples = options.samplesPerPixel;
-    if (options.maxBounces > 0)
-        session.scene.getRenderSettings().maxBounces = options.maxBounces;
+        LOG_INFO("Vulkan raytracer smoke: reading back image");
+        const Bitmap bitmap = readColor(renderer);
+        std::string error;
+        if (!BitmapWriter::write(options.outputPath, bitmap, {}, &error))
+            throw std::runtime_error("Failed to save Vulkan raytracer smoke image: " + error);
+        LOG_INFO("Saved Vulkan raytracer smoke image: " << options.outputPath);
+        return;
+    }
+    Scene scene;
+    scene.load(options.scenePath);
     if (options.gaussianShadingMode)
-        session.scene.getRenderSettings().gaussianShadingMode = *options.gaussianShadingMode;
+        scene.getRenderSettings().gaussianShadingMode = *options.gaussianShadingMode;
     if (options.gaussianProxyType)
-        session.scene.getRenderSettings().gaussianProxyType = *options.gaussianProxyType;
-    session.scene.getRenderSettings().optixDenoiserEnabled = options.denoiserEnabled;
-    LOG_INFO("Rendering @ " << options.samplesPerPixel << " spp");
-    raytracer.renderFrame(0, 0, options.sampleSeed);
-    raytracer.getOutputColor().save(options.outputPath);
-    raytracer.harvestKernelStats();
-    LOG_INFO("Saved: " << options.outputPath);
+        scene.getRenderSettings().gaussianProxyType = *options.gaussianProxyType;
+    if (options.maxBounces > 0)
+        scene.getRenderSettings().maxBounces = options.maxBounces;
+    const auto* cameraInstance = scene.getRenderCamera();
+    const glm::uvec2 sceneResolution = cameraInstance
+        ? cameraInstance->getCamera()->getSensor().resolution()
+        : glm::uvec2(1280u, 720u);
+    const uint32_t width = options.width > 0
+        ? static_cast<uint32_t>(options.width) : sceneResolution.x;
+    const uint32_t height = options.height > 0
+        ? static_cast<uint32_t>(options.height) : sceneResolution.y;
+    gpu::Device device;
+    VulkanRaytracer renderer(device, width, height, false);
+    renderer.uploadScene(scene);
+    uploadCompiledMaterials(renderer, scene, options.scenePath);
+    uploadActiveCamera(renderer, scene);
+    double rayTracingMilliseconds = 0.0;
+    double minimumDispatchMilliseconds = std::numeric_limits<double>::max();
+    double maximumDispatchMilliseconds = 0.0;
+    for (uint32_t sample = 0; sample < static_cast<uint32_t>(options.samplesPerPixel); ++sample)
+    {
+        renderer.render(options.sampleSeed, sample);
+        device.synchronize();
+        if (options.statsEnabled)
+        {
+            const double milliseconds = renderer.lastDispatchMilliseconds();
+            rayTracingMilliseconds += milliseconds;
+            minimumDispatchMilliseconds = std::min(
+                minimumDispatchMilliseconds, milliseconds);
+            maximumDispatchMilliseconds = std::max(
+                maximumDispatchMilliseconds, milliseconds);
+        }
+    }
     if (options.statsEnabled)
-        raytracer.printKernelStats();
+    {
+        const double samples = static_cast<double>(options.samplesPerPixel);
+        const double average = samples > 0.0 ? rayTracingMilliseconds / samples : 0.0;
+        std::cout << std::fixed << std::setprecision(3)
+            << "GPU timing (timestamp queries):\n"
+            << "  ray tracing: " << rayTracingMilliseconds << " ms total, "
+            << average << " ms/sample, " << minimumDispatchMilliseconds
+            << " ms min, " << maximumDispatchMilliseconds << " ms max\n";
+    }
+    const Bitmap bitmap = readColor(renderer);
+    std::string error;
+    if (!BitmapWriter::write(options.outputPath, bitmap, {}, &error))
+        throw std::runtime_error("Failed to save Vulkan render: " + error);
+    LOG_INFO("Saved: " << options.outputPath);
 }
 
 }

@@ -10,7 +10,6 @@
 #include "Rendering/Camera/OrthographicCamera.h"
 #include "Rendering/Camera/FisheyeCamera.h"
 #include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/HybridPsfCamera.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

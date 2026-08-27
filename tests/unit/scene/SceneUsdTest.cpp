@@ -41,7 +41,7 @@ TEST_CASE("USD scene round-trip preserves geometry and embedded MaterialX", "[sc
     SceneWriter::Write(scene, path.string());
     REQUIRE(std::filesystem::is_regular_file(path));
 
-    Scene reloaded(session.context);
+    Scene reloaded;
     SceneReader::Read(reloaded, path.string());
     REQUIRE(reloaded.getMeshInstances().size() == 1);
     const MeshAsset& reloadedAsset = reloaded.getMeshInstances().front()->getMeshAsset();

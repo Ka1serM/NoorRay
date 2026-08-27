@@ -2,23 +2,28 @@
 
 static const int GROUP_SIZE = 16;
 
-[[vk::binding(0, 0)]] [format("rgba32f")] RWTexture2D<float4> colorImage;
-[[vk::binding(1, 0)]] [format("rgba8")]   RWTexture2D<float4> outputImage;
-[[vk::binding(2, 0)]] [format("r32ui")]   RWTexture2D<uint>   idImage;
-[[vk::binding(3, 0)]] [format("rgba8")]   RWTexture2D<float4> albedoImage;
-[[vk::binding(4, 0)]] [format("rgba16f")] RWTexture2D<float4> normalImage;
-[[vk::binding(5, 0)]] [format("rgba16f")] RWTexture2D<float4> positionImage;
-[[vk::binding(6, 0)]] StructuredBuffer<float4> denoisedBuffer;
-
 struct PushConstants
 {
     uint  selectedCryptomatteId;
     float exposure;
     int   bufferVisualization;
     int   tonemappingEnabled;
+    uint  colorImage;
+    uint  outputImage;
+    uint  idImage;
+    uint  albedoImage;
+    uint  normalImage;
+    uint  positionImage;
+    uint  overdrawImage;
+    uint  overdrawMax;
 };
 
-[[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
+struct ViewportRoot
+{
+    PushConstants* arguments;
+};
+
+[[vk::push_constant]] ConstantBuffer<ViewportRoot> root;
 
 static const float3x3 ACESInputMat = float3x3(
     0.59719, 0.35458, 0.04823,
@@ -61,10 +66,39 @@ float3 hashIdToColor(uint id)
         float( h        & 0xFFu) / 255.0);
 }
 
+float3 magma(float value)
+{
+    static const float3 colors[5] = {
+        float3(0.001462, 0.000466, 0.013866),
+        float3(0.316654, 0.071690, 0.485380),
+        float3(0.716387, 0.214982, 0.475290),
+        float3(0.986700, 0.535582, 0.382210),
+        float3(0.987053, 0.991438, 0.749504),
+    };
+    const float scaled = saturate(value) * 4.0;
+    const uint segment = min(uint(scaled), 3u);
+    return lerp(colors[segment], colors[segment + 1u], scaled - float(segment));
+}
+
 [shader("compute")]
 [numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
 {
+    const PushConstants pushConstants = *root.arguments;
+    RWTexture2D<float4> colorImage =
+        DescriptorHandle<RWTexture2D<float4>>(uint2(pushConstants.colorImage, 0));
+    RWTexture2D<float4> outputImage =
+        DescriptorHandle<RWTexture2D<float4>>(uint2(pushConstants.outputImage, 0));
+    RWTexture2D<uint> idImage =
+        DescriptorHandle<RWTexture2D<uint>>(uint2(pushConstants.idImage, 0));
+    RWTexture2D<float4> albedoImage =
+        DescriptorHandle<RWTexture2D<float4>>(uint2(pushConstants.albedoImage, 0));
+    RWTexture2D<float4> normalImage =
+        DescriptorHandle<RWTexture2D<float4>>(uint2(pushConstants.normalImage, 0));
+    RWTexture2D<float4> positionImage =
+        DescriptorHandle<RWTexture2D<float4>>(uint2(pushConstants.positionImage, 0));
+    RWStructuredBuffer<uint> overdrawImage =
+        DescriptorHandle<RWStructuredBuffer<uint>>(uint2(pushConstants.overdrawImage, 0));
     uint width;
     uint height;
     outputImage.GetDimensions(width, height);
@@ -75,13 +109,10 @@ void main(uint3 threadId : SV_DispatchThreadID)
     float3 color;
     float  alpha = 1.0;
 
-    const bool beautyView = pushConstants.bufferVisualization == 0
-        || pushConstants.bufferVisualization == 5;
+    const bool beautyView = pushConstants.bufferVisualization == 0;
     if (beautyView)
     {
-        const uint linearPixel = threadId.y * width + threadId.x;
-        const float4 hdr = pushConstants.bufferVisualization == 5
-            ? denoisedBuffer[linearPixel] : colorImage[pixel];
+        const float4 hdr = colorImage[pixel];
         alpha = clamp(hdr.a, 0.0, 1.0);
         const float3 straight = alpha > 0.0
             ? hdr.rgb / alpha * exp2(clamp(pushConstants.exposure, -20.0, 20.0))
@@ -166,6 +197,13 @@ void main(uint3 threadId : SV_DispatchThreadID)
     {
         const float3 p = positionImage[pixel].xyz;
         color = abs(p) / (abs(p) + 1.0); // Reinhard-like to keep it in [0,1]
+        break;
+    }
+    case 5: // Gaussian proxy overdraw view.
+    {
+        const float count = float(overdrawImage[uint(pixel.y) * width + uint(pixel.x)]);
+        const float range = float(max(pushConstants.overdrawMax, 1u));
+        color = magma(log2(count + 1.0) / log2(range + 1.0));
         break;
     }
     default: // Beauty is handled above; keep invalid values black.

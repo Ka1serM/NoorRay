@@ -48,9 +48,6 @@
 [submodule "external/Catch2"]
 	path = external/Catch2
 	url = https://github.com/catchorg/Catch2.git
-[submodule "external/ROSS"]
-	path = external/ROSS
-	url = git@github.com:hs-duesseldorf/ROSS.git
 [submodule "external/GaussForge"]
 	path = external/GaussForge
 	url = https://github.com/3dgscloud/GaussForge.git

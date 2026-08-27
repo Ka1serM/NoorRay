@@ -6,7 +6,8 @@
 #include <functional>
 #include "glm/glm.hpp"
 #include "SDL3/SDL_events.h"
-#include "Backend/Vulkan/Runtime/Context.h"
+#include <gpu/gpu.hpp>
+#include <vulkan/vulkan.hpp>
 
 class ImGuiComponent;
 class Window;
@@ -18,8 +19,8 @@ public:
         Light
     };
     
-    ImGuiManager(Window& window, Context& context, uint32_t numImages,
-        vk::SurfaceFormatKHR renderTargetFormat);
+    ImGuiManager(Window& window, gpu::Device& device, uint32_t numImages,
+        gpu::ImageFormat renderTargetFormat);
     ~ImGuiManager();
     // Runs widget logic for all components (including any resulting scene
     // mutations) and finalizes ImGui's draw data. Must be called before any
@@ -27,7 +28,7 @@ public:
     // edits never race an in-flight kernel.
     void updateUi();
     // Records the draw data already finalized by updateUi() into commandBuffer.
-    void renderDrawData(vk::CommandBuffer commandBuffer, vk::ImageView targetView, vk::Extent2D targetExtent);
+    void renderDrawData(const gpu::Frame& frame);
     void processEvent(const SDL_Event& event);
 
     template<typename T, typename... Args>
@@ -57,4 +58,6 @@ public:
 private:
     std::vector<std::unique_ptr<ImGuiComponent>> components;
     Theme currentTheme = Theme::Dark;
+    gpu::Device& device;
+    vk::UniqueDescriptorPool descriptorPool;
 };

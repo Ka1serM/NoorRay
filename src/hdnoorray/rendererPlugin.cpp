@@ -14,7 +14,7 @@ TF_REGISTRY_FUNCTION(TfType)
     HdRendererPluginRegistry::Define<HdNoorRayRendererPlugin>();
 }
 
-// Creating a delegate brings up Vulkan, CUDA and OptiX. If any of that fails
+// Creating a delegate brings up libnoorray's Vulkan renderer. If that fails
 // the host gets a null delegate and falls back to another renderer, rather than
 // an exception escaping across the plugin boundary.
 HdRenderDelegate* HdNoorRayRendererPlugin::CreateRenderDelegate()

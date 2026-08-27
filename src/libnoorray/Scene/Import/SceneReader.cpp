@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <stdexcept>
 
@@ -12,7 +13,6 @@
 #include "Rendering/Camera/OrthographicCamera.h"
 #include "Rendering/Camera/PerspectiveCamera.h"
 #include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/HybridPsfCamera.h"
 #include "Rendering/Camera/ThinLensCamera.h"
 #include "Geometry/Mesh/Assets/MeshAsset.h"
 #include "Geometry/Mesh/Transform.h"
@@ -46,14 +46,6 @@ std::vector<std::string> splitPaths(const std::string& paths)
     return result;
 }
 
-SensorType sensorType(const std::string& type)
-{
-    if (type == "scatter_psf") return SensorType::ScatterPsf;
-    if (type == "gather_psf") return SensorType::GatherPsf;
-    if (type == "rectangular") return SensorType::Rectangular;
-    throw std::runtime_error("Unknown camera sensor type: " + type);
-}
-
 MaterialAuthoring toMaterial(const nr::sceneio::MaterialFile& file)
 {
     MaterialAuthoring material{};
@@ -73,18 +65,10 @@ MaterialAuthoring toMaterial(const nr::sceneio::MaterialFile& file)
 std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
 {
     std::unique_ptr<Sensor> sensor;
-    const SensorType type = sensorType(file.sensor_type);
-    if (type == SensorType::ScatterPsf)
-        sensor = std::make_unique<ScatterPsfSensor>();
-    else if (type == SensorType::GatherPsf)
-        sensor = std::make_unique<GatherPsfSensor>();
-    else
-        sensor = std::make_unique<RectangularSensor>();
+    sensor = std::make_unique<RectangularSensor>();
     std::unique_ptr<Camera> camera;
-    if (file.projection == "realistic")
+    if (file.projection == "realistic" || file.projection == "noorrayrealistic")
         camera = std::make_unique<RealisticCamera>(std::move(sensor));
-    else if (file.projection == "hybridpsf")
-        camera = std::make_unique<HybridPsfCamera>(std::move(sensor));
     else if (file.projection == "thinlens")
         camera = std::make_unique<ThinLensCamera>(std::move(sensor));
     else if (file.projection == "fisheye")
@@ -97,8 +81,6 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
         throw std::runtime_error("Unknown camera projection: " + file.projection);
     if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get()))
         realistic->apertureDiameterMm = file.aperture_diameter_mm;
-    else if (auto* hybrid = dynamic_cast<HybridPsfCamera*>(camera.get()))
-        hybrid->apertureDiameterMm = file.aperture_diameter_mm;
     else if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get())) {
         thinLens->apertureDiameterMm = file.aperture_diameter_mm;
         thinLens->bokehBias = std::max(0.001f, file.bokeh_bias);
@@ -107,8 +89,7 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
         fisheye->bokehBias = std::max(0.001f, file.bokeh_bias);
     }
 
-    if (!dynamic_cast<RealisticCamera*>(camera.get())
-        && !dynamic_cast<HybridPsfCamera*>(camera.get()))
+    if (!dynamic_cast<RealisticCamera*>(camera.get()))
         camera->setFocalLengthMm(file.focal_length_mm.value_or(50.0f));
     camera->setFocusDistanceCm(file.focus_distance_cm);
     camera->exposure = file.exposure;
@@ -128,19 +109,11 @@ CameraInstance* addCamera(Scene& scene, const nr::sceneio::ObjectFile& object)
         throw std::runtime_error("Camera object is missing its camera properties");
     const nr::sceneio::CameraFile& file = *object.camera;
     std::unique_ptr<Camera> camera = makeCamera(file);
-    if (file.projection == "realistic") {
+    if (file.projection == "realistic" || file.projection == "noorrayrealistic") {
         if (file.lens.empty())
             throw std::runtime_error("Realistic camera requires a lens path");
         dynamic_cast<RealisticCamera&>(*camera).load(
             file.lens, splitPaths(file.glass_catalogs));
-    } else if (file.projection == "hybridpsf") {
-        if (file.lens.empty() || file.sensor.empty())
-            throw std::runtime_error("Hybrid PSF camera requires lens and sensor paths");
-        Sensor& sensor = camera->getSensor();
-        if (!file.psf.empty())
-            sensor.setPsfGridPath(file.psf);
-        dynamic_cast<HybridPsfCamera&>(*camera).load(
-            file.lens, splitPaths(file.glass_catalogs), file.ray_lut);
     }
     const Transform transform = toTransform(object);
     auto cameraInstance = std::make_unique<CameraInstance>(
@@ -185,7 +158,7 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
 
         // Mark the material as needing MaterialX compilation when a path is
         // specified. The actual compilation happens later (in runCli()), once
-        // the Raytracer exists and can register OptiX modules.
+        // the native renderer is ready.
         MeshAssetRef meshAsset;
         if (object.type == "cube")
             meshAsset = scene.add(MeshAsset::CreateCube(scene, object.name, materialDocument));
@@ -243,6 +216,37 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
     if (const auto error = glz::read<readOptions>(file, json))
         throw std::runtime_error("Failed to parse scene JSON: " + glz::format_error(error, json));
 
+    // Scene-authored resources are relative to the scene document, not the
+    // process working directory. This matters for CLI tests and for opening a
+    // scene from the UI after NoorRay was launched elsewhere.
+    const std::filesystem::path sceneDirectory =
+        std::filesystem::absolute(filepath).parent_path();
+    const auto resolve = [&sceneDirectory](std::string& value) {
+        if (!value.empty() && std::filesystem::path(value).is_relative())
+            value = (sceneDirectory / value).lexically_normal().string();
+    };
+    for (nr::sceneio::ObjectFile& object : file.objects)
+    {
+        resolve(object.path);
+        if (object.material)
+            resolve(object.material->materialx_path);
+        if (object.camera)
+        {
+            resolve(object.camera->lens);
+            resolve(object.camera->sensor);
+            std::vector<std::string> catalogs = splitPaths(
+                object.camera->glass_catalogs);
+            object.camera->glass_catalogs.clear();
+            for (std::string& catalog : catalogs)
+            {
+                resolve(catalog);
+                if (!object.camera->glass_catalogs.empty())
+                    object.camera->glass_catalogs += ';';
+                object.camera->glass_catalogs += catalog;
+            }
+        }
+    }
+
     scene.clear();
 
     const size_t proceduralMeshCount = static_cast<size_t>(
@@ -265,10 +269,6 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
     if (file.render_settings) {
         scene.getRenderSettings().maxSamples = file.render_settings->max_samples;
         scene.getRenderSettings().aovEnabled = file.render_settings->aov_enabled;
-        scene.getRenderSettings().optixDenoiserEnabled =
-            file.render_settings->optix_denoiser_enabled;
-        scene.getRenderSettings().optixDenoiserMinSamples =
-            std::max(file.render_settings->optix_denoiser_min_samples, 1);
         scene.getRenderSettings().indirectLightClamp = std::max(
             file.render_settings->indirect_light_clamp, 0.0f);
         scene.getRenderSettings().gaussianShadingMode =

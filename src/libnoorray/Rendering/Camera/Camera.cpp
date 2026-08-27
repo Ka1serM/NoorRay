@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include "Backend/CUDA/ManagedMemory.h"
+#include "Backend/Host/MutationBarrier.h"
 
 Camera::~Camera() = default;
 
@@ -18,22 +18,18 @@ Camera::Camera(std::unique_ptr<Sensor> ownedSensor)
         throw std::invalid_argument("Camera requires a Sensor");
     if (!*sensor)
         throw std::invalid_argument("Camera requires a tagged concrete Sensor type");
-    std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
-        sensor->getPsfGridPath().c_str());
 }
 
 Camera::Camera(const Camera& other)
-    : TaggedCamera(other), cameraToWorld(other.cameraToWorld)
+    : cameraToWorld(other.cameraToWorld)
     , focalLengthMm(other.focalLengthMm)
     , focusDistanceCm(other.focusDistanceCm), exposure(other.exposure)
 {
     const Sensor& source = other.getSensor();
-    source.DispatchCPU([this, &source](const auto* concrete) {
-        using SensorType = std::remove_cvref_t<decltype(*concrete)>;
-        sensor.reset(new SensorType(source));
-    });
-    std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
-        other.retainedPsfGridPath);
+    if (const auto* rectangular = dynamic_cast<const RectangularSensor*>(&source))
+        sensor = std::make_unique<RectangularSensor>(*rectangular);
+    else
+        sensor = std::make_unique<Sensor>(source);
 }
 
 Camera& Camera::operator=(const Camera& other)
@@ -44,8 +40,6 @@ Camera& Camera::operator=(const Camera& other)
     focalLengthMm = other.focalLengthMm;
     focusDistanceCm = other.focusDistanceCm;
     exposure = other.exposure;
-    std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s",
-        other.retainedPsfGridPath);
     return *this;
 }
 
@@ -63,48 +57,40 @@ void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
 
     nr::synchronizeBeforeManagedMutation("Camera sensor replacement");
 
-    const std::string psfPath = getSensor().getPsfGridPath();
-    if (!psfPath.empty())
-        std::snprintf(retainedPsfGridPath, sizeof(retainedPsfGridPath), "%s", psfPath.c_str());
-
     sensor.reset(newSensor.release());
-    if (sensor->getType() != SensorType::Rectangular
-        && retainedPsfGridPath[0] != '\0'
-        && sensor->getPsfGridPath().empty())
-        sensor->loadPsfGrid(retainedPsfGridPath);
 }
 
 PerspectiveCamera::PerspectiveCamera()
     : PerspectiveCamera(std::make_unique<RectangularSensor>()) {}
 PerspectiveCamera::PerspectiveCamera(std::unique_ptr<Sensor> ownedSensor)
-    : TaggedBase(std::move(ownedSensor)) {}
+    : Camera(std::move(ownedSensor)) {}
 ThinLensCamera::ThinLensCamera()
     : ThinLensCamera(std::make_unique<RectangularSensor>()) {}
 ThinLensCamera::ThinLensCamera(std::unique_ptr<Sensor> ownedSensor)
-    : TaggedBase(std::move(ownedSensor)) {}
+    : Camera(std::move(ownedSensor)) {}
 OrthographicCamera::OrthographicCamera()
     : OrthographicCamera(std::make_unique<RectangularSensor>()) {}
 OrthographicCamera::OrthographicCamera(std::unique_ptr<Sensor> ownedSensor)
-    : TaggedBase(std::move(ownedSensor)) {}
+    : Camera(std::move(ownedSensor)) {}
 FisheyeCamera::FisheyeCamera()
     : FisheyeCamera(std::make_unique<RectangularSensor>()) {}
 FisheyeCamera::FisheyeCamera(std::unique_ptr<Sensor> ownedSensor)
-    : TaggedBase(std::move(ownedSensor)) {}
+    : Camera(std::move(ownedSensor)) {}
 
 PerspectiveCamera::PerspectiveCamera(const PerspectiveCamera& other)
-    : TaggedBase(other) {}
+    : Camera(other) {}
 
 
 ThinLensCamera::ThinLensCamera(const ThinLensCamera& other)
-    : TaggedBase(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
+    : Camera(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
 
 
 OrthographicCamera::OrthographicCamera(const OrthographicCamera& other)
-    : TaggedBase(other) {}
+    : Camera(other) {}
 
 
 FisheyeCamera::FisheyeCamera(const FisheyeCamera& other)
-    : TaggedBase(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
+    : Camera(other), apertureDiameterMm(other.apertureDiameterMm), bokehBias(other.bokehBias) {}
 
 
 PerspectiveCamera::~PerspectiveCamera() = default;
@@ -141,18 +127,10 @@ void Camera::setFocalLengthMm(const float requestedFocalLengthMm)
 void Camera::setFocusDistanceCm(const float requestedFocusDistanceCm)
 {
     nr::synchronizeBeforeManagedMutation("Camera focus distance");
-    if (ptr()) {
-        DispatchCPU([requestedFocusDistanceCm](auto* cam) {
-            using CameraType = std::remove_cvref_t<decltype(*cam)>;
-            if constexpr (std::is_same_v<CameraType, RealisticCamera>
-                || std::is_same_v<CameraType, HybridPsfCamera>)
-                cam->setOpticalFocusDistanceCm(requestedFocusDistanceCm);
-            else
-                cam->focusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
-        });
-    } else {
+    if (auto* realistic = dynamic_cast<RealisticCamera*>(this))
+        realistic->setOpticalFocusDistanceCm(requestedFocusDistanceCm);
+    else
         focusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
-    }
 }
 
 void Camera::setExposure(const float requestedExposure)
@@ -173,14 +151,8 @@ float Camera::getFocusDistanceCm() const
 
 void Camera::prepareForRender()
 {
-    if (!ptr())
-        return;
-    DispatchCPU([](auto* camera) {
-        using CameraType = std::remove_cvref_t<decltype(*camera)>;
-        if constexpr (std::is_same_v<CameraType, RealisticCamera>
-            || std::is_same_v<CameraType, HybridPsfCamera>)
-            camera->prepareOptics();
-    });
+    if (auto* realistic = dynamic_cast<RealisticCamera*>(this))
+        realistic->prepareOptics();
 }
 
 float Camera::getFocalLengthMm() const
@@ -201,16 +173,12 @@ void Camera::setCameraToWorld(const glm::mat4& m)
 
 Camera Camera::cloneBaseState() const
 {
-    const Camera* source = ptr()
-        ? DispatchCPU([](const auto* cam) { return static_cast<const Camera*>(cam); })
-        : this;
+    const Camera* source = this;
 
     Camera state;
     state.cameraToWorld = source->cameraToWorld;
     state.focalLengthMm = source->focalLengthMm;
     state.focusDistanceCm = source->focusDistanceCm;
     state.exposure = source->exposure;
-    std::snprintf(state.retainedPsfGridPath, sizeof(state.retainedPsfGridPath), "%s",
-        source->retainedPsfGridPath);
     return state;
 }

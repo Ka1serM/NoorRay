@@ -24,7 +24,7 @@ Environment::~Environment()
 
 void Environment::destroyCdf() noexcept
 {
-    cdfTexture.reset();
+    cdfTexture = 0;
     cdfWidth = 0;
     cdfHeight = 0;
     cdfDirty = 1;

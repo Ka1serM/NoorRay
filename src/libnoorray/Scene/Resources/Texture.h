@@ -47,9 +47,9 @@ public:
     int getHeight() const { return height; }
     int getSceneIndex() const { return sceneIndex; }
     TextureEncoding getEncoding() const { return encoding; }
-    // Preserve ordinary image assets as RGBA8. CUDA's normalized texture
-    // fetch performs sRGB-to-linear conversion when requested, so neither CPU
-    // staging nor device storage needs an expanded linear representation.
+    // Preserve ordinary image assets as RGBA8. Sampling applies the encoding
+    // conversion at the Vulkan image boundary; neither CPU
+
     bool usesByteStorage() const {
         return bytePixels && !bytePixels->empty();
     }

@@ -7,11 +7,10 @@
 #include "ImGuiManager.h"
 
 class Scene;
-class Context;
 
 class MainMenuBar : public ImGuiComponent {
 public:
-    MainMenuBar(std::string name, Context& context, Scene& scene,
+    MainMenuBar(std::string name, Scene& scene,
         ImGuiManager& manager, std::string currentScenePath = {});
     void renderUi() override;
     const std::string& getCurrentScenePath() const { return currentScenePath; }
@@ -26,7 +25,6 @@ private:
     void saveScene(const std::string& filePath);
 
     Scene& scene;
-    Context& context;
     ImGuiManager& imGuiManager;
 
     std::unique_ptr<pfd::open_file> openDialog;

@@ -9,24 +9,32 @@ struct ViewportBillboard
     float4 color;        // rgb = display color
 };
 
-[[vk::binding(0, 0)]] StructuredBuffer<ViewportBillboard> billboards;
-
 struct PushConstants
 {
     float4x4 viewProjection;
     float2   screenSize;
     float    radius; // billboard half-size, in pixels
+    uint     billboards;
 };
 
-[[vk::push_constant]] ConstantBuffer<PushConstants> pushConstants;
+struct BillboardRoot
+{
+    PushConstants* arguments;
+};
+
+[[vk::push_constant]] ConstantBuffer<BillboardRoot> root;
 
 static const int BillboardTypePoint       = 0;
 static const int BillboardTypeSpot        = 1;
 static const int BillboardTypeRect        = 2;
 static const int BillboardTypeDirectional = 3;
 
-// Corners of a unit quad, in triangle-strip order.
-static const float2 corners[4] = { float2(-1, -1), float2(1, -1), float2(-1, 1), float2(1, 1) };
+// The clean graphics API currently draws triangle lists. Emit two explicit
+// triangles; four strip-ordered vertices only rasterized the first half.
+static const float2 corners[6] = {
+    float2(-1, -1), float2( 1, -1), float2(-1,  1),
+    float2(-1,  1), float2( 1, -1), float2( 1,  1)
+};
 
 struct VertexOutput
 {
@@ -39,7 +47,10 @@ struct VertexOutput
 [shader("vertex")]
 VertexOutput vertMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 {
-    const ViewportBillboard billboard = billboards[instanceId];
+    const PushConstants pushConstants = *root.arguments;
+    StructuredBuffer<ViewportBillboard> billboardBuffer =
+        DescriptorHandle<StructuredBuffer<ViewportBillboard>>(uint2(pushConstants.billboards, 0));
+    const ViewportBillboard billboard = billboardBuffer[instanceId];
     const float4 clip = mul(pushConstants.viewProjection, float4(billboard.positionType.xyz, 1.0));
 
     VertexOutput output;
@@ -57,10 +68,10 @@ VertexOutput vertMain(uint vertexId : SV_VertexID, uint instanceId : SV_Instance
 
     const float2 corner = corners[vertexId];
     const float2 ndc = clip.xy / clip.w;
-    // Screen-space pixel offset converted back to a clip-space delta (NDC y grows
-    // upward while pixel y grows downward, hence the sign flip), then scaled by
-    // clip.w so it survives the hardware's perspective divide unchanged.
-    const float2 ndcOffset = corner * pushConstants.radius * float2(2.0, -2.0) / pushConstants.screenSize;
+    // The raw output is presented with a single V flip, so use its bottom-left
+    // convention here as well. Scaling by clip.w preserves the pixel size
+    // through the perspective divide.
+    const float2 ndcOffset = corner * pushConstants.radius * 2.0 / pushConstants.screenSize;
 
     output.clipPosition = float4((ndc + ndcOffset) * clip.w, clip.z, clip.w);
     output.local = corner;
@@ -185,6 +196,7 @@ float billboardAlpha(const float2 p, const int type, const float aa)
 [shader("fragment")]
 float4 fragMain(VertexOutput input) : SV_Target
 {
+    const PushConstants pushConstants = *root.arguments;
     // Antialias in local billboard units. The glyphs are strokes, not filled SDF
     // blobs, which keeps them crisp and avoids a heavy outline.
     const float aa = 1.15 / pushConstants.radius;

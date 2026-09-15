@@ -256,7 +256,7 @@ void Texture::validateStorageSize(const size_t valueCount) const
         throw std::runtime_error("Texture has invalid pixel storage: " + name);
 }
 
-void Texture::upload(gpu::Device& device)
+void Texture::upload(noorrhi::Device& device)
 {
     if (width <= 0 || height <= 0)
         throw std::runtime_error("texture has invalid dimensions: " + name);
@@ -264,7 +264,7 @@ void Texture::upload(gpu::Device& device)
     // one canonical format keeps sRGB conversion identical for byte, half, HDR
     // and EXR source assets.
     const std::vector<float>& pixels = getPixels();
-    image = device.image<std::byte>(width, height, gpu::ImageUsage::Sampled,
-        gpu::ImageFormat::Rgba32Float);
+    image = device.image<std::byte>(width, height, noorrhi::ImageUsage::Sampled,
+        noorrhi::ImageFormat::Rgba32Float);
     image.upload(std::span<const std::byte>(std::as_bytes(std::span(pixels))));
 }

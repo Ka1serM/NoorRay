@@ -162,7 +162,7 @@ std::vector<float> Environment::computeCdf(
     return out;
 }
 
-void Environment::uploadImages(gpu::Device& device, const Texture* hdri)
+void Environment::uploadImages(noorrhi::Device& device, const Texture* hdri)
 {
     hdriImage = {};
     cdfImage = {};
@@ -176,20 +176,20 @@ void Environment::uploadImages(gpu::Device& device, const Texture* hdri)
             throw std::runtime_error("invalid HDRI pixel storage");
 
         hdriImage = device.image<std::byte>(width, height,
-            gpu::ImageUsage::Sampled, gpu::ImageFormat::Rgba32Float);
+            noorrhi::ImageUsage::Sampled, noorrhi::ImageFormat::Rgba32Float);
         hdriImage.upload(std::span<const std::byte>(std::as_bytes(std::span(pixels))));
 
         std::vector<float> cdf = computeCdf(pixels.data(), width, height, mapping());
         if (cdf.size() != valueCount)
             throw std::runtime_error("invalid HDRI importance CDF");
         cdfImage = device.image<std::byte>(width, height,
-            gpu::ImageUsage::Sampled, gpu::ImageFormat::Rgba32Float);
+            noorrhi::ImageUsage::Sampled, noorrhi::ImageFormat::Rgba32Float);
         cdfImage.upload(std::span<const std::byte>(std::as_bytes(std::span(cdf))));
     }
     uploadRecord(device);
 }
 
-void Environment::uploadRecord(gpu::Device& device)
+void Environment::uploadRecord(noorrhi::Device& device)
 {
     if (!*this)
         allocate(device);

@@ -24,21 +24,21 @@ void NoorRaySession::initializeHeadlessRenderer(const uint32_t width,
     shutdownRenderer();
     device_.emplace();
     exportViewportMemory_ = exportColorMemory;
-    viewportOutputFormat_ = gpu::ImageFormat::Rgba32Float;
+    viewportOutputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     raytracer_.emplace(*device_, width, height, exportColorMemory);
     prepareViewport();
     headless_ = true;
 }
 
-NoorRaySession::NoorRaySession(gpu::SurfaceProvider& surfaceProvider)
+NoorRaySession::NoorRaySession(noorrhi::SurfaceProvider& surfaceProvider)
     : scene_()
     , headless_(false)
 {
-    device_.emplace(gpu::DeviceConfig{.surface = &surfaceProvider});
+    device_.emplace(noorrhi::DeviceConfig{.surface = &surfaceProvider});
     swapchain_.emplace(device_->swapchain());
     raytracer_.emplace(*device_, surfaceProvider.width(), surfaceProvider.height());
     exportViewportMemory_ = false;
-    viewportOutputFormat_ = gpu::ImageFormat::Rgba32Float;
+    viewportOutputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     prepareViewport();
 }
 
@@ -60,14 +60,14 @@ void NoorRaySession::shutdownRenderer()
     renderSettingsInitialized = false;
 }
 
-gpu::Device& NoorRaySession::device()
+noorrhi::Device& NoorRaySession::device()
 {
     if (!device_)
         throw std::runtime_error("graphics device is not initialized");
     return *device_;
 }
 
-gpu::Swapchain& NoorRaySession::swapchain()
+noorrhi::Swapchain& NoorRaySession::swapchain()
 {
     if (!swapchain_)
         throw std::runtime_error("swapchain is not initialized");
@@ -109,17 +109,17 @@ void NoorRaySession::synchronize()
         device_->synchronize();
 }
 
-gpu::Frame NoorRaySession::beginFrame()
+noorrhi::Frame NoorRaySession::beginFrame()
 {
     return device().begin_frame(swapchain());
 }
 
-void NoorRaySession::endFrame(gpu::Frame&& frame)
+void NoorRaySession::endFrame(noorrhi::Frame&& frame)
 {
     device().end_frame(std::move(frame));
 }
 
-void NoorRaySession::copyOutputTo(const gpu::ImageHandle target)
+void NoorRaySession::copyOutputTo(const noorrhi::ImageHandle target)
 {
     device().copy(outputImageHandle(), target);
 }
@@ -131,7 +131,7 @@ std::vector<std::byte> NoorRaySession::readColor()
     return raytracer_->readColor();
 }
 
-std::vector<gpu::float4> NoorRaySession::readBeauty()
+std::vector<noorrhi::float4> NoorRaySession::readBeauty()
 {
     if (!raytracer_)
         return {};
@@ -145,7 +145,7 @@ std::vector<std::uint32_t> NoorRaySession::readCryptomatte()
     return raytracer_->readCryptomatte();
 }
 
-std::vector<gpu::float4> NoorRaySession::readPosition()
+std::vector<noorrhi::float4> NoorRaySession::readPosition()
 {
     if (!raytracer_)
         return {};
@@ -273,29 +273,29 @@ void NoorRaySession::renderViewport(const uint32_t selectedCryptomatteId,
     renderViewport(viewProjection, selectedCryptomatteId, showBillboards);
 }
 
-std::vector<gpu::float4> NoorRaySession::readOutput() const
+std::vector<noorrhi::float4> NoorRaySession::readOutput() const
 {
-    return viewport_ ? viewport_->readOutput() : std::vector<gpu::float4>{};
+    return viewport_ ? viewport_->readOutput() : std::vector<noorrhi::float4>{};
 }
 
-gpu::ImageHandle NoorRaySession::outputImageHandle() const
+noorrhi::ImageHandle NoorRaySession::outputImageHandle() const
 {
-    return viewport_ ? viewport_->outputImageHandle() : gpu::ImageHandle{};
+    return viewport_ ? viewport_->outputImageHandle() : noorrhi::ImageHandle{};
 }
 
-gpu::TextureHandle NoorRaySession::outputTexture() const
+noorrhi::TextureHandle NoorRaySession::outputTexture() const
 {
-    return viewport_ ? viewport_->outputTexture() : gpu::TextureHandle{};
+    return viewport_ ? viewport_->outputTexture() : noorrhi::TextureHandle{};
 }
 
-gpu::TextureHandle NoorRaySession::outputStorageTexture() const
+noorrhi::TextureHandle NoorRaySession::outputStorageTexture() const
 {
-    return viewport_ ? viewport_->outputStorageTexture() : gpu::TextureHandle{};
+    return viewport_ ? viewport_->outputStorageTexture() : noorrhi::TextureHandle{};
 }
 
-gpu::ImageFormat NoorRaySession::outputFormat() const
+noorrhi::ImageFormat NoorRaySession::outputFormat() const
 {
-    return viewport_ ? viewport_->outputFormat() : gpu::ImageFormat::Auto;
+    return viewport_ ? viewport_->outputFormat() : noorrhi::ImageFormat::Auto;
 }
 
 uint32_t NoorRaySession::outputWidth() const

@@ -6,7 +6,7 @@
 #include <glm/mat3x3.hpp>
 #include <glm/vec3.hpp>
 
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 
 #include "Shared/Environment.h"
 
@@ -23,7 +23,7 @@ enum class EnvironmentMapping : int
 // truth for everything the GPU reads - there is no CPU mirror to keep in step.
 // Members below are either authored inputs the record stores in derived form,
 // or state the shader never sees.
-class Environment : public gpu::Shared<nr::graphics::Environment>
+class Environment : public noorrhi::Shared<nr::graphics::Environment>
 {
 public:
     // Authored inputs. The record holds the lowered forms: sin/cos of the
@@ -60,12 +60,12 @@ public:
     // Rebuilds the HDRI and importance-CDF images from `hdri` (null clears
     // them), then republishes the shared record. Called by the renderer at
     // the scene publication boundary.
-    void uploadImages(gpu::Device& device, const Texture* hdri);
+    void uploadImages(noorrhi::Device& device, const Texture* hdri);
     // Republishes the small scalar record only, leaving the images resident.
-    void uploadRecord(gpu::Device& device);
+    void uploadRecord(noorrhi::Device& device);
 
-    gpu::Image<std::byte> hdriImage;
-    gpu::Image<std::byte> cdfImage;
+    noorrhi::Image<std::byte> hdriImage;
+    noorrhi::Image<std::byte> cdfImage;
 
     void setEquirectangularMapping(
         const glm::mat3& environmentFromWorldTransform = glm::mat3(1.f));

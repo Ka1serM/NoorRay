@@ -28,51 +28,51 @@ add_noorray_test(pbrt_parser_test
     "unit/scene/PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/Import/PbrtParser.cpp" pbrt)
 
 
-# The gpu API's own tests live with the library in external/gpu/tests and run from
+# The NoorRHI API's own tests live with the library in external/NoorRHI/tests and run from
 # its standalone build. What stays here is NoorRay-specific: the composite BSDF
 # shader (which includes src/libnoorray/Shaders) and the adoption test, which
-# checks gpu links cleanly inside NoorRay's archive closure.
-set(NR_GPU_TEST_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/gpu")
-set(NR_GPU_ADD_SHADER "${NR_GPU_TEST_SHADER_DIR}/add.spv")
-set(NR_GPU_COMPOSITE_BSDF_SHADER "${NR_GPU_TEST_SHADER_DIR}/composite_bsdf.spv")
-file(GLOB NR_GPU_RAYTRACER_SHADER_DEPENDENCIES CONFIGURE_DEPENDS
+# checks NoorRHI links cleanly inside NoorRay's archive closure.
+set(NR_NOORRHI_TEST_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/noorrhi")
+set(NR_NOORRHI_ADD_SHADER "${NR_NOORRHI_TEST_SHADER_DIR}/add.spv")
+set(NR_NOORRHI_COMPOSITE_BSDF_SHADER "${NR_NOORRHI_TEST_SHADER_DIR}/composite_bsdf.spv")
+file(GLOB NR_NOORRHI_RAYTRACER_SHADER_DEPENDENCIES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/libnoorray/Shaders/Raytracer/*.slang")
 
-set(NR_GPU_SHADER_FLAGS
+set(NR_NOORRHI_SHADER_FLAGS
     -emit-spirv-directly
     -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081)
 
 add_custom_command(
-    OUTPUT "${NR_GPU_ADD_SHADER}" "${NR_GPU_COMPOSITE_BSDF_SHADER}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_GPU_TEST_SHADER_DIR}"
+    OUTPUT "${NR_NOORRHI_ADD_SHADER}" "${NR_NOORRHI_COMPOSITE_BSDF_SHADER}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_NOORRHI_TEST_SHADER_DIR}"
     COMMAND "${NR_SLANGC_EXECUTABLE}"
-        "${CMAKE_SOURCE_DIR}/external/gpu/tests/shaders/add.slang"
+        "${CMAKE_SOURCE_DIR}/external/NoorRHI/tests/shaders/add.slang"
         -entry main -stage compute -target spirv
-        -profile spirv_1_5 ${NR_GPU_SHADER_FLAGS}
-        -o "${NR_GPU_ADD_SHADER}"
+        -profile spirv_1_5 ${NR_NOORRHI_SHADER_FLAGS}
+        -o "${NR_NOORRHI_ADD_SHADER}"
     COMMAND "${NR_SLANGC_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/composite_bsdf.slang"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/noorrhi/composite_bsdf.slang"
         -entry main -stage compute -target spirv
-        -profile spirv_1_5 ${NR_GPU_SHADER_FLAGS}
-        -o "${NR_GPU_COMPOSITE_BSDF_SHADER}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/external/gpu/tests/shaders/add.slang"
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/composite_bsdf.slang"
-        ${NR_GPU_RAYTRACER_SHADER_DEPENDENCIES}
-    COMMENT "Compiling NoorRay gpu test shaders" VERBATIM)
-add_custom_target(noorray_gpu_test_shader DEPENDS
-    "${NR_GPU_ADD_SHADER}" "${NR_GPU_COMPOSITE_BSDF_SHADER}")
+        -profile spirv_1_5 ${NR_NOORRHI_SHADER_FLAGS}
+        -o "${NR_NOORRHI_COMPOSITE_BSDF_SHADER}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/external/NoorRHI/tests/shaders/add.slang"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/noorrhi/composite_bsdf.slang"
+        ${NR_NOORRHI_RAYTRACER_SHADER_DEPENDENCIES}
+    COMMENT "Compiling NoorRay NoorRHI test shaders" VERBATIM)
+add_custom_target(noorray_noorrhi_test_shader DEPENDS
+    "${NR_NOORRHI_ADD_SHADER}" "${NR_NOORRHI_COMPOSITE_BSDF_SHADER}")
 
 add_noorray_test(composite_bsdf_shader_test unit/materials/CompositeBsdfShaderTest.cpp materials)
-add_dependencies(composite_bsdf_shader_test noorray_gpu_test_shader)
+add_dependencies(composite_bsdf_shader_test noorray_noorrhi_test_shader)
 target_compile_definitions(composite_bsdf_shader_test PRIVATE
-    GPU_COMPOSITE_BSDF_SHADER="${NR_GPU_COMPOSITE_BSDF_SHADER}")
-target_link_libraries(composite_bsdf_shader_test PRIVATE gpu::gpu)
+    NOORRHI_COMPOSITE_BSDF_SHADER="${NR_NOORRHI_COMPOSITE_BSDF_SHADER}")
+target_link_libraries(composite_bsdf_shader_test PRIVATE NoorRHI::NoorRHI)
 
-add_noorray_test(gpu_noorray_adoption_test unit/gpu/GpuNoorRayAdoptionTest.cpp gpu)
-add_dependencies(gpu_noorray_adoption_test noorray_gpu_test_shader)
-target_compile_definitions(gpu_noorray_adoption_test PRIVATE GPU_TEST_SHADER="${NR_GPU_ADD_SHADER}")
-target_link_libraries(gpu_noorray_adoption_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,gpu>")
+add_noorray_test(noorrhi_adoption_test unit/noorrhi/NoorRhiAdoptionTest.cpp NoorRHI)
+add_dependencies(noorrhi_adoption_test noorray_noorrhi_test_shader)
+target_compile_definitions(noorrhi_adoption_test PRIVATE NOORRHI_TEST_SHADER="${NR_NOORRHI_ADD_SHADER}")
+target_link_libraries(noorrhi_adoption_test PRIVATE
+    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,NoorRHI>")
 
 add_noorray_test(vertex_color_test unit/scene/VertexColorTest.cpp vertex-color)
 target_link_libraries(vertex_color_test PRIVATE glm)
@@ -92,7 +92,7 @@ target_link_libraries(imgui_math_input_test PRIVATE imgui)
 
 add_noorray_test(viewport_billboard_picking_test
     unit/ui/ViewportBillboardPickingTest.cpp ui)
-target_link_libraries(viewport_billboard_picking_test PRIVATE glm gpu::gpu)
+target_link_libraries(viewport_billboard_picking_test PRIVATE glm NoorRHI::NoorRHI)
 
 add_noorray_test(materialx_node_catalog_test
     "unit/ui/MaterialXNodeCatalogTest.cpp;${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodeCatalog.cpp" ui)
@@ -164,7 +164,7 @@ endfunction()
 
 add_noorray_test(editor_edit_render_test e2e/EditorEditRenderTest.cpp e2e)
 target_link_libraries(editor_edit_render_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,gpu,NoorRayMaterialX>")
+    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,NoorRHI,NoorRayMaterialX>")
 add_noorray_render_test(render_smoke_test e2e/RenderSmokeTest.cpp)
 add_noorray_render_test(white_furnace_test e2e/WhiteFurnaceTest.cpp)
 add_noorray_render_test(convergence_test e2e/ConvergenceTest.cpp)

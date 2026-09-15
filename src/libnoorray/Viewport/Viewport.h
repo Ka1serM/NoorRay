@@ -1,6 +1,6 @@
 #pragma once
 
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -44,16 +44,16 @@ inline bool projectViewportBillboard(const glm::mat4& viewProjection,
 }
 
 // The AOV images the composite pass reads. These are descriptor-heap handles of
-// images the raytracer created through gpu::Device, plus the device address of
+// images the raytracer created through noorrhi::Device, plus the device address of
 // the overdraw counter; nothing here is a descriptor or an index.
 struct ViewportInputs
 {
-    gpu::TextureHandle color{};
-    gpu::TextureHandle albedo{};
-    gpu::TextureHandle normal{};
-    gpu::TextureHandle crypto{};
-    gpu::TextureHandle position{};
-    gpu::GpuPtr<std::uint32_t> overdraw{};
+    noorrhi::TextureHandle color{};
+    noorrhi::TextureHandle albedo{};
+    noorrhi::TextureHandle normal{};
+    noorrhi::TextureHandle crypto{};
+    noorrhi::TextureHandle position{};
+    noorrhi::GpuPtr<std::uint32_t> overdraw{};
 
     explicit operator bool() const noexcept
     {
@@ -63,12 +63,12 @@ struct ViewportInputs
 
 class Viewport {
 public:
-    Viewport(gpu::Device& gpu_device, uint32_t width, uint32_t height,
-             const ViewportInputs& inputs, gpu::ImageFormat outputImageFormat,
+    Viewport(noorrhi::Device& gpu_device, uint32_t width, uint32_t height,
+             const ViewportInputs& inputs, noorrhi::ImageFormat outputImageFormat,
              bool exportOutputMemory = false);
     ~Viewport();
 
-    // Recorded into whatever gpu::Frame is open around the call.
+    // Recorded into whatever noorrhi::Frame is open around the call.
     void dispatch(
         uint32_t selectedCryptomatteId,
         const glm::mat4& viewProjection,
@@ -81,44 +81,44 @@ public:
     // Calling this each frame is an O(1) revision check in the common case.
     void updateBillboards(const Scene& scene);
     void resize(uint32_t width, uint32_t height, const ViewportInputs& inputs,
-                gpu::ImageFormat outputImageFormat);
+                noorrhi::ImageFormat outputImageFormat);
 
     // The composited viewport is the public render result. It includes the
     // selected AOV visualization, tonemapping, and optional scene billboards.
-    // Consumers can sample it through gpu or obtain its native image identity
+    // Consumers can sample it through NoorRHI or obtain its native image identity
     // for interop with a UI renderer such as Dear ImGui.
-    gpu::ImageHandle outputImageHandle() const { return outputImage.handle(); }
-    gpu::TextureHandle outputTexture() const { return outputImage.sampled_handle(); }
-    gpu::TextureHandle outputStorageTexture() const { return outputImage.storage_handle(); }
-    gpu::ImageFormat outputFormat() const { return outputFormat_; }
+    noorrhi::ImageHandle outputImageHandle() const { return outputImage.handle(); }
+    noorrhi::TextureHandle outputTexture() const { return outputImage.sampled_handle(); }
+    noorrhi::TextureHandle outputStorageTexture() const { return outputImage.storage_handle(); }
+    noorrhi::ImageFormat outputFormat() const { return outputFormat_; }
     uint32_t outputWidth() const { return outputImage.width(); }
     uint32_t outputHeight() const { return outputImage.height(); }
-    std::vector<gpu::float4> readOutput() const;
+    std::vector<noorrhi::float4> readOutput() const;
 
 private:
-    gpu::Device& gpuDevice;
-    gpu::Image<std::byte> outputImage;
-    gpu::ImageFormat outputFormat_ = gpu::ImageFormat::Rgba32Float;
+    noorrhi::Device& gpuDevice;
+    noorrhi::Image<std::byte> outputImage;
+    noorrhi::ImageFormat outputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     bool exportOutputMemory_{};
     ViewportInputs inputs{};
 
     // Beauty/AOV composite - compute pass.
-    gpu::Shader shader;
-    gpu::ComputePipeline pipeline;
+    noorrhi::Shader shader;
+    noorrhi::ComputePipeline pipeline;
 
     // Billboard overlay - a tiny raster pass (dynamic rendering, instanced quads)
     // drawn on top of the compute pass's output.
-    gpu::Shader billboardVertexShader;
-    gpu::Shader billboardFragmentShader;
-    gpu::GraphicsPipeline billboardPipeline;
-    gpu::Buffer<std::byte> billboardBuffer;
+    noorrhi::Shader billboardVertexShader;
+    noorrhi::Shader billboardFragmentShader;
+    noorrhi::GraphicsPipeline billboardPipeline;
+    noorrhi::Buffer<std::byte> billboardBuffer;
     std::vector<ViewportBillboard> billboardData;
     uint32_t billboardCapacity{};
-    gpu::GpuPtr<std::byte> billboardEntry{};
+    noorrhi::GpuPtr<std::byte> billboardEntry{};
     uint32_t billboardCount{};
     uint64_t observedLightRevision{};
 
-    void createOutputImage(uint32_t width, uint32_t height, gpu::ImageFormat format);
+    void createOutputImage(uint32_t width, uint32_t height, noorrhi::ImageFormat format);
     void createBillboardPipeline();
     void reserveBillboards(uint32_t capacity);
     void drawBillboards(const glm::mat4& viewProjection);

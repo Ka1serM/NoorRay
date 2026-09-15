@@ -52,7 +52,7 @@ ViewportPanel::ViewportPanel(const std::string& name, Window& window,
     samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    const auto handles = gpu::interop::device_handles(session.device());
+    const auto handles = noorrhi::interop::device_handles(session.device());
     sampler = vk::Device(reinterpret_cast<VkDevice>(handles.device)).createSamplerUnique(samplerInfo);
     
     updateDisplayDescriptor();
@@ -102,7 +102,7 @@ ViewportPanel::ViewportPanel(const std::string& name, Window& window,
 
 void ViewportPanel::updateDisplayDescriptor()
 {
-    const vk::ImageView view(reinterpret_cast<VkImageView>(gpu::interop::image_view(
+    const vk::ImageView view(reinterpret_cast<VkImageView>(noorrhi::interop::image_view(
         session.device(), session.outputImageHandle())));
     width = session.outputWidth();
     height = session.outputHeight();
@@ -542,11 +542,11 @@ void ViewportPanel::handlePositionPicking() const {
         return;
 
     const ivec2 pixel = screenToPixel();
-    const std::vector<gpu::float4> positions = session.readPosition();
+    const std::vector<noorrhi::float4> positions = session.readPosition();
     const size_t index = static_cast<size_t>(pixel.y) * width + pixel.x;
     if (index >= positions.size())
         return;
-    const gpu::float4 value = positions[index];
+    const noorrhi::float4 value = positions[index];
     const vec3 position(value.x, value.y, value.z);
 
     NR_LOG_INFO( "Picked Position: (" << position.x << ", " << position.y << ", " << position.z << ")");

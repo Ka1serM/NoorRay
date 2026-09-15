@@ -5,7 +5,7 @@
 #include <functional>
 #include "glm/glm.hpp"
 #include "SDL3/SDL_events.h"
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 #include <vulkan/vulkan.hpp>
 
 class ImGuiComponent;
@@ -18,8 +18,8 @@ public:
         Light
     };
     
-    ImGuiManager(Window& window, gpu::Device& device, uint32_t numImages,
-        gpu::ImageFormat renderTargetFormat);
+    ImGuiManager(Window& window, noorrhi::Device& device, uint32_t numImages,
+        noorrhi::ImageFormat renderTargetFormat);
     ~ImGuiManager();
     // Runs widget logic for all components (including any resulting scene
     // mutations) and finalizes ImGui's draw data. Must be called before any
@@ -27,7 +27,7 @@ public:
     // edits never race an in-flight kernel.
     void updateUi();
     // Records the draw data already finalized by updateUi() into commandBuffer.
-    void renderDrawData(const gpu::Frame& frame);
+    void renderDrawData(const noorrhi::Frame& frame);
     void processEvent(const SDL_Event& event);
 
     template<typename T, typename... Args>
@@ -55,6 +55,6 @@ public:
 private:
     std::vector<std::unique_ptr<ImGuiComponent>> components;
     Theme currentTheme = Theme::Dark;
-    gpu::Device& device;
+    noorrhi::Device& device;
     vk::UniqueDescriptorPool descriptorPool;
 };

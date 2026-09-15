@@ -1,4 +1,4 @@
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -24,24 +24,24 @@ std::vector<std::byte> read_shader(const char* path) {
 
 }
 
-TEST_CASE("gpu API supplies the device used by NoorRay") {
-    std::unique_ptr<gpu::Device> device;
+TEST_CASE("NoorRHI API supplies the device used by NoorRay") {
+    std::unique_ptr<noorrhi::Device> device;
     try {
-        device = std::make_unique<gpu::Device>();
+        device = std::make_unique<noorrhi::Device>();
     } catch (const std::exception&) {
         SKIP("GPU device requires extensions unavailable on this Vulkan device");
     }
 
-    auto shader = device->create_shader(read_shader(GPU_TEST_SHADER));
+    auto shader = device->create_shader(read_shader(NOORRHI_TEST_SHADER));
     auto pipeline = device->compute(shader);
     auto input = device->buffer<float>(1);
     auto output = device->buffer<float>(1);
     const float value = 41.0f;
     input.upload(std::span<const float>(&value, 1));
     struct Args {
-        gpu::GpuPtr<float> input;
-        gpu::GpuPtr<float> b;
-        gpu::GpuPtr<float> output;
+        noorrhi::GpuPtr<float> input;
+        noorrhi::GpuPtr<float> b;
+        noorrhi::GpuPtr<float> output;
         std::uint32_t count;
     } args{input.ptr(), input.ptr(), output.ptr(), 1};
     pipeline.launch({1, 1, 1}, args);

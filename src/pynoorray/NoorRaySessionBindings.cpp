@@ -41,9 +41,9 @@ void bindNoorRaySession(nb::module_& module)
         .def("beauty_rgba", [](noorray::NoorRaySession& session) {
             if (!session.hasRenderer())
                 throw std::runtime_error("initialize_renderer must be called before beauty_rgba");
-            const std::vector<gpu::float4> pixels = session.readBeauty();
+            const std::vector<noorrhi::float4> pixels = session.readBeauty();
             auto* data = new float[pixels.size() * 4];
-            std::memcpy(data, pixels.data(), pixels.size() * sizeof(gpu::float4));
+            std::memcpy(data, pixels.data(), pixels.size() * sizeof(noorrhi::float4));
             nb::capsule owner(data, [](void* pointer) noexcept { delete[] static_cast<float*>(pointer); });
             const size_t shape[3] = {session.outputHeight(), session.outputWidth(), 4};
             return nb::ndarray<nb::numpy, float, nb::shape<-1, -1, 4>>(data, 3, shape, owner);

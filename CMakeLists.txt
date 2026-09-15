@@ -29,9 +29,9 @@ set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
 # standalone API examples remain opt-in integrations for developers who need
 # them; they should not enlarge the normal NoorRay dependency graph.
 option(NR_ENABLE_USD "Build USD scene import/export" OFF)
-# Consumed by external/gpu, which owns the example targets, so it must be declared
+# Consumed by external/NoorRHI, which owns the example targets, so it must be declared
 # before that subdirectory is added.
-option(NR_BUILD_EXAMPLES "Build the standalone gpu API examples" OFF)
+option(NR_BUILD_EXAMPLES "Build the standalone NoorRHI API examples" OFF)
 if(NR_ENABLE_USD)
     set(NR_USD_ROOT "${PROJECT_SOURCE_DIR}/external/blender-usd" CACHE PATH
         "Blender USD SDK root (auto-vendored by default)")
@@ -178,18 +178,18 @@ target_include_directories(NoorRayIO PUBLIC "${NR_CORE_DIR}")
 target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 
 # ---------------------------------------------------------------------------
-# gpu - small Vulkan graphics abstraction
+# NoorRHI - small Vulkan graphics abstraction
 # ---------------------------------------------------------------------------
-# gpu is its own repository (external/gpu): it compiles its own VMA
+# NoorRHI is its own repository (external/NoorRHI): it compiles its own VMA
 # implementation TU, builds, tests and installs standalone. It reuses the
 # GPUOpen::VulkanMemoryAllocator target defined above instead of finding its
 # own. Its examples follow NoorRay's switch; its tests run from its own build.
-if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/gpu/CMakeLists.txt")
-    message(FATAL_ERROR "external/gpu is missing. Link or check out the gpu repository there.")
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/NoorRHI/CMakeLists.txt")
+    message(FATAL_ERROR "external/NoorRHI is missing. Link or check out the NoorRHI repository there.")
 endif()
-set(GPU_BUILD_EXAMPLES ${NR_BUILD_EXAMPLES} CACHE BOOL "" FORCE)
-set(GPU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-add_subdirectory(external/gpu)
+set(NOORRHI_BUILD_EXAMPLES ${NR_BUILD_EXAMPLES} CACHE BOOL "" FORCE)
+set(NOORRHI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/NoorRHI)
 
 # ---------------------------------------------------------------------------
 # libnoorray (core engine library)
@@ -223,7 +223,7 @@ target_compile_definitions(libnoorray PUBLIC
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
 target_link_libraries(libnoorray PUBLIC
-    NoorRayIO gpu::gpu portable_file_dialogs glm Vulkan::Vulkan
+    NoorRayIO NoorRHI::NoorRHI portable_file_dialogs glm Vulkan::Vulkan
     tinygltf tinyobjloader tinyply tinyexr stb gauss_forge_readers
     GPUOpen::VulkanMemoryAllocator glaze TBB::tbb
     NoorRayMaterialX MaterialXFormat MaterialXCore)
@@ -390,7 +390,7 @@ endif()
 
 # The Hydra delegate is an optional host plugin.  It is intentionally kept
 # outside the default build because it needs Blender's ABI-matched OpenUSD
-# SDK, but when enabled it links only against libnoorray and the gpu API.
+# SDK, but when enabled it links only against libnoorray and the NoorRHI API.
 option(NR_BUILD_HYDRA "Build the hdnoorray Hydra render delegate" OFF)
 if(NR_BUILD_HYDRA)
     add_subdirectory(src/hdnoorray)
@@ -461,7 +461,7 @@ endif()
 # wrapped in a linker group by the consumer, so the single-pass Unix linker does
 # not care about the exact ordering within it.
 set(NR_LINK_MANIFEST_TARGETS
-    libnoorray gpu NoorRayIO NoorRayMaterialX
+    libnoorray NoorRHI NoorRayIO NoorRayMaterialX
     gauss_forge_readers tinyply tinyexr TBB::tbb spz
     webp sharpyuv zlibstatic
     MaterialXGenShader MaterialXFormat MaterialXCore)

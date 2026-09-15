@@ -6,7 +6,7 @@
 #include <span>
 #include <vector>
 
-void Material::upload(gpu::Device& device,
+void Material::upload(noorrhi::Device& device,
     const std::function<std::uint32_t(std::uint32_t)>& resolveTexture)
 {
     if (hasProgram()) {

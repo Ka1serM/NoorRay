@@ -10,7 +10,7 @@
 #include "UI/NoorRayUi.h"
 #include "Logging/Log.h"
 #include "Raytracing/Raytracer.h"
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 #include "Materials/MaterialX/MaterialXSceneRuntime.h"
 #include "Camera/CameraInstance.h"
 #include "Scene/Scene.h"
@@ -185,7 +185,7 @@ void runCli(const CliOptions& options)
     {
         const uint32_t width = options.width > 0 ? static_cast<uint32_t>(options.width) : 128u;
         const uint32_t height = options.height > 0 ? static_cast<uint32_t>(options.height) : 72u;
-        gpu::Device device;
+        noorrhi::Device device;
         // The scene-less smoke mode uses the tiny native triangle scene to
         // validate the AS/query layer before a full imported scene is added.
         Raytracer renderer(device, width, height,
@@ -219,7 +219,7 @@ void runCli(const CliOptions& options)
         NR_LOG_INFO("Saved Vulkan raytracer smoke image: " << options.outputPath);
         return;
     }
-    gpu::Device device;
+    noorrhi::Device device;
     Scene scene;
     scene.load(options.scenePath);
     if (options.gaussianShadingMode)

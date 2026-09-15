@@ -69,3 +69,7 @@
 [submodule "external/ImNodeFlow"]
 	path = external/ImNodeFlow
 	url = https://github.com/Fattorino/ImNodeFlow.git
+[submodule "external/gpu"]
+	path = external/gpu
+	url = ../gpu
+	branch = main

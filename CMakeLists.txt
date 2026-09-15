@@ -29,7 +29,7 @@ set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
 # standalone API examples remain opt-in integrations for developers who need
 # them; they should not enlarge the normal NoorRay dependency graph.
 option(NR_ENABLE_USD "Build USD scene import/export" OFF)
-# Consumed by src/gpu, which owns the example targets, so it must be declared
+# Consumed by external/gpu, which owns the example targets, so it must be declared
 # before that subdirectory is added.
 option(NR_BUILD_EXAMPLES "Build the standalone gpu API examples" OFF)
 if(NR_ENABLE_USD)
@@ -180,12 +180,16 @@ target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 # ---------------------------------------------------------------------------
 # gpu - small Vulkan graphics abstraction
 # ---------------------------------------------------------------------------
-# src/gpu is a standalone project: it compiles its own VMA implementation TU
-# and can be configured on its own. Its examples and tests follow NoorRay's
-# own switches when it is built from here.
+# gpu is its own repository (external/gpu): it compiles its own VMA
+# implementation TU, builds, tests and installs standalone. It reuses the
+# GPUOpen::VulkanMemoryAllocator target defined above instead of finding its
+# own. Its examples follow NoorRay's switch; its tests run from its own build.
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/gpu/CMakeLists.txt")
+    message(FATAL_ERROR "external/gpu is missing. Link or check out the gpu repository there.")
+endif()
 set(GPU_BUILD_EXAMPLES ${NR_BUILD_EXAMPLES} CACHE BOOL "" FORCE)
 set(GPU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-add_subdirectory(src/gpu)
+add_subdirectory(external/gpu)
 
 # ---------------------------------------------------------------------------
 # libnoorray (core engine library)

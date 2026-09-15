@@ -28,7 +28,7 @@ add_noorray_test(pbrt_parser_test
     "unit/scene/PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/Import/PbrtParser.cpp" pbrt)
 
 
-# The gpu API's own tests live with the library in src/gpu/tests and run from
+# The gpu API's own tests live with the library in external/gpu/tests and run from
 # its standalone build. What stays here is NoorRay-specific: the composite BSDF
 # shader (which includes src/libnoorray/Shaders) and the adoption test, which
 # checks gpu links cleanly inside NoorRay's archive closure.
@@ -46,7 +46,7 @@ add_custom_command(
     OUTPUT "${NR_GPU_ADD_SHADER}" "${NR_GPU_COMPOSITE_BSDF_SHADER}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_GPU_TEST_SHADER_DIR}"
     COMMAND "${NR_SLANGC_EXECUTABLE}"
-        "${CMAKE_SOURCE_DIR}/src/gpu/tests/shaders/add.slang"
+        "${CMAKE_SOURCE_DIR}/external/gpu/tests/shaders/add.slang"
         -entry main -stage compute -target spirv
         -profile spirv_1_5 ${NR_GPU_SHADER_FLAGS}
         -o "${NR_GPU_ADD_SHADER}"
@@ -55,7 +55,7 @@ add_custom_command(
         -entry main -stage compute -target spirv
         -profile spirv_1_5 ${NR_GPU_SHADER_FLAGS}
         -o "${NR_GPU_COMPOSITE_BSDF_SHADER}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/src/gpu/tests/shaders/add.slang"
+    DEPENDS "${CMAKE_SOURCE_DIR}/external/gpu/tests/shaders/add.slang"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/composite_bsdf.slang"
         ${NR_GPU_RAYTRACER_SHADER_DEPENDENCIES}
     COMMENT "Compiling NoorRay gpu test shaders" VERBATIM)

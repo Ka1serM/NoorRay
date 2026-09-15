@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 #include <MaterialXCore/Document.h>
 
 #include "Materials/Material.h"
@@ -57,7 +57,7 @@ struct MeshGeometry
 // member. The Raytracer publishes a table of pointers to these records rather
 // than copying the structs into one array, so a mesh that re-uploads does not
 // force the whole table to be rebuilt - the same arrangement Material uses.
-class Mesh : public gpu::Shared<nr::graphics::Mesh>
+class Mesh : public noorrhi::Shared<nr::graphics::Mesh>
 {
 public:
     // The material argument is a MaterialX document (the conversion from an
@@ -126,13 +126,13 @@ public:
     void setMaterial(uint32_t materialSlot, Material* material);
     void notifyMaterialsChanged();
 
-    void upload(gpu::Device& device);
+    void upload(noorrhi::Device& device);
     void releaseGpu();
-    gpu::Buffer<std::uint32_t> indexBuffer;
-    gpu::Buffer<nr::graphics::Vertex> vertexBuffer;
-    gpu::Buffer<nr::graphics::Face> faceBuffer;
-    gpu::Buffer<std::uint32_t> materialBuffer;
-    gpu::AccelerationStructure blas;
+    noorrhi::Buffer<std::uint32_t> indexBuffer;
+    noorrhi::Buffer<nr::graphics::Vertex> vertexBuffer;
+    noorrhi::Buffer<nr::graphics::Face> faceBuffer;
+    noorrhi::Buffer<std::uint32_t> materialBuffer;
+    noorrhi::AccelerationStructure blas;
 
 private:
     void initializeMaterialIds(const std::vector<Material*>& materials);

@@ -29,8 +29,8 @@ std::span<const std::byte> shader_bytes(const unsigned char* data, const std::si
 
 }
 
-Viewport::Viewport(gpu::Device& gpu_device, const uint32_t width, const uint32_t height,
-                   const ViewportInputs& inputs, const gpu::ImageFormat outputImageFormat,
+Viewport::Viewport(noorrhi::Device& gpu_device, const uint32_t width, const uint32_t height,
+                   const ViewportInputs& inputs, const noorrhi::ImageFormat outputImageFormat,
                    const bool exportOutputMemory)
 : gpuDevice(gpu_device), inputs(inputs), exportOutputMemory_(exportOutputMemory)
 {
@@ -48,13 +48,13 @@ Viewport::~Viewport()
 }
 
 void Viewport::createOutputImage(const uint32_t width, const uint32_t height,
-                                 const gpu::ImageFormat format)
+                                 const noorrhi::ImageFormat format)
 {
     outputImage = gpuDevice.image<std::byte>(width, height,
-        gpu::ImageUsage::Sampled | gpu::ImageUsage::Storage
-            | gpu::ImageUsage::ColorAttachment
-            | (exportOutputMemory_ ? gpu::ImageUsage::ExternalMemory
-                                   : gpu::ImageUsage{}),
+        noorrhi::ImageUsage::Sampled | noorrhi::ImageUsage::Storage
+            | noorrhi::ImageUsage::ColorAttachment
+            | (exportOutputMemory_ ? noorrhi::ImageUsage::ExternalMemory
+                                   : noorrhi::ImageUsage{}),
         format);
     outputFormat_ = format;
 }
@@ -65,8 +65,8 @@ void Viewport::createBillboardPipeline()
         noorRayViewportBillboardsSpvLength);
     billboardVertexShader = gpuDevice.create_shader(bytes, "vertMain");
     billboardFragmentShader = gpuDevice.create_shader(bytes, "fragMain");
-    gpu::GraphicsState state{};
-    state.cull = gpu::CullMode::None;
+    noorrhi::GraphicsState state{};
+    state.cull = noorrhi::CullMode::None;
     state.depth_test = false;
     state.depth_write = false;
     state.blend.enabled = true;
@@ -177,7 +177,7 @@ void Viewport::dispatch(
 
 void Viewport::resize(const uint32_t width, const uint32_t height,
                       const ViewportInputs& newInputs,
-                      const gpu::ImageFormat outputImageFormat)
+                      const noorrhi::ImageFormat outputImageFormat)
 {
     if (width == 0 || height == 0)
         return;
@@ -190,7 +190,7 @@ void Viewport::resize(const uint32_t width, const uint32_t height,
         // Only replacing the viewport resources requires waiting for work
         // that may still reference the old image or format-specific pipeline.
         gpuDevice.synchronize();
-        const gpu::ImageFormat previousFormat = outputFormat_;
+        const noorrhi::ImageFormat previousFormat = outputFormat_;
         createOutputImage(width, height, outputImageFormat);
         // The billboard pipeline bakes in its color-attachment format, so it
         // only has to be rebuilt when that format actually changes.
@@ -200,12 +200,12 @@ void Viewport::resize(const uint32_t width, const uint32_t height,
     inputs = newInputs;
 }
 
-std::vector<gpu::float4> Viewport::readOutput() const
+std::vector<noorrhi::float4> Viewport::readOutput() const
 {
-    if (outputFormat_ != gpu::ImageFormat::Rgba32Float)
-        throw gpu::Error(gpu::ErrorCode::InvalidArgument,
+    if (outputFormat_ != noorrhi::ImageFormat::Rgba32Float)
+        throw noorrhi::Error(noorrhi::ErrorCode::InvalidArgument,
             "Viewport::readOutput requires an RGBA32F output texture");
-    std::vector<gpu::float4> result(static_cast<std::size_t>(outputWidth())
+    std::vector<noorrhi::float4> result(static_cast<std::size_t>(outputWidth())
         * outputHeight());
     outputImage.download(std::as_writable_bytes(std::span(result)));
     return result;

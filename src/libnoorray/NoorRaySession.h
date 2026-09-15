@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "Scene/Scene.h"
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 #include "Materials/MaterialX/MaterialXSceneRuntime.h"
 #include "Raytracing/Raytracer.h"
 #include "Viewport/Viewport.h"
@@ -18,7 +18,7 @@ class NoorRaySession
 {
 public:
     NoorRaySession();
-    explicit NoorRaySession(gpu::SurfaceProvider& surfaceProvider);
+    explicit NoorRaySession(noorrhi::SurfaceProvider& surfaceProvider);
     ~NoorRaySession();
 
     // Publishes the current scene into the native raytracer. Hosts call
@@ -33,11 +33,11 @@ public:
     // and publishes one immutable GPU snapshot when all changed materials are ready.
     bool processNativeMaterials();
     void updateNativeCamera();
-    // Prepares the final viewport texture. Call this before opening a gpu
+    // Prepares the final viewport texture. Call this before opening a NoorRHI
     // frame; it refreshes AOV handles, resizes the viewport output, and uploads
     // scene overlays when they changed.
     void prepareViewport();
-    // Records the final composited viewport image into the current gpu frame,
+    // Records the final composited viewport image into the current NoorRHI frame,
     // or submits it independently when no frame is open. The output includes
     // AOV visualization, tonemapping, and optional scene billboards.
     void renderViewport(const glm::mat4& viewProjection,
@@ -45,14 +45,14 @@ public:
     void renderViewport(uint32_t selectedCryptomatteId = ~0u,
         bool showBillboards = true);
 
-    gpu::ImageHandle outputImageHandle() const;
-    gpu::TextureHandle outputTexture() const;
-    gpu::TextureHandle outputStorageTexture() const;
-    gpu::ImageFormat outputFormat() const;
+    noorrhi::ImageHandle outputImageHandle() const;
+    noorrhi::TextureHandle outputTexture() const;
+    noorrhi::TextureHandle outputStorageTexture() const;
+    noorrhi::ImageFormat outputFormat() const;
     uint32_t outputWidth() const;
     uint32_t outputHeight() const;
-    std::vector<gpu::float4> readOutput() const;
-    // Creates the headless gpu::Device/raytracer pair used by embedded
+    std::vector<noorrhi::float4> readOutput() const;
+    // Creates the headless noorrhi::Device/raytracer pair used by embedded
     // hosts such as Python and Hydra. It is deliberately explicit so merely
     // constructing a scene remains GPU-free.
     void initializeHeadlessRenderer(uint32_t width, uint32_t height,
@@ -67,20 +67,20 @@ public:
     // Small host integration surface. The renderer and presentation objects
     // remain owned by this session; consumers only borrow them for their own
     // frame/UI integration.
-    gpu::Device& device();
-    gpu::Swapchain& swapchain();
+    noorrhi::Device& device();
+    noorrhi::Swapchain& swapchain();
     void resize(uint32_t width, uint32_t height);
     void commit();
     void render(uint32_t frameIndex = 0, uint32_t sampleIndex = 0);
     double lastDispatchMilliseconds();
     void synchronize();
-    gpu::Frame beginFrame();
-    void endFrame(gpu::Frame&& frame);
-    void copyOutputTo(gpu::ImageHandle target);
+    noorrhi::Frame beginFrame();
+    void endFrame(noorrhi::Frame&& frame);
+    void copyOutputTo(noorrhi::ImageHandle target);
     std::vector<std::byte> readColor();
-    std::vector<gpu::float4> readBeauty();
+    std::vector<noorrhi::float4> readBeauty();
     std::vector<std::uint32_t> readCryptomatte();
-    std::vector<gpu::float4> readPosition();
+    std::vector<noorrhi::float4> readPosition();
 
     NoorRaySession(const NoorRaySession&) = delete;
     NoorRaySession& operator=(const NoorRaySession&) = delete;
@@ -88,8 +88,8 @@ public:
     // Member order is load-bearing: scene-owned GPU resources must be released
     // before the device. Members are destroyed in reverse declaration order.
 private:
-    std::optional<gpu::Device> device_;
-    std::optional<gpu::Swapchain> swapchain_;
+    std::optional<noorrhi::Device> device_;
+    std::optional<noorrhi::Swapchain> swapchain_;
     std::optional<Raytracer> raytracer_;
     // Declared after raytracer so it is destroyed first; its inputs are views
     // into the raytracer's AOV resources.
@@ -101,7 +101,7 @@ private:
     MaterialXSceneRuntime materialRuntime_;
 
 private:
-    gpu::ImageFormat viewportOutputFormat_{gpu::ImageFormat::Rgba32Float};
+    noorrhi::ImageFormat viewportOutputFormat_{noorrhi::ImageFormat::Rgba32Float};
     bool exportViewportMemory_{};
     RenderSettings appliedRenderSettings{};
     bool renderSettingsInitialized{};

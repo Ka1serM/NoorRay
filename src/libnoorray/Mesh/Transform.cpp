@@ -48,9 +48,9 @@ void Transform::setFromMatrix(const glm::mat4& mat) {
     rotationEulerDegrees = degrees(eulerAngles(rotation));
 }
 
-gpu::float4x4 Transform::getGpuTransform() const {
+noorrhi::float4x4 Transform::getGpuTransform() const {
     glm::mat4 mat = getMatrix();
-    gpu::float4x4 transform{};
+    noorrhi::float4x4 transform{};
     // The GPU API uses explicit row-major records; GLM stores columns.
     for (std::size_t row = 0; row < 3; ++row)
         for (std::size_t column = 0; column < 4; ++column)

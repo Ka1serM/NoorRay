@@ -7,9 +7,9 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
 
-#include <gpu/surface.hpp>
+#include <noorrhi/surface.hpp>
 
-class Window final : public gpu::SurfaceProvider
+class Window final : public noorrhi::SurfaceProvider
 {
 public:
     Window(uint32_t requestedWidth = 0, uint32_t requestedHeight = 0);

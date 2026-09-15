@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include <gpu/gpu.hpp>
+#include <noorrhi/noorrhi.hpp>
 
 #include "Shared/Math.h"
 
@@ -75,13 +75,13 @@ public:
     // Uploads the pixels into this texture's sampled image. The renderer calls
     // this while publishing a scene snapshot. Throws if the source pixels are
     // unusable; the renderer substitutes the white fallback.
-    void upload(gpu::Device& device);
+    void upload(noorrhi::Device& device);
     // Zero until upload() has succeeded, which is how the renderer knows to
     // substitute its 1x1 white fallback for an asset that failed to load.
-    gpu::TextureHandle sampledHandle() const { return image.sampled_handle(); }
+    noorrhi::TextureHandle sampledHandle() const { return image.sampled_handle(); }
     explicit operator bool() const { return static_cast<bool>(image); }
 
-    gpu::Image<std::byte> image;
+    noorrhi::Image<std::byte> image;
 
 private:
     void validateStorageSize(size_t valueCount) const;

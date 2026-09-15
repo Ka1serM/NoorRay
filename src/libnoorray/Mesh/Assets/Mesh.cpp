@@ -313,7 +313,7 @@ void Mesh::initializeMaterialIds(const std::vector<Material*>& materials)
 }
 
 Mesh::Mesh(Mesh&& other) noexcept
-    : gpu::Shared<nr::graphics::Mesh>(std::move(other)),
+    : noorrhi::Shared<nr::graphics::Mesh>(std::move(other)),
       scene(other.scene), path(std::move(other.path)), index(other.index),
       vertices(std::move(other.vertices)), indices(std::move(other.indices)),
       faces(std::move(other.faces)), materialIds(std::move(other.materialIds)),
@@ -416,7 +416,7 @@ void Mesh::notifyMaterialsChanged()
     scene.setDirtyFlag(Accumulation);
 }
 
-void Mesh::upload(gpu::Device& device)
+void Mesh::upload(noorrhi::Device& device)
 {
     if (vertices.empty() || indices.empty())
         return;
@@ -446,10 +446,10 @@ void Mesh::upload(gpu::Device& device)
 
     // Positions are the first member of Vertex, so the BLAS reads them
     // straight out of the interleaved vertex buffer.
-    const gpu::TriangleGeometry geometry{
-        gpu::GpuPtr<gpu::float3>{vertexBuffer.ptr().address}, indexBuffer.ptr(),
+    const noorrhi::TriangleGeometry geometry{
+        noorrhi::GpuPtr<noorrhi::float3>{vertexBuffer.ptr().address}, indexBuffer.ptr(),
         static_cast<uint32_t>(indices.size() / 3), sizeof(nr::graphics::Vertex), false};
-    blas = device.build_blas(std::span<const gpu::TriangleGeometry>(&geometry, 1));
+    blas = device.build_blas(std::span<const noorrhi::TriangleGeometry>(&geometry, 1));
 
     if (!*this)
         allocate(device);

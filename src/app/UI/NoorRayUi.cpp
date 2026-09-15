@@ -50,7 +50,7 @@ NoorRayUi::~NoorRayUi()
 {
     // ViewportPanel removes its ImGui texture descriptor and releases
     // viewport resources during ImGuiManager destruction. The last frame
-    // may still reference both, so retire the shared NoorRay/gpu-api queue
+    // may still reference both, so retire the shared NoorRay/NoorRHI queue
     // before any UI-owned GPU state is torn down.
     if (session.hasRenderer())
     {
@@ -136,7 +136,7 @@ void NoorRayUi::run()
             if (viewportPanel) viewportPanel->preparePresentation();
         }
         if (session.hasRenderer()) session.commit();
-        gpu::Frame frame = session.beginFrame();
+        noorrhi::Frame frame = session.beginFrame();
         if (!frame)
             continue;
         uint32_t submittedSamples = 0;

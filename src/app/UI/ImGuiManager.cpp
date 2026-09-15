@@ -5,7 +5,7 @@
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_vulkan.h"
 #include "glm/gtc/type_ptr.inl"
-#include <gpu/interop.hpp>
+#include <noorrhi/interop.hpp>
 #include "UI/Window.h"
 #include <array>
 #include <cstddef>
@@ -24,8 +24,8 @@ constexpr unsigned char noorRayImGuiLayout[] = {
 constexpr std::size_t noorRayImGuiLayoutLength = sizeof(noorRayImGuiLayout);
 }
 
-ImGuiManager::ImGuiManager(Window& window, gpu::Device& device, const uint32_t numImages,
-    const gpu::ImageFormat targetFormat)
+ImGuiManager::ImGuiManager(Window& window, noorrhi::Device& device, const uint32_t numImages,
+    const noorrhi::ImageFormat targetFormat)
     : device(device)
 {
     IMGUI_CHECKVERSION();
@@ -62,7 +62,7 @@ ImGuiManager::ImGuiManager(Window& window, gpu::Device& device, const uint32_t n
 
     ImGui_ImplSDL3_InitForVulkan(window.nativeHandle());
 
-    const auto handles = gpu::interop::device_handles(device);
+    const auto handles = noorrhi::interop::device_handles(device);
     const vk::Device nativeDevice(reinterpret_cast<VkDevice>(handles.device));
     const std::array poolSizes{
         vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 64},
@@ -89,7 +89,7 @@ ImGuiManager::ImGuiManager(Window& window, gpu::Device& device, const uint32_t n
     init_info.UseDynamicRendering = true;
     init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
     init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-    const auto renderTargetFormat = static_cast<VkFormat>(gpu::interop::native_format(targetFormat));
+    const auto renderTargetFormat = static_cast<VkFormat>(noorrhi::interop::native_format(targetFormat));
     init_info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &renderTargetFormat;
     
     ImGui_ImplVulkan_Init(&init_info);
@@ -141,16 +141,16 @@ void ImGuiManager::updateUi() {
     ImGui::Render();
 }
 
-void ImGuiManager::renderDrawData(const gpu::Frame& frame) {
+void ImGuiManager::renderDrawData(const noorrhi::Frame& frame) {
     const vk::CommandBuffer commandBuffer(reinterpret_cast<VkCommandBuffer>(
-        gpu::interop::command_buffer(frame)));
+        noorrhi::interop::command_buffer(frame)));
     const vk::ImageView targetView(reinterpret_cast<VkImageView>(
-        gpu::interop::image_view(device, frame.target())));
+        noorrhi::interop::image_view(device, frame.target())));
 
     // Vulkan dynamic rendering
     vk::RenderingAttachmentInfo colorAttachment{};
     colorAttachment.setImageView(targetView);
-    // gpu keeps presentation images in GENERAL under
+    // NoorRHI keeps presentation images in GENERAL under
     // VK_KHR_unified_image_layouts.  The external ImGui draw is part of that
     // same frame, so it must use the layout the device established.
     colorAttachment.setImageLayout(vk::ImageLayout::eGeneral);

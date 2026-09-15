@@ -8,7 +8,7 @@
 #include "Camera/FisheyeCamera.h"
 #include "Camera/RealisticCamera.h"
 #include "Camera/ThinLensCamera.h"
-#include <gpu/interop.hpp>
+#include <noorrhi/interop.hpp>
 
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/imaging/hd/camera.h>
@@ -69,7 +69,7 @@ bool GetOpenGlColorTarget(GLuint& texture, unsigned int& width, unsigned int& he
 }
 
 void UploadBgra(const GLuint texture, const unsigned int width, const unsigned int height,
-    const std::vector<gpu::float4>& source)
+    const std::vector<noorrhi::float4>& source)
 {
     std::vector<std::byte> pixels(source.size() * 4u);
     const auto encode = [](const float value) -> std::byte {
@@ -124,7 +124,7 @@ bool HdNoorRayRenderPass::_EnsureInteropImage(const unsigned int width,
         || !std::strstr(extensions, "GL_EXT_semaphore_fd"))
         return false;
     try {
-        const auto exported = gpu::interop::export_image_memory(
+        const auto exported = noorrhi::interop::export_image_memory(
             renderParam_.session.device(), renderParam_.session.outputImageHandle());
         glCreateMemoryObjectsEXT(1, &interopMemory_);
         glImportMemoryFdEXT(interopMemory_, exported.allocation_size,
@@ -196,7 +196,7 @@ bool HdNoorRayRenderPass::_PresentLastFrame(const unsigned int targetTexture,
         return false;
     if (_EnsureInteropImage(width, height)) {
         try {
-            const auto semaphore = gpu::interop::signal_external(session.device());
+            const auto semaphore = noorrhi::interop::signal_external(session.device());
             if (_PresentInterop(targetTexture, width, height, semaphore.fd))
                 return true;
         } catch (...) {

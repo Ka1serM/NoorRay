@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <gpu/interop.hpp>
+#include <noorrhi/interop.hpp>
 #include <vulkan/vulkan.hpp>
 #include "UI/ImGuiComponent.h"
 #include <string>

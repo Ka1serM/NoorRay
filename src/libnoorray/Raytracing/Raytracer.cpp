@@ -5,7 +5,7 @@
 
 #include "Scene/GaussianInstance.h"
 
-#include <gpu/interop.hpp>
+#include <noorrhi/interop.hpp>
 
 #include <algorithm>
 #include <array>
@@ -91,7 +91,7 @@ constexpr std::size_t raygenSpvLength = sizeof(raygenSpv);
 // entry is reserved for the white fallback, leaving room for render targets,
 // scene buffers, and repeated immutable material updates.
 
-gpu::Buffer<std::byte> upload_bytes(gpu::Device& device, const void* data,
+noorrhi::Buffer<std::byte> upload_bytes(noorrhi::Device& device, const void* data,
     const std::size_t size)
 {
     if (size == 0)
@@ -103,14 +103,14 @@ gpu::Buffer<std::byte> upload_bytes(gpu::Device& device, const void* data,
 }
 
 template<class T>
-gpu::Buffer<std::byte> upload_value(gpu::Device& device, const T& value)
+noorrhi::Buffer<std::byte> upload_value(noorrhi::Device& device, const T& value)
 {
     return upload_bytes(device, &value, sizeof(value));
 }
 
 }
 
-Raytracer::Raytracer(gpu::Device& device,
+Raytracer::Raytracer(noorrhi::Device& device,
     const uint32_t width, const uint32_t height, const bool exportColorMemory)
     : renderWidth(std::max(width, 1u))
     , renderHeight(std::max(height, 1u))
@@ -118,7 +118,7 @@ Raytracer::Raytracer(gpu::Device& device,
     , exportColorMemory(exportColorMemory)
 {
     dispatchTimestamp = gpuDevice->timestamp();
-    NR_LOG_INFO("graphics API raytracer: using gpu API (rayQuery="
+    NR_LOG_INFO("graphics API raytracer: using NoorRHI API (rayQuery="
         << gpuDevice->features().ray_query << ", rayTracing="
         << gpuDevice->features().ray_tracing << ")");
     NR_LOG_INFO("graphics API raytracer: creating ray-tracing pipeline");
@@ -126,7 +126,7 @@ Raytracer::Raytracer(gpu::Device& device,
     NR_LOG_INFO("graphics API raytracer: creating output images");
     createImages();
     NR_LOG_INFO("graphics API raytracer: creating upload buffers");
-    lens = gpu::Shared<nr::graphics::Lens>(*gpuDevice);
+    lens = noorrhi::Shared<nr::graphics::Lens>(*gpuDevice);
 
     // An empty pointer table until the first uploadMaterials().
     const std::uint64_t noMaterial = 0;
@@ -142,7 +142,7 @@ Raytracer::Raytracer(gpu::Device& device,
     // map invalid scene texture references to it during material upload.
     const float whitePixel[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     whiteTexture = gpuDevice->image<std::byte>(1, 1,
-        gpu::ImageUsage::Sampled, gpu::ImageFormat::Rgba32Float);
+        noorrhi::ImageUsage::Sampled, noorrhi::ImageFormat::Rgba32Float);
     whiteTexture.upload(std::span<const std::byte>(std::as_bytes(std::span(whitePixel))));
     // Immutable shading data shared by every closure: energy-compensation LUTs
     // and the CIE/D65 spectral tables.
@@ -198,29 +198,29 @@ void Raytracer::createPipeline()
 
 void Raytracer::createImages()
 {
-    const auto storage = gpu::ImageUsage::Storage | gpu::ImageUsage::Sampled;
+    const auto storage = noorrhi::ImageUsage::Storage | noorrhi::ImageUsage::Sampled;
     // Beauty is the authoritative scene-linear HDR image.  Presentation to an
     // 8-bit swapchain is a graphics API blit; offline integrations retain all
     // radiance and alpha values through readBeauty().
     const auto color_usage = exportColorMemory
-        ? storage | gpu::ImageUsage::ExternalMemory : storage;
+        ? storage | noorrhi::ImageUsage::ExternalMemory : storage;
     colorImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, color_usage,
-        gpu::ImageFormat::Rgba32Float);
+        noorrhi::ImageFormat::Rgba32Float);
     albedoImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
-        gpu::ImageFormat::Rgba32Float);
+        noorrhi::ImageFormat::Rgba32Float);
     normalImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
-        gpu::ImageFormat::Rgba32Float);
+        noorrhi::ImageFormat::Rgba32Float);
     positionImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
-        gpu::ImageFormat::Rgba32Float);
+        noorrhi::ImageFormat::Rgba32Float);
     cryptomatteImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
-        gpu::ImageFormat::R32Uint);
+        noorrhi::ImageFormat::R32Uint);
     gaussianOverdrawBuffer = gpuDevice->buffer<std::uint32_t>(
         static_cast<std::size_t>(renderWidth) * renderHeight);
-    accumulationBuffer = gpuDevice->buffer<gpu::float4>(
+    accumulationBuffer = gpuDevice->buffer<noorrhi::float4>(
         static_cast<std::size_t>(renderWidth) * renderHeight);
-    std::vector<gpu::float4> clear(static_cast<std::size_t>(renderWidth)
-        * renderHeight, gpu::float4{});
-    accumulationBuffer.upload(std::span<const gpu::float4>(clear));
+    std::vector<noorrhi::float4> clear(static_cast<std::size_t>(renderWidth)
+        * renderHeight, noorrhi::float4{});
+    accumulationBuffer.upload(std::span<const noorrhi::float4>(clear));
 }
 
 void Raytracer::updateRoot()
@@ -231,7 +231,7 @@ void Raytracer::updateRoot()
     const auto address = [](const auto& buffer) -> std::uint64_t {
         return buffer ? buffer.ptr().address : 0;
     };
-    const gpu::AccelerationStructureHandle topLevel = tlas.handle();
+    const noorrhi::AccelerationStructureHandle topLevel = tlas.handle();
 
     data.colorImage = colorImage.storage_handle().value;
     data.albedoImage = albedoImage.storage_handle().value;
@@ -597,7 +597,7 @@ void Raytracer::render(const uint32_t frameIndex, const uint32_t sampleIndex)
     data.width = renderWidth;
     data.height = renderHeight;
 
-    // Inside a gpu::Frame this batches into the frame's command buffer; with
+    // Inside a noorrhi::Frame this batches into the frame's command buffer; with
     // no frame open it is submitted on its own, which is the offline path.
     gpuDevice->measure(dispatchTimestamp, [this] {
         pipeline.trace({renderWidth, renderHeight, 1}, data);
@@ -625,9 +625,9 @@ std::vector<std::byte> Raytracer::readColor() {
     return result;
 }
 
-std::vector<gpu::float4> Raytracer::readBeauty()
+std::vector<noorrhi::float4> Raytracer::readBeauty()
 {
-    std::vector<gpu::float4> result(static_cast<std::size_t>(renderWidth)
+    std::vector<noorrhi::float4> result(static_cast<std::size_t>(renderWidth)
         * renderHeight);
     colorImage.download(std::as_writable_bytes(std::span(result)));
     return result;
@@ -643,9 +643,9 @@ std::vector<std::uint32_t> Raytracer::readCryptomatte()
     return result;
 }
 
-std::vector<gpu::float4> Raytracer::readPosition()
+std::vector<noorrhi::float4> Raytracer::readPosition()
 {
-    std::vector<gpu::float4> result(static_cast<std::size_t>(renderWidth)
+    std::vector<noorrhi::float4> result(static_cast<std::size_t>(renderWidth)
         * renderHeight);
     std::vector<std::byte> bytes(result.size() * sizeof(result.front()));
     positionImage.download(std::span<std::byte>(bytes));
@@ -805,7 +805,7 @@ void Raytracer::buildGaussians(const Scene& scene)
         for (std::size_t local = 0; local < source.size(); ++local)
         {
             const Gaussian& gaussian = records[recordBegin + local];
-            gpu::float4x4 transform{};
+            noorrhi::float4x4 transform{};
             for (uint32_t row = 0; row < 3; ++row)
             {
                 for (uint32_t column = 0; column < 3; ++column)
@@ -830,21 +830,21 @@ void Raytracer::buildGaussians(const Scene& scene)
     const float proxyScale = scene.getRenderSettings().gaussianCutoffSigma
         / proxyInradius(unitProxy);
     gaussianProxyTriangleCount_ = static_cast<uint32_t>(unitProxy.indices.size() / 3u);
-    std::vector<gpu::float3> positions;
+    std::vector<noorrhi::float3> positions;
     positions.reserve(unitProxy.vertices.size());
     for (const glm::vec3 vertex : unitProxy.vertices)
         positions.push_back({vertex.x * proxyScale, vertex.y * proxyScale,
             vertex.z * proxyScale});
-    gaussianProxy.positions = (*gpuDevice).buffer<gpu::float3>(positions.size());
+    gaussianProxy.positions = (*gpuDevice).buffer<noorrhi::float3>(positions.size());
     gaussianProxy.indices = (*gpuDevice).buffer<std::uint32_t>(unitProxy.indices.size());
-    gaussianProxy.positions.upload(std::span<const gpu::float3>(positions));
+    gaussianProxy.positions.upload(std::span<const noorrhi::float3>(positions));
     gaussianProxy.indices.upload(std::span<const std::uint32_t>(unitProxy.indices));
-    const gpu::TriangleGeometry proxyGeometry{gaussianProxy.positions.ptr(),
+    const noorrhi::TriangleGeometry proxyGeometry{gaussianProxy.positions.ptr(),
         gaussianProxy.indices.ptr(), gaussianProxyTriangleCount_, false};
     gaussianProxy.blas = (*gpuDevice).build_blas(
-        std::span<const gpu::TriangleGeometry>(&proxyGeometry, 1));
+        std::span<const noorrhi::TriangleGeometry>(&proxyGeometry, 1));
 
-    const auto publish = [this]<class T>(gpu::Buffer<T>& buffer, const std::vector<T>& values) {
+    const auto publish = [this]<class T>(noorrhi::Buffer<T>& buffer, const std::vector<T>& values) {
         if (values.empty()) { buffer = {}; return; }
         buffer = gpuDevice->buffer<T>(values.size());
         buffer.upload(std::span<const T>(values));
@@ -922,7 +922,7 @@ void Raytracer::uploadInstances()
 
 nr::graphics::Scene Raytracer::sceneBuffers() const
 {
-    const auto address = []<class T>(const gpu::Buffer<T>& buffer) {
+    const auto address = []<class T>(const noorrhi::Buffer<T>& buffer) {
         return buffer ? buffer.ptr().address : std::uint64_t{0};
     };
     return {
@@ -981,7 +981,7 @@ void Raytracer::buildTopLevel(const Scene& scene)
     instanceCount_ = static_cast<uint32_t>(tlasInstances.size());
     if (tlasInstances.empty())
         return;
-    tlas = (*gpuDevice).build_tlas(std::span<const gpu::Instance>(tlasInstances));
+    tlas = (*gpuDevice).build_tlas(std::span<const noorrhi::Instance>(tlasInstances));
 }
 
 bool Raytracer::updateMutableData(const Scene& scene, const bool updateGaussians)
@@ -1058,7 +1058,7 @@ bool Raytracer::updateMutableData(const Scene& scene, const bool updateGaussians
                         ? original.sphericalHarmonics.values[coefficient] : half{0};
                     assign(gaussianShCoefficientData_, index * coefficientCount * 3u + coefficient, value);
                 }
-                gpu::float4x4 transform{};
+                noorrhi::float4x4 transform{};
                 for (uint32_t row = 0; row < 3; ++row) {
                     for (uint32_t column = 0; column < 3; ++column)
                         transform.values[row][column] = record.transform[column][row];
@@ -1082,6 +1082,6 @@ bool Raytracer::updateMutableData(const Scene& scene, const bool updateGaussians
         gaussianShCoefficients_.upload(std::span<const half>(gaussianShCoefficientData_));
     }
     if (tlas && refit)
-        (*gpuDevice).update_tlas(tlas, std::span<const gpu::Instance>(tlasInstances));
+        (*gpuDevice).update_tlas(tlas, std::span<const noorrhi::Instance>(tlasInstances));
     return true;
 }

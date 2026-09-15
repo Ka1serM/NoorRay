@@ -3,16 +3,9 @@
 #include "api.h"
 
 #include <pxr/imaging/hd/material.h>
+#include <MaterialXCore/Document.h>
 
 #include <cstdint>
-#include <memory>
-
-namespace MaterialX_v1_39_4
-{
-class Document;
-using DocumentPtr = std::shared_ptr<Document>;
-}
-namespace MaterialX = MaterialX_v1_39_4;
 
 PXR_NAMESPACE_OPEN_SCOPE
 

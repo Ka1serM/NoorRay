@@ -6,9 +6,8 @@
 
 #include <vector>
 
-namespace mx = MaterialX;
 
-MaterialXGraphNode::MaterialXGraphNode(mx::NodePtr node)
+MaterialXGraphNode::MaterialXGraphNode(MaterialX::NodePtr node)
     : node_(std::move(node))
 {
     if (node_)
@@ -20,7 +19,7 @@ void MaterialXGraphNode::buildPins()
     // Declared inputs, not just the authored ones: an input with no pin cannot
     // be connected to, which left most of a surface shader's parameters
     // unreachable in the graph (see exposedInputs).
-    for (const mx::InputPtr& input : exposedInputs(node_)) {
+    for (const MaterialX::InputPtr& input : exposedInputs(node_)) {
         if (!input)
             continue;
         // An input the body draws inline still needs a pin once something is
@@ -36,7 +35,7 @@ void MaterialXGraphNode::buildPins()
     (void)addOUT<std::string>("out");
 }
 
-void MaterialXGraphNode::setMaterialNode(mx::NodePtr node)
+void MaterialXGraphNode::setMaterialNode(MaterialX::NodePtr node)
 {
     node_ = std::move(node);
     if (!node_)
@@ -85,7 +84,7 @@ std::string MaterialXGraphNode::inputValue(const std::string& inputName) const
 {
     if (!node_)
         return {};
-    const mx::InputPtr input = node_->getInput(inputName);
+    const MaterialX::InputPtr input = node_->getInput(inputName);
     if (!input || input->getConnectedNode())
         return {};
     return input->getValueString();

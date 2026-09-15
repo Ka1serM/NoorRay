@@ -1,4 +1,4 @@
-#include "Rendering/Camera/CameraInstance.h"
+#include "Camera/CameraInstance.h"
 
 #include <array>
 #include <imgui.h>
@@ -46,7 +46,7 @@ bool renderCameraInstance(CameraInstance& instance)
 
 }
 
-void ObjectUiVisitor::visit(CameraInstance& instance)
+bool object_ui::render(CameraInstance& instance)
 {
-    changed |= renderCameraInstance(instance);
+    return renderCameraInstance(instance);
 }

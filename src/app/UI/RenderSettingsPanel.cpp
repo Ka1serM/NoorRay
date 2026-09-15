@@ -5,7 +5,7 @@
 
 #include <imgui.h>
 
-#include "Scene/RenderSettings.h"
+#include "Shared/RenderSettings.h"
 #include "Scene/Scene.h"
 #include "UI/ImGuiManager.h"
 #include "UI/MathInput.h"

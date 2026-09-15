@@ -21,7 +21,7 @@ bool renderSceneObject(SceneObject& object)
 
 }
 
-void ObjectUiVisitor::visit(SceneObject& object)
+bool object_ui::render(SceneObject& object)
 {
-    changed |= renderSceneObject(object);
+    return renderSceneObject(object);
 }

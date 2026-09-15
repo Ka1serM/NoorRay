@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <numbers>
 
-#include "Scene/Objects/LightInstance.h"
+#include "Scene/LightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 

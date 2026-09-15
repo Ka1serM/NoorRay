@@ -101,9 +101,28 @@ std::uintptr_t Window::create_surface(const std::uintptr_t instance) const
     return reinterpret_cast<std::uintptr_t>(surface);
 }
 
+uint32_t Window::width() const
+{
+    int width = 0;
+    SDL_GetWindowSizeInPixels(window, &width, nullptr);
+    return static_cast<uint32_t>(std::max(width, 0));
+}
+
+uint32_t Window::height() const
+{
+    int height = 0;
+    SDL_GetWindowSizeInPixels(window, nullptr, &height);
+    return static_cast<uint32_t>(std::max(height, 0));
+}
+
 bool Window::pollEvent(SDL_Event& event) const
 {
     return SDL_PollEvent(&event);
+}
+
+bool Window::waitEvent(SDL_Event& event) const
+{
+    return SDL_WaitEvent(&event);
 }
 
 void Window::setFullscreen(const bool fullscreen) const

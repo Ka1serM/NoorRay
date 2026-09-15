@@ -5,17 +5,25 @@
 
 #pragma once
 
+#include <cmath>
+
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
-#include "Backend/Host/Platform.h"
-#include "Rendering/Ray.h"
 #include "Materials/SVM/SvmTypes.h"
 
 namespace nr::svm::detail
 {
 
-NR_GPU inline float svmMath(const MathOp operation, const float a, const float b,
+inline glm::vec3 svmSafeNormalize(
+    const glm::vec3& value, const glm::vec3& fallback = glm::vec3(0.0f))
+{
+    const float lengthSquared = glm::dot(value, value);
+    return std::isfinite(lengthSquared) && lengthSquared > 1.0e-12f
+        ? value / std::sqrt(lengthSquared) : fallback;
+}
+
+inline float svmMath(const MathOp operation, const float a, const float b,
     const float /*c*/)
 {
     switch (operation) {
@@ -55,7 +63,7 @@ NR_GPU inline float svmMath(const MathOp operation, const float a, const float b
     return 0.0f;
 }
 
-NR_GPU inline glm::vec3 svmVectorMath(const VectorMathOp operation, const glm::vec3 a,
+inline glm::vec3 svmVectorMath(const VectorMathOp operation, const glm::vec3 a,
     const glm::vec3 b, const float parameter = 0.0f)
 {
     switch (operation) {
@@ -68,7 +76,7 @@ NR_GPU inline glm::vec3 svmVectorMath(const VectorMathOp operation, const glm::v
     case VectorMathOp::CrossProduct: return glm::cross(a, b);
     case VectorMathOp::DotProduct: return glm::vec3(glm::dot(a, b));
     case VectorMathOp::Normalize:
-        return nr::safeNormalize(a);
+        return svmSafeNormalize(a);
     case VectorMathOp::Magnitude: return glm::vec3(glm::length(a));
     case VectorMathOp::Distance: return glm::vec3(glm::distance(a, b));
     case VectorMathOp::Reflect: return glm::reflect(a, b);

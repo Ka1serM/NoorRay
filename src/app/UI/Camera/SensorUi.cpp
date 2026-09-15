@@ -1,4 +1,4 @@
-#include "Rendering/Camera/Sensor.h"
+#include "Camera/Sensor.h"
 #include <array>
 #include <cstdio>
 #include <imgui.h>

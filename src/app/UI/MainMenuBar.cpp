@@ -1,11 +1,11 @@
 ﻿#include "MainMenuBar.h"
 #include "imgui.h"
-#include "Scene/Objects/LightInstance.h"
-#include "Scene/Objects/MeshInstance.h"
-#include "Rendering/Camera/CameraInstance.h"
+#include "Scene/LightInstance.h"
+#include "Scene/MeshInstance.h"
+#include "Camera/CameraInstance.h"
 #include <SDL3/SDL.h>
 #include <iostream>
-#include "Log.h"
+#include "Logging/Log.h"
 #include "Scene/Import/SceneImporter.h"
 #include "Scene/Import/SceneReader.h"
 #include "Scene/Import/SceneUsd.h"
@@ -37,17 +37,17 @@ void MainMenuBar::renderAddMenu() {
     if (ImGui::BeginMenu("Add")) {
         if (ImGui::BeginMenu("Primitives")) {
             if (ImGui::MenuItem("Cube")) {
-                const MeshAssetRef cube = scene.add(MeshAsset::CreateCube(scene, "Cube", {}));
+                Mesh* cube = scene.add(Mesh::CreateCube(scene, "Cube", {}));
                 auto instance = std::make_unique<MeshInstance>(scene, "Cube Instance", cube, Transform(vec3(0, 0, 0)));
                 scene.setActiveObject(scene.add(std::move(instance)));
             }
             if (ImGui::MenuItem("Plane")) {
-                const MeshAssetRef plane = scene.add(MeshAsset::CreatePlane(scene, "Plane", {}));
+                Mesh* plane = scene.add(Mesh::CreatePlane(scene, "Plane", {}));
                 auto instance = std::make_unique<MeshInstance>(scene, "Plane Instance", plane, Transform(vec3(0, 0, 0)));
                 scene.setActiveObject(scene.add(std::move(instance)));
             }
             if (ImGui::MenuItem("Sphere")) {
-                const MeshAssetRef sphere = scene.add(MeshAsset::CreateSphere(scene, "Sphere", {}, 24, 48));
+                Mesh* sphere = scene.add(Mesh::CreateSphere(scene, "Sphere", {}, 24, 48));
                 auto instance = std::make_unique<MeshInstance>(scene, "Sphere Instance", sphere, Transform(vec3(0, 0, 0)));
                 scene.setActiveObject(scene.add(std::move(instance)));
             }
@@ -95,18 +95,19 @@ void MainMenuBar::handleMaterialXImport(const std::string& filePath)
         const std::filesystem::path absolute = std::filesystem::absolute(filePath);
         if (!std::filesystem::is_regular_file(absolute))
             throw std::runtime_error("MaterialX file not found: " + filePath);
-        const MaterialRef material = scene.addMaterial(MaterialX::DocumentPtr{});
+        Material* material = scene.addMaterial(MaterialX::DocumentPtr{});
         auto& paths = scene.getMaterialXSourcePaths();
         auto& documents = scene.getMaterialXDocuments();
-        if (paths.size() <= material.index()) paths.resize(material.index() + 1);
-        if (documents.size() <= material.index()) documents.resize(material.index() + 1);
+        const uint32_t index = scene.getMaterialIndex(material);
+        if (paths.size() <= index) paths.resize(index + 1);
+        if (documents.size() <= index) documents.resize(index + 1);
         // The path is the source of truth for a disk-backed material: its XML
         // is read at compile time (import), never retained in memory.
-        paths[material.index()] = absolute.string();
-        documents[material.index()] = nullptr;
-        scene.invalidateMaterial(material.handle());
+        paths[index] = absolute.string();
+        documents[index] = nullptr;
+        scene.invalidateMaterial(material);
     } catch (const std::exception& error) {
-        LOG_ERROR("MaterialX import failed: " << error.what());
+        NR_LOG_ERROR("MaterialX import failed: " << error.what());
     }
 }
 
@@ -129,7 +130,7 @@ void MainMenuBar::handleFileImport(const std::string& filePath)
     try {
         SceneImporter::ImportFile(scene, filePath);
     } catch (const std::exception& e) {
-       LOG_ERROR("Import failed: " << e.what());
+       NR_LOG_ERROR("Import failed: " << e.what());
     }
 }
 
@@ -147,7 +148,7 @@ void MainMenuBar::openScene(const std::string& filePath)
         currentScenePath = nr::sceneio::isUsdFile(filePath) || extension == ".pbrt"
             ? filePath : std::string{};
     } catch (const std::exception& e) {
-        LOG_ERROR("Open scene failed: " << e.what());
+        NR_LOG_ERROR("Open scene failed: " << e.what());
     }
 }
 
@@ -164,7 +165,7 @@ void MainMenuBar::saveScene(const std::string& filePath)
         SceneWriter::Write(scene, path.string());
         currentScenePath = path.string();
     } catch (const std::exception& e) {
-        LOG_ERROR("Save scene failed: " << e.what());
+        NR_LOG_ERROR("Save scene failed: " << e.what());
     }
 }
 

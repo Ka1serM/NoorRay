@@ -17,20 +17,19 @@
 #include <MaterialXCore/Node.h>
 #include <MaterialXFormat/XmlIo.h>
 
-#include "Rendering/Camera/CameraInstance.h"
-#include "Rendering/Camera/FisheyeCamera.h"
-#include "Rendering/Camera/ThinLensCamera.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Scene/Objects/GaussianInstance.h"
-#include "Scene/Objects/LightInstance.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Camera/CameraInstance.h"
+#include "Camera/FisheyeCamera.h"
+#include "Camera/ThinLensCamera.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Scene/GaussianInstance.h"
+#include "Scene/LightInstance.h"
+#include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 #include "Scene/Import/SceneFile.h"
 #include "Scene/SceneObject.h"
 #include "Scene/Import/SceneUsd.h"
 
 namespace {
-namespace mx = MaterialX;
 
 nr::sceneio::Vec3 fromVec3(const glm::vec3 value)
 {
@@ -50,7 +49,7 @@ std::string lower(std::string value)
     return value;
 }
 
-std::string primitiveTypeForMesh(const MeshAsset& asset)
+std::string primitiveTypeForMesh(const Mesh& asset)
 {
     const std::string name = lower(asset.getName());
     if (name.find("cube") != std::string::npos) return "cube";
@@ -63,7 +62,7 @@ std::string primitiveTypeForMesh(const MeshAsset& asset)
 nr::sceneio::EnvironmentFile makeEnvironmentFile(const Environment& environment)
 {
     return {
-        .color = fromVec3(environment.color),
+        .color = fromVec3(environment.data.color),
         .lighting_exposure = environment.lightingExposure,
         .visible_exposure = environment.visibleExposure,
     };
@@ -140,7 +139,7 @@ std::optional<nr::sceneio::ObjectFile> makeObjectFile(
             file.type = "gaussian";
     } else if (const auto mesh = std::dynamic_pointer_cast<MeshInstance>(object)) {
         if (file.type.empty()) {
-            file.type = primitiveTypeForMesh(mesh->getMeshAsset());
+            file.type = primitiveTypeForMesh(mesh->getMesh());
             if (file.type.empty())
                 return std::nullopt;
         }
@@ -232,29 +231,29 @@ std::vector<float> materialNumbers(std::string value)
     return result;
 }
 
-const mx::InputPtr findMaterialInput(const mx::NodePtr& shader,
+const MaterialX::InputPtr findMaterialInput(const MaterialX::NodePtr& shader,
     const std::initializer_list<std::string_view> names)
 {
     if (!shader) return {};
     for (const std::string_view name : names)
-        if (const mx::InputPtr input = shader->getInput(std::string(name)))
+        if (const MaterialX::InputPtr input = shader->getInput(std::string(name)))
             return input;
     return {};
 }
 
-float materialFloat(const mx::NodePtr& shader,
+float materialFloat(const MaterialX::NodePtr& shader,
     const std::initializer_list<std::string_view> names, const float fallback)
 {
-    const mx::InputPtr input = findMaterialInput(shader, names);
+    const MaterialX::InputPtr input = findMaterialInput(shader, names);
     if (!input || !input->getValue()) return fallback;
     const std::vector<float> values = materialNumbers(input->getValueString());
     return values.empty() ? fallback : values.front();
 }
 
-glm::vec3 materialColor(const mx::NodePtr& shader,
+glm::vec3 materialColor(const MaterialX::NodePtr& shader,
     const std::initializer_list<std::string_view> names, const glm::vec3 fallback)
 {
-    const mx::InputPtr input = findMaterialInput(shader, names);
+    const MaterialX::InputPtr input = findMaterialInput(shader, names);
     if (!input || !input->getValue()) return fallback;
     const std::vector<float> values = materialNumbers(input->getValueString());
     if (values.size() == 1) return glm::vec3(values.front());
@@ -270,7 +269,7 @@ struct PbrtMaterial {
     float emissionStrength{};
 };
 
-mx::DocumentPtr loadMaterialDocument(const Scene& scene, const uint32_t slot,
+MaterialX::DocumentPtr loadMaterialDocument(const Scene& scene, const uint32_t slot,
     const std::filesystem::path& outputPath)
 {
     const auto& documents = scene.getMaterialXDocuments();
@@ -281,8 +280,8 @@ mx::DocumentPtr loadMaterialDocument(const Scene& scene, const uint32_t slot,
     std::filesystem::path source(paths[slot]);
     if (source.is_relative()) source = std::filesystem::absolute(source);
     if (!std::filesystem::is_regular_file(source)) return {};
-    const mx::DocumentPtr document = mx::createDocument();
-    mx::readFromXmlString(document, [&] {
+    const MaterialX::DocumentPtr document = MaterialX::createDocument();
+    MaterialX::readFromXmlString(document, [&] {
         std::ifstream input(source, std::ios::binary);
         std::ostringstream contents;
         contents << input.rdbuf();
@@ -296,11 +295,11 @@ PbrtMaterial pbrtMaterial(const Scene& scene, const uint32_t slot,
     const std::filesystem::path& outputPath)
 {
     PbrtMaterial result;
-    const mx::DocumentPtr document = loadMaterialDocument(scene, slot, outputPath);
+    const MaterialX::DocumentPtr document = loadMaterialDocument(scene, slot, outputPath);
     if (!document) return result;
 
-    mx::NodePtr shader;
-    for (const mx::NodePtr& node : document->getNodes()) {
+    MaterialX::NodePtr shader;
+    for (const MaterialX::NodePtr& node : document->getNodes()) {
         if (node->getType() != "surfaceshader") continue;
         if (!shader || node->getCategory() == "open_pbr_surface"
             || node->getCategory() == "standard_surface"
@@ -354,7 +353,7 @@ void writePbrtMaterial(std::ostream& out, const PbrtMaterial& material)
     out << "\n";
 }
 
-void writePbrtShape(std::ostream& out, const MeshAsset& asset,
+void writePbrtShape(std::ostream& out, const Mesh& asset,
     const std::vector<uint32_t>& indices)
 {
     out << "Shape \"trianglemesh\" \"integer indices\" [";
@@ -382,8 +381,8 @@ void writePbrtShape(std::ostream& out, const MeshAsset& asset,
 void writePbrtMesh(std::ostream& out, const Scene& scene,
     const MeshInstance& instance, const std::filesystem::path& outputPath)
 {
-    if (!instance.isVisible() || !instance.hasMeshAsset()) return;
-    const MeshAsset& asset = instance.getMeshAsset();
+    if (!instance.isVisible() || !instance.hasMesh()) return;
+    const Mesh& asset = instance.getMesh();
     const size_t materialCount = std::max<size_t>(asset.getMaterialCount(), 1);
     std::vector<std::vector<uint32_t>> indicesByMaterial(materialCount);
     const auto& indices = asset.getIndices();
@@ -554,7 +553,7 @@ void writePbrt(const Scene& scene, const std::string& filepath)
     out << "WorldBegin\n";
     const Environment& environment = scene.getEnvironment();
     out << "LightSource \"infinite\" \"rgb L\" [";
-    writeVec3(out, environment.color);
+    writeVec3(out, environment.data.color);
     out << "] \"float scale\" [" << pbrtNumber(environment.lightingExposure) << "]\n";
     for (const auto& object : scene.getRootObjects()) {
         writePbrtObject(out, scene, object, outputPath);

@@ -26,6 +26,7 @@ struct RenderTarget;
 struct RayTracingPipelineDesc;
 struct TriangleGeometry;
 struct Instance;
+struct InstanceRecord;
 class Sampler;
 template<class T> class Buffer;
 template<class T> class Image;
@@ -66,17 +67,37 @@ private:
     std::shared_ptr<State> impl_;
 };
 
-// Buffer device addresses, dynamic rendering, the descriptor heap and unified
-// image layouts are mandatory: a device that lacks any of them is rejected at
-// construction, so only the optional ray-tracing capabilities are reported.
+// Buffer device addresses, dynamic rendering, descriptor heaps, untyped shader
+// pointers and unified image layouts are mandatory: a device that lacks any of
+// them is rejected at construction, so only the optional ray-tracing
+// capabilities are reported.
 struct DeviceFeatures {
     bool ray_query = false;
     bool ray_tracing = false;
 };
 
+// VMA totals include allocations awaiting GPU completion and allocator slack.
+// Dedicated external images are owned by the external-memory interop boundary.
+struct MemoryReport {
+    std::uint64_t allocation_bytes = 0;
+    std::uint64_t reserved_bytes = 0;
+    std::uint64_t allocation_count = 0;
+    std::uint64_t argument_arena_bytes = 0;
+};
+
 struct DeviceConfig {
     bool enable_validation = false;
     std::string_view application_name = "gpu";
+    // Ring holding the per-launch root argument records. Records are tens to
+    // a few hundred bytes; this only has to outlast the command buffers that
+    // still reference a given offset.
+    std::size_t argument_arena_bytes = 256u * 1024u;
+    // Slots in the device-owned descriptor heaps. Every sampled or storage
+    // image view takes one texture slot and every sampler one sampler slot;
+    // slot 0 of each is reserved. The heaps never grow, so exhausting either
+    // throws ErrorCode::OutOfMemory.
+    std::uint32_t texture_descriptor_capacity = 16384;
+    std::uint32_t sampler_descriptor_capacity = 256;
     // Supplying a provider makes this a presenting device: it enables the
     // swapchain extension, selects a present-capable queue, and lets
     // swapchain() and begin_frame() be used. Leaving it null gives a headless
@@ -94,6 +115,8 @@ public:
     Device& operator=(const Device&) = delete;
 
     DeviceFeatures features() const;
+    // Current allocation totals, broken down by category.
+    MemoryReport memory_report() const;
 
     template<class T> Buffer<T> buffer(std::size_t count);
     template<class T> Image<T> image(std::uint32_t width, std::uint32_t height, ImageUsage usage);
@@ -106,6 +129,11 @@ public:
     GraphicsPipeline graphics(const GraphicsPipelineDesc& desc);
     RayTracingPipeline ray_tracing(const RayTracingPipelineDesc& desc);
     AccelerationStructure build_blas(std::span<const TriangleGeometry> geometry);
+    // Refits a BLAS in place against the current contents of the vertex and
+    // index buffers it was built from. Much cheaper than a rebuild, but only
+    // valid while those buffers keep their allocation and triangle count --
+    // deforming geometry, not changing topology.
+    void refit_blas(AccelerationStructure& blas);
     AccelerationStructure build_tlas(std::span<const Instance> instances);
     void update_tlas(AccelerationStructure& tlas, std::span<const Instance> instances);
     // Builds from records already resident in device memory. The caller owns
@@ -115,13 +143,6 @@ public:
     void update_tlas(AccelerationStructure& tlas, GpuPtr<InstanceRecord> records,
         std::uint32_t count);
     Sampler sampler(const SamplerDesc& desc);
-
-    template<class T> void upload(Buffer<T>& destination, std::span<const T> data);
-    template<class T> void upload(Buffer<T>& destination, std::span<const T> data,
-        std::size_t destination_offset);
-    template<class T> void download(std::span<T> destination, const Buffer<T>& source);
-    template<class T> void upload(Image<T>& destination, std::span<const T> data);
-    template<class T> void download(std::span<T> destination, const Image<T>& source);
 
     // Blit one image onto another, scaling if the extents differ. Both images
     // may belong to this device or be swapchain images; layout handling is

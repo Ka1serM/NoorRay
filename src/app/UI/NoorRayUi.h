@@ -8,6 +8,8 @@
 #include "UI/Window.h"
 
 class ImGuiManager;
+class DebugPanel;
+class ViewportPanel;
 
 class NoorRayUi
 {
@@ -21,4 +23,6 @@ private:
     Window window;
     noorray::NoorRaySession session;
     std::unique_ptr<ImGuiManager> imGuiManager;
+    DebugPanel* debugPanel{};
+    ViewportPanel* viewportPanel{};
 };

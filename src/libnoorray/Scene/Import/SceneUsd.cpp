@@ -694,7 +694,7 @@ void writeUsd(const Scene& scene, const std::string& filepath)
     stage->GetRootLayer()->SetDefaultPrim(TfToken("NoorRayScene"));
 
     setAttr(root.GetPrim(), "nr:environmentColor", pxr::SdfValueTypeNames->Color3f,
-        toUsd(scene.getEnvironment().color));
+        toUsd(scene.getEnvironment().data.color));
     setAttr(root.GetPrim(), "nr:lightingExposure", pxr::SdfValueTypeNames->Float,
         scene.getEnvironment().lightingExposure);
     setAttr(root.GetPrim(), "nr:visibleExposure", pxr::SdfValueTypeNames->Float,
@@ -718,7 +718,7 @@ void readUsd(Scene& scene, const std::string& filepath)
     if (!root) root = stage->GetPseudoRoot();
     if (!root) throw std::runtime_error("USD scene has no /NoorRayScene root: " + filepath);
     scene.clear();
-    if (GfVec3f color; getAttr(root, "nr:environmentColor", &color)) scene.getEnvironment().color = toGlm(color);
+    if (GfVec3f color; getAttr(root, "nr:environmentColor", &color)) scene.getEnvironment().data.color = toGlm(color);
     getAttr(root, "nr:lightingExposure", &scene.getEnvironment().lightingExposure);
     getAttr(root, "nr:visibleExposure", &scene.getEnvironment().visibleExposure);
     getAttr(root, "nr:maxSamples", &scene.getRenderSettings().maxSamples);

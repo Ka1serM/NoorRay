@@ -7,12 +7,11 @@
 
 #include <glm/common.hpp>
 
-#include "Backend/Host/Platform.h"
 
 namespace nr::svm::detail
 {
 
-NR_GPU inline glm::vec3 svmBlackbody(const float inputTemperature)
+inline glm::vec3 svmBlackbody(const float inputTemperature)
 {
     const float temperature = glm::clamp(inputTemperature, 1667.0f, 25000.0f);
     const float t = 1000.0f / temperature;

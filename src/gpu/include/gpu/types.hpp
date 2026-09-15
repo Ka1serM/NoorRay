@@ -5,9 +5,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <memory>
 #include <string>
 
 namespace gpu {
+namespace detail { class DeviceImpl; struct ImageImpl; }
 
 enum class ErrorCode {
     UnsupportedFeature,
@@ -83,22 +85,32 @@ struct DrawArgs {
     std::uint32_t first_instance = 0;
 };
 
-// Opaque shader-facing resource token. Ordinary buffers use GpuPtr<T>; this
-// token is only needed by shaders that deliberately consume descriptor-backed
-// resources such as images or explicit resource tables.
-struct ResourceHandle {
-    std::uint64_t value = 0;
-    explicit operator bool() const noexcept { return value != 0; }
-};
-
-struct ImageHandle {
-    std::uint64_t value = 0;
+// Host image identities and shader texture handles are distinct types. Only
+// TextureHandle and SamplerHandle belong in shader data; ImageHandle names
+// render/copy/interop resources.
+//
+// Texture and sampler handles are 32-bit indices into the device's resource and
+// sampler descriptor heaps, which shaders read as ResourceDescriptorHeap[i] and
+// SamplerDescriptorHeap[i]. Slot 0 of each heap is never written, so 0 is the
+// null handle.
+struct TextureHandle {
+    std::uint32_t value = 0;
     explicit operator bool() const noexcept { return value != 0; }
 };
 
 struct SamplerHandle {
-    std::uint64_t value = 0;
+    std::uint32_t value = 0;
     explicit operator bool() const noexcept { return value != 0; }
+};
+
+class ImageHandle {
+public:
+    ImageHandle() = default;
+    explicit ImageHandle(const std::shared_ptr<detail::ImageImpl>& image) : image_(image) {}
+    explicit operator bool() const noexcept { return !image_.expired(); }
+private:
+    friend class detail::DeviceImpl;
+    std::weak_ptr<detail::ImageImpl> image_;
 };
 
 struct AccelerationStructureHandle {

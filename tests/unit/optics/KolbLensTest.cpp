@@ -5,7 +5,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
-#include "Rendering/Optics/KolbLens.h"
+#include "Optics/KolbLens.h"
 
 TEST_CASE("Sellmeier and native surface geometry are self-contained", "[optics]")
 {

@@ -1,10 +1,15 @@
 #include "MaterialXSceneRuntime.h"
 
 #include <algorithm>
-#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <exception>
 #include <filesystem>
-#include <future>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <MaterialXCore/Document.h>
@@ -12,24 +17,40 @@
 #include <MaterialXFormat/File.h>
 #include <MaterialXFormat/XmlIo.h>
 
-#include "Log.h"
+#include "Logging/Log.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Scene/Scene.h"
 #include "Materials/SVM/SvmCompiler.h"
+#include "Scene/Scene.h"
 
-namespace mx = MaterialX;
 
 struct MaterialXSceneRuntime::Impl
 {
-    struct PendingCompile
+    struct Job
     {
         std::size_t materialIndex{};
-        std::future<nr::svm::CompiledSvmProgram> future;
+        std::uint64_t materialRevision{};
+        MaterialX::DocumentPtr document;
+        std::unordered_map<std::string, std::uint32_t> resolvedTextures;
     };
 
-    std::vector<PendingCompile> pending;
+    struct Completion
+    {
+        std::size_t materialIndex{};
+        std::uint64_t materialRevision{};
+        std::optional<nr::svm::CompiledSvmProgram> result;
+        std::string error;
+    };
+
+    mutable std::mutex mutex;
+    std::condition_variable condition;
+    std::deque<Job> jobs;
+    std::deque<Completion> completed;
+    std::unordered_set<std::size_t> scheduled;
+    std::size_t active{};
+    bool stopping{};
+    std::thread worker;
+
     std::vector<std::pair<std::size_t, nr::svm::CompiledSvmProgram>> ready;
-    nr::svm::SvmProgramTable programs;
 };
 
 namespace {
@@ -43,7 +64,7 @@ std::string normalizedPath(const std::string& value)
 }
 
 std::unordered_map<std::string, std::uint32_t> resolveSceneTextures(
-    const mx::DocumentPtr& document, const Scene& scene,
+    const MaterialX::DocumentPtr& document, const Scene& scene,
     const std::string& sceneDirectory)
 {
     std::unordered_map<std::string, std::uint32_t> resolved;
@@ -60,12 +81,6 @@ std::unordered_map<std::string, std::uint32_t> resolveSceneTextures(
             const bool matches = std::ranges::any_of(candidates,
                 [&](const std::string& candidate) {
                     const std::string normalizedCandidate = normalizedPath(candidate);
-                    // Imported scenes commonly keep MaterialX image paths
-                    // relative to the scene file while Scene owns the
-                    // resolved absolute texture path.  Accept an exact
-                    // normalized match or a path-boundary suffix match; the
-                    // latter preserves deduplication without requiring the
-                    // UI session to carry a second scene-directory ABI.
                     const bool suffixMatch = normalizedTexturePath.size()
                         > normalizedCandidate.size()
                         && normalizedTexturePath.ends_with(normalizedCandidate)
@@ -88,150 +103,197 @@ std::unordered_map<std::string, std::uint32_t> resolveSceneTextures(
 MaterialXSceneRuntime::MaterialXSceneRuntime()
     : impl_(std::make_unique<Impl>())
 {
+    impl_->worker = std::thread([this] {
+        for (;;) {
+            Impl::Job job;
+            {
+                std::unique_lock lock(impl_->mutex);
+                impl_->condition.wait(lock, [this] {
+                    return impl_->stopping || !impl_->jobs.empty();
+                });
+                if (impl_->stopping && impl_->jobs.empty())
+                    return;
+                job = std::move(impl_->jobs.front());
+                impl_->jobs.pop_front();
+                ++impl_->active;
+            }
+
+            Impl::Completion completion;
+            completion.materialIndex = job.materialIndex;
+            completion.materialRevision = job.materialRevision;
+            try {
+                nr::svm::SvmCompiler compiler;
+                completion.result = compiler.compile(job.document, {},
+                    job.resolvedTextures);
+            } catch (const std::exception& error) {
+                completion.error = error.what();
+            } catch (...) {
+                completion.error = "unknown exception";
+            }
+
+            {
+                std::lock_guard lock(impl_->mutex);
+                --impl_->active;
+                impl_->scheduled.erase(job.materialIndex);
+                impl_->completed.push_back(std::move(completion));
+            }
+            impl_->condition.notify_all();
+        }
+    });
 }
 
-MaterialXSceneRuntime::~MaterialXSceneRuntime() = default;
-
-bool MaterialXSceneRuntime::hasPendingCompilations() const
+MaterialXSceneRuntime::~MaterialXSceneRuntime()
 {
-    return !impl_->pending.empty();
+    shutdown();
+}
+
+void MaterialXSceneRuntime::shutdown()
+{
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->stopping)
+            return;
+        impl_->stopping = true;
+    }
+    impl_->condition.notify_all();
+    if (impl_->worker.joinable())
+        impl_->worker.join();
 }
 
 bool MaterialXSceneRuntime::needsCompilation(const Scene& scene) const
 {
-    if (!impl_->pending.empty())
-        return false;
-    for (uint32_t i = 0; i < scene.getMaterials().size(); ++i)
-        if (scene.getMaterials()[i].svmBytecodeLength == 0)
-            return true;
-    return false;
+    return std::ranges::any_of(scene.getMaterials(),
+        [](const Material& material) { return !material.hasProgram(); });
 }
 
-const nr::svm::SvmProgramTable& MaterialXSceneRuntime::programs() const
-{
-    return impl_->programs;
-}
-
-void MaterialXSceneRuntime::compilePending(Scene& scene,
+void MaterialXSceneRuntime::processPending(Scene& scene,
     const std::string& sceneDirectory)
 {
     auto& materials = scene.getMaterials();
     const auto& paths = scene.getMaterialXSourcePaths();
     const auto& documents = scene.getMaterialXDocuments();
-    bool changed = false;
-
-    const auto schedule = [this](const std::size_t materialIndex,
-                              mx::DocumentPtr document,
-                              std::unordered_map<std::string, std::uint32_t> resolvedTextures) {
-        impl_->pending.push_back(Impl::PendingCompile{
-            materialIndex,
-            std::async(std::launch::async,
-                [document = std::move(document),
-                    resolvedTextures = std::move(resolvedTextures)]() {
-                    nr::svm::SvmCompiler compiler;
-                    return compiler.compile(document, {}, resolvedTextures);
-                })});
-    };
+    std::deque<Impl::Completion> completed;
+    {
+        std::lock_guard lock(impl_->mutex);
+        completed.swap(impl_->completed);
+    }
 
     std::vector<std::size_t> fallbackCompiles;
-    for (auto pending = impl_->pending.begin(); pending != impl_->pending.end();)
-    {
-        if (pending->future.wait_for(std::chrono::seconds(0))
-            != std::future_status::ready)
-        {
-            ++pending;
+    for (auto& completion : completed) {
+        if (completion.materialRevision != scene.getMaterialRevision())
             continue;
+        if (completion.result) {
+            if (completion.materialIndex < materials.size()
+                && !materials[completion.materialIndex].hasProgram())
+                impl_->ready.emplace_back(completion.materialIndex,
+                    std::move(*completion.result));
+        } else {
+            NR_LOG_WARN("MaterialX background compilation failed: "
+                << completion.error);
+            if (completion.materialIndex < materials.size()
+                && !materials[completion.materialIndex].hasProgram())
+                fallbackCompiles.push_back(completion.materialIndex);
         }
-        try {
-            nr::svm::CompiledSvmProgram result = pending->future.get();
-            if (pending->materialIndex < materials.size()
-                && materials[pending->materialIndex].svmBytecodeLength == 0)
-                impl_->ready.emplace_back(
-                    pending->materialIndex, std::move(result));
-        } catch (const std::exception& error) {
-            LOG_WARN("MaterialX background compilation failed: "
-                << error.what());
-            // A graph that no longer compiles (for example because an
-            // important node was deleted) must never strand the material on
-            // the legacy default shader: fall back to a default MaterialX
-            // material instead.
-            if (pending->materialIndex < materials.size()
-                && materials[pending->materialIndex].svmBytecodeLength == 0)
-                fallbackCompiles.push_back(pending->materialIndex);
-        }
-        pending = impl_->pending.erase(pending);
-    }
-    for (const std::size_t materialIndex : fallbackCompiles)
-    {
-        LOG_WARN("Falling back to the default MaterialX material for material "
-            << materialIndex);
-        schedule(materialIndex, nr::materialx::defaultMaterial(), {});
-    }
-    if (impl_->pending.empty() && !impl_->ready.empty())
-    {
-        for (auto& [materialIndex, program] : impl_->ready) {
-            if (materialIndex >= materials.size()
-                || materials[materialIndex].svmBytecodeLength != 0)
-                continue;
-            impl_->programs.append(program);
-            const nr::svm::SvmProgramRecord record = impl_->programs.records().back();
-            materials[materialIndex].svmBytecodeOffset = record.wordOffset;
-            materials[materialIndex].svmBytecodeLength = record.wordCount;
-            materials[materialIndex].svmTextureOffset = record.textureOffset;
-            materials[materialIndex].svmTextureCount = record.textureCount;
-            materials[materialIndex].svmStackSize = record.stackSize;
-            materials[materialIndex].mayEmit = program.mayEmit ? 1u : 0u;
-            changed = true;
-        }
-        impl_->ready.clear();
     }
 
-    for (std::size_t i = 0; i < materials.size(); ++i)
-    {
-        if (materials[i].svmBytecodeLength != 0)
+    const auto schedule = [this](const std::size_t materialIndex,
+                              const std::uint64_t materialRevision,
+                              MaterialX::DocumentPtr document,
+                              std::unordered_map<std::string, std::uint32_t> resolvedTextures) {
+        {
+            std::lock_guard lock(impl_->mutex);
+            if (!impl_->scheduled.insert(materialIndex).second)
+                return;
+            impl_->jobs.push_back(Impl::Job{materialIndex, materialRevision,
+                std::move(document), std::move(resolvedTextures)});
+        }
+        impl_->condition.notify_one();
+    };
+
+    for (const std::size_t materialIndex : fallbackCompiles) {
+        NR_LOG_WARN("Falling back to the default MaterialX material for material "
+            << materialIndex);
+        schedule(materialIndex, scene.getMaterialRevision(),
+            nr::materialx::defaultMaterial(), {});
+    }
+
+    for (std::size_t i = 0; i < materials.size(); ++i) {
+        if (materials[i].hasProgram())
             continue;
-        if (std::ranges::any_of(impl_->pending,
-            [i](const Impl::PendingCompile& pending) { return pending.materialIndex == i; }))
-            continue;
+        {
+            std::lock_guard lock(impl_->mutex);
+            if (impl_->scheduled.contains(i))
+                continue;
+        }
         if (std::ranges::any_of(impl_->ready,
             [i](const auto& ready) { return ready.first == i; }))
             continue;
 
         const bool hasSource = i < paths.size() && !paths[i].empty();
         const bool hasDocument = i < documents.size() && documents[i] != nullptr;
-        mx::DocumentPtr document;
+        MaterialX::DocumentPtr document;
         if (hasSource) {
             std::filesystem::path path(paths[i]);
             if (!path.is_absolute())
                 path = std::filesystem::path(sceneDirectory) / path;
             path = path.lexically_normal();
-            LOG_INFO("Compiling MaterialX program: " << path.string());
-            document = mx::createDocument();
-            mx::FileSearchPath searchPath;
-            searchPath.append(mx::FilePath(path.parent_path().string()));
+            NR_LOG_INFO("Compiling MaterialX program: " << path.string());
+            document = MaterialX::createDocument();
+            MaterialX::FileSearchPath searchPath;
+            searchPath.append(MaterialX::FilePath(path.parent_path().string()));
             try {
-                mx::readFromXmlFile(document, path.string(), searchPath);
+                MaterialX::readFromXmlFile(document, path.string(), searchPath);
             } catch (const std::exception& error) {
-                LOG_WARN("Failed to read MaterialX file " << path.string()
+                NR_LOG_WARN("Failed to read MaterialX file " << path.string()
                     << ": " << error.what());
                 document = nr::materialx::defaultMaterial();
             }
         } else if (hasDocument) {
-            LOG_INFO("Compiling in-memory MaterialX program for material " << i);
-            // Clone so importLibrary() below never mutates the Scene's copy.
+            NR_LOG_INFO("Compiling in-memory MaterialX program for material " << i);
             document = documents[i]->copy();
         } else {
-            LOG_INFO("Compiling synthetic MaterialX program for native material " << i);
+            NR_LOG_INFO("Compiling synthetic MaterialX program for native material " << i);
             document = nr::materialx::defaultMaterial();
         }
         auto resolvedTextures = document
             ? resolveSceneTextures(document, scene, sceneDirectory)
             : std::unordered_map<std::string, std::uint32_t>{};
-        schedule(i, std::move(document), std::move(resolvedTextures));
+        schedule(i, scene.getMaterialRevision(), std::move(document),
+            std::move(resolvedTextures));
     }
-    if (changed)
+
+    bool backgroundWork = false;
     {
-        scene.setDirtyFlag(Meshes);
-        scene.setDirtyFlag(Accumulation);
+        std::lock_guard lock(impl_->mutex);
+        backgroundWork = !impl_->jobs.empty() || impl_->active != 0
+            || !impl_->completed.empty();
+    }
+    if (backgroundWork || (needsCompilation(scene) && impl_->ready.empty()))
+        return;
+
+    for (auto& [materialIndex, program] : impl_->ready) {
+        if (materialIndex >= materials.size() || materials[materialIndex].hasProgram())
+            continue;
+        // Publishing uploads this one material's buffers and marks the scene
+        // dirty; no other material is re-uploaded.
+        scene.setMaterialProgram(materialIndex, std::move(program));
+    }
+    impl_->ready.clear();
+}
+
+void MaterialXSceneRuntime::compileAndWait(Scene& scene,
+    const std::string& sceneDirectory)
+{
+    processPending(scene, sceneDirectory);
+    for (;;) {
+        std::unique_lock lock(impl_->mutex);
+        impl_->condition.wait(lock, [this] {
+            return !impl_->completed.empty()
+                || (impl_->jobs.empty() && impl_->active == 0);
+        });
+        lock.unlock();
+        processPending(scene, sceneDirectory);
+        if (!needsCompilation(scene))
+            return;
     }
 }

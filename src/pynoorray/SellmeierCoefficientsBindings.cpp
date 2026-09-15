@@ -1,6 +1,6 @@
 #include "Bindings.h"
 
-#include "Materials/Shading/Sellmeier.h"
+#include "Optics/Sellmeier.h"
 
 namespace nb = nanobind;
 

@@ -21,12 +21,13 @@ public:
     std::uintptr_t instance_proc_address() const override;
     std::vector<const char*> instance_extensions() const override;
     std::uintptr_t create_surface(std::uintptr_t instance) const override;
-    uint32_t width() const override { return pixelWidth; }
-    uint32_t height() const override { return pixelHeight; }
+    uint32_t width() const override;
+    uint32_t height() const override;
 
     SDL_Window* nativeHandle() const { return window; }
     float getDpiScale() const { return dpiScale; }
     bool pollEvent(SDL_Event& event) const;
+    bool waitEvent(SDL_Event& event) const;
     void setFullscreen(bool fullscreen) const;
     bool setRelativeMouseMode(bool enabled) const;
     bool isRelativeMouseMode() const;

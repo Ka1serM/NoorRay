@@ -28,7 +28,7 @@ private:
         std::string key;         // Stable identity, e.g. "material:3"
         std::string sourcePath;  // Non-empty when backed by a .mtlx file
         MaterialX::DocumentPtr document; // The Scene's stored document, when not file-backed
-        MaterialHandle handle;
+        Material* material{};
         bool valid{};
     };
 

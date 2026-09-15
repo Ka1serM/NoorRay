@@ -20,9 +20,13 @@ struct AccelerationStructureImpl;
 }
 
 struct TriangleGeometry {
+    // Address of the first position. May point into a larger interleaved
+    // vertex buffer, in which case `stride` is that vertex's size.
     GpuPtr<float3> positions;
     GpuPtr<std::uint32_t> indices;
     std::uint32_t triangle_count = 0;
+    // Byte distance between consecutive positions.
+    std::uint32_t stride = sizeof(float3);
     // Opaque geometry skips any-hit invocation. Gaussian proxy triangles set
     // this to false so their stochastic acceptance shader can reject hits.
     bool opaque = true;

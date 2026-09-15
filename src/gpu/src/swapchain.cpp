@@ -97,12 +97,11 @@ std::shared_ptr<ImageImpl> DeviceImpl::wrap_presentation_image(const vk::Image i
     result->byte_size = static_cast<std::size_t>(width) * height
         * format_texel_size(public_format);
     // A presentation image is a render target and a blit destination, never a
-    // shader resource, so it needs an identity handle but no heap descriptor.
-    result->handle = ImageHandle{allocate_resource().value};
+    // shader resource, so it needs an identity handle but no heap slot.
+    result->handle = ImageHandle{result};
     const vk::ImageViewCreateInfo view_info({}, image, vk::ImageViewType::e2D, format, {},
         {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
     result->view = vk_device().createImageViewUnique(view_info);
-    images_.push_back(result);
     return result;
 }
 
@@ -175,11 +174,11 @@ void DeviceImpl::rebuild_swapchain(SwapchainImpl& chain) {
             wrap_presentation_image(image, chain.format, chain.public_format, width, height));
     chain.presented.assign(raw_images.size(), false);
 
-    if (chain.acquire_semaphores.size() < raw_images.size()) {
+    {
         chain.acquire_semaphores.clear();
         chain.present_semaphores.clear();
         for (std::size_t i = 0; i < raw_images.size(); ++i) {
-            chain.acquire_semaphores.push_back(vk_device().createSemaphoreUnique({}));
+            chain.acquire_semaphores.push_back({vk_device().createSemaphoreUnique({}), {}});
             chain.present_semaphores.push_back(vk_device().createSemaphoreUnique({}));
         }
     }
@@ -224,10 +223,17 @@ std::shared_ptr<Frame::State> DeviceImpl::begin_frame(
     chain->semaphore_cursor =
         (chain->semaphore_cursor + 1) % static_cast<std::uint32_t>(chain->acquire_semaphores.size());
 
+    const auto& slot = chain->acquire_semaphores[semaphore_index];
+    if (slot.token.value) {
+        const vk::Semaphore semaphore = timeline_.get();
+        const vk::SemaphoreWaitInfo wait_info({}, semaphore, slot.token.value);
+        if (vk_device().waitSemaphores(wait_info, UINT64_MAX) != vk::Result::eSuccess)
+            throw Error(ErrorCode::DeviceLost, "swapchain acquire semaphore wait failed");
+    }
     std::uint32_t image_index = 0;
     const vk::Result acquired = vk_device().acquireNextImageKHR(chain->swapchain.get(),
         std::numeric_limits<std::uint64_t>::max(),
-        chain->acquire_semaphores[semaphore_index].get(), {}, &image_index);
+        chain->acquire_semaphores[semaphore_index].semaphore.get(), {}, &image_index);
     if (acquired == vk::Result::eErrorOutOfDateKHR) {
         chain->stale = true;
         return {};
@@ -255,7 +261,6 @@ std::shared_ptr<Frame::State> DeviceImpl::begin_frame(
     state->open = true;
 
     state->command.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    bind_heaps(state->command);
     transition(state->command, chain->images[image_index]->image,
         chain->presented[image_index] ? vk::ImageLayout::ePresentSrcKHR
                                       : vk::ImageLayout::eUndefined,
@@ -277,14 +282,14 @@ void DeviceImpl::end_frame(Frame::State& state) {
         vk::ImageLayout::eGeneral, vk::ImageLayout::ePresentSrcKHR);
     state.command.end();
 
-    const GpuToken token{next_timeline_++};
-    const vk::Semaphore acquire = chain.acquire_semaphores[state.semaphore_index].get();
+    const GpuToken token{next_timeline_};
+    const vk::Semaphore acquire = chain.acquire_semaphores[state.semaphore_index].semaphore.get();
     const vk::Semaphore presented = chain.present_semaphores[state.image_index].get();
     const std::array signal_semaphores{timeline_.get(), presented};
     // Only the timeline entry carries a value; the binary semaphore's slot is
     // ignored but must still be present for the arrays to line up.
     const std::array<std::uint64_t, 2> signal_values{token.value, 0};
-    constexpr vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    constexpr vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eAllCommands;
 
     vk::TimelineSemaphoreSubmitInfo timeline_info{};
     timeline_info.setSignalSemaphoreValues(signal_values);
@@ -294,9 +299,17 @@ void DeviceImpl::end_frame(Frame::State& state) {
         .setWaitDstStageMask(wait_stage)
         .setSignalSemaphores(signal_semaphores);
     submit_info.pNext = &timeline_info;
-    queue_.submit(submit_info);
-
     pending_.push_back({token, std::move(state.owned_command), std::move(frame_resources_)});
+    try {
+        queue_.submit(submit_info);
+    } catch (...) {
+        state.owned_command = std::move(pending_.back().command);
+        frame_resources_ = std::move(pending_.back().resources);
+        pending_.pop_back();
+        throw;
+    }
+    ++next_timeline_;
+    chain.acquire_semaphores[state.semaphore_index].token = token;
     frame_resources_.clear();
     frame_command_ = nullptr;
     state.open = false;
@@ -334,15 +347,24 @@ void Swapchain::invalidate() {
 }
 
 Frame::Frame(Frame&&) noexcept = default;
-Frame& Frame::operator=(Frame&&) noexcept = default;
+Frame& Frame::operator=(Frame&& other) noexcept {
+    if (this != &other) {
+        Frame previous(std::move(*this));
+        impl_ = std::move(other.impl_);
+    }
+    return *this;
+}
 
 Frame::~Frame() {
     // A frame dropped without end_frame discards its work rather than
     // presenting a half-recorded image. The command buffer and any resources
     // it referenced are released with it.
     if (impl_ && impl_->open && impl_->device) {
-        impl_->command.end();
-        impl_->device->abandon_frame(*impl_);
+        try {
+            impl_->device->abandon_frame(*impl_);
+        } catch (...) {
+            // Destruction cannot report device loss.
+        }
     }
 }
 

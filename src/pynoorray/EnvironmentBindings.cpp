@@ -1,7 +1,7 @@
 #include "Bindings.h"
 
-#include "Scene/Resources/Environment.h"
-#include "Scene/Resources/Texture.h"
+#include "Environment/Environment.h"
+#include "Texture/Texture.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

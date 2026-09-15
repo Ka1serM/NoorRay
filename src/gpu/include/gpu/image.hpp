@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device.hpp"
+#include "sampler.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -41,9 +42,17 @@ template<class T>
 class Image {
 public:
     Image() = default;
+    Image(const Image&) = delete;
+    Image& operator=(const Image&) = delete;
+    Image(Image&&) noexcept = default;
+    Image& operator=(Image&&) noexcept = default;
+    void upload(std::span<const T> data);
+    void download(std::span<T> destination) const;
     ImageHandle handle() const noexcept;
-    ImageHandle sampled_handle() const noexcept;
-    ImageHandle storage_handle() const noexcept;
+    // Resource-heap indices. There is no combined image/sampler form: pair a
+    // sampled handle with a Sampler::handle() in the shader instead.
+    TextureHandle sampled_handle() const noexcept;
+    TextureHandle storage_handle() const noexcept;
     ImageFormat format() const noexcept { return format_; }
     std::uint32_t width() const noexcept { return width_; }
     std::uint32_t height() const noexcept { return height_; }
@@ -66,13 +75,10 @@ private:
 namespace gpu::detail {
 std::shared_ptr<ImageImpl> make_image(const std::shared_ptr<DeviceImpl>&, std::uint32_t,
                                       std::uint32_t, ImageUsage, ImageFormat);
-std::uint64_t image_handle(const std::shared_ptr<ImageImpl>&);
-std::uint64_t image_sampled_handle(const std::shared_ptr<ImageImpl>&);
-std::uint64_t image_storage_handle(const std::shared_ptr<ImageImpl>&);
-void upload_image(const std::shared_ptr<DeviceImpl>&, const std::shared_ptr<ImageImpl>&,
-                  const void*, std::size_t);
-void download_image(const std::shared_ptr<DeviceImpl>&, const std::shared_ptr<ImageImpl>&,
-                    void*, std::size_t);
+std::uint32_t image_sampled_handle(const std::shared_ptr<ImageImpl>&);
+std::uint32_t image_storage_handle(const std::shared_ptr<ImageImpl>&);
+void upload_image(const std::shared_ptr<ImageImpl>&, const void*, std::size_t);
+void download_image(const std::shared_ptr<ImageImpl>&, void*, std::size_t);
 std::size_t image_byte_size(const std::shared_ptr<ImageImpl>&);
 }
 
@@ -99,36 +105,36 @@ Image<T> Device::image(const std::uint32_t width, const std::uint32_t height,
 
 template<class T>
 ImageHandle Image<T>::handle() const noexcept {
-    return impl_ ? ImageHandle{detail::image_handle(impl_)} : ImageHandle{};
+    return ImageHandle{impl_};
 }
 
 template<class T>
-ImageHandle Image<T>::sampled_handle() const noexcept {
-    return impl_ ? ImageHandle{detail::image_sampled_handle(impl_)} : ImageHandle{};
+TextureHandle Image<T>::sampled_handle() const noexcept {
+    return impl_ ? TextureHandle{detail::image_sampled_handle(impl_)} : TextureHandle{};
 }
 
 template<class T>
-ImageHandle Image<T>::storage_handle() const noexcept {
-    return impl_ ? ImageHandle{detail::image_storage_handle(impl_)} : ImageHandle{};
+TextureHandle Image<T>::storage_handle() const noexcept {
+    return impl_ ? TextureHandle{detail::image_storage_handle(impl_)} : TextureHandle{};
 }
 
 template<class T>
-void Device::upload(Image<T>& destination, const std::span<const T> data) {
-    if (!destination.impl_)
+void Image<T>::upload(const std::span<const T> data) {
+    if (!impl_)
         throw Error(ErrorCode::InvalidResource, "cannot upload to an empty gpu::Image");
-    if (data.size_bytes() != detail::image_byte_size(destination.impl_))
+    if (data.size_bytes() != detail::image_byte_size(impl_))
         throw Error(ErrorCode::InvalidArgument,
             "image upload must cover exactly one full mip level");
-    detail::upload_image(impl_, destination.impl_, data.data(), data.size_bytes());
+    detail::upload_image(impl_, data.data(), data.size_bytes());
 }
 
 template<class T>
-void Device::download(const std::span<T> destination, const Image<T>& source) {
-    if (!source.impl_)
+void Image<T>::download(const std::span<T> destination) const {
+    if (!impl_)
         throw Error(ErrorCode::InvalidResource, "cannot download from an empty gpu::Image");
-    if (destination.size_bytes() != detail::image_byte_size(source.impl_))
+    if (destination.size_bytes() != detail::image_byte_size(impl_))
         throw Error(ErrorCode::InvalidArgument,
             "image download must cover exactly one full mip level");
-    detail::download_image(impl_, source.impl_, destination.data(), destination.size_bytes());
+    detail::download_image(impl_, destination.data(), destination.size_bytes());
 }
 } // namespace gpu

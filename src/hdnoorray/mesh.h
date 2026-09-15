@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "Scene/Handle.h"
-#include "Scene/Resources/SceneResources.h"
+#include "Mesh/Assets/Gaussian.h"
+#include "Mesh/Assets/Mesh.h"
 
 class Scene;
 
@@ -39,13 +39,13 @@ private:
     void ReleaseAll(HdNoorRayRenderParam& param);
     void UnbindAllMaterials(HdNoorRayRenderParam& param);
 
-    MeshAssetRef meshAsset_;
-    GaussianAssetRef gaussianAsset_;
+    Mesh* mesh_;
+    GaussianAsset* gaussianAsset_;
     std::vector<SceneObjectHandle> objects_;
     // One entry per material slot this mesh currently has bound (slot 0 is
     // always the Rprim's own GetMaterialId(); slots 1+ come from HdGeomSubset
     // material bindings, see BuildTriangleMesh's own comment). Index-parallel
-    // with MeshAsset::getMaterialIds().
+    // with Mesh::getMaterialIds().
     std::vector<SdfPath> boundMaterialIds_;
     std::string splatPath_;
 };

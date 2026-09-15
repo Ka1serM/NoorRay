@@ -9,7 +9,7 @@
 #include "UI/Window.h"
 #include <array>
 #include <cstddef>
-#include "Log.h"
+#include "Logging/Log.h"
 
 namespace
 {
@@ -103,7 +103,7 @@ ImGuiManager::~ImGuiManager() {
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
-    LOG_INFO( "Destroyed ImGuiManager");
+    NR_LOG_INFO( "Destroyed ImGuiManager");
 }
 
 void ImGuiManager::updateUi() {
@@ -154,7 +154,7 @@ void ImGuiManager::renderDrawData(const gpu::Frame& frame) {
     // VK_KHR_unified_image_layouts.  The external ImGui draw is part of that
     // same frame, so it must use the layout the device established.
     colorAttachment.setImageLayout(vk::ImageLayout::eGeneral);
-    // The raytracer pass (and the optional compositor copy) has already written
+    // The raytracer and viewport passes have already written
     // the acquired swapchain image. Loading it is required to preserve the
     // renderer output underneath the ImGui overlay.
     colorAttachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
@@ -174,13 +174,6 @@ void ImGuiManager::renderDrawData(const gpu::Frame& frame) {
 void ImGuiManager::processEvent(const SDL_Event& event)
 {
         ImGui_ImplSDL3_ProcessEvent(&event);
-}
-
-ImGuiComponent* ImGuiManager::getComponent(const std::string& name) const {
-    for (const auto& component : components)
-        if (component->getName() == name)
-            return component.get();
-    return nullptr;
 }
 
 static ImVec4 mult(const ImVec4& c, float a) {

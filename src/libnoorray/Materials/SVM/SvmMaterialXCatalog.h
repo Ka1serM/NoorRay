@@ -1,15 +1,7 @@
 #pragma once
 
-#include <memory>
 #include <string>
 #include <vector>
-
-namespace MaterialX_v1_39_4
-{
-class Document;
-using DocumentPtr = std::shared_ptr<Document>;
-}
-namespace MaterialX = MaterialX_v1_39_4;
 
 namespace nr::svm
 {

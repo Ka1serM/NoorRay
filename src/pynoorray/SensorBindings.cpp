@@ -5,7 +5,7 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 
-#include "Rendering/Camera/Sensor.h"
+#include "Camera/Sensor.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

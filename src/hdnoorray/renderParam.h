@@ -26,9 +26,8 @@
 #include "Materials/SVM/SvmCompiler.h"
 
 #include "NoorRaySession.h"
-#include "Scene/Resources/SceneResources.h"
-#include "Scene/Resources/Texture.h"
-#include "Materials/Shading/Material.h"
+#include "Texture/Texture.h"
+#include "Materials/Material.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -75,7 +74,7 @@ public:
     // Textures are shared between the materials that name the same file. The
     // retained by the Scene-wide image library until the scene is cleared.
     // Returns an invalid handle when the file cannot be loaded.
-    TextureHandle GetOrCreateTexture(
+    Texture* GetOrCreateTexture(
         const std::string& filePath, TextureEncoding encoding,
         bool flipY = true);
     // The cache stores generation-checked handles rather than owning
@@ -100,12 +99,12 @@ public:
     // compiled once instead of once per mesh. The document is published here
     // and the render-thread compile pass installs its program. Caller must
     // hold `mutex` (mesh Sync and PublishFallbackMaterial/ReleaseMaterial do).
-    MaterialRef GetNativeGreyMaterial();
+    Material* GetNativeGreyMaterial();
     // Marks an existing scene material slot for the render thread to compile.
     // Used by the grey fallback paths that publish a document directly into a
     // scene slot without going through QueueMaterialCompilation (which owns
     // its own Hydra material prim). Caller must hold `mutex`.
-    void QueueSceneMaterialCompilation(MaterialRef slot);
+    void QueueSceneMaterialCompilation(Material* slot);
     void QueueMaterialCompilation(const SdfPath& id, MaterialX::DocumentPtr document,
         std::function<MaterialCompilationOutput()> compile);
     // Returns true when a completed background compile changed renderer state.
@@ -127,8 +126,8 @@ public:
     // mesh.cpp's BuildFaceMaterialSlots). Meshes are addressed by handle
     // because the asset storage is a managed vector that moves its elements
     // when it grows.
-    void BindMaterial(const SdfPath& id, MeshAssetHandle mesh, uint32_t slot = 0);
-    void UnbindMaterial(const SdfPath& id, MeshAssetHandle mesh, uint32_t slot = 0);
+    void BindMaterial(const SdfPath& id, Mesh* mesh, uint32_t slot = 0);
+    void UnbindMaterial(const SdfPath& id, Mesh* mesh, uint32_t slot = 0);
 
     mutable std::mutex mutex;
     noorray::NoorRaySession session;
@@ -244,7 +243,7 @@ private:
     DecodedTextureData GetOrDecodeTexture(
         const std::string& filePath, const ContentIdentity& content,
         bool flipY);
-    TextureHandle GetOrCreateMemoryTexture(
+    Texture* GetOrCreateMemoryTexture(
         const std::string& dataUri, TextureEncoding encoding);
 
     std::atomic<double> progress_{};
@@ -252,12 +251,12 @@ private:
     mutable std::shared_mutex materialXDocumentsMutex_;
     std::unordered_map<std::string, MaterialXDocument> materialXDocuments_;
     uint64_t nextMaterialXDocumentRevision_{};
-    std::map<SdfPath, MaterialRef> materials_;
+    std::map<SdfPath, Material*> materials_;
     // One entry per (mesh, slot) currently bound to this material path -- a
     // mesh can appear more than once if it binds the same material at
     // several slots (or, via HdGeomSubsets, different slots point at
     // different material paths and so appear in different map entries).
-    std::map<SdfPath, std::vector<std::pair<MeshAssetHandle, uint32_t>>> materialBindings_;
+    std::map<SdfPath, std::vector<std::pair<Mesh*, uint32_t>>> materialBindings_;
     std::unordered_map<std::string, AssetFingerprint>
         assetFingerprintCache_;
     std::unordered_map<std::string, std::shared_future<ContentIdentity>>
@@ -269,7 +268,7 @@ private:
         decodedTextureFlights_;
     // Non-owning deduplication index. Texture bytes live only in Scene;
     // these handles are discarded when the scene invalidates them.
-    std::unordered_map<TextureCacheKey, TextureHandle, TextureCacheKeyHash>
+    std::unordered_map<TextureCacheKey, Texture*, TextureCacheKeyHash>
         textureCache_;
     std::counting_semaphore<64> materialSyncSlots_{4};
     std::map<SdfPath, uint64_t> materialCompileGenerations_;
@@ -279,10 +278,10 @@ private:
     std::atomic<uint32_t> pendingMaterialCompiles_{};
     // The shared native grey slot handed to every mesh with no bound material.
     // Guarded by `mutex`.
-    MaterialRef nativeGreyMaterial_;
+    Material* nativeGreyMaterial_;
     // Scene slots whose fallback documents need their program installed by the
     // render thread (ProcessMaterialCompilations). Guarded by `mutex`.
-    std::vector<MaterialRef> pendingSceneMaterialCompiles_;
+    std::vector<Material*> pendingSceneMaterialCompiles_;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

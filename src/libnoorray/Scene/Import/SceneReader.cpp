@@ -8,17 +8,17 @@
 
 #include <glaze/glaze.hpp>
 
-#include "Rendering/Camera/CameraInstance.h"
-#include "Rendering/Camera/FisheyeCamera.h"
-#include "Rendering/Camera/OrthographicCamera.h"
-#include "Rendering/Camera/PerspectiveCamera.h"
-#include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/ThinLensCamera.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Geometry/Mesh/Transform.h"
+#include "Camera/CameraInstance.h"
+#include "Camera/FisheyeCamera.h"
+#include "Camera/OrthographicCamera.h"
+#include "Camera/PerspectiveCamera.h"
+#include "Camera/RealisticCamera.h"
+#include "Camera/ThinLensCamera.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Mesh/Transform.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Materials/Shading/Sellmeier.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Optics/Sellmeier.h"
+#include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 #include "Scene/Import/SceneFile.h"
 #include "Scene/Import/SceneImporter.h"
@@ -46,9 +46,9 @@ std::vector<std::string> splitPaths(const std::string& paths)
     return result;
 }
 
-MaterialAuthoring toMaterial(const nr::sceneio::MaterialFile& file)
+SvmMaterial toMaterial(const nr::sceneio::MaterialFile& file)
 {
-    MaterialAuthoring material{};
+    SvmMaterial material{};
     material.albedo = toVec3(file.albedo);
     material.roughness = file.roughness;
     material.metallic = file.metallic;
@@ -142,8 +142,8 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
         if (SceneObject* root = scene.getActiveObject())
             root->setLocalTransform(transform);
     } else if (object.type == "obj") {
-        MaterialAuthoring materialOverride{};
-        const MaterialAuthoring* materialOverridePtr = nullptr;
+        SvmMaterial materialOverride{};
+        const SvmMaterial* materialOverridePtr = nullptr;
         if (object.material) {
             materialOverride = toMaterial(*object.material);
             materialOverridePtr = &materialOverride;
@@ -153,27 +153,27 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
             root->setLocalTransform(transform);
     } else {
         const MaterialX::DocumentPtr materialDocument = object.material
-            ? nr::materialx::documentFromAuthoring(toMaterial(*object.material))
+            ? nr::materialx::documentFromSvmMaterial(toMaterial(*object.material))
             : nr::materialx::defaultMaterial();
 
         // Mark the material as needing MaterialX compilation when a path is
         // specified. The actual compilation happens later (in runCli()), once
         // the native renderer is ready.
-        MeshAssetRef meshAsset;
+        Mesh* mesh;
         if (object.type == "cube")
-            meshAsset = scene.add(MeshAsset::CreateCube(scene, object.name, materialDocument));
+            mesh = scene.add(Mesh::CreateCube(scene, object.name, materialDocument));
         else if (object.type == "plane")
-            meshAsset = scene.add(MeshAsset::CreatePlane(scene, object.name, materialDocument));
+            mesh = scene.add(Mesh::CreatePlane(scene, object.name, materialDocument));
         else if (object.type == "disk")
-            meshAsset = scene.add(MeshAsset::CreateDisk(scene, object.name, materialDocument));
+            mesh = scene.add(Mesh::CreateDisk(scene, object.name, materialDocument));
         else if (object.type == "sphere")
-            meshAsset = scene.add(MeshAsset::CreateSphere(scene, object.name, materialDocument));
+            mesh = scene.add(Mesh::CreateSphere(scene, object.name, materialDocument));
         else
             throw std::runtime_error("Unknown scene object type: " + object.type);
 
         if (object.material && !object.material->materialx_path.empty())
         {
-            const uint32_t matIndex = meshAsset.get()->getMaterialIds()[0];
+            const uint32_t matIndex = mesh->getMaterialIds()[0];
             // Ensure the vector is large enough and store the path. The path
             // is the source of truth for disk-backed materials: the XML is
             // only read from it at compile time (import), never retained in
@@ -189,7 +189,7 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
             documents[matIndex] = nullptr;
         }
 
-        scene.add(std::make_unique<MeshInstance>(scene, object.name, meshAsset, transform));
+        scene.add(std::make_unique<MeshInstance>(scene, object.name, mesh, transform));
     }
 }
 
@@ -260,7 +260,7 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
 
     if (file.environment) {
         Environment& environment = scene.getEnvironment();
-        environment.color = toVec3(file.environment->color);
+        environment.data.color = toVec3(file.environment->color);
         environment.lightingExposure = file.environment->lighting_exposure;
         environment.visibleExposure = file.environment->visible_exposure;
         environment.updateDerivedSettings();
@@ -291,5 +291,4 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
 
     if (activeCameraCount == 0)
         scene.setActiveCamera(nullptr);
-    scene.reclaimUnusedResources();
 }

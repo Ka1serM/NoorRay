@@ -1,14 +1,14 @@
-#include "../../../src/libnoorray/Backend/Vulkan/Shaders/Raytracer/CompositeBsdf.slang"
-#include "../../../src/libnoorray/Backend/Vulkan/Shaders/Raytracer/RgbToSpectrum.slang"
+#include "../../../src/libnoorray/Shaders/Raytracer/CompositeBsdf.slang"
+#include "../../../src/libnoorray/Shaders/Raytracer/RgbToSpectrum.slang"
 
 // Compile-time coverage for the complete tagged-storage BSDF surface. This
 // deliberately exercises every lobe conversion and the mixture evaluator so
 // Slang cannot discard invalid methods as unreferenced library code.
 struct CompositeBsdfTestArgs
 {
-    uint output;
-    uint energyLuts;
-    uint spectralTables;
+    float4* output;
+    ByteBuffer energyLuts;
+    ByteBuffer spectralTables;
 };
 
 struct CompositeBsdfTestRoot
@@ -26,12 +26,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
 
     const CompositeBsdfTestArgs args = *root.arguments;
-    RWStructuredBuffer<float4> output =
-        DescriptorHandle<RWStructuredBuffer<float4>>(uint2(args.output, 0));
-    ByteAddressBuffer energyLuts =
-        DescriptorHandle<ByteAddressBuffer>(uint2(args.energyLuts, 0));
-    ByteAddressBuffer spectralTables =
-        DescriptorHandle<ByteAddressBuffer>(uint2(args.spectralTables, 0));
+    float4* output = args.output;
+    ByteBuffer energyLuts = args.energyLuts;
+    ByteBuffer spectralTables = args.spectralTables;
 
     NoorRayShaderData bsdf = makeShaderData(
         float3(0.0, 0.0, 1.0), float3(0.0, 0.0, 1.0),

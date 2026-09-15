@@ -14,7 +14,7 @@ NB_MODULE(_pynoorray, module)
     bindTexture(module);
     bindEnvironment(module);
     bindSceneObject(module);
-    bindMeshAsset(module);
+    bindMesh(module);
     bindMeshInstance(module);
     bindSensor(module);
     bindRectangularSensor(module);

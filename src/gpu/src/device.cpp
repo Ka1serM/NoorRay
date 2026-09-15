@@ -4,6 +4,7 @@
 #include "gpu/gpu.hpp"
 #include "gpu/interop.hpp"
 #include "internal.hpp"
+#include "gpu/shared.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -42,6 +43,14 @@ bool has_extension(const std::vector<vk::ExtensionProperties>& extensions, const
 
 DeviceImpl::DeviceImpl(const DeviceConfig& config) {
     surface_provider_ = config.surface;
+    // Root arguments use a fixed mapped arena; large assets use temporary staging.
+    argument_arena_size_ = config.argument_arena_bytes;
+    texture_descriptor_capacity_ = config.texture_descriptor_capacity;
+    sampler_descriptor_capacity_ = config.sampler_descriptor_capacity;
+    // Slot 0 is reserved, so a usable heap needs at least two.
+    if (texture_descriptor_capacity_ < 2 || sampler_descriptor_capacity_ < 2)
+        throw Error(ErrorCode::InvalidArgument,
+            "descriptor heap capacities must be at least 2 (slot 0 is reserved)");
     try {
         create_instance(config);
         VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance());
@@ -49,6 +58,11 @@ DeviceImpl::DeviceImpl(const DeviceConfig& config) {
         // device that cannot present to it is not a candidate.
         create_surface(config);
         select_physical_device();
+        host_alignment_ = std::max<std::size_t>(16,
+            physical_device_.getProperties().limits.nonCoherentAtomSize);
+        if (argument_arena_size_ < host_alignment_ || argument_arena_size_ % host_alignment_)
+            throw Error(ErrorCode::InvalidArgument,
+                "argument budget must be a multiple of the device host alignment");
         create_device(config);
         VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_device());
         create_allocator();
@@ -60,9 +74,16 @@ DeviceImpl::DeviceImpl(const DeviceConfig& config) {
 
 // The mandatory set is what the whole library is built on: buffer device
 // addresses for every buffer, a timeline semaphore for all synchronization,
-// synchronization2 and dynamic rendering for command recording, the descriptor
-// heap for every pipeline's root arguments, and unified image layouts so no
-// image ever needs a layout transition.
+// synchronization2 and dynamic rendering for command recording, descriptor
+// heaps for textures and samplers, and unified image layouts so no image ever
+// needs a layout transition.
+//
+// VK_EXT_descriptor_heap is what keeps pipelines layout-free: images and
+// samplers are encoded into device-owned heaps that shaders index directly
+// (SPV_EXT_descriptor_heap), and root pointers travel as push data. Slang
+// lowers heap access through untyped pointers, and the pipeline flag that
+// opts into heaps lives in maintenance5's flags2 field, so both are required
+// alongside it.
 DeviceImpl::Capabilities DeviceImpl::probe(const vk::PhysicalDevice candidate) {
     Capabilities capabilities{};
     const auto properties = candidate.getProperties();
@@ -70,8 +91,12 @@ DeviceImpl::Capabilities DeviceImpl::probe(const vk::PhysicalDevice candidate) {
         return capabilities;
 
     const auto extensions = candidate.enumerateDeviceExtensionProperties();
-    const bool has_heap = has_extension(extensions, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME)
-        && has_extension(extensions, VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
+    const bool has_descriptor_heap = has_extension(extensions,
+        VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
+    const bool has_untyped_pointers = has_extension(extensions,
+        VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME);
+    const bool has_maintenance5 = properties.apiVersion >= VK_API_VERSION_1_4
+        || has_extension(extensions, VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     const bool has_unified_layouts = has_extension(
         extensions, VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME);
     const bool has_as = has_extension(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
@@ -83,24 +108,26 @@ DeviceImpl::Capabilities DeviceImpl::probe(const vk::PhysicalDevice candidate) {
     vk::PhysicalDeviceVulkan11Features supported11{};
     vk::PhysicalDeviceVulkan12Features supported12{};
     vk::PhysicalDeviceVulkan13Features supported13{};
-    vk::PhysicalDeviceMaintenance5Features supported_maintenance5{};
-    vk::PhysicalDeviceDescriptorHeapFeaturesEXT supported_heap{};
     vk::PhysicalDeviceUnifiedImageLayoutsFeaturesKHR supported_unified{};
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR supported_as{};
     vk::PhysicalDeviceRayQueryFeaturesKHR supported_query{};
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR supported_rt{};
+    vk::PhysicalDeviceDescriptorHeapFeaturesEXT supported_heap{};
+    vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR supported_untyped{};
+    vk::PhysicalDeviceMaintenance5FeaturesKHR supported_maintenance5{};
     vk::PhysicalDeviceFeatures2 supported{};
     // Chain unconditionally: querying a feature struct whose extension is
     // absent simply reports it unsupported.
     supported.pNext = &supported11;
     supported11.pNext = &supported12;
     supported12.pNext = &supported13;
-    supported13.pNext = &supported_maintenance5;
-    supported_maintenance5.pNext = &supported_heap;
-    supported_heap.pNext = &supported_unified;
+    supported13.pNext = &supported_unified;
     supported_unified.pNext = &supported_as;
     supported_as.pNext = &supported_query;
     supported_query.pNext = &supported_rt;
+    supported_rt.pNext = &supported_heap;
+    supported_heap.pNext = &supported_untyped;
+    supported_untyped.pNext = &supported_maintenance5;
     candidate.getFeatures2(&supported);
 
     bool has_compute = false;
@@ -108,10 +135,14 @@ DeviceImpl::Capabilities DeviceImpl::probe(const vk::PhysicalDevice candidate) {
         has_compute |= static_cast<bool>(queue.queueFlags & vk::QueueFlagBits::eCompute);
 
     capabilities.mandatory = has_compute
+        && supported.features.shaderInt64 && supported11.shaderDrawParameters
+        && supported13.shaderIntegerDotProduct
         && supported12.bufferDeviceAddress && supported12.timelineSemaphore
-        && supported12.runtimeDescriptorArray
+        && supported12.runtimeDescriptorArray && supported12.scalarBlockLayout
         && supported13.synchronization2 && supported13.dynamicRendering
-        && has_heap && supported_maintenance5.maintenance5 && supported_heap.descriptorHeap
+        && has_descriptor_heap && supported_heap.descriptorHeap
+        && has_untyped_pointers && supported_untyped.shaderUntypedPointers
+        && has_maintenance5 && supported_maintenance5.maintenance5
         && has_unified_layouts && supported_unified.unifiedImageLayouts;
     capabilities.acceleration_structure = has_as && supported_as.accelerationStructure;
     capabilities.ray_query = has_query && capabilities.acceleration_structure
@@ -130,10 +161,18 @@ void DeviceImpl::adopt_capabilities(const Capabilities& capabilities) {
 }
 
 void DeviceImpl::initialize_resources() {
-    create_descriptor_heap();
-    argument_arena_ = create_buffer(argument_arena_size,
+    create_descriptor_heaps();
+    argument_arena_ = create_buffer(argument_arena_size_,
         vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
         VMA_MEMORY_USAGE_CPU_TO_GPU, true);
+
+}
+
+MemoryReport DeviceImpl::memory_report() const {
+    VmaTotalStatistics statistics{};
+    vmaCalculateStatistics(allocator_, &statistics);
+    return {statistics.total.statistics.allocationBytes, statistics.total.statistics.blockBytes,
+        statistics.total.statistics.allocationCount, argument_arena_size_};
 }
 
 void DeviceImpl::create_instance(const DeviceConfig& config) {
@@ -162,12 +201,15 @@ void DeviceImpl::create_instance(const DeviceConfig& config) {
                 break;
             }
         }
-        if (!layers.empty())
-            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        if (layers.empty())
+            throw Error(ErrorCode::UnsupportedFeature, "Vulkan validation was requested but is unavailable");
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
 
     const std::string application_name(config.application_name);
-    const vk::ApplicationInfo appInfo(application_name.c_str(), 1, "gpu", 1, VK_API_VERSION_1_3);
+    // 1.4 so that a 1.4 device exposes maintenance5 as core; 1.3 devices
+    // still qualify through the extension.
+    const vk::ApplicationInfo appInfo(application_name.c_str(), 1, "gpu", 1, VK_API_VERSION_1_4);
     vk::InstanceCreateInfo createInfo{};
     createInfo.setPApplicationInfo(&appInfo)
         .setPEnabledLayerNames(layers)
@@ -236,7 +278,8 @@ void DeviceImpl::select_physical_device() {
     if (!best)
         throw Error(ErrorCode::UnsupportedFeature,
             "No Vulkan 1.3 device supports buffer device address, timeline semaphores, "
-            "synchronization2, dynamic rendering, VK_EXT_descriptor_heap and "
+            "synchronization2, dynamic rendering, VK_EXT_descriptor_heap, "
+            "VK_KHR_shader_untyped_pointers, maintenance5 and "
             "VK_KHR_unified_image_layouts");
     physical_device_ = best;
     adopt_capabilities(best_capabilities);
@@ -274,11 +317,11 @@ void DeviceImpl::create_device(const DeviceConfig&) {
     const auto extensions = physical_device_.enumerateDeviceExtensionProperties();
     std::vector<const char*> enabled_extensions{
         VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
-        // VK_EXT_descriptor_heap depends on maintenance5, and omitting it is a
-        // spec violation the validation layers reject outright.
-        VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
+        VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
         VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME,
     };
+    if (physical_device_.getProperties().apiVersion < VK_API_VERSION_1_4)
+        enabled_extensions.push_back(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     if (surface_)
         enabled_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     external_memory_fd_enabled_ = has_extension(extensions,
@@ -289,11 +332,6 @@ void DeviceImpl::create_device(const DeviceConfig&) {
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
     if (external_semaphore_fd_enabled_)
         enabled_extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
-    // Slang lowers descriptor-heap access through untyped pointers. It is not
-    // required by this library's own recording, but shaders compiled for the
-    // heap ABI need it, so enable it whenever the driver offers it.
-    if (has_extension(extensions, VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME))
-        enabled_extensions.push_back(VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME);
 
     const vk::PhysicalDeviceFeatures supported_base = physical_device_.getFeatures();
     vk::PhysicalDeviceFeatures base{};
@@ -307,27 +345,31 @@ void DeviceImpl::create_device(const DeviceConfig&) {
     vk::PhysicalDeviceVulkan12Features features12{};
     features12.bufferDeviceAddress = VK_TRUE;
     features12.timelineSemaphore = VK_TRUE;
-    // Descriptor-heap shaders address resources through unbounded arrays, so
-    // the SPIR-V they produce declares RuntimeDescriptorArray.
-    features12.runtimeDescriptorArray = VK_TRUE;
-    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-    features12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
-    features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+    // Slang's natural layout for records reached through GPU pointers matches
+    // C++ struct packing (vec3 followed by a scalar, for instance), which is
+    // only legal SPIR-V under scalar block layout.
+    features12.scalarBlockLayout = VK_TRUE;
     vk::PhysicalDeviceVulkan13Features features13{};
     features13.synchronization2 = VK_TRUE;
     features13.dynamicRendering = VK_TRUE;
-    vk::PhysicalDeviceMaintenance5Features maintenance5{};
-    maintenance5.maintenance5 = VK_TRUE;
-    vk::PhysicalDeviceDescriptorHeapFeaturesEXT heap_features{};
-    heap_features.descriptorHeap = VK_TRUE;
+    features13.shaderIntegerDotProduct = VK_TRUE;
     vk::PhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified_layouts{};
     unified_layouts.unifiedImageLayouts = VK_TRUE;
     features11.pNext = &features12;
     features12.pNext = &features13;
-    features13.pNext = &maintenance5;
-    maintenance5.pNext = &heap_features;
-    heap_features.pNext = &unified_layouts;
-    void** tail = &unified_layouts.pNext;
+    // Slang lowers ResourceDescriptorHeap[i] through untyped pointers, so any
+    // heap-using shader needs shaderUntypedPointers next to descriptorHeap.
+    vk::PhysicalDeviceDescriptorHeapFeaturesEXT heap_features{};
+    heap_features.descriptorHeap = VK_TRUE;
+    vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR untyped_pointers{};
+    untyped_pointers.shaderUntypedPointers = VK_TRUE;
+    vk::PhysicalDeviceMaintenance5FeaturesKHR maintenance5{};
+    maintenance5.maintenance5 = VK_TRUE;
+    features13.pNext = &unified_layouts;
+    unified_layouts.pNext = &heap_features;
+    heap_features.pNext = &untyped_pointers;
+    untyped_pointers.pNext = &maintenance5;
+    void** tail = &maintenance5.pNext;
 
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR as_features{};
     vk::PhysicalDeviceRayQueryFeaturesKHR query_features{};
@@ -421,13 +463,13 @@ void DeviceImpl::measure(const std::shared_ptr<TimestampQuery::State>& state,
 }
 
 double DeviceImpl::timestamp_milliseconds(TimestampQuery::State& query) {
-    synchronize();
     std::uint64_t values[2]{};
     const VkResult result = vkGetQueryPoolResults(
         static_cast<VkDevice>(vk_device()),
         static_cast<VkQueryPool>(*timestamp_query_pool_), query.first_query, 2u,
         sizeof(values), values, sizeof(values[0]),
-        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        VK_QUERY_RESULT_64_BIT);
+    if (result == VK_NOT_READY) return query.milliseconds;
     if (result != VK_SUCCESS)
         throw Error(ErrorCode::InvalidState, "failed to read GPU timestamps");
     std::uint64_t ticks = values[1] - values[0];
@@ -436,85 +478,134 @@ double DeviceImpl::timestamp_milliseconds(TimestampQuery::State& query) {
         const std::uint64_t mask = (std::uint64_t{1} << timestamp_valid_bits_) - 1u;
         ticks = (values[1] - values[0]) & mask;
     }
-    return static_cast<double>(ticks) * timestamp_period_ns_ * 1.0e-6;
+    query.milliseconds = static_cast<double>(ticks) * timestamp_period_ns_ * 1.0e-6;
+    return query.milliseconds;
 }
 
-void DeviceImpl::create_descriptor_heap() {
+namespace {
+constexpr vk::DeviceSize align_up(const vk::DeviceSize value, const vk::DeviceSize alignment) {
+    const vk::DeviceSize a = std::max<vk::DeviceSize>(alignment, 1);
+    return (value + a - 1) / a * a;
+}
+}
+
+// Every shader in this library takes the same thing: one 8-byte pointer to its
+// root argument record as push data, plus whatever textures and samplers it
+// indexes out of the two device-owned heaps. No pipeline layout exists.
+void DeviceImpl::create_descriptor_heaps() {
     vk::PhysicalDeviceProperties2 properties{};
-    properties.pNext = &descriptor_properties_;
+    properties.pNext = &heap_properties_;
     if (acceleration_structure_supported_) {
-        descriptor_properties_.pNext = &acceleration_structure_properties_;
+        heap_properties_.pNext = &acceleration_structure_properties_;
         acceleration_structure_properties_.pNext = &ray_tracing_properties_;
     }
     physical_device_.getProperties2(&properties);
-    descriptor_stride_ = std::max(resource_descriptor_slot_size,
-        std::max({descriptor_properties_.bufferDescriptorSize,
-            descriptor_properties_.imageDescriptorSize,
-            descriptor_properties_.samplerDescriptorSize,
-            descriptor_properties_.bufferDescriptorAlignment,
-            descriptor_properties_.imageDescriptorAlignment,
-            vk::DeviceSize(1)}));
-    const vk::DeviceSize alignment = std::max(descriptor_properties_.resourceHeapAlignment,
-        vk::DeviceSize(1));
-    const vk::DeviceSize reserved = (descriptor_properties_.minResourceHeapReservedRange
-        + alignment - 1) / alignment * alignment;
-    const vk::DeviceSize capacity = reserved + descriptor_stride_ * descriptor_capacity + alignment;
-    descriptor_heap_ = create_buffer(capacity,
-        vk::BufferUsageFlagBits::eDescriptorHeapEXT | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-        VMA_MEMORY_USAGE_CPU_TO_GPU, true);
-    descriptor_heap_offset_ = (alignment - descriptor_heap_->address % alignment) % alignment;
+    heap_properties_.pNext = nullptr;
+    acceleration_structure_properties_.pNext = nullptr;
 
-    if (descriptor_properties_.samplerDescriptorSize != 0) {
-        sampler_stride_ = std::max(descriptor_properties_.samplerDescriptorSize,
-            descriptor_properties_.samplerDescriptorAlignment);
-        const vk::DeviceSize sampler_alignment = std::max(
-            descriptor_properties_.samplerHeapAlignment, vk::DeviceSize(1));
-        sampler_heap_ = create_buffer(
-            descriptor_properties_.maxSamplerHeapSize + sampler_alignment,
-            vk::BufferUsageFlagBits::eDescriptorHeapEXT
-                | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-            VMA_MEMORY_USAGE_CPU_TO_GPU, true);
-        sampler_heap_offset_ = (sampler_alignment - sampler_heap_->address % sampler_alignment)
-            % sampler_alignment;
-    }
+    if (heap_properties_.maxPushDataSize < sizeof(vk::DeviceAddress))
+        throw Error(ErrorCode::UnsupportedFeature,
+            "descriptor heap push data cannot hold an 8-byte root pointer");
+    // Shaders index the resource heap with the image descriptor size as the
+    // array stride (Slang's default), and the heap holds nothing but images.
+    create_heap(texture_heap_, texture_descriptor_capacity_,
+        heap_properties_.imageDescriptorSize,
+        std::max(heap_properties_.imageDescriptorAlignment,
+            heap_properties_.bufferDescriptorAlignment),
+        heap_properties_.resourceHeapAlignment,
+        heap_properties_.minResourceHeapReservedRange,
+        heap_properties_.maxResourceHeapSize,
+        "DeviceConfig::texture_descriptor_capacity");
+    create_heap(sampler_heap_, sampler_descriptor_capacity_,
+        heap_properties_.samplerDescriptorSize,
+        heap_properties_.samplerDescriptorAlignment,
+        heap_properties_.samplerHeapAlignment,
+        heap_properties_.minSamplerHeapReservedRange,
+        heap_properties_.maxSamplerHeapSize,
+        "DeviceConfig::sampler_descriptor_capacity");
+}
+
+void DeviceImpl::create_heap(DescriptorHeap& heap, const std::uint32_t capacity,
+    const vk::DeviceSize descriptor_size, const vk::DeviceSize descriptor_alignment,
+    const vk::DeviceSize heap_alignment, const vk::DeviceSize reserved_size,
+    const vk::DeviceSize max_size, const char* capacity_name) {
+    if (descriptor_size == 0)
+        throw Error(ErrorCode::UnsupportedFeature, "device reports a zero descriptor size");
+    const vk::DeviceSize reserved_offset = align_up(capacity * descriptor_size,
+        descriptor_alignment);
+    const vk::DeviceSize bind_size = reserved_offset + reserved_size;
+    if (max_size && bind_size > max_size)
+        throw Error(ErrorCode::InvalidArgument,
+            std::string(capacity_name) + " exceeds the device's maximum descriptor heap size");
+    // VMA does not promise an address aligned to the heap alignment, so
+    // over-allocate and bind the heap at an aligned address inside the buffer.
+    const vk::DeviceSize alignment = std::max<vk::DeviceSize>(heap_alignment, 1);
+    heap.buffer = create_buffer(static_cast<std::size_t>(bind_size + alignment - 1),
+        vk::BufferUsageFlagBits::eDescriptorHeapEXT
+            | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+        VMA_MEMORY_USAGE_CPU_TO_GPU, true);
+    heap.address = align_up(heap.buffer->address, alignment);
+    heap.buffer_offset = static_cast<std::size_t>(heap.address - heap.buffer->address);
+    heap.slots = static_cast<std::byte*>(heap.buffer->mapped) + heap.buffer_offset;
+    heap.descriptor_size = descriptor_size;
+    heap.reserved_offset = reserved_offset;
+    heap.reserved_size = reserved_size;
+    heap.capacity = capacity;
+    heap.capacity_name = capacity_name;
+    // Slot 0 stays zeroed: it is the null handle and is never read.
+    std::memset(heap.buffer->mapped, 0, heap.buffer->size);
+}
+
+vk::BindHeapInfoEXT DeviceImpl::heap_bind_info(const DescriptorHeap& heap) {
+    using Range = decltype(vk::BindHeapInfoEXT::heapRange);
+    return vk::BindHeapInfoEXT{Range{heap.address, heap.reserved_offset + heap.reserved_size},
+        heap.reserved_offset, heap.reserved_size};
 }
 
 void DeviceImpl::bind_heaps(const vk::CommandBuffer command) const {
-    if (!descriptor_heap_)
-        return;
-    const vk::DeviceSize descriptor_bytes = descriptor_stride_ * descriptor_capacity;
-    const vk::DeviceSize reserved = descriptor_properties_.minResourceHeapReservedRange;
-    const vk::DeviceAddressRangeEXT range{
-        descriptor_heap_->address + descriptor_heap_offset_, descriptor_bytes + reserved};
-    command.bindResourceHeapEXT({range, descriptor_bytes, reserved});
-    if (sampler_heap_) {
-        const vk::DeviceSize sampler_reserved = descriptor_properties_.minSamplerHeapReservedRange;
-        const vk::DeviceSize sampler_heap_size = descriptor_properties_.maxSamplerHeapSize;
-        const vk::DeviceSize sampler_bytes = sampler_heap_size > sampler_reserved
-            ? sampler_heap_size - sampler_reserved : 0;
-        const vk::DeviceAddressRangeEXT sampler_range{
-            sampler_heap_->address + sampler_heap_offset_, sampler_heap_size};
-        command.bindSamplerHeapEXT({sampler_range, sampler_bytes, sampler_reserved});
+    command.bindResourceHeapEXT(heap_bind_info(texture_heap_));
+    command.bindSamplerHeapEXT(heap_bind_info(sampler_heap_));
+}
+
+std::uint32_t DeviceImpl::allocate_slot(DescriptorHeap& heap) {
+    std::lock_guard lock(heap_mutex_);
+    if (!heap.buffer)
+        throw Error(ErrorCode::InvalidState, "gpu::Device has been shut down");
+    if (!heap.free.empty()) {
+        const std::uint32_t slot = heap.free.back();
+        heap.free.pop_back();
+        return slot;
     }
+    if (heap.next < heap.capacity)
+        return heap.next++;
+    throw Error(ErrorCode::OutOfMemory,
+        std::string("descriptor heap is full; raise ") + heap.capacity_name);
+}
+
+void DeviceImpl::release_slot(DescriptorHeap& heap, const std::uint32_t slot) noexcept {
+    if (slot == 0)
+        return;
+    std::lock_guard lock(heap_mutex_);
+    // After shutdown the heap is gone and there is nothing to return to.
+    if (heap.buffer)
+        heap.free.push_back(slot);
+}
+
+vk::HostAddressRangeEXT DeviceImpl::slot_range(const DescriptorHeap& heap,
+    const std::uint32_t slot) const {
+    return vk::HostAddressRangeEXT{heap.slots + slot * heap.descriptor_size,
+        static_cast<std::size_t>(heap.descriptor_size)};
+}
+
+void DeviceImpl::flush_slot(const DescriptorHeap& heap, const std::uint32_t slot) const {
+    if (vmaFlushAllocation(allocator_, heap.buffer->allocation,
+            heap.buffer_offset + slot * heap.descriptor_size, heap.descriptor_size) != VK_SUCCESS)
+        throw Error(ErrorCode::DeviceLost, "flushing a descriptor heap write failed");
 }
 
 void DeviceImpl::retain_active(std::shared_ptr<void> resource) {
     if (resource && active_command_)
         active_resources_.push_back(std::move(resource));
-}
-
-void DeviceImpl::release_resource(const ResourceHandle handle) {
-    if (!handle || handle.value >= descriptor_capacity)
-        return;
-    std::lock_guard descriptor_lock(descriptor_mutex_);
-    free_descriptors_.push_back(handle.value);
-}
-
-void DeviceImpl::release_sampler(const SamplerHandle handle) {
-    if (!handle)
-        return;
-    std::lock_guard descriptor_lock(descriptor_mutex_);
-    free_sampler_descriptors_.push_back(handle.value);
 }
 
 void DeviceImpl::shutdown() noexcept {
@@ -526,6 +617,9 @@ void DeviceImpl::shutdown() noexcept {
     } catch (...) {
         // Destructors cannot report device-loss errors.
     }
+    frame_command_ = nullptr;
+    frame_resources_.clear();
+    argument_pending_.clear();
     active_resources_.clear();
     pending_.clear();
     // The queue is idle, so everything still deferred can be released.
@@ -542,8 +636,9 @@ void DeviceImpl::shutdown() noexcept {
     // allocator itself. External resource objects keep DeviceImpl alive, so
     // no user-visible resource should remain here.
     argument_arena_.reset();
-    descriptor_heap_.reset();
-    sampler_heap_.reset();
+    std::lock_guard heap_lock(heap_mutex_);
+    texture_heap_ = {};
+    sampler_heap_ = {};
 }
 
 DeviceImpl::~DeviceImpl() {
@@ -553,9 +648,10 @@ DeviceImpl::~DeviceImpl() {
 }
 
 std::shared_ptr<BufferImpl> DeviceImpl::create_buffer(const std::size_t size,
-    const vk::BufferUsageFlags usage, const VmaMemoryUsage memory_usage, const bool mapped) {
+    const vk::BufferUsageFlags usage, const VmaMemoryUsage memory_usage, const bool mapped, const std::size_t alignment) {
     if (size == 0)
         throw Error(ErrorCode::InvalidArgument, "GPU buffers cannot have zero bytes");
+    auto result = std::make_shared<BufferImpl>();
     vk::BufferCreateInfo bufferInfo({}, size, usage, vk::SharingMode::eExclusive);
     VmaAllocationCreateInfo allocationInfo{};
     allocationInfo.usage = memory_usage;
@@ -564,11 +660,10 @@ std::shared_ptr<BufferImpl> DeviceImpl::create_buffer(const std::size_t size,
     VmaAllocation allocation = VK_NULL_HANDLE;
     VmaAllocationInfo allocationResult{};
     VkBuffer rawBuffer = VK_NULL_HANDLE;
-    if (vmaCreateBuffer(allocator_, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo),
-                        &allocationInfo, &rawBuffer, &allocation, &allocationResult) != VK_SUCCESS)
+    if (vmaCreateBufferWithAlignment(allocator_, reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo),
+                        &allocationInfo, alignment, &rawBuffer, &allocation, &allocationResult) != VK_SUCCESS)
         throw Error(ErrorCode::OutOfMemory, "VMA buffer allocation failed");
 
-    auto result = std::make_shared<BufferImpl>();
     result->device = self_.lock();
     result->buffer = rawBuffer;
     result->allocation = allocation;
@@ -576,7 +671,6 @@ std::shared_ptr<BufferImpl> DeviceImpl::create_buffer(const std::size_t size,
     result->mapped = allocationResult.pMappedData;
     if (mapped && !result->mapped) {
         if (vmaMapMemory(allocator_, allocation, &result->mapped) != VK_SUCCESS) {
-            vmaDestroyBuffer(allocator_, rawBuffer, allocation);
             throw Error(ErrorCode::OutOfMemory, "VMA could not map a host-visible buffer");
         }
     }
@@ -626,16 +720,8 @@ interop::DeviceHandles DeviceImpl::native_handles() const noexcept {
 }
 
 std::shared_ptr<ImageImpl> DeviceImpl::find_image(const ImageHandle handle) const {
-    if (!handle)
-        return {};
-    for (const auto& weak : images_) {
-        if (const auto image = weak.lock(); image
-            && (image->handle.value == handle.value
-                || image->sampled_handle.value == handle.value
-                || image->storage_handle.value == handle.value))
-            return image;
-    }
-    return {};
+    auto image = handle.image_.lock();
+    return image && image->device.get() == this ? image : nullptr;
 }
 
 std::shared_ptr<ShaderImpl> DeviceImpl::create_shader(const std::span<const std::byte> spirv,
@@ -670,9 +756,9 @@ std::shared_ptr<ComputePipelineImpl> DeviceImpl::create_compute(const Shader& sh
     result->device = self_.lock();
     const vk::PipelineShaderStageCreateInfo stage({}, vk::ShaderStageFlagBits::eCompute,
         *shader.impl_->module, shader.impl_->entry_point.c_str());
-    const vk::PipelineCreateFlags2CreateInfo flags2{
-        vk::PipelineCreateFlagBits2::eDescriptorHeapEXT};
-    const vk::ComputePipelineCreateInfo pipelineInfo{{}, stage, nullptr, {}, {}, &flags2};
+    const auto heap_flags = pipeline_heap_flags();
+    vk::ComputePipelineCreateInfo pipelineInfo{{}, stage, {}};
+    pipelineInfo.pNext = &heap_flags;
     try {
         result->pipeline = vk_device().createComputePipelineUnique({}, pipelineInfo).value;
     } catch (const vk::SystemError& error) {
@@ -695,10 +781,16 @@ std::shared_ptr<SamplerImpl> DeviceImpl::create_sampler(const SamplerDesc& desc)
         address(desc.address_u), address(desc.address_v), address(desc.address_w));
     auto result = std::make_shared<SamplerImpl>();
     result->device = self_.lock();
-    result->sampler = vk_device().createSamplerUnique(info);
-    result->handle = sampler_heap_ ? write_sampler_descriptor(info)
-                                   : SamplerHandle{allocate_handle()};
-    samplers_.push_back(result);
+    // The descriptor is encoded straight from the create info; shaders pair
+    // this slot with any sampled texture handle.
+    const std::uint32_t slot = allocate_slot(sampler_heap_);
+    const vk::HostAddressRangeEXT destination = slot_range(sampler_heap_, slot);
+    if (vk_device().writeSamplerDescriptorsEXT(1, &info, &destination) != vk::Result::eSuccess) {
+        release_slot(sampler_heap_, slot);
+        throw Error(ErrorCode::InvalidState, "writing a sampler descriptor failed");
+    }
+    flush_slot(sampler_heap_, slot);
+    result->handle = SamplerHandle{slot};
     return result;
 }
 
@@ -740,7 +832,6 @@ GpuToken DeviceImpl::submit(const std::function<void(vk::CommandBuffer)>& record
         throw Error(ErrorCode::OutOfMemory, "Vulkan command-buffer allocation failed");
     auto command = std::move(commands.front());
     command->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-    bind_heaps(command.get());
     vk::MemoryBarrier2 ordering{};
     ordering.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
         .setSrcAccessMask(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
@@ -758,14 +849,21 @@ GpuToken DeviceImpl::submit(const std::function<void(vk::CommandBuffer)>& record
     command->pipelineBarrier2({{}, ordering, {}, {}});
     command->end();
 
-    const GpuToken token{next_timeline_++};
+    const GpuToken token{next_timeline_};
     vk::TimelineSemaphoreSubmitInfo timelineInfo{};
     timelineInfo.setSignalSemaphoreValues(token.value);
     vk::SubmitInfo submitInfo{};
-    submitInfo.setCommandBuffers(command.get()).setSignalSemaphores(timeline_.get());
+    const vk::CommandBuffer raw_command = command.get();
+    submitInfo.setCommandBuffers(raw_command).setSignalSemaphores(timeline_.get());
     submitInfo.pNext = &timelineInfo;
-    queue_.submit(submitInfo);
     pending_.push_back({token, std::move(command), std::move(resources)});
+    try {
+        queue_.submit(submitInfo);
+    } catch (...) {
+        pending_.pop_back();
+        throw;
+    }
+    ++next_timeline_;
     return token;
 }
 
@@ -773,16 +871,23 @@ void DeviceImpl::abandon_frame(Frame::State& state) {
     std::lock_guard lock(mutex_);
     if (frame_command_ == state.command)
         frame_command_ = nullptr;
+    std::erase_if(argument_pending_, [this](const auto& region) {
+        return region.token.value == next_timeline_;
+    });
     // Nothing was submitted, so nothing is in flight: the command buffer and
     // the resources it referenced can be released as soon as the GPU is idle
     // with respect to earlier work, which the ordinary retire path handles.
     frame_resources_.clear();
+    {
+        std::lock_guard retire_lock(retire_mutex_);
+        for (auto& entry : retired_)
+            if (entry.timeline == next_timeline_)
+                entry.timeline = next_timeline_ - 1;
+    }
+    state.swapchain->stale = true;
     state.open = false;
     state.command = nullptr;
-    if (state.owned_command) {
-        vk_device().waitIdle();
-        state.owned_command.reset();
-    }
+    state.owned_command.reset();
 }
 
 void DeviceImpl::retire(std::function<void()> release) {
@@ -791,10 +896,8 @@ void DeviceImpl::retire(std::function<void()> release) {
     {
         std::lock_guard lock(retire_mutex_);
         if (!shut_down_) {
-            // next_timeline_ is only ever incremented, so reading it without
-            // mutex_ can retire a resource one value later than strictly
-            // necessary - never earlier, which is what would be unsafe.
-            retired_.push_back({next_timeline_ - 1, std::move(release)});
+            // Include commands recorded into the current, not-yet-submitted frame.
+            retired_.push_back({frame_command_ ? next_timeline_ : next_timeline_ - 1, std::move(release)});
             return;
         }
     }
@@ -825,10 +928,6 @@ void DeviceImpl::reap_completed() {
 
     if (buffers_.size() > 64) {
         std::erase_if(buffers_, [](const auto& entry) { return entry.second.expired(); });
-        std::erase_if(images_, [](const auto& entry) { return entry.expired(); });
-        std::erase_if(samplers_, [](const auto& entry) { return entry.expired(); });
-        std::erase_if(acceleration_structures_,
-            [](const auto& entry) { return entry.expired(); });
     }
 }
 
@@ -836,6 +935,9 @@ void DeviceImpl::wait(const GpuToken token) {
     if (token.value == 0)
         return;
     std::lock_guard lock(mutex_);
+    if (frame_command_ && token.value >= frame_token_.value)
+        throw Error(ErrorCode::InvalidState,
+            "cannot wait for an open frame; finish it before reusing staging storage");
     vk::SemaphoreWaitInfo info({}, timeline_.get(), token.value);
     const auto result = vk_device().waitSemaphores(info, std::numeric_limits<std::uint64_t>::max());
     if (result != vk::Result::eSuccess)
@@ -866,23 +968,40 @@ vk::DeviceAddress DeviceImpl::stage_arguments(const void* args, const std::size_
     if (size > argument_arena_->size)
         throw Error(ErrorCode::OutOfMemory,
             "root arguments do not fit in the GPU argument arena");
-    constexpr std::size_t alignment = 16;
+    const std::size_t alignment = host_alignment_;
     std::size_t offset = (argument_offset_ + alignment - 1) & ~(alignment - 1);
-    // The arena is a ring. Root argument records are tiny relative to its
-    // size, so wrapping reuses storage thousands of dispatches later - long
-    // after any command buffer that referenced it has retired. This matters
-    // for externally recorded command buffers, whose completion this library
-    // never observes and so cannot key a reset on.
+    // Called while submit holds mutex_. Protect every launch record until
+    // its submission retires, including records recorded in an open frame.
     if (offset + size > argument_arena_->size)
         offset = 0;
+    std::uint64_t overlap = 0;
+    const auto completed = vk_device().getSemaphoreCounterValue(timeline_.get());
+    while (!argument_pending_.empty()
+        && argument_pending_.front().token.value <= completed)
+        argument_pending_.pop_front();
+    for (const auto& region : argument_pending_)
+        if (region.end > offset && region.begin < offset + size)
+            overlap = std::max(overlap, region.token.value);
+    if (overlap >= next_timeline_)
+        throw Error(ErrorCode::OutOfMemory,
+            "open submission exceeds argument arena capacity");
+    if (overlap > completed) {
+        const vk::SemaphoreWaitInfo wait_info({}, timeline_.get(), overlap);
+        if (vk_device().waitSemaphores(wait_info,
+            std::numeric_limits<std::uint64_t>::max()) != vk::Result::eSuccess)
+            throw Error(ErrorCode::DeviceLost, "waiting for argument storage failed");
+    }
+    argument_pending_.push_back({offset, offset + size, GpuToken{next_timeline_}});
     std::memcpy(static_cast<std::byte*>(argument_arena_->mapped) + offset, args, size);
     vmaFlushAllocation(allocator_, argument_arena_->allocation, offset, size);
     argument_offset_ = offset + size;
     return argument_arena_->address + offset;
 }
 
-void DeviceImpl::push_root(const vk::CommandBuffer command, const vk::DeviceAddress root) {
-    command.pushDataEXT({0, vk::HostAddressRangeConstEXT{&root, sizeof(root)}});
+void DeviceImpl::push_root(const vk::CommandBuffer command,
+    const vk::DeviceAddress root) const {
+    command.pushDataEXT(vk::PushDataInfoEXT{0,
+        vk::HostAddressRangeConstEXT{&root, sizeof(root)}});
 }
 
 void DeviceImpl::record_compute(const ComputePipelineImpl& pipeline,
@@ -906,8 +1025,8 @@ void DeviceImpl::record_compute(const ComputePipelineImpl& pipeline,
             | vk::AccessFlagBits2::eShaderWrite
             | vk::AccessFlagBits2::eAccelerationStructureReadKHR);
     command.pipelineBarrier2({{}, ordering, {}, {}});
-    bind_heaps(command);
     command.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline.pipeline);
+    bind_heaps(command);
     push_root(command, stage_arguments(args, size));
     command.dispatch(groups.x, groups.y, groups.z);
 }
@@ -956,26 +1075,15 @@ std::shared_ptr<RayTracingPipelineImpl> DeviceImpl::create_ray_tracing(
 
     std::vector<vk::PipelineShaderStageCreateInfo> stages;
     std::vector<vk::RayTracingShaderGroupCreateInfoKHR> groups;
-    const vk::DescriptorMappingSourceDataEXT as_mapping_data{
-        vk::DescriptorMappingSourceConstantOffsetEXT{
-            0, static_cast<std::uint32_t>(descriptor_stride_)}};
-    const vk::DescriptorSetAndBindingMappingEXT as_mapping{
-        0, 0, 1, vk::SpirvResourceTypeFlagBitsEXT::eAccelerationStructure,
-        vk::DescriptorMappingSourceEXT::eHeapWithConstantOffset, as_mapping_data};
-    const vk::ShaderDescriptorSetAndBindingMappingInfoEXT as_mapping_info{
-        1, &as_mapping};
     auto add_stage = [&](const Shader& shader, const vk::ShaderStageFlagBits stage) {
         if (!shader.impl_)
             throw Error(ErrorCode::InvalidResource, "ray-tracing shader list contains an empty shader");
         const auto index = static_cast<std::uint32_t>(stages.size());
         result->shaders.push_back(shader.impl_);
-        vk::PipelineShaderStageCreateInfo stage_info{
-            {}, stage, *shader.impl_->module, shader.impl_->entry_point.c_str()};
-        // The raygen stage declares where its acceleration-structure binding
-        // is read from in the resource heap.
-        if (stage == vk::ShaderStageFlagBits::eRaygenKHR)
-            stage_info.pNext = &as_mapping_info;
-        stages.push_back(stage_info);
+        // Nothing to map: the raygen stage reads its acceleration structure
+        // from an address in its root record, not from a binding.
+        stages.push_back({{}, stage, *shader.impl_->module,
+            shader.impl_->entry_point.c_str()});
         return index;
     };
     const auto raygen_index = add_stage(desc.raygen, vk::ShaderStageFlagBits::eRaygenKHR);
@@ -1005,11 +1113,10 @@ std::shared_ptr<RayTracingPipelineImpl> DeviceImpl::create_ray_tracing(
     if (groups.empty())
         throw Error(ErrorCode::InvalidArgument, "ray-tracing pipeline contains no shader groups");
 
+    const auto heap_flags = pipeline_heap_flags();
     vk::RayTracingPipelineCreateInfoKHR info({}, stages, groups, 1, nullptr, nullptr,
-        nullptr, vk::PipelineLayout{});
-    const vk::PipelineCreateFlags2CreateInfo flags2{
-        vk::PipelineCreateFlagBits2::eDescriptorHeapEXT};
-    info.pNext = &flags2;
+        nullptr, {});
+    info.pNext = &heap_flags;
     try {
         result->pipeline = vk_device().createRayTracingPipelineKHRUnique({}, {}, info).value;
     } catch (const vk::SystemError& error) {
@@ -1080,18 +1187,17 @@ AccelerationStructure DeviceImpl::build_blas(const std::span<const TriangleGeome
         if (!item.positions.address || !item.indices.address || item.triangle_count == 0)
             throw Error(ErrorCode::InvalidArgument, "BLAS geometry contains an empty GPU address or triangle count");
         const auto positions_buffer = find_buffer_resource(item.positions.address);
-        if (positions_buffer->size < sizeof(float3)
-            || positions_buffer->size % sizeof(float3) != 0)
+        if (item.stride < sizeof(float3) || positions_buffer->size < item.stride)
             throw Error(ErrorCode::InvalidArgument,
-                "BLAS position buffer is not a packed float3 array");
-        const std::size_t vertex_count = positions_buffer->size / sizeof(float3);
+                "BLAS position buffer is smaller than one strided vertex");
+        const std::size_t vertex_count = positions_buffer->size / item.stride;
         if (vertex_count > std::numeric_limits<std::uint32_t>::max())
             throw Error(ErrorCode::InvalidArgument, "BLAS position buffer has too many vertices");
         source_buffers.push_back(positions_buffer);
         source_buffers.push_back(find_buffer_resource(item.indices.address));
         const vk::AccelerationStructureGeometryTrianglesDataKHR triangles{
             vk::Format::eR32G32B32Sfloat,
-            vk::DeviceOrHostAddressConstKHR{item.positions.address}, sizeof(float3),
+            vk::DeviceOrHostAddressConstKHR{item.positions.address}, item.stride,
             static_cast<std::uint32_t>(vertex_count - 1),
             vk::IndexType::eUint32,
             vk::DeviceOrHostAddressConstKHR{item.indices.address}, {}};
@@ -1103,13 +1209,13 @@ AccelerationStructure DeviceImpl::build_blas(const std::span<const TriangleGeome
 
     const vk::AccelerationStructureBuildGeometryInfoKHR size_info{
         vk::AccelerationStructureTypeKHR::eBottomLevel,
-        vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace,
+        vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace
+            | vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate,
         vk::BuildAccelerationStructureModeKHR::eBuild, {}, {}, geometries, {}, {}};
     const auto sizes = vk_device().getAccelerationStructureBuildSizesKHR(
         vk::AccelerationStructureBuildTypeKHR::eDevice, size_info, primitive_counts);
     auto result = std::make_shared<AccelerationStructureImpl>();
     result->device = self_.lock();
-    acceleration_structures_.push_back(result);
     result->storage = create_buffer(sizes.accelerationStructureSize,
         vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR
             | vk::BufferUsageFlagBits::eShaderDeviceAddress,
@@ -1119,13 +1225,15 @@ AccelerationStructure DeviceImpl::build_blas(const std::span<const TriangleGeome
     result->acceleration_structure = vk_device().createAccelerationStructureKHRUnique(create_info);
     auto scratch = create_buffer(sizes.buildScratchSize,
         vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-        VMA_MEMORY_USAGE_GPU_ONLY, false);
+        VMA_MEMORY_USAGE_GPU_ONLY, false,
+        acceleration_structure_properties_.minAccelerationStructureScratchOffsetAlignment);
     const auto acceleration_structure = *result->acceleration_structure;
     const GpuToken token = submit([acceleration_structure, scratch, geometries, primitive_counts]
         (const vk::CommandBuffer command) mutable {
         const vk::AccelerationStructureBuildGeometryInfoKHR build_info{
             vk::AccelerationStructureTypeKHR::eBottomLevel,
-            vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace,
+            vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace
+            | vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate,
             vk::BuildAccelerationStructureModeKHR::eBuild, {}, acceleration_structure,
             geometries, {}, vk::DeviceOrHostAddressKHR{scratch->address}};
         std::vector<vk::AccelerationStructureBuildRangeInfoKHR> ranges;
@@ -1145,10 +1253,20 @@ AccelerationStructure DeviceImpl::build_blas(const std::span<const TriangleGeome
         command.pipelineBarrier2({{}, ready, {}, {}});
     }, {result->storage, scratch});
     wait(token);
+    result->updateable = true;
+    result->update_scratch = create_buffer(sizes.updateScratchSize,
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+        VMA_MEMORY_USAGE_GPU_ONLY, false,
+        acceleration_structure_properties_.minAccelerationStructureScratchOffsetAlignment);
+    result->blas_geometries = geometries;
+    result->blas_primitive_counts = primitive_counts;
+    result->blas_sources = source_buffers;
     result->address = vk_device().getAccelerationStructureAddressKHR({acceleration_structure});
     result->storage_size = result->storage->size;
-    result->handle = write_acceleration_structure_descriptor(acceleration_structure,
-        result->address, result->storage_size);
+    // The shader-facing handle for an acceleration structure is simply its
+    // device address; OpConvertUToAccelerationStructureKHR turns it back into
+    // a traceable structure, so there is no descriptor here either.
+    result->handle = AccelerationStructureHandle{result->address};
     return AccelerationStructure(std::move(result));
 }
 
@@ -1183,7 +1301,7 @@ AccelerationStructure DeviceImpl::build_tlas(const std::span<const Instance> ins
     }
 
     auto instance_buffer = create_buffer(records.size() * sizeof(records[0]),
-        vk::BufferUsageFlagBits::eShaderDeviceAddress
+        vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eShaderDeviceAddress
             | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
         VMA_MEMORY_USAGE_CPU_TO_GPU, true);
     std::memcpy(instance_buffer->mapped, records.data(), records.size() * sizeof(records[0]));
@@ -1237,7 +1355,6 @@ AccelerationStructure DeviceImpl::build_tlas_at(const vk::DeviceAddress records,
     result->primitive_count = count;
     result->updateable = true;
     result->references = std::move(references);
-    acceleration_structures_.push_back(result);
     result->storage = create_buffer(sizes.accelerationStructureSize,
         vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR
             | vk::BufferUsageFlagBits::eShaderDeviceAddress,
@@ -1247,7 +1364,8 @@ AccelerationStructure DeviceImpl::build_tlas_at(const vk::DeviceAddress records,
         vk::AccelerationStructureTypeKHR::eTopLevel});
     auto scratch = create_buffer(std::max(sizes.buildScratchSize, sizes.updateScratchSize),
         vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-        VMA_MEMORY_USAGE_GPU_ONLY, false);
+        VMA_MEMORY_USAGE_GPU_ONLY, false,
+        acceleration_structure_properties_.minAccelerationStructureScratchOffsetAlignment);
     const auto acceleration_structure = *result->acceleration_structure;
     const GpuToken token = submit([acceleration_structure, scratch, geometry, count]
         (const vk::CommandBuffer command) mutable {
@@ -1272,11 +1390,51 @@ AccelerationStructure DeviceImpl::build_tlas_at(const vk::DeviceAddress records,
     wait(token);
     result->address = vk_device().getAccelerationStructureAddressKHR({acceleration_structure});
     result->storage_size = result->storage->size;
-    result->handle = write_acceleration_structure_descriptor(acceleration_structure,
-        result->address, result->storage_size);
+    // The shader-facing handle for an acceleration structure is simply its
+    // device address; OpConvertUToAccelerationStructureKHR turns it back into
+    // a traceable structure, so there is no descriptor here either.
+    result->handle = AccelerationStructureHandle{result->address};
     result->update_input = std::move(owned_input);
     result->update_scratch = scratch;
     return AccelerationStructure(std::move(result));
+}
+
+void DeviceImpl::refit_blas(AccelerationStructure& blas) {
+    auto target = blas.impl_;
+    if (!target || !target->acceleration_structure || !target->updateable
+        || target->blas_geometries.empty())
+        throw Error(ErrorCode::InvalidResource, "BLAS was not built for updates");
+    auto scratch = target->update_scratch;
+    if (!scratch)
+        throw Error(ErrorCode::InvalidResource, "BLAS update scratch storage is invalid");
+    const auto acceleration_structure = *target->acceleration_structure;
+    const auto geometries = target->blas_geometries;
+    const auto primitive_counts = target->blas_primitive_counts;
+    submit([acceleration_structure, scratch, geometries, primitive_counts]
+        (const vk::CommandBuffer command) mutable {
+        const vk::AccelerationStructureBuildGeometryInfoKHR build_info{
+            vk::AccelerationStructureTypeKHR::eBottomLevel,
+            vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace
+                | vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate,
+            vk::BuildAccelerationStructureModeKHR::eUpdate, acceleration_structure,
+            acceleration_structure, geometries, {},
+            vk::DeviceOrHostAddressKHR{scratch->address}};
+        std::vector<vk::AccelerationStructureBuildRangeInfoKHR> ranges;
+        ranges.reserve(primitive_counts.size());
+        for (const auto count : primitive_counts)
+            ranges.emplace_back(count, 0, 0, 0);
+        std::vector<const vk::AccelerationStructureBuildRangeInfoKHR*> range_ptrs{ranges.size()};
+        for (std::size_t i = 0; i < ranges.size(); ++i)
+            range_ptrs[i] = &ranges[i];
+        command.buildAccelerationStructuresKHR(build_info, range_ptrs);
+        const vk::MemoryBarrier2 ready{
+            vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+            vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+            vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR
+                | vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+            vk::AccessFlagBits2::eAccelerationStructureReadKHR};
+        command.pipelineBarrier2({{}, ready, {}, {}});
+    }, {target, scratch});
 }
 
 void DeviceImpl::update_tlas(AccelerationStructure& tlas,
@@ -1314,8 +1472,7 @@ void DeviceImpl::update_tlas(AccelerationStructure& tlas,
     if (!instance_buffer || instance_buffer->size
             < records.size() * sizeof(records[0]))
         throw Error(ErrorCode::InvalidResource, "TLAS update input storage is invalid");
-    std::memcpy(instance_buffer->mapped, records.data(), records.size() * sizeof(records[0]));
-    vmaFlushAllocation(allocator_, instance_buffer->allocation, 0, instance_buffer->size);
+    upload(instance_buffer, records.data(), records.size() * sizeof(records[0]), 0);
     update_tlas_at(tlas, instance_buffer->address,
         static_cast<std::uint32_t>(records.size()));
     target->references = std::move(references);
@@ -1363,18 +1520,22 @@ void DeviceImpl::update_tlas_at(AccelerationStructure& tlas,
             vk::AccessFlagBits2::eAccelerationStructureReadKHR};
         command.pipelineBarrier2({{}, ready, {}, {}});
     }, {target, scratch});
-    wait(token);
+    // Queue ordering protects input/scratch reuse and subsequent traversal.
 }
 void DeviceImpl::upload(const std::shared_ptr<BufferImpl>& destination, const void* data,
     const std::size_t bytes, const std::size_t destination_offset) {
-    if (!destination || !data || destination_offset > destination->size
-        || bytes > destination->size - destination_offset)
+    if (!destination || destination->device.get() != this || !data
+        || destination_offset > destination->size || bytes > destination->size - destination_offset)
         throw Error(ErrorCode::InvalidArgument, "invalid GPU upload range");
+    if (!bytes) return;
+    if (frame_command_)
+        throw Error(ErrorCode::InvalidState, "upload resources before beginning a frame");
     auto staging = create_buffer(bytes, vk::BufferUsageFlagBits::eTransferSrc,
-                                 VMA_MEMORY_USAGE_CPU_TO_GPU, true);
+        VMA_MEMORY_USAGE_CPU_TO_GPU, true);
     std::memcpy(staging->mapped, data, bytes);
-    vmaFlushAllocation(allocator_, staging->allocation, 0, bytes);
-    submit([staging, destination, bytes, destination_offset](const vk::CommandBuffer command) {
+    if (vmaFlushAllocation(allocator_, staging->allocation, 0, bytes) != VK_SUCCESS)
+        throw Error(ErrorCode::DeviceLost, "flushing GPU upload failed");
+    submit([=](vk::CommandBuffer command) {
         command.copyBuffer(staging->buffer, destination->buffer,
             vk::BufferCopy(0, destination_offset, bytes));
     }, {staging, destination});
@@ -1382,17 +1543,20 @@ void DeviceImpl::upload(const std::shared_ptr<BufferImpl>& destination, const vo
 
 void DeviceImpl::download(const std::shared_ptr<BufferImpl>& source, void* data,
     const std::size_t bytes) {
-    if (!source || !data || bytes > source->size)
+    if (!source || source->device.get() != this || !data || bytes > source->size)
         throw Error(ErrorCode::InvalidArgument, "invalid GPU download range");
+    if (!bytes) return;
+    if (frame_command_)
+        throw Error(ErrorCode::InvalidState, "read back resources after ending a frame");
     auto staging = create_buffer(bytes, vk::BufferUsageFlagBits::eTransferDst,
-                                 VMA_MEMORY_USAGE_GPU_TO_CPU, true);
-    const GpuToken token = submit([staging, source, bytes](const vk::CommandBuffer command) {
+        VMA_MEMORY_USAGE_GPU_TO_CPU, true);
+    const auto token = submit([=](vk::CommandBuffer command) {
         command.copyBuffer(source->buffer, staging->buffer, vk::BufferCopy(0, 0, bytes));
-    }, {staging, source});
+    }, {source, staging});
     wait(token);
-    vmaInvalidateAllocation(allocator_, staging->allocation, 0, bytes);
-    if (staging->mapped)
-        std::memcpy(data, staging->mapped, bytes);
+    if (vmaInvalidateAllocation(allocator_, staging->allocation, 0, bytes) != VK_SUCCESS)
+        throw Error(ErrorCode::DeviceLost, "invalidating GPU readback failed");
+    std::memcpy(data, staging->mapped, bytes);
 }
 
 void DeviceImpl::record_copy_image(const vk::CommandBuffer command,
@@ -1474,9 +1638,9 @@ void ComputePipelineImpl::launch_indirect(const GpuPtr<DispatchArgs> args,
         // The dispatch dimensions come from the GPU, but the shader still
         // reads its root arguments through the same push-data path.
         const vk::DeviceAddress root = device_impl.stage_arguments(argument_data, argument_size);
-        device_impl.bind_heaps(command);
         command.bindPipeline(vk::PipelineBindPoint::eCompute, *self->pipeline);
-        DeviceImpl::push_root(command, root);
+        device_impl.bind_heaps(command);
+        device_impl.push_root(command, root);
         command.dispatchIndirect(buffer, offset);
     }, std::vector<std::shared_ptr<void>>{self, resource});
 }
@@ -1484,40 +1648,37 @@ void ComputePipelineImpl::launch_indirect(const GpuPtr<DispatchArgs> args,
 BufferImpl::~BufferImpl() {
     if (!device || !allocation)
         return;
-    device->retire([owner = device, allocator = device->allocator_, buffer = this->buffer,
-        allocation = this->allocation, unmap = mapped_by_api, descriptor = handle] {
+    device->retire([allocator = device->allocator_, buffer = this->buffer,
+        allocation = this->allocation, unmap = mapped_by_api] {
         if (unmap)
             vmaUnmapMemory(allocator, allocation);
         if (buffer)
             vmaDestroyBuffer(allocator, buffer, allocation);
-        owner->release_resource(descriptor);
     });
 }
 
 SamplerImpl::~SamplerImpl() {
-    if (!device || !sampler)
+    if (!device || !handle)
         return;
-    device->retire([owner = device, sampler = sampler.release(), descriptor = handle,
-        vk_device = device->device()] {
-        if (sampler)
-            vk_device.destroySampler(sampler);
-        owner->release_sampler(descriptor);
+    device->retire([owner = device.get(), slot = handle.value] {
+        owner->release_slot(owner->sampler_heap_, slot);
     });
 }
 
 AccelerationStructureImpl::~AccelerationStructureImpl() {
     if (!device || !acceleration_structure)
         return;
-    device->retire([owner = device, acceleration = acceleration_structure.release(),
-        descriptor = handle, storage = std::move(storage), vk_device = device->device()] {
+    device->retire([acceleration = acceleration_structure.release(),
+        storage = std::move(storage), vk_device = device->device()] {
         if (acceleration)
             vk_device.destroyAccelerationStructureKHR(acceleration);
-        owner->release_resource(ResourceHandle{descriptor.value});
     });
 }
 
 std::shared_ptr<BufferImpl> make_buffer(const std::shared_ptr<DeviceImpl>& device,
-    const std::size_t size, const std::size_t) {
+    const std::size_t size, const std::size_t alignment) {
+    if (!device)
+        throw Error(ErrorCode::InvalidResource, "empty GPU device");
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorageBuffer
             | vk::BufferUsageFlagBits::eTransferSrc
             | vk::BufferUsageFlagBits::eTransferDst
@@ -1525,27 +1686,24 @@ std::shared_ptr<BufferImpl> make_buffer(const std::shared_ptr<DeviceImpl>& devic
             | vk::BufferUsageFlagBits::eShaderDeviceAddress;
     if (device->acceleration_structure_supported())
         usage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-    return device->create_buffer(size, usage, VMA_MEMORY_USAGE_GPU_ONLY, false);
+    return device->create_buffer(size, usage, VMA_MEMORY_USAGE_GPU_ONLY, false, alignment);
 }
 
-void upload_buffer(const std::shared_ptr<DeviceImpl>& device,
-    const std::shared_ptr<BufferImpl>& destination, const void* data,
-    const std::size_t bytes, const std::size_t, const std::size_t destination_offset) {
-    device->upload(destination, data, bytes, destination_offset);
+void upload_buffer(const std::shared_ptr<BufferImpl>& destination, const void* data,
+    const std::size_t bytes, const std::size_t offset) {
+    destination->device->upload(destination, data, bytes, offset);
 }
 
-void download_buffer(const std::shared_ptr<DeviceImpl>& device,
-    const std::shared_ptr<BufferImpl>& source, void* data,
-    const std::size_t bytes, const std::size_t) {
-    device->download(source, data, bytes);
+void download_buffer(const std::shared_ptr<BufferImpl>& source, void* data, const std::size_t bytes) {
+    source->device->download(source, data, bytes);
 }
 
 std::uint64_t buffer_address(const std::shared_ptr<BufferImpl>& buffer) {
     return buffer ? buffer->address : 0;
 }
 
-ResourceHandle buffer_handle(const std::shared_ptr<BufferImpl>& buffer) {
-    return buffer ? buffer->device->buffer_resource(buffer) : ResourceHandle{};
+std::uint32_t sampler_handle(const std::shared_ptr<SamplerImpl>& sampler) {
+    return sampler ? sampler->handle.value : 0;
 }
 
 AccelerationStructureHandle acceleration_structure_handle(
@@ -1567,9 +1725,17 @@ Device::~Device() {
         impl_->shutdown();
 }
 Device::Device(Device&&) noexcept = default;
-Device& Device::operator=(Device&&) noexcept = default;
+Device& Device::operator=(Device&& other) noexcept {
+    if (this != &other) {
+        if (impl_)
+            impl_->shutdown();
+        impl_ = std::move(other.impl_);
+    }
+    return *this;
+}
 
 DeviceFeatures Device::features() const { return impl_->features(); }
+MemoryReport Device::memory_report() const { return impl_->memory_report(); }
 
 Shader Device::create_shader(const std::span<const std::byte> spirv) {
     return create_shader(spirv, "main");
@@ -1589,6 +1755,10 @@ RayTracingPipeline Device::ray_tracing(const RayTracingPipelineDesc& desc) {
 }
 AccelerationStructure Device::build_blas(const std::span<const TriangleGeometry> geometry) {
     return impl_->build_blas(geometry);
+}
+
+void Device::refit_blas(AccelerationStructure& blas) {
+    impl_->refit_blas(blas);
 }
 AccelerationStructure Device::build_tlas(const std::span<const Instance> instances) {
     return impl_->build_tlas(instances);
@@ -1671,8 +1841,8 @@ void detail::DeviceImpl::record_ray_tracing(const detail::RayTracingPipelineImpl
             | vk::AccessFlagBits2::eShaderWrite
             | vk::AccessFlagBits2::eAccelerationStructureReadKHR);
     command.pipelineBarrier2({{}, ordering, {}, {}});
-    bind_heaps(command);
     command.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, *pipeline.pipeline);
+    bind_heaps(command);
     push_root(command, root);
     command.traceRaysKHR(pipeline.raygen_region, pipeline.miss_region,
         pipeline.hit_region, {}, groups.x, groups.y, groups.z);
@@ -1702,7 +1872,6 @@ AccelerationStructure::operator bool() const noexcept {
     return static_cast<bool>(handle());
 }
 
-SamplerHandle Sampler::handle() const noexcept { return impl_ ? impl_->handle : SamplerHandle{}; }
 
 } // namespace gpu
 

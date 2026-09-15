@@ -1,4 +1,4 @@
-#include "Scene/Objects/LightInstance.h"
+#include "Scene/LightInstance.h"
 
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"
@@ -79,7 +79,7 @@ bool renderLightInstance(LightInstance& instance)
 
 }
 
-void ObjectUiVisitor::visit(LightInstance& instance)
+bool object_ui::render(LightInstance& instance)
 {
-    changed |= renderLightInstance(instance);
+    return renderLightInstance(instance);
 }

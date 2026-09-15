@@ -267,10 +267,10 @@ TEST_CASE("MaterialX image color4 keeps alpha contiguous in the SVM stack",
 TEST_CASE("Authoring albedo textures stay connected through SVM compilation",
     "[svm][materialx][image][authoring]")
 {
-    MaterialAuthoring material;
+    SvmMaterial material;
     material.albedo = {0.1f, 0.2f, 0.3f};
     material.albedoIndex = 7;
-    const MaterialX::DocumentPtr document = nr::materialx::documentFromAuthoring(
+    const MaterialX::DocumentPtr document = nr::materialx::documentFromSvmMaterial(
         material, [](const int index) {
             return index == 7 ? std::string("grass004_diff") : std::string{};
         });

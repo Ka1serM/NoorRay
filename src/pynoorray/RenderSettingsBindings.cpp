@@ -1,6 +1,6 @@
 #include "Bindings.h"
 
-#include "Scene/RenderSettings.h"
+#include "Shared/RenderSettings.h"
 
 namespace nb = nanobind;
 

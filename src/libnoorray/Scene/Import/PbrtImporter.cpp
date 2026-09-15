@@ -16,22 +16,21 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/quaternion.hpp>
 
-#include "Rendering/Camera/CameraInstance.h"
-#include "Rendering/Camera/RectangularSensor.h"
-#include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/ThinLensCamera.h"
-#include "Log.h"
+#include "Camera/CameraInstance.h"
+#include "Camera/RectangularSensor.h"
+#include "Camera/RealisticCamera.h"
+#include "Camera/ThinLensCamera.h"
+#include "Logging/Log.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Geometry/Mesh/Assets/PlyMeshLoader.h"
-#include "Geometry/Mesh/Transform.h"
-#include "Materials/Shading/Sellmeier.h"
-#include "Scene/Objects/LightInstance.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Mesh/Transform.h"
+#include "Optics/Sellmeier.h"
+#include "Scene/LightInstance.h"
+#include "Scene/MeshInstance.h"
 #include "Scene/Import/PbrtParser.h"
 #include "Scene/Scene.h"
-#include "Scene/Resources/Texture.h"
-#include "Rendering/Optics/KolbLens.h"
+#include "Texture/Texture.h"
+#include "Optics/KolbLens.h"
 
 namespace {
 using nr::pbrt::Command;
@@ -252,10 +251,10 @@ glm::mat4 lookAtCameraFromWorld(const Command& command)
     return glm::inverse(worldFromCamera);
 }
 
-MaterialAuthoring makeMaterial(const Command& command,
+SvmMaterial makeMaterial(const Command& command,
     const std::unordered_map<std::string, int>& textures)
 {
-    MaterialAuthoring material{};
+    SvmMaterial material{};
     const std::string type = command.arguments.empty() ? "diffuse" : command.arguments.front();
     if (type != "diffuse" && type != "coateddiffuse" && type != "conductor"
         && type != "coatedconductor" && type != "dielectric" && type != "thindielectric")
@@ -284,13 +283,13 @@ MaterialAuthoring makeMaterial(const Command& command,
 struct ShapeRecord {
     Command command;
     glm::mat4 transform{1.f};
-    MaterialAuthoring material{};
+    SvmMaterial material{};
     bool reverse{};
 };
 
 struct State {
     glm::mat4 transform{1.f};
-    MaterialAuthoring material{};
+    SvmMaterial material{};
     std::string namedMaterial;
     glm::vec3 areaEmission{};
     bool reverse{};
@@ -318,7 +317,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
     if (shape.command.arguments.empty()) return;
     const std::string& type = shape.command.arguments.front();
     const std::string name = type + "_" + std::to_string(index);
-    MaterialAuthoring material = shape.material;
+    SvmMaterial material = shape.material;
     const auto texturePathResolver = [&scene](const int textureIndex) {
         const auto& textures = scene.getTextures();
         if (textureIndex < 0 || static_cast<size_t>(textureIndex) >= textures.size())
@@ -326,47 +325,19 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
         return textures[static_cast<size_t>(textureIndex)].getName();
     };
     const MaterialX::DocumentPtr materialDocument =
-        nr::materialx::documentFromAuthoring(material, texturePathResolver);
+        nr::materialx::documentFromSvmMaterial(material, texturePathResolver);
     glm::mat4 transform = shape.transform;
-    MeshAssetRef meshAsset;
+    Mesh* mesh;
 
     if (type == "sphere") {
         const float radius = scalar(shape.command, "radius", 1.f);
         transform *= glm::scale(glm::mat4(1.f), glm::vec3(radius * 2.f));
-        meshAsset = scene.add(MeshAsset::CreateSphere(scene, name, materialDocument));
+        mesh = scene.add(Mesh::CreateSphere(scene, name, materialDocument));
     } else if (type == "disk") {
         const float radius = scalar(shape.command, "radius", 1.f);
         transform *= glm::rotate(glm::mat4(1.f), glm::half_pi<float>(), glm::vec3(1, 0, 0));
         transform *= glm::scale(glm::mat4(1.f), glm::vec3(radius * 2.f));
-        meshAsset = scene.add(MeshAsset::CreateDisk(scene, name, materialDocument));
-    } else if (type == "plymesh") {
-        const std::string filename = relativeAssetPath(shape.command, "filename");
-        if (filename.empty())
-            throw std::runtime_error("plymesh requires a filename at "
-                + shape.command.source.string() + ":" + std::to_string(shape.command.line));
-
-        PlyMeshData mesh;
-        try {
-            mesh = PlyMeshLoader::Load(filename);
-        } catch (const std::exception& error) {
-            throw std::runtime_error("failed to load PBRT plymesh at "
-                + shape.command.source.string() + ":" + std::to_string(shape.command.line)
-                + ": " + error.what());
-        }
-
-        if (shape.reverse) {
-            for (size_t i = 0; i < mesh.indices.size(); i += 3)
-                std::swap(mesh.indices[i + 1], mesh.indices[i + 2]);
-            for (Vertex& vertex : mesh.vertices)
-                vertex.normal = -vertex.normal;
-        }
-
-        const std::string meshName = std::filesystem::path(filename).stem().string();
-        meshAsset = scene.add(MeshAsset(scene,
-            meshName.empty() ? name : meshName,
-            mesh.vertices, mesh.indices,
-            std::vector<Face>(mesh.indices.size() / 3, Face{0}),
-            std::vector<MaterialX::DocumentPtr>{materialDocument}));
+        mesh = scene.add(Mesh::CreateDisk(scene, name, materialDocument));
     } else if (type == "trianglemesh") {
         const Parameter* positions = shape.command.find("P");
         const Parameter* indexParameter = shape.command.find("indices");
@@ -378,7 +349,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
         if (p.size() % 3 != 0 || sourceIndices.size() % 3 != 0)
             throw std::runtime_error("invalid trianglemesh array length at "
                 + shape.command.source.string() + ":" + std::to_string(shape.command.line));
-        std::vector<Vertex> vertices(p.size() / 3);
+        std::vector<Vertex> vertices(p.size() / 3, defaultVertex());
         for (size_t i = 0; i < vertices.size(); ++i) {
             vertices[i].position = {p[i * 3], p[i * 3 + 1], p[i * 3 + 2]};
             vertices[i].tangentSign = 1.f;
@@ -410,16 +381,16 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
                 vertices[i].tangent = glm::normalize(glm::cross(helper, vertices[i].normal));
             }
         } else computeMissingNormals(vertices, indices);
-        meshAsset = scene.add(MeshAsset(scene, name, vertices, indices,
+        mesh = scene.add(Mesh(scene, name, vertices, indices,
             std::vector<Face>(indices.size() / 3, Face{0}),
             std::vector<MaterialX::DocumentPtr>{materialDocument}));
     } else {
-        LOG_ERROR("PBRT shape '" << type << "' is not supported; skipping "
+        NR_LOG_ERROR("PBRT shape '" << type << "' is not supported; skipping "
             << shape.command.source.string() << ':' << shape.command.line);
         return;
     }
 
-    auto instance = std::make_unique<MeshInstance>(scene, name, meshAsset, Transform(transform));
+    auto instance = std::make_unique<MeshInstance>(scene, name, mesh, Transform(transform));
     instance->setSource("pbrt", shape.command.source.string());
     scene.add(std::move(instance));
 }
@@ -443,7 +414,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
     state.material.roughness = 1.f;
     std::vector<State> stack;
     std::unordered_map<std::string, glm::mat4> coordinateSystems;
-    std::unordered_map<std::string, MaterialAuthoring> namedMaterials;
+    std::unordered_map<std::string, SvmMaterial> namedMaterials;
     std::unordered_map<std::string, int> textures;
     std::unordered_map<std::string, std::vector<ShapeRecord>> objectDefinitions;
     std::vector<ShapeRecord> shapes;
@@ -500,13 +471,13 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                     const std::filesystem::path texturePath =
                         (command.source.parent_path() / filename).lexically_normal();
                     if (!std::filesystem::exists(texturePath)) {
-                        LOG_WARN("PBRT texture not found; skipping: " << texturePath.string()
+                        NR_LOG_WARN("PBRT texture not found; skipping: " << texturePath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
-                        const TextureHandle texture = scene.addTexture(Texture(
+                        Texture* texture = scene.addTexture(Texture(
                             texturePath.string(), TextureEncoding::Srgb8));
                         textures[command.arguments[0]] =
-                            static_cast<int>(texture.index());
+                            texture->getSceneIndex();
                     }
                 }
             }
@@ -528,7 +499,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                 : rgb(command, "L", glm::vec3(1.f)) * scalar(command, "scale", 1.f);
         } else if (name == "ReverseOrientation") state.reverse = !state.reverse;
         else if (name == "Shape") {
-                MaterialAuthoring material = state.material;
+                SvmMaterial material = state.material;
             if (glm::length2(state.areaEmission) > 0.f) {
                 material.emission = state.areaEmission;
                 material.emissionStrength = 1.f;
@@ -554,7 +525,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
         } else if (name == "LightSource") {
             const std::string& type = command.arguments.front();
             if (type != "infinite" && type != "point" && type != "spot" && type != "distant") {
-                LOG_ERROR("PBRT light '" << type << "' is not supported; skipping "
+                NR_LOG_ERROR("PBRT light '" << type << "' is not supported; skipping "
                     << command.source.string() << ':' << command.line);
                 continue;
             }
@@ -563,7 +534,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
             if (type == "infinite") {
                 Environment& environment = scene.getEnvironment();
                 const float colorMagnitude = std::max({color.r, color.g, color.b, 0.f});
-                environment.color = colorMagnitude > 0.f
+                environment.data.color = colorMagnitude > 0.f
                     ? color / colorMagnitude : glm::vec3(0.f);
                 // Despite the legacy member name, lightingExposure is a direct
                 // multiplier. Keep color in display-friendly [0, 1] range and
@@ -574,7 +545,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                     const std::filesystem::path hdriPath =
                         (command.source.parent_path() / filename).lexically_normal();
                     if (!std::filesystem::exists(hdriPath)) {
-                        LOG_WARN("PBRT HDRI not found; skipping: " << hdriPath.string()
+                        NR_LOG_WARN("PBRT HDRI not found; skipping: " << hdriPath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
                         scene.setEnvironmentTexture(

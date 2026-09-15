@@ -7,8 +7,8 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/string.h>
 
-#include "Rendering/Camera/CameraInstance.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
+#include "Camera/CameraInstance.h"
+#include "Mesh/Assets/Mesh.h"
 #include "Scene/Scene.h"
 #include "Scene/SceneObject.h"
 
@@ -34,9 +34,9 @@ void bindScene(nb::module_& module)
             return std::dynamic_pointer_cast<CameraInstance>(scene.getObjectPtr(handle));
         }, "camera"_a, "name"_a = "Camera", "transform"_a = Transform{},
            nb::rv_policy::move)
-        .def("add", [](Scene& scene, std::unique_ptr<MeshAsset> asset) {
+        .def("add", [](Scene& scene, std::unique_ptr<Mesh> asset) {
             return scene.add(std::move(*asset));
-        }, "asset"_a)
+        }, "mesh"_a)
         .def("add", [](Scene& scene, std::unique_ptr<Texture> texture) {
             return scene.addTexture(std::move(*texture));
         }, "texture"_a)

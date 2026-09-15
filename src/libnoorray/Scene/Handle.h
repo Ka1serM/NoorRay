@@ -4,23 +4,23 @@
 #include <cstdint>
 #include <functional>
 
-namespace nr {
+class SceneObject;
 
-// Opaque, strongly typed reference to a scene resource.
+// Stable, generation-checked reference to a scene object.
 //
-// The index addresses a registry slot and is the value GPU-side structures
-// store, so it stays stable for as long as the resource lives. The generation
-// counter is bumped whenever a slot is released, which makes a handle that
-// outlived its resource detectable instead of silently aliasing whichever
-// resource was allocated into the recycled slot.
-template<class Tag>
-class Handle
+// The index addresses a slot in Scene's object table, so it stays valid as
+// objects move within the dense array behind it. The generation counter is
+// bumped whenever a slot is released, which makes a handle that outlived its
+// object detectable instead of silently aliasing whichever object was
+// allocated into the recycled slot -- this is what keeps a stale UI selection
+// safe.
+class SceneObjectHandle
 {
 public:
     static constexpr uint32_t InvalidIndex = ~0u;
 
-    constexpr Handle() = default;
-    constexpr Handle(const uint32_t index, const uint32_t generation)
+    constexpr SceneObjectHandle() = default;
+    constexpr SceneObjectHandle(const uint32_t index, const uint32_t generation)
         : index_(index), generation_(generation)
     {
     }
@@ -30,34 +30,20 @@ public:
     constexpr bool isValid() const { return index_ != InvalidIndex; }
     constexpr explicit operator bool() const { return isValid(); }
 
-    friend constexpr bool operator==(const Handle&, const Handle&) = default;
+    friend constexpr bool operator==(
+        const SceneObjectHandle&, const SceneObjectHandle&) = default;
 
 private:
     uint32_t index_{InvalidIndex};
     uint32_t generation_{};
 };
 
-}
-
-template<class Tag>
-struct std::hash<nr::Handle<Tag>>
+template<>
+struct std::hash<SceneObjectHandle>
 {
-    std::size_t operator()(const nr::Handle<Tag>& handle) const noexcept
+    std::size_t operator()(const SceneObjectHandle& handle) const noexcept
     {
         return std::hash<uint64_t>{}(
-            static_cast<uint64_t>(handle.index()) << 32
-            | handle.generation());
+            static_cast<uint64_t>(handle.index()) << 32 | handle.generation());
     }
 };
-
-class GaussianAsset;
-class MeshAsset;
-class SceneObject;
-class Texture;
-struct Material;
-
-using MeshAssetHandle = nr::Handle<MeshAsset>;
-using GaussianAssetHandle = nr::Handle<GaussianAsset>;
-using MaterialHandle = nr::Handle<Material>;
-using TextureHandle = nr::Handle<Texture>;
-using SceneObjectHandle = nr::Handle<SceneObject>;

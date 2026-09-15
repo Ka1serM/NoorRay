@@ -57,16 +57,8 @@ struct Frame::State {
 namespace gpu::detail {
 
 class DeviceImpl;
+struct SamplerImpl;
 
-// Descriptor-heap capacities. These bound the opaque handle space, so they are
-// shared by the allocator and by every heap write and bind.
-inline constexpr std::uint32_t descriptor_capacity = 4096;
-inline constexpr std::uint32_t sampler_descriptor_capacity = 1024;
-// Slang's ResourceHeapEXT lowering indexes every resource descriptor through a
-// 128-byte slot, regardless of the physical descriptor payload size reported
-// by VK_EXT_descriptor_heap.
-inline constexpr vk::DeviceSize resource_descriptor_slot_size = 128;
-inline constexpr std::size_t argument_arena_size = 4u * 1024u * 1024u;
 
 // The library renders depth into a single format; RenderTarget depth images
 // and depth-enabled pipelines are both built against it.
@@ -102,7 +94,6 @@ struct BufferImpl {
     vk::Buffer buffer;
     VmaAllocation allocation = VK_NULL_HANDLE;
     vk::DeviceAddress address = 0;
-    ResourceHandle handle{};
     std::size_t size = 0;
     void* mapped = nullptr;
     bool host_visible = false;
@@ -126,8 +117,8 @@ struct ImageImpl {
     VmaAllocation allocation = VK_NULL_HANDLE;
     vk::DeviceMemory external_memory;
     ImageHandle handle{};
-    ImageHandle sampled_handle{};
-    ImageHandle storage_handle{};
+    TextureHandle sampled_handle{};
+    TextureHandle storage_handle{};
     vk::Format format = vk::Format::eR8G8B8A8Unorm;
     vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor;
     std::size_t byte_size = 0;
@@ -141,12 +132,33 @@ struct ImageImpl {
     ~ImageImpl();
 };
 
+// A sampler exists only as its encoded descriptor in the sampler heap; there is
+// no VkSampler object behind it.
 struct SamplerImpl {
     std::shared_ptr<DeviceImpl> device;
-    vk::UniqueSampler sampler;
     SamplerHandle handle{};
 
     ~SamplerImpl();
+};
+
+// One device-owned descriptor heap: a mapped buffer of fixed-size slots
+// followed by the implementation's reserved range. Slot 0 is never handed out,
+// so a zero handle stays null.
+struct DescriptorHeap {
+    std::shared_ptr<BufferImpl> buffer;
+    // First slot, at the aligned heap address inside `buffer`.
+    std::byte* slots = nullptr;
+    std::size_t buffer_offset = 0;
+    vk::DeviceAddress address = 0;
+    vk::DeviceSize descriptor_size = 0;
+    vk::DeviceSize reserved_offset = 0;
+    vk::DeviceSize reserved_size = 0;
+    std::uint32_t capacity = 0;
+    // Slots below `next` have been handed out at least once; freed ones wait
+    // in `free` for reuse.
+    std::uint32_t next = 1;
+    std::vector<std::uint32_t> free;
+    const char* capacity_name = "";
 };
 
 struct AccelerationStructureImpl {
@@ -161,6 +173,12 @@ struct AccelerationStructureImpl {
     std::vector<std::shared_ptr<AccelerationStructureImpl>> references;
     std::shared_ptr<BufferImpl> update_input;
     std::shared_ptr<BufferImpl> update_scratch;
+    // Retained so a BLAS refit can re-issue the original build description.
+    // The geometry holds device addresses, so a refit is only valid while the
+    // source buffers keep their allocation -- i.e. same vertex/index count.
+    std::vector<vk::AccelerationStructureGeometryKHR> blas_geometries;
+    std::vector<std::uint32_t> blas_primitive_counts;
+    std::vector<std::shared_ptr<BufferImpl>> blas_sources;
 
     ~AccelerationStructureImpl();
 };
@@ -210,7 +228,11 @@ public:
     std::vector<std::shared_ptr<ImageImpl>> images;
     // Acquire semaphores cycle independently of image indices: the index is
     // only known after the acquire that the semaphore belongs to.
-    std::vector<vk::UniqueSemaphore> acquire_semaphores;
+    struct Acquire {
+        vk::UniqueSemaphore semaphore;
+        GpuToken token{};
+    };
+    std::vector<Acquire> acquire_semaphores;
     std::vector<vk::UniqueSemaphore> present_semaphores;
     // A swapchain image must be transitioned from PRESENT_SRC rather than
     // UNDEFINED once it has been presented at least once, or its contents are
@@ -240,7 +262,7 @@ public:
     bool acceleration_structure_supported() const noexcept { return acceleration_structure_supported_; }
 
     std::shared_ptr<BufferImpl> create_buffer(std::size_t size, vk::BufferUsageFlags usage,
-                                               VmaMemoryUsage memory_usage, bool mapped);
+                                               VmaMemoryUsage memory_usage, bool mapped, std::size_t alignment = 1);
     std::shared_ptr<ImageImpl> create_image(std::uint32_t width, std::uint32_t height,
         ImageUsage usage, ImageFormat format);
     std::shared_ptr<ShaderImpl> create_shader(std::span<const std::byte> spirv,
@@ -269,23 +291,26 @@ public:
     vk::DeviceAddress buffer_address(vk::Buffer buffer) const;
     std::shared_ptr<BufferImpl> find_buffer_resource(vk::DeviceAddress address) const;
     std::pair<vk::Buffer, vk::DeviceSize> find_buffer(vk::DeviceAddress address) const;
-    void bind_heaps(vk::CommandBuffer) const;
     void retain_active(std::shared_ptr<void> resource);
-    void release_resource(ResourceHandle handle);
-    void release_sampler(SamplerHandle handle);
     // Stage `size` bytes of root arguments in the argument arena and return the
     // GPU address the shader's root pointer should carry.
     vk::DeviceAddress stage_arguments(const void* args, std::size_t size);
-    // Every pipeline is a descriptor-heap pipeline, so root arguments always
-    // travel through the extension's push-data path.
-    static void push_root(vk::CommandBuffer, vk::DeviceAddress root);
-    void write_descriptor(ResourceHandle, const vk::ResourceDescriptorInfoEXT&) const;
-    void write_image_descriptor(const ImageImpl&, ResourceHandle, vk::DescriptorType) const;
-    ResourceHandle allocate_resource();
-    ResourceHandle buffer_resource(const std::shared_ptr<BufferImpl>&);
-    SamplerHandle write_sampler_descriptor(const vk::SamplerCreateInfo&);
-    AccelerationStructureHandle write_acceleration_structure_descriptor(vk::AccelerationStructureKHR,
-                                                                         vk::DeviceAddress, vk::DeviceSize);
+    MemoryReport memory_report() const;
+    // Root arguments are one 8-byte pointer delivered with vkCmdPushDataEXT;
+    // shaders read it through their [[vk::push_constant]] block.
+    void push_root(vk::CommandBuffer, vk::DeviceAddress root) const;
+    // Bind the resource and sampler heaps. Every launch calls this right before
+    // its push: legacy descriptor-set commands recorded into the same command
+    // buffer (the ImGui backend's, for one) invalidate heap bindings, so
+    // binding once per command buffer is not enough.
+    void bind_heaps(vk::CommandBuffer) const;
+    // Every pipeline is layout-free and reads descriptors from the heaps.
+    static vk::PipelineCreateFlags2CreateInfo pipeline_heap_flags(const void* next = nullptr) {
+        return vk::PipelineCreateFlags2CreateInfo{
+            vk::PipelineCreateFlagBits2::eDescriptorHeapEXT, next};
+    }
+    // Allocate a resource-heap slot and encode a view of `image` into it.
+    std::uint32_t write_image_descriptor(const ImageImpl&, vk::DescriptorType);
     std::shared_ptr<ImageImpl> find_image(ImageHandle handle) const;
     void render(const RenderTarget&, const std::function<void()>&);
     // Shared prologue for every in-render draw: validates that the pipeline
@@ -326,6 +351,7 @@ public:
     std::shared_ptr<RayTracingPipelineImpl> create_ray_tracing(const RayTracingPipelineDesc&);
     AccelerationStructure build_blas(std::span<const TriangleGeometry>);
     AccelerationStructure build_tlas(std::span<const Instance>);
+    void refit_blas(AccelerationStructure&);
     void update_tlas(AccelerationStructure&, std::span<const Instance>);
     AccelerationStructure build_tlas(GpuPtr<InstanceRecord>, std::uint32_t,
         std::span<const AccelerationStructure>);
@@ -339,7 +365,6 @@ public:
     void update_tlas_at(AccelerationStructure&, vk::DeviceAddress records,
         std::uint32_t count);
 
-    std::uint64_t allocate_handle() noexcept { return next_handle_++; }
 
 private:
     friend class ComputePipelineImpl;
@@ -347,6 +372,7 @@ private:
     friend class RayTracingPipelineImpl;
     friend struct BufferImpl;
     friend struct ImageImpl;
+    friend struct SamplerImpl;
     friend struct AccelerationStructureImpl;
     struct Pending {
         GpuToken token;
@@ -362,7 +388,8 @@ private:
 
     struct Capabilities {
         bool mandatory = false;   // BDA, timeline, sync2, dynamic rendering,
-                                  // descriptor heap, unified image layouts
+                                  // descriptor heaps, untyped pointers,
+                                  // maintenance5, unified image layouts
         bool acceleration_structure = false;
         bool ray_query = false;
         bool ray_tracing = false;
@@ -376,7 +403,18 @@ private:
     void create_device(const DeviceConfig& config);
     void create_allocator();
     void create_command_state();
-    void create_descriptor_heap();
+    void create_descriptor_heaps();
+    void create_heap(DescriptorHeap&, std::uint32_t capacity, vk::DeviceSize descriptor_size,
+        vk::DeviceSize descriptor_alignment, vk::DeviceSize heap_alignment,
+        vk::DeviceSize reserved_size, vk::DeviceSize max_size, const char* capacity_name);
+    static vk::BindHeapInfoEXT heap_bind_info(const DescriptorHeap&);
+    // Slots are taken on resource creation and returned from the resource's
+    // retire callback, so a slot is never reused while in-flight work may
+    // still read it.
+    std::uint32_t allocate_slot(DescriptorHeap&);
+    void release_slot(DescriptorHeap&, std::uint32_t slot) noexcept;
+    vk::HostAddressRangeEXT slot_range(const DescriptorHeap&, std::uint32_t slot) const;
+    void flush_slot(const DescriptorHeap&, std::uint32_t slot) const;
     void reap_completed();
 public:
     // Called from resource destructors: defers the Vulkan/VMA release until
@@ -418,31 +456,27 @@ private:
     float timestamp_period_ns_ = 1.0f;
     std::uint32_t timestamp_valid_bits_ = 64;
     std::uint64_t next_timeline_ = 1;
-    std::uint64_t next_handle_ = 1;
     std::shared_ptr<BufferImpl> argument_arena_;
-    std::shared_ptr<BufferImpl> descriptor_heap_;
-    std::shared_ptr<BufferImpl> sampler_heap_;
-    vk::PhysicalDeviceDescriptorHeapPropertiesEXT descriptor_properties_{};
+    std::size_t argument_arena_size_ = 0;
+    std::size_t host_alignment_ = 16;
+    struct ArgumentRegion { std::size_t begin = 0, end = 0; GpuToken token{}; };
+    // Every pipeline in the library is layout-free: textures and samplers come
+    // from these two heaps, everything else through the 8-byte root pointer.
+    vk::PhysicalDeviceDescriptorHeapPropertiesEXT heap_properties_{};
+    std::uint32_t texture_descriptor_capacity_ = 0;
+    std::uint32_t sampler_descriptor_capacity_ = 0;
+    DescriptorHeap texture_heap_;
+    DescriptorHeap sampler_heap_;
+    // Guarded by its own mutex for the same reason as retire_mutex_: slots are
+    // released from retire callbacks.
+    mutable std::mutex heap_mutex_;
     vk::PhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties_{};
     vk::PhysicalDeviceRayTracingPipelinePropertiesKHR ray_tracing_properties_{};
-    vk::DeviceSize descriptor_heap_offset_ = 0;
-    vk::DeviceSize descriptor_stride_ = 0;
-    // Descriptor zero is reserved so opaque handles remain truthy even when
-    // the underlying heap index is the first application-visible slot.
-    std::uint32_t next_descriptor_ = 1;
-    std::vector<std::uint32_t> free_descriptors_;
-    vk::DeviceSize sampler_heap_offset_ = 0;
-    vk::DeviceSize sampler_stride_ = 0;
-    std::uint32_t next_sampler_descriptor_ = 1;
-    std::vector<std::uint32_t> free_sampler_descriptors_;
-    std::mutex descriptor_mutex_;
     // Ring offset into argument_arena_; see DeviceImpl::stage_arguments.
     std::size_t argument_offset_ = 0;
+    std::deque<ArgumentRegion> argument_pending_;
     std::mutex argument_mutex_;
     std::map<vk::DeviceAddress, std::weak_ptr<BufferImpl>> buffers_;
-    std::vector<std::weak_ptr<ImageImpl>> images_;
-    std::vector<std::weak_ptr<SamplerImpl>> samplers_;
-    std::vector<std::weak_ptr<AccelerationStructureImpl>> acceleration_structures_;
     std::deque<Pending> pending_;
     // Guarded by its own mutex: retiring happens inside resource destructors,
     // which can run while mutex_ is already held (a completed submission
@@ -461,17 +495,13 @@ private:
 };
 
 std::shared_ptr<BufferImpl> make_buffer(const std::shared_ptr<DeviceImpl>&, std::size_t, std::size_t);
-void upload_buffer(const std::shared_ptr<DeviceImpl>&, const std::shared_ptr<BufferImpl>&,
-                   const void*, std::size_t, std::size_t, std::size_t);
-void download_buffer(const std::shared_ptr<DeviceImpl>&, const std::shared_ptr<BufferImpl>&,
-                     void*, std::size_t, std::size_t);
+void upload_buffer(const std::shared_ptr<BufferImpl>&, const void*, std::size_t, std::size_t);
+void download_buffer(const std::shared_ptr<BufferImpl>&, void*, std::size_t);
 std::uint64_t buffer_address(const std::shared_ptr<BufferImpl>&);
-ResourceHandle buffer_handle(const std::shared_ptr<BufferImpl>&);
 std::shared_ptr<ImageImpl> make_image(const std::shared_ptr<DeviceImpl>&, std::uint32_t,
                                       std::uint32_t, ImageUsage, ImageFormat);
-std::uint64_t image_handle(const std::shared_ptr<ImageImpl>&);
-std::uint64_t image_sampled_handle(const std::shared_ptr<ImageImpl>&);
-std::uint64_t image_storage_handle(const std::shared_ptr<ImageImpl>&);
+std::uint32_t image_sampled_handle(const std::shared_ptr<ImageImpl>&);
+std::uint32_t image_storage_handle(const std::shared_ptr<ImageImpl>&);
 AccelerationStructureHandle acceleration_structure_handle(
     const std::shared_ptr<AccelerationStructureImpl>&);
 

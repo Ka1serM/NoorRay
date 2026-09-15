@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include <memory>
-#include <string>
 #include <vector>
 #include <functional>
 #include "glm/glm.hpp"
@@ -43,8 +42,6 @@ public:
 
     static void SetDarkTheme();
     static void SetLightTheme();
-    ImGuiComponent* getComponent(const std::string& name) const;
-
     static void tableRowLabel(const char* label);
     static bool accordionRow(const char* label);
     static void checkboxRow(const char* label, bool value, const std::function<void(bool)>& setter);

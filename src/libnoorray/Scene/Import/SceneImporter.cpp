@@ -12,8 +12,8 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <tbb/task_arena.h>
-#include "Rendering/Camera/CameraInstance.h"
-#include "Scene/Resources/Texture.h"
+#include "Camera/CameraInstance.h"
+#include "Texture/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -23,17 +23,17 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include "Log.h"
+#include "Logging/Log.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Scene/MeshInstance.h"
 #include "glm/gtx/matrix_decompose.hpp"
 #include "glm/gtx/norm.hpp"
 #include "glm/gtx/quaternion.hpp"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Geometry/Mesh/Assets/GaussianAsset.h"
-#include "Geometry/Mesh/Transform.h"
-#include "Scene/CoordinateSystem.h"
-#include "Scene/Objects/GaussianInstance.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Mesh/Assets/Gaussian.h"
+#include "Mesh/Transform.h"
+#include "Math/CoordinateSystem.h"
+#include "Scene/GaussianInstance.h"
 #include "Scene/Import/SceneReader.h"
 #include "Scene/Import/SceneUsd.h"
 
@@ -234,20 +234,20 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     if (!success)
         throw std::runtime_error("Failed to load GLTF file: " + warn + err);
     if (!warn.empty())
-        LOG_ERROR("TinyGLTF Warning: " << warn);
+        NR_LOG_ERROR("TinyGLTF Warning: " << warn);
     if (!err.empty())
-        LOG_ERROR("TinyGLTF Info/Error: " << err);
+        NR_LOG_ERROR("TinyGLTF Info/Error: " << err);
 
     // STEP 1: Import all unique assets (meshes and materials)
 
     // Load Materials
-    std::vector<MaterialAuthoring> globalMaterials;
+    std::vector<SvmMaterial> globalMaterials;
     // Keyed by (glTF image index, encoding) so two materials that sample the
     // same source image (a common texture-atlas pattern) upload it once
     // instead of decoding and uploading a duplicate copy per material.
-    std::map<std::pair<int, int>, TextureHandle> imageTextureCache;
+    std::map<std::pair<int, int>, Texture*> imageTextureCache;
     for (const auto& mat : model.materials) {
-        MaterialAuthoring material{};
+        SvmMaterial material{};
         const auto& pbr = mat.pbrMetallicRoughness;
         material.albedo = glm::make_vec3(pbr.baseColorFactor.data());
         material.metallic = static_cast<float>(pbr.metallicFactor);
@@ -290,30 +290,30 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             if (const auto cached = imageTextureCache.find(cacheKey);
                 cached != imageTextureCache.end())
             {
-                materialIndex = static_cast<int>(cached->second.index());
+                materialIndex = cached->second->getSceneIndex();
                 return;
             }
 
             if (!image.uri.empty()) {
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
-                    const TextureHandle texture = scene.addTexture(
+                    Texture* texture = scene.addTexture(
                         Texture(texturePath.string(), encoding));
-                    materialIndex = static_cast<int>(texture.index());
+                    materialIndex = texture->getSceneIndex();
                     imageTextureCache[cacheKey] = texture;
                 } else {
-                    LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
+                    NR_LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
                 }
             } else if (!image.image.empty()) {
                 const std::string texName = image.name.empty()
                     ? "texture_" + std::to_string(textureIndex)
                     : image.name;
-                const TextureHandle texture = scene.addTexture(Texture(texName,
+                Texture* texture = scene.addTexture(Texture(texName,
                     image.image.data(), image.width, image.height, encoding));
-                materialIndex = static_cast<int>(texture.index());
+                materialIndex = texture->getSceneIndex();
                 imageTextureCache[cacheKey] = texture;
             } else {
-                LOG_ERROR("Warning: Embedded texture has no decoded data");
+                NR_LOG_ERROR("Warning: Embedded texture has no decoded data");
             }
         };
 
@@ -391,7 +391,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
         output.geometry.vertices.reserve(vertexCount);
         for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
-            Vertex vertex{};
+            Vertex vertex = defaultVertex();
             vertex.position = nr::coords::toOpenGlVector(
                 vec3(positions.component(vertexIndex, 0),
                     positions.component(vertexIndex, 1),
@@ -418,8 +418,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             vertex.tangentSign = tangents && tangents.count > vertexIndex
                 ? tangents.component(vertexIndex, 3) : 1.0f;
             if (colors)
-                vertex.color = nr::vertex_color::packLinear(
-                    gltfVertexColor(model, *colors, vertexIndex));
+                vertex.color = gltfVertexColor(model, *colors, vertexIndex);
             output.geometry.vertices.push_back(vertex);
         }
 
@@ -523,19 +522,19 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     // Phase 2: publish shared materials and prepared meshes in source order.
     // Registry and Scene mutation stays on this thread; BLAS builds are
     // enqueued only after a complete immutable CPU payload exists.
-    std::vector<MaterialRef> globalMaterialRefs;
-    globalMaterialRefs.reserve(globalMaterials.size());
-    for (const MaterialAuthoring& material : globalMaterials)
-        globalMaterialRefs.push_back(
-            scene.addMaterial(nr::materialx::documentFromAuthoring(material)));
+    std::vector<Material*> globalMaterialsInScene;
+    globalMaterialsInScene.reserve(globalMaterials.size());
+    for (const SvmMaterial& material : globalMaterials)
+        globalMaterialsInScene.push_back(
+            scene.addMaterial(nr::materialx::documentFromSvmMaterial(material)));
 
-    std::vector<std::vector<MeshAssetRef>> loadedMeshAssets(model.meshes.size());
+    std::vector<std::vector<Mesh*>> loadedMeshes(model.meshes.size());
     for (PreparedPrimitive& primitive : prepared) {
         if (!primitive.ready)
             continue;
-        std::vector<MaterialRef> materials;
-        materials.push_back(globalMaterialRefs[primitive.materialIndex]);
-        loadedMeshAssets[primitive.meshIndex].push_back(scene.add(MeshAsset(
+        std::vector<Material*> materials;
+        materials.push_back(globalMaterialsInScene[primitive.materialIndex]);
+        loadedMeshes[primitive.meshIndex].push_back(scene.add(Mesh(
             scene, std::move(primitive.name), std::move(primitive.geometry),
             std::move(materials))));
     }
@@ -590,7 +589,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         scene.add(std::move(sceneObject)); // Add as a root object for now
 
         // If the node has a mesh, create instances and attach them as children
-        if (node.mesh >= 0 && node.mesh < loadedMeshAssets.size()) {
+        if (node.mesh >= 0 && node.mesh < loadedMeshes.size()) {
             // Check for GPU instancing extension (EXT_mesh_gpu_instancing)
             bool hasInstancing = node.extensions.contains("EXT_mesh_gpu_instancing");
             std::vector<mat4> perInstanceTransforms;
@@ -643,17 +642,17 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 // GPU instancing: one MeshInstance per entry
                 for (size_t inst = 0; inst < perInstanceTransforms.size(); ++inst) {
                     const mat4 finalWorld = worldTransforms[i] * perInstanceTransforms[inst];
-                    for (const MeshAssetRef& meshAsset : loadedMeshAssets[node.mesh]) {
+                    for (Mesh* mesh : loadedMeshes[node.mesh]) {
                         auto instance = std::make_unique<MeshInstance>(
-                            scene, meshAsset.get()->getName() + "_inst_" + std::to_string(inst), meshAsset, Transform{finalWorld});
+                            scene, mesh->getName() + "_inst_" + std::to_string(inst), mesh, Transform{finalWorld});
                         const SceneObjectHandle instHandle = scene.add(std::move(instance));
                         scene.reparentObject(instHandle, objPtr->getHandle());
                     }
                 }
             } else {
                 // Single instance with the node's world transform
-                for (const MeshAssetRef& meshAsset : loadedMeshAssets[node.mesh]) {
-                    auto instance = std::make_unique<MeshInstance>(scene, meshAsset.get()->getName() + "_inst", meshAsset, Transform{worldTransforms[i]});
+                for (Mesh* mesh : loadedMeshes[node.mesh]) {
+                    auto instance = std::make_unique<MeshInstance>(scene, mesh->getName() + "_inst", mesh, Transform{worldTransforms[i]});
                     const SceneObjectHandle instHandle = scene.add(std::move(instance));
                     scene.reparentObject(instHandle, objPtr->getHandle());
                 }
@@ -691,12 +690,10 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
 
     scene.setActiveObject(rootHandle);
     scene.registerImportedFileRoot(resolvedFilepath, rootHandle);
-    loadedMeshAssets.clear();
-    globalMaterialRefs.clear();
-    scene.reclaimUnusedResources();
+    loadedMeshes.clear();
 }
 
-void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const MaterialAuthoring* materialOverride)
+void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const SvmMaterial* materialOverride)
 {
     const std::filesystem::path filePath = resolveAssetPath(filepath);
     if (!std::filesystem::exists(filePath))
@@ -733,20 +730,20 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
         throw std::runtime_error("Failed to load OBJ file: " + warn + err);
 
     if (!warn.empty())
-       LOG_ERROR("TinyObjLoader Warning: " << warn);
+       NR_LOG_ERROR("TinyObjLoader Warning: " << warn);
     if (!err.empty())
-       LOG_ERROR("TinyObjLoader Info/Error: " << err);
+       NR_LOG_ERROR("TinyObjLoader Info/Error: " << err);
 
     // Load Global Materials from the MTL file (if it was found)
-    std::vector<MaterialAuthoring> globalMaterials;
+    std::vector<SvmMaterial> globalMaterials;
     // The materials below carry scene texture slot indices. Scene owns the
     // corresponding image data for the lifetime of this scene.
     // Keyed by (resolved texture path, encoding) so multiple materials that
     // reuse the same texture file upload it once instead of decoding and
     // uploading a duplicate copy per material.
-    std::map<std::pair<std::string, int>, TextureHandle> imageTextureCache;
+    std::map<std::pair<std::string, int>, Texture*> imageTextureCache;
     for (const auto& mat : mats) {
-        MaterialAuthoring material{};
+        SvmMaterial material{};
         material.albedo = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
         material.specular = mat.specular[0];
         material.metallic = mat.metallic;
@@ -772,16 +769,16 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                 if (const auto cached = imageTextureCache.find(cacheKey);
                     cached != imageTextureCache.end())
                 {
-                    index = static_cast<int>(cached->second.index());
+                    index = cached->second->getSceneIndex();
                     return;
                 }
                 if (std::filesystem::exists(texturePath)) {
-                    const TextureHandle texture = scene.addTexture(
+                    Texture* texture = scene.addTexture(
                         Texture(resolvedTexturePath, encoding));
-                    index = static_cast<int>(texture.index());
+                    index = texture->getSceneIndex();
                     imageTextureCache[cacheKey] = texture;
                 } else
-                   LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
+                   NR_LOG_ERROR("Warning: Texture file not found: " << texturePath.string());
             }
         };
 
@@ -907,11 +904,11 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                 if (static_cast<size_t>(
                         sourceIndex.vertex_index * 3 + 2)
                     < attrib.colors.size())
-                    vertex.color = nr::vertex_color::packLinear(glm::vec4(
+                    vertex.color = glm::vec4(
                         attrib.colors[3 * sourceIndex.vertex_index],
                         attrib.colors[3 * sourceIndex.vertex_index + 1],
                         attrib.colors[3 * sourceIndex.vertex_index + 2],
-                        1.0f));
+                        1.0f);
             }
             indexOffset += vertexCount;
             if (!validTriangle)
@@ -977,11 +974,11 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     scene.reserveForImport(preparedMeshCount, globalMaterials.size(),
         preparedMeshCount + 1);
 
-    std::vector<MaterialRef> globalMaterialRefs;
-    globalMaterialRefs.reserve(globalMaterials.size());
-    for (const MaterialAuthoring& material : globalMaterials)
-        globalMaterialRefs.push_back(
-            scene.addMaterial(nr::materialx::documentFromAuthoring(material)));
+    std::vector<Material*> globalMaterialsInScene;
+    globalMaterialsInScene.reserve(globalMaterials.size());
+    for (const SvmMaterial& material : globalMaterials)
+        globalMaterialsInScene.push_back(
+            scene.addMaterial(nr::materialx::documentFromSvmMaterial(material)));
 
     // Phase 2: publish in OBJ shape order and assemble the hierarchy serially.
     auto parentObject =
@@ -992,19 +989,19 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     for (PreparedObjShape& shape : prepared) {
         if (!shape.ready)
             continue;
-        std::vector<MaterialRef> localMaterials;
+        std::vector<Material*> localMaterials;
         localMaterials.reserve(shape.globalMaterialIndices.size());
         for (const size_t materialIndex : shape.globalMaterialIndices)
-            localMaterials.push_back(globalMaterialRefs[materialIndex]);
+            localMaterials.push_back(globalMaterialsInScene[materialIndex]);
 
         const std::string instanceName = shape.name;
-        const MeshAssetRef meshAsset = scene.add(MeshAsset(scene,
+        Mesh* mesh = scene.add(Mesh(scene,
             std::move(shape.name), std::move(shape.geometry),
             std::move(localMaterials)), materialOverride == nullptr);
         Transform transform;
         transform.setPosition(shape.center);
         auto instance = std::make_unique<MeshInstance>(
-            scene, instanceName, meshAsset, transform);
+            scene, instanceName, mesh, transform);
         const SceneObjectHandle instanceHandle =
             scene.add(std::move(instance));
         scene.reparentObject(instanceHandle, parentHandle);
@@ -1013,8 +1010,6 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     scene.setActiveObject(parentHandle);
     if (materialOverride == nullptr)
         scene.registerImportedFileRoot(resolvedFilepath, parentHandle);
-    globalMaterialRefs.clear();
-    scene.reclaimUnusedResources();
 }
 
 std::string SceneImporter::nameFromPath(const std::string& path) {
@@ -1098,7 +1093,7 @@ void SceneImporter::ImportGaussianScene(Scene& scene, const std::string& filepat
         throw std::runtime_error("File not found: " + filepath);
 
     const std::string name = nameFromPath(filePath.filename().string());
-    const GaussianAssetRef asset =
+    GaussianAsset* asset =
         scene.add(GaussianAsset::CreateFromFile(scene, name, filePath.string()));
     auto instance = std::make_unique<GaussianInstance>(scene, name, asset, Transform{});
     instance->setSource("gaussian", filePath.string());

@@ -2,22 +2,10 @@
 
 #include <cstdint>
 
-#include "Backend/Host/Platform.h"
 
 // Shader Virtual Machine bytecode format for MaterialX graphs.
 namespace nr::svm
 {
-
-struct SvmProgramRecord
-{
-    std::uint32_t wordOffset{};
-    std::uint32_t wordCount{};
-    std::uint32_t textureOffset{};
-    std::uint32_t textureCount{};
-    // Peak live float slots, recorded by the compiler. The evaluator uses
-    // this to select a smaller stack frame for simple materials.
-    std::uint32_t stackSize{};
-};
 
 using StackOffset = std::uint8_t;
 
@@ -33,7 +21,7 @@ inline constexpr StackOffset InvalidOffset = 255;
 // SvmEval's stackOrLiteral() below share.
 inline constexpr std::uint32_t StackOffsetNanMask = 0x7FC00000u;
 
-NR_CPU_GPU inline std::uint32_t encodeStackOffset(StackOffset offset)
+inline std::uint32_t encodeStackOffset(StackOffset offset)
 {
     return StackOffsetNanMask | static_cast<std::uint32_t>(offset);
 }
@@ -43,12 +31,12 @@ NR_CPU_GPU inline std::uint32_t encodeStackOffset(StackOffset offset)
 // can never collide with this pattern -- only NaNs have every exponent bit
 // set, and this mask additionally pins the two top mantissa bits, keeping
 // the encoding clear of ordinary NaNs a graph might legitimately produce.
-NR_CPU_GPU inline bool isStackOffset(std::uint32_t bits)
+inline bool isStackOffset(std::uint32_t bits)
 {
     return (bits & StackOffsetNanMask) == StackOffsetNanMask;
 }
 
-NR_CPU_GPU inline StackOffset decodeStackOffset(std::uint32_t bits)
+inline StackOffset decodeStackOffset(std::uint32_t bits)
 {
     return static_cast<StackOffset>(bits & 0xFFu);
 }

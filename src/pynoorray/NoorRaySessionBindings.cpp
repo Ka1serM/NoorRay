@@ -48,5 +48,5 @@ void bindNoorRaySession(nb::module_& module)
             const size_t shape[3] = {session.outputHeight(), session.outputWidth(), 4};
             return nb::ndarray<nb::numpy, float, nb::shape<-1, -1, 4>>(data, 3, shape, owner);
         })
-        .def_ro("headless", &noorray::NoorRaySession::isHeadless);
+        .def_prop_ro("headless", &noorray::NoorRaySession::isHeadless);
 }

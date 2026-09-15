@@ -10,6 +10,10 @@
 #include "Scene/Import/SceneImporter.h"
 #include "Scene/Import/SceneReader.h"
 
+using glm::inverse;
+using glm::mat4;
+using glm::vec3;
+
 Scene::Scene()
     : environment(std::make_unique<Environment>())
 {

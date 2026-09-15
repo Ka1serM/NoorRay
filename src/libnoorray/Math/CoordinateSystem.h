@@ -48,7 +48,7 @@ inline glm::vec3 toOpenGlVector(const glm::vec3 v, const CoordinateSpace& source
 inline glm::mat4 toOpenGlTransform(const glm::mat4& sourceTransform, const CoordinateSpace& sourceSpace)
 {
     const glm::mat4 conversion = toOpenGlMatrix(sourceSpace);
-    return conversion * sourceTransform * inverse(conversion);
+    return conversion * sourceTransform * glm::inverse(conversion);
 }
 
 } // namespace nr::coords

@@ -56,19 +56,19 @@ public:
     
     void removeChild(const SceneObject* child);
     
-    vec3 getPosition() const {
+    glm::vec3 getPosition() const {
         return transform.getPosition();
     }
 
-    quat getRotation() const {
+    glm::quat getRotation() const {
         return transform.getRotation();
     }
 
-    vec3 getRotationEuler() const {
+    glm::vec3 getRotationEuler() const {
         return transform.getRotationEuler();
     }
 
-    vec3 getScale() const {
+    glm::vec3 getScale() const {
         return transform.getScale();
     }
 
@@ -76,13 +76,13 @@ public:
 
     virtual void onTransformUpdated();
     
-    virtual void setPosition(const vec3& pos);
-    virtual void setRotation(const quat& rot);
-    virtual void setRotationEuler(const vec3& rot);
-    virtual void setScale(const vec3& scale);
+    virtual void setPosition(const glm::vec3& pos);
+    virtual void setRotation(const glm::quat& rot);
+    virtual void setRotationEuler(const glm::vec3& rot);
+    virtual void setScale(const glm::vec3& scale);
 
     virtual void setLocalTransform(const Transform& transf);
-    virtual void setWorldTransformFromMatrix(const mat4& transf);
+    virtual void setWorldTransformFromMatrix(const glm::mat4& transf);
 
     Transform getWorldTransform() const;
 

@@ -1,4 +1,5 @@
 #include "UI/MaterialXNodes/MaterialXGraphNodeRegistry.h"
+#include <MaterialXCore/Document.h>
 
 
 MaterialXGraphNodeRegistry& MaterialXGraphNodeRegistry::instance()

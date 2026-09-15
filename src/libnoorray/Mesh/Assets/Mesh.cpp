@@ -18,6 +18,10 @@
 #include <MaterialXCore/Document.h>
 #include <MaterialXCore/Types.h>
 
+using glm::normalize;
+using glm::vec2;
+using glm::vec3;
+
 namespace {
 MeshGeometry copyGeometry(const std::vector<Vertex>& vertices,
     const std::vector<uint32_t>& indices, const std::vector<Face>& faces)

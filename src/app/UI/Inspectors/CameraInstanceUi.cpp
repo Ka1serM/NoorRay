@@ -3,6 +3,7 @@
 #include <array>
 #include <imgui.h>
 
+#include "UI/Camera/CameraUi.h"
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"
 
@@ -34,11 +35,11 @@ bool renderCameraInstance(CameraInstance& instance)
     }
 
     Camera* camera = instance.getCamera();
-    if (auto* concrete = camera->CastOrNullptr<PerspectiveCamera>()) changed |= concrete->renderUi();
-    else if (auto* concrete = camera->CastOrNullptr<ThinLensCamera>()) changed |= concrete->renderUi();
-    else if (auto* concrete = camera->CastOrNullptr<OrthographicCamera>()) changed |= concrete->renderUi();
-    else if (auto* concrete = camera->CastOrNullptr<FisheyeCamera>()) changed |= concrete->renderUi();
-    else if (auto* concrete = camera->CastOrNullptr<RealisticCamera>()) changed |= concrete->renderUi();
+    if (auto* concrete = camera->CastOrNullptr<PerspectiveCamera>()) changed |= camera_ui::render(*concrete);
+    else if (auto* concrete = camera->CastOrNullptr<ThinLensCamera>()) changed |= camera_ui::render(*concrete);
+    else if (auto* concrete = camera->CastOrNullptr<OrthographicCamera>()) changed |= camera_ui::render(*concrete);
+    else if (auto* concrete = camera->CastOrNullptr<FisheyeCamera>()) changed |= camera_ui::render(*concrete);
+    else if (auto* concrete = camera->CastOrNullptr<RealisticCamera>()) changed |= camera_ui::render(*concrete);
     if (changed)
         instance.markDirty();
     return changed;

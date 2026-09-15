@@ -14,6 +14,7 @@
 #include "Materials/MaterialX/MaterialXSceneRuntime.h"
 #include "Camera/CameraInstance.h"
 #include "Scene/Scene.h"
+#include "Scene/Import/AssetPath.h"
 #include "IO/BitmapWriter.h"
 #include "IO/Bitmap.h"
 
@@ -287,6 +288,7 @@ int main(const int argc, char* argv[])
             printUsage();
             return 0;
         }
+        noorray::setAssetDirectory(NOORRAY_ASSET_DIR);
         if (options.cliMode)
             runCli(options);
         else

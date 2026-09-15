@@ -34,8 +34,17 @@
 #include "Mesh/Transform.h"
 #include "Math/CoordinateSystem.h"
 #include "Scene/GaussianInstance.h"
+#include "Scene/Import/AssetPath.h"
 #include "Scene/Import/SceneReader.h"
 #include "Scene/Import/SceneUsd.h"
+
+using glm::cross;
+using glm::dot;
+using glm::mat4;
+using glm::normalize;
+using glm::quat;
+using glm::vec2;
+using glm::vec3;
 
 namespace {
 template<class Function>
@@ -68,19 +77,10 @@ std::string lowerPath(std::string value)
     return value;
 }
 
-// Resolves an asset path referenced from a scene JSON. If the path does not
-// exist as given (e.g. relative to whatever the process cwd happens to be),
-// fall back to resolving it relative to the compiled-in asset directory, so
-// scenes can reference paths like "tests/utah_teapot.obj" regardless of cwd.
+// Resolves an asset path referenced from a scene JSON; see noorray::resolveAssetPath.
 std::filesystem::path resolveAssetPath(const std::string& filepath)
 {
-    const std::filesystem::path direct(filepath);
-    if (std::filesystem::exists(direct))
-        return direct;
-    const std::filesystem::path fallback = std::filesystem::path(NOORRAY_ASSET_DIR) / filepath;
-    if (std::filesystem::exists(fallback))
-        return fallback;
-    return direct;
+    return noorray::resolveAssetPath(filepath);
 }
 
 float gltfColorComponent(const tinygltf::Model& model,

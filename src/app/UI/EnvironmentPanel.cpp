@@ -4,6 +4,8 @@
 #include "ImGuiManager.h"
 #include "Scene/Scene.h"
 
+using glm::vec3;
+
 EnvironmentPanel::EnvironmentPanel(std::string name, Scene& scene) : ImGuiComponent(std::move(name)), scene(scene) {}
 
 void EnvironmentPanel::renderUi() {

@@ -10,6 +10,4 @@ public:
     ~FisheyeCamera();
     float apertureDiameterMm{};
     float bokehBias{1.f};
-
-    bool renderUi();
 };

@@ -4,9 +4,9 @@
 #include <vector>
 #include <memory>
 #include <noorrhi/noorrhi.hpp>
-#include <MaterialXCore/Document.h>
 
 #include "Materials/Material.h"
+#include "Materials/MaterialX/MaterialXFwd.h"
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -14,9 +14,6 @@
 
 #include "Mesh/VertexColor.h"
 #include "Shared/Mesh.h"
-
-using glm::vec2;
-using glm::vec3;
 
 class Scene;
 

@@ -8,5 +8,4 @@ public:
     explicit PerspectiveCamera(std::unique_ptr<Sensor> sensor);
     PerspectiveCamera(const PerspectiveCamera& other);
     ~PerspectiveCamera();
-    bool renderUi();
 };

@@ -220,10 +220,9 @@ endif()
 target_compile_features(libnoorray PUBLIC cxx_std_23)
 target_include_directories(libnoorray PUBLIC "${NR_CORE_DIR}")
 target_compile_definitions(libnoorray PUBLIC
-    VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-    NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
+    VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 target_link_libraries(libnoorray PUBLIC
-    NoorRayIO NoorRHI::NoorRHI portable_file_dialogs glm Vulkan::Vulkan
+    NoorRayIO NoorRHI::NoorRHI glm Vulkan::Vulkan
     tinygltf tinyobjloader tinyply tinyexr stb gauss_forge_readers
     GPUOpen::VulkanMemoryAllocator glaze TBB::tbb
     NoorRayMaterialX MaterialXFormat MaterialXCore)
@@ -267,6 +266,11 @@ set_target_properties(NoorRayMaterialX PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Vulkan shaders (Viewport, ViewportBillboards)
 # ---------------------------------------------------------------------------
 set(NR_SHADER_DIR "${NR_CORE_DIR}/Shaders")
+# Compiled SPIR-V is a build product: it lives in the binary tree and reaches
+# the library through #embed, which searches this directory.
+set(NR_SHADER_BUILD_DIR "${CMAKE_BINARY_DIR}/shaders")
+target_compile_options(libnoorray PRIVATE
+    "$<$<COMPILE_LANGUAGE:CXX>:--embed-dir=${NR_SHADER_BUILD_DIR}>")
 file(GLOB NR_RAYTRACER_SHADER_INCLUDES CONFIGURE_DEPENDS
     "${NR_SHADER_DIR}/Raytracer/*.slang")
 file(GLOB NR_SHARED_SHADER_ABI CONFIGURE_DEPENDS
@@ -286,14 +290,14 @@ set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/V
     "${NR_SHADER_DIR}/Raytracer/Sampling.slang"
     ${NR_RAYTRACER_SHADER_INCLUDES}
     "${NR_SHADER_DIR}/Gaussian/Gaussian.slang")
-set(NR_SHADER_OUT "${NR_SHADER_DIR}/Viewport/Viewport.spv" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.spv"
-    "${NR_SHADER_DIR}/Raytracer/Raytracer.spv"
-    "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.spv"
-    "${NR_SHADER_DIR}/Raytracer/RaytracingHit.spv"
-    "${NR_SHADER_DIR}/Raytracer/EmissionHit.spv"
-    "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.spv"
-    "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.spv"
-    "${NR_SHADER_DIR}/Raytracer/GaussianHit.spv")
+set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
+    "${NR_SHADER_BUILD_DIR}/Raytracer/Raytracer.spv"
+    "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingMiss.spv"
+    "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingHit.spv"
+    "${NR_SHADER_BUILD_DIR}/Raytracer/EmissionHit.spv"
+    "${NR_SHADER_BUILD_DIR}/Raytracer/OpacityAnyHit.spv"
+    "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianAnyHit.spv"
+    "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianHit.spv")
 set(NR_SHADER_VALIDATE_COMMANDS)
 if(NR_SPIRV_VAL_EXECUTABLE)
     foreach(_spv IN LISTS NR_SHADER_OUT)
@@ -303,59 +307,61 @@ if(NR_SPIRV_VAL_EXECUTABLE)
     endforeach()
 endif()
 add_custom_command(OUTPUT ${NR_SHADER_OUT}
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "${NR_SHADER_BUILD_DIR}/Viewport" "${NR_SHADER_BUILD_DIR}/Raytracer"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/Viewport.slang"
         -entry main -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Viewport/Viewport.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
         -entry vertMain -stage vertex -entry fragMain -stage fragment
         -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Viewport/ViewportBillboards.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
         -entry main -stage raygeneration -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Raytracer/Raytracer.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Raytracer/Raytracer.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.slang"
         -entry main -stage miss -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingMiss.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingHit.slang"
         -entry main -stage closesthit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Raytracer/RaytracingHit.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/EmissionHit.slang"
         -entry main -stage closesthit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Raytracer/EmissionHit.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Raytracer/EmissionHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
         -entry main -stage anyhit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Raytracer/OpacityAnyHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
         -entry main -stage anyhit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianAnyHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
         -entry main -stage closesthit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_DIR}/Raytracer/GaussianHit.spv"
+        -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianHit.spv"
     ${NR_SHADER_VALIDATE_COMMANDS}
     DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
     COMMENT "Compiling viewport shaders" VERBATIM)
@@ -382,7 +388,10 @@ if(NR_BUILD_APPLICATION)
     endif()
     target_compile_definitions(NoorRay PRIVATE
         SDL_MAIN_HANDLED VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-        NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
+        NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}"
+        # The editor resolves scene-relative asset paths against the source
+        # tree's assets; the library itself carries no such path.
+        NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(NoorRay PRIVATE -Wno-c23-extensions)
     endif()

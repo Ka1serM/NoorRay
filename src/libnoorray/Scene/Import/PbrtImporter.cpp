@@ -27,6 +27,7 @@
 #include "Optics/Sellmeier.h"
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
+#include "Scene/Import/AssetPath.h"
 #include "Scene/Import/PbrtParser.h"
 #include "Scene/Scene.h"
 #include "Texture/Texture.h"
@@ -90,10 +91,7 @@ private:
 
 std::filesystem::path resolvePbrtPath(const std::string& filepath)
 {
-    const std::filesystem::path direct(filepath);
-    if (std::filesystem::exists(direct)) return direct;
-    const std::filesystem::path fallback = std::filesystem::path(NOORRAY_ASSET_DIR) / filepath;
-    return std::filesystem::exists(fallback) ? fallback : direct;
+    return noorray::resolveAssetPath(filepath);
 }
 
 std::string relativeAssetPath(const Command& command, const std::string_view parameter)

@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-#include "Scene/Resources/Texture.h"
+#include "Texture/Texture.h"
 
 TEST_CASE("RGBA8 textures preserve byte storage", "[texture]")
 {

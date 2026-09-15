@@ -1,4 +1,4 @@
-#include "Scene/Objects/MeshInstance.h"
+#include "Scene/MeshInstance.h"
 
 #include <string>
 #include <filesystem>
@@ -8,8 +8,8 @@
 // ImGuiManager::tableRowLabel does.
 #include <imgui_internal.h>
 
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Materials/Shading/Sellmeier.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Optics/Sellmeier.h"
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"
 
@@ -29,7 +29,7 @@ std::string materialLabel(Scene& scene, const uint32_t materialIndex)
     return "Material " + std::to_string(materialIndex);
 }
 
-bool renderMeshAsset(MeshAsset& asset)
+bool renderMesh(Mesh& asset)
 {
     Scene& scene = asset.getScene();
     ImGuiManager::tableRowLabel("Source");
@@ -45,7 +45,7 @@ bool renderMeshAsset(MeshAsset& asset)
         static_cast<uint32_t>(asset.getMaterialCount() - 1));
     for (size_t index = 0; index < asset.getMaterialCount(); ++index) {
         const uint32_t slot = static_cast<uint32_t>(index);
-        const MaterialHandle current = asset.getMaterialHandle(slot);
+        Material* current = asset.getMaterialPtr(slot);
         ImGui::PushID(static_cast<int>(index));
 
         // Selecting the slot and reassigning its material are separate
@@ -67,20 +67,17 @@ bool renderMeshAsset(MeshAsset& asset)
             ImGui::SameLine();
         }
 
-        const std::string preview = materialLabel(scene, current.index());
+        const std::string preview = materialLabel(scene, scene.getMaterialIndex(current));
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::BeginCombo("##MaterialSlot", preview.c_str())) {
             const auto& materials = scene.getMaterials();
             for (uint32_t materialIndex = 0; materialIndex < materials.size(); ++materialIndex) {
-                const MaterialHandle candidate =
-                    scene.getMaterialRegistry().handleAt(materialIndex);
-                if (!candidate.isValid())
-                    continue;
+                Material* candidate = const_cast<Material*>(&materials[materialIndex]);
                 const std::string label = materialLabel(scene, materialIndex)
                     + "##GlobalMaterial" + std::to_string(materialIndex);
                 const bool isCurrent = candidate == current;
                 if (ImGui::Selectable(label.c_str(), isCurrent)) {
-                    asset.setMaterial(slot, scene.getMaterialRef(candidate));
+                    asset.setMaterial(slot, candidate);
                     scene.setSelectedMaterialSlot(slot);
                 }
                 if (isCurrent)
@@ -105,12 +102,12 @@ bool renderMeshInstance(MeshInstance& instance)
     if (!ImGuiManager::accordionRow("Mesh Asset###MeshProperties"))
         return false;
 
-    return instance.hasMeshAsset() && renderMeshAsset(instance.getMeshAsset());
+    return instance.hasMesh() && renderMesh(instance.getMesh());
 }
 
 }
 
-void ObjectUiVisitor::visit(MeshInstance& instance)
+bool object_ui::render(MeshInstance& instance)
 {
-    changed |= renderMeshInstance(instance);
+    return renderMeshInstance(instance);
 }

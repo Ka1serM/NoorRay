@@ -8,111 +8,44 @@
 
 namespace gpu::detail {
 
-ResourceHandle DeviceImpl::allocate_resource() {
-    std::lock_guard descriptor_lock(descriptor_mutex_);
-    if (!free_descriptors_.empty()) {
-        const std::uint32_t value = free_descriptors_.back();
-        free_descriptors_.pop_back();
-        return ResourceHandle{value};
-    }
-    if (next_descriptor_ >= descriptor_capacity)
-        throw Error(ErrorCode::OutOfMemory, "gpu resource descriptor heap exhausted");
-    return ResourceHandle{next_descriptor_++};
-}
-
-// Every resource descriptor is written the same way: pick the slot, hand the
-// driver the descriptor payload, and let it fill the heap for us.
-void DeviceImpl::write_descriptor(const ResourceHandle handle,
-    const vk::ResourceDescriptorInfoEXT& descriptor) const {
-    if (!handle || handle.value >= descriptor_capacity)
-        throw Error(ErrorCode::InvalidArgument, "resource descriptor handle is out of range");
-    const vk::HostAddressRangeEXT destination{
-        static_cast<std::byte*>(descriptor_heap_->mapped)
-            + descriptor_heap_offset_ + handle.value * descriptor_stride_,
-        static_cast<std::size_t>(descriptor_stride_)};
+// The shader-facing handle for an image: a resource-heap slot holding a
+// descriptor for the whole image. The view is described inline, so the heap
+// entry owns no VkImageView of its own; it stays valid while the image does,
+// and ImageImpl's retire path returns the slot only after the GPU is done.
+std::uint32_t DeviceImpl::write_image_descriptor(const ImageImpl& image,
+    const vk::DescriptorType type) {
+    const std::uint32_t slot = allocate_slot(texture_heap_);
+    const vk::ImageViewUsageCreateInfo usage{type == vk::DescriptorType::eStorageImage
+        ? vk::ImageUsageFlagBits::eStorage : vk::ImageUsageFlagBits::eSampled};
+    const vk::ImageViewCreateInfo view({}, image.image, vk::ImageViewType::e2D,
+        image.format, {}, {image.aspect, 0, 1, 0, 1}, &usage);
+    const vk::ImageDescriptorInfoEXT image_info{&view, vk::ImageLayout::eGeneral};
+    const vk::ResourceDescriptorInfoEXT descriptor{type,
+        vk::ResourceDescriptorDataEXT{&image_info}};
+    const vk::HostAddressRangeEXT destination = slot_range(texture_heap_, slot);
     if (vk_device().writeResourceDescriptorsEXT(1, &descriptor, &destination)
-        != vk::Result::eSuccess)
-        throw Error(ErrorCode::InvalidState, "Vulkan descriptor heap write failed");
-}
-
-ResourceHandle DeviceImpl::buffer_resource(const std::shared_ptr<BufferImpl>& buffer) {
-    if (!buffer || buffer->device.get() != this)
-        throw Error(ErrorCode::InvalidResource, "GPU buffer belongs to another device");
-    std::lock_guard lock(mutex_);
-    if (!buffer->handle) {
-        buffer->handle = allocate_resource();
-        const vk::DeviceAddressRangeEXT range{buffer->address, buffer->size};
-        vk::ResourceDescriptorDataEXT data{};
-        data.pAddressRange = &range;
-        write_descriptor(buffer->handle,
-            {vk::DescriptorType::eStorageBuffer, data});
+            != vk::Result::eSuccess) {
+        release_slot(texture_heap_, slot);
+        throw Error(ErrorCode::InvalidState, "writing an image descriptor failed");
     }
-    return buffer->handle;
-}
-
-void DeviceImpl::write_image_descriptor(const ImageImpl& image,
-    const ResourceHandle handle, const vk::DescriptorType type) const {
-    const vk::ImageViewCreateInfo view_info{
-        {}, image.image, vk::ImageViewType::e2D, image.format, {},
-        {image.aspect, 0, 1, 0, 1}};
-    const vk::ImageDescriptorInfoEXT image_info{&view_info, vk::ImageLayout::eGeneral};
-    vk::ResourceDescriptorDataEXT data{};
-    data.pImage = &image_info;
-    write_descriptor(handle, {type, data});
-}
-
-SamplerHandle DeviceImpl::write_sampler_descriptor(const vk::SamplerCreateInfo& info) {
-    if (!sampler_heap_)
-        throw Error(ErrorCode::UnsupportedFeature,
-            "this device reports no sampler descriptor storage");
-    const vk::DeviceSize reserved = descriptor_properties_.minSamplerHeapReservedRange;
-    const vk::DeviceSize available = descriptor_properties_.maxSamplerHeapSize > reserved
-        ? descriptor_properties_.maxSamplerHeapSize - reserved : 0;
-    std::lock_guard descriptor_lock(descriptor_mutex_);
-    std::uint32_t descriptor = 0;
-    if (!free_sampler_descriptors_.empty()) {
-        descriptor = free_sampler_descriptors_.back();
-        free_sampler_descriptors_.pop_back();
-    } else {
-        descriptor = next_sampler_descriptor_++;
-    }
-    if (descriptor >= sampler_descriptor_capacity
-        || descriptor > available / sampler_stride_)
-        throw Error(ErrorCode::OutOfMemory, "gpu sampler descriptor heap exhausted");
-    const vk::DeviceSize offset = sampler_heap_offset_
-        + static_cast<vk::DeviceSize>(descriptor) * sampler_stride_;
-    const vk::HostAddressRangeEXT destination{
-        static_cast<std::byte*>(sampler_heap_->mapped) + offset,
-        static_cast<std::size_t>(sampler_stride_)};
-    if (vk_device().writeSamplerDescriptorsEXT(1, &info, &destination) != vk::Result::eSuccess)
-        throw Error(ErrorCode::InvalidState, "Vulkan descriptor heap sampler write failed");
-    return SamplerHandle{descriptor};
-}
-
-AccelerationStructureHandle DeviceImpl::write_acceleration_structure_descriptor(
-    const vk::AccelerationStructureKHR acceleration_structure, const vk::DeviceAddress address,
-    const vk::DeviceSize size) {
-    if (!acceleration_structure)
-        return {};
-    const ResourceHandle resource = allocate_resource();
-    const vk::DeviceAddressRangeEXT range{address, size};
-    vk::ResourceDescriptorDataEXT data{};
-    data.pAddressRange = &range;
-    write_descriptor(resource, {vk::DescriptorType::eAccelerationStructureKHR, data});
-    return AccelerationStructureHandle{resource.value};
+    flush_slot(texture_heap_, slot);
+    return slot;
 }
 
 ImageImpl::~ImageImpl() {
     if (!device || !image)
         return;
-    // A presentation image is owned by the swapchain, but its view, its
-    // identity handle and any descriptors written for it are ours - so the
-    // retire path runs either way and only the image release is conditional.
-    device->retire([owner = device, allocator = device->allocator_, image = this->image,
+    // A presentation image is owned by the swapchain, but its view is ours, so
+    // the retire path runs either way and only the image release is
+    // conditional. Heap slots go back to the free list here too, never
+    // earlier: in-flight work may still read the descriptors they hold.
+    device->retire([allocator = device->allocator_, image = this->image,
         allocation = this->allocation, external_memory = this->external_memory,
         owns = owns_image, view = view.release(),
-        vk_device = device->device(), identity = handle,
-        sampled = sampled_handle, storage = storage_handle] {
+        vk_device = device->device(), owner = device.get(),
+        sampled = sampled_handle.value, storage = storage_handle.value] {
+        owner->release_slot(owner->texture_heap_, sampled);
+        owner->release_slot(owner->texture_heap_, storage);
         if (view)
             vk_device.destroyImageView(view);
         if (owns && allocation)
@@ -121,11 +54,6 @@ ImageImpl::~ImageImpl() {
             vk_device.destroyImage(image);
             vk_device.freeMemory(external_memory);
         }
-        owner->release_resource(ResourceHandle{identity.value});
-        if (sampled.value != identity.value)
-            owner->release_resource(ResourceHandle{sampled.value});
-        if (storage.value != identity.value && storage.value != sampled.value)
-            owner->release_resource(ResourceHandle{storage.value});
     });
 }
 
@@ -215,26 +143,23 @@ std::shared_ptr<ImageImpl> DeviceImpl::create_image(const std::uint32_t width,
     result->height = height;
     result->byte_size = static_cast<std::size_t>(width) * height
         * format_texel_size(format_choice);
-    if (wants(ImageUsage::Storage))
-        result->storage_handle = ImageHandle{allocate_resource().value};
-    if (wants(ImageUsage::Sampled))
-        result->sampled_handle = ImageHandle{allocate_resource().value};
-    result->handle = result->storage_handle
-        ? result->storage_handle : result->sampled_handle;
-    // Render targets and depth-only images still need an opaque identity for
-    // RenderTarget lookup even when they have no shader descriptor role.
-    if (!result->handle)
-        result->handle = ImageHandle{allocate_resource().value};
-    images_.push_back(result);
+    // The identity handle names this image to render(), copy() and interop. It
+    // is a weak host reference, deliberately unrelated to the heap indices
+    // below, which only mean something to shaders.
+    result->handle = ImageHandle{result};
+    // The view serves render targets and interop; shader descriptors describe
+    // their own view inline.
     const vk::ImageViewCreateInfo viewInfo({}, result->image, vk::ImageViewType::e2D,
         format, {}, {aspect, 0, 1, 0, 1});
     result->view = vk_device().createImageViewUnique(viewInfo);
     if (wants(ImageUsage::Storage))
-        write_image_descriptor(*result, ResourceHandle{result->storage_handle.value},
-            vk::DescriptorType::eStorageImage);
+        result->storage_handle = TextureHandle{
+            write_image_descriptor(*result, vk::DescriptorType::eStorageImage)};
+    // A sampled image and a sampler are separate heap entries; shaders that
+    // filter pair this handle with a Sampler::handle().
     if (wants(ImageUsage::Sampled))
-        write_image_descriptor(*result, ResourceHandle{result->sampled_handle.value},
-            vk::DescriptorType::eSampledImage);
+        result->sampled_handle = TextureHandle{
+            write_image_descriptor(*result, vk::DescriptorType::eSampledImage)};
     // Unified image layouts removes every transition between usages, but an
     // image is still created in UNDEFINED and has to reach GENERAL once. This
     // is the only layout transition left in the library.
@@ -276,39 +201,39 @@ void DeviceImpl::transfer_barrier(const vk::CommandBuffer command,
 
 void DeviceImpl::upload_image(const std::shared_ptr<ImageImpl>& image, const void* data,
     const std::size_t bytes) {
-    if (!image || !data || bytes == 0 || bytes != image->byte_size)
+    if (!image || image->device.get() != this || !data || bytes != image->byte_size)
         throw Error(ErrorCode::InvalidArgument, "invalid GPU image upload");
+    if (frame_command_)
+        throw Error(ErrorCode::InvalidState, "upload images before beginning a frame");
     auto staging = create_buffer(bytes, vk::BufferUsageFlagBits::eTransferSrc,
         VMA_MEMORY_USAGE_CPU_TO_GPU, true);
     std::memcpy(staging->mapped, data, bytes);
-    vmaFlushAllocation(allocator_, staging->allocation, 0, bytes);
-    submit([this, staging, image](const vk::CommandBuffer command) {
-        transfer_barrier(command, true);
-        command.copyBufferToImage(staging->buffer, image->image,
-            vk::ImageLayout::eGeneral,
+    if (vmaFlushAllocation(allocator_, staging->allocation, 0, bytes) != VK_SUCCESS)
+        throw Error(ErrorCode::DeviceLost, "flushing image upload failed");
+    submit([=](vk::CommandBuffer command) {
+        command.copyBufferToImage(staging->buffer, image->image, vk::ImageLayout::eGeneral,
             vk::BufferImageCopy(0, 0, 0, {image->aspect, 0, 0, 1}, {0, 0, 0},
                 {image->width, image->height, 1}));
-        transfer_barrier(command, false);
     }, {staging, image});
 }
 
 void DeviceImpl::download_image(const std::shared_ptr<ImageImpl>& image, void* data,
     const std::size_t bytes) {
-    if (!image || !data || bytes == 0 || bytes != image->byte_size)
+    if (!image || image->device.get() != this || !data || bytes != image->byte_size)
         throw Error(ErrorCode::InvalidArgument, "invalid GPU image download");
+    if (frame_command_)
+        throw Error(ErrorCode::InvalidState, "read back images after ending a frame");
     auto staging = create_buffer(bytes, vk::BufferUsageFlagBits::eTransferDst,
         VMA_MEMORY_USAGE_GPU_TO_CPU, true);
-    const GpuToken token = submit([this, staging, image](const vk::CommandBuffer command) {
-        transfer_barrier(command, true);
-        command.copyImageToBuffer(image->image, vk::ImageLayout::eGeneral,
-            staging->buffer, vk::BufferImageCopy(0, 0, 0,
-                {image->aspect, 0, 0, 1}, {0, 0, 0}, {image->width, image->height, 1}));
-        transfer_barrier(command, false);
+    const auto token = submit([=](vk::CommandBuffer command) {
+        command.copyImageToBuffer(image->image, vk::ImageLayout::eGeneral, staging->buffer,
+            vk::BufferImageCopy(0, 0, 0, {image->aspect, 0, 0, 1}, {0, 0, 0},
+                {image->width, image->height, 1}));
     }, {staging, image});
     wait(token);
-    vmaInvalidateAllocation(allocator_, staging->allocation, 0, bytes);
-    if (staging->mapped)
-        std::memcpy(data, staging->mapped, bytes);
+    if (vmaInvalidateAllocation(allocator_, staging->allocation, 0, bytes) != VK_SUCCESS)
+        throw Error(ErrorCode::DeviceLost, "invalidating image readback failed");
+    std::memcpy(data, staging->mapped, bytes);
 }
 
 std::shared_ptr<ImageImpl> make_image(const std::shared_ptr<DeviceImpl>& device,
@@ -350,43 +275,52 @@ interop::ExternalSemaphore DeviceImpl::signal_external()
     exportInfo.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
     vk::SemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.pNext = &exportInfo;
-    vk::UniqueSemaphore semaphore = vk_device().createSemaphoreUnique(semaphoreInfo);
+    auto semaphore = std::make_shared<vk::UniqueSemaphore>(
+        vk_device().createSemaphoreUnique(semaphoreInfo));
     // Queue order makes this signal happen after the renderer's preceding
     // standalone dispatch.  GL_EXT_semaphore_fd consumes the FD and waits on
     // the same binary payload before accessing the shared allocation.
     vk::SubmitInfo submitInfo{};
-    submitInfo.setSignalSemaphores(semaphore.get());
-    queue_.submit(submitInfo);
+    const GpuToken token{next_timeline_};
+    const std::array signals{semaphore->get(), timeline_.get()};
+    const std::array<std::uint64_t, 2> values{0, token.value};
+    vk::TimelineSemaphoreSubmitInfo timelineInfo{};
+    timelineInfo.setSignalSemaphoreValues(values);
+    submitInfo.setSignalSemaphores(signals);
+    submitInfo.pNext = &timelineInfo;
+    pending_.push_back({token, {}, {semaphore}});
+    try {
+        queue_.submit(submitInfo);
+    } catch (...) {
+        pending_.pop_back();
+        throw;
+    }
+    ++next_timeline_;
     vk::SemaphoreGetFdInfoKHR fdInfo{};
-    fdInfo.semaphore = semaphore.get();
+    fdInfo.semaphore = semaphore->get();
     fdInfo.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
     const int fd = vk_device().getSemaphoreFdKHR(fdInfo);
     if (fd < 0)
         throw Error(ErrorCode::InvalidState,
             "Vulkan returned an invalid external-semaphore FD");
-    // The exported FD owns the external payload. The Vulkan semaphore itself
-    // is no longer needed after queue submission and may be released.
+    // Keep the Vulkan semaphore until its signal completes. The exported FD
+    // independently owns the external payload.
     return {fd};
 }
-std::uint64_t image_handle(const std::shared_ptr<ImageImpl>& image) {
-    return image ? image->handle.value : 0;
-}
-std::uint64_t image_sampled_handle(const std::shared_ptr<ImageImpl>& image) {
+std::uint32_t image_sampled_handle(const std::shared_ptr<ImageImpl>& image) {
     return image ? image->sampled_handle.value : 0;
 }
-std::uint64_t image_storage_handle(const std::shared_ptr<ImageImpl>& image) {
+std::uint32_t image_storage_handle(const std::shared_ptr<ImageImpl>& image) {
     return image ? image->storage_handle.value : 0;
 }
 std::size_t image_byte_size(const std::shared_ptr<ImageImpl>& image) {
     return image ? image->byte_size : 0;
 }
-void upload_image(const std::shared_ptr<DeviceImpl>& device,
-    const std::shared_ptr<ImageImpl>& image, const void* data, const std::size_t bytes) {
-    device->upload_image(image, data, bytes);
+void upload_image(const std::shared_ptr<ImageImpl>& image, const void* data, std::size_t bytes) {
+    image->device->upload_image(image, data, bytes);
 }
-void download_image(const std::shared_ptr<DeviceImpl>& device,
-    const std::shared_ptr<ImageImpl>& image, void* data, const std::size_t bytes) {
-    device->download_image(image, data, bytes);
+void download_image(const std::shared_ptr<ImageImpl>& image, void* data, std::size_t bytes) {
+    image->device->download_image(image, data, bytes);
 }
 
 } // namespace gpu::detail

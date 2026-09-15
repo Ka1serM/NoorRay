@@ -1,4 +1,4 @@
-#include "Rendering/Camera/PerspectiveCamera.h"
+#include "Camera/PerspectiveCamera.h"
 
 bool PerspectiveCamera::renderUi()
 {

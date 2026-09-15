@@ -18,11 +18,8 @@ function(add_noorray_test target source prefix)
     )
 endfunction()
 
-add_noorray_test(sampler_test unit/sampling/SamplerTest.cpp sampler)
-target_link_libraries(sampler_test PRIVATE glm)
-
 add_noorray_test(kolb_lens_test
-    "unit/optics/KolbLensTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Rendering/Optics/KolbLens.cpp" optics)
+    "unit/optics/KolbLensTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Optics/KolbLens.cpp" optics)
 target_compile_definitions(kolb_lens_test PRIVATE
     OPTICS_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/optics")
 target_link_libraries(kolb_lens_test PRIVATE glm)
@@ -30,90 +27,52 @@ target_link_libraries(kolb_lens_test PRIVATE glm)
 add_noorray_test(pbrt_parser_test
     "unit/scene/PbrtParserTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Scene/Import/PbrtParser.cpp" pbrt)
 
-add_noorray_test(vulkan_frame_abi_test unit/vulkan/VulkanFrameAbiTest.cpp vulkan)
 
+# The gpu API's own tests live with the library in src/gpu/tests and run from
+# its standalone build. What stays here is NoorRay-specific: the composite BSDF
+# shader (which includes src/libnoorray/Shaders) and the adoption test, which
+# checks gpu links cleanly inside NoorRay's archive closure.
 set(NR_GPU_TEST_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/gpu")
 set(NR_GPU_ADD_SHADER "${NR_GPU_TEST_SHADER_DIR}/add.spv")
-set(NR_GPU_TRIANGLE_SHADER "${NR_GPU_TEST_SHADER_DIR}/triangle.spv")
-set(NR_GPU_RAYTRACING_SHADER "${NR_GPU_TEST_SHADER_DIR}/raytracing.spv")
 set(NR_GPU_COMPOSITE_BSDF_SHADER "${NR_GPU_TEST_SHADER_DIR}/composite_bsdf.spv")
 file(GLOB NR_GPU_RAYTRACER_SHADER_DEPENDENCIES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/libnoorray/Backend/Vulkan/Shaders/Raytracer/*.slang")
+    "${CMAKE_SOURCE_DIR}/src/libnoorray/Shaders/Raytracer/*.slang")
 
-# The gpu API is descriptor-heap only, so the tests compile against the same
-# Slang resource-heap ABI the renderer ships with.
-set(NR_GPU_HEAP_FLAGS
-    -capability spvDescriptorHeapEXT -emit-spirv-directly
-    -spirv-resource-heap-stride 128
+set(NR_GPU_SHADER_FLAGS
+    -emit-spirv-directly
     -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081)
 
 add_custom_command(
-    OUTPUT "${NR_GPU_ADD_SHADER}" "${NR_GPU_TRIANGLE_SHADER}"
-        "${NR_GPU_RAYTRACING_SHADER}" "${NR_GPU_COMPOSITE_BSDF_SHADER}"
+    OUTPUT "${NR_GPU_ADD_SHADER}" "${NR_GPU_COMPOSITE_BSDF_SHADER}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_GPU_TEST_SHADER_DIR}"
     COMMAND "${NR_SLANGC_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/add.slang"
+        "${CMAKE_SOURCE_DIR}/src/gpu/tests/shaders/add.slang"
         -entry main -stage compute -target spirv
-        -profile spirv_1_5+SPV_EXT_descriptor_heap ${NR_GPU_HEAP_FLAGS}
+        -profile spirv_1_5 ${NR_GPU_SHADER_FLAGS}
         -o "${NR_GPU_ADD_SHADER}"
     COMMAND "${NR_SLANGC_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/triangle.slang"
-        -entry vertMain -stage vertex -entry fragMain -stage fragment
-        -target spirv -profile spirv_1_5+SPV_EXT_descriptor_heap ${NR_GPU_HEAP_FLAGS}
-        -o "${NR_GPU_TRIANGLE_SHADER}"
-    COMMAND "${NR_SLANGC_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/raytracing.slang"
-        -entry rayGenMain -stage raygeneration
-        -entry missMain -stage miss
-        -entry closestHitMain -stage closesthit
-        -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap ${NR_GPU_HEAP_FLAGS}
-        -o "${NR_GPU_RAYTRACING_SHADER}"
-    COMMAND "${NR_SLANGC_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/composite_bsdf.slang"
         -entry main -stage compute -target spirv
-        -profile spirv_1_5+SPV_EXT_descriptor_heap ${NR_GPU_HEAP_FLAGS}
+        -profile spirv_1_5 ${NR_GPU_SHADER_FLAGS}
         -o "${NR_GPU_COMPOSITE_BSDF_SHADER}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/add.slang"
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/triangle.slang"
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/raytracing.slang"
+    DEPENDS "${CMAKE_SOURCE_DIR}/src/gpu/tests/shaders/add.slang"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/gpu/composite_bsdf.slang"
         ${NR_GPU_RAYTRACER_SHADER_DEPENDENCIES}
-    COMMENT "Compiling gpu API test shaders" VERBATIM)
+    COMMENT "Compiling NoorRay gpu test shaders" VERBATIM)
 add_custom_target(noorray_gpu_test_shader DEPENDS
-    "${NR_GPU_ADD_SHADER}" "${NR_GPU_TRIANGLE_SHADER}"
-    "${NR_GPU_RAYTRACING_SHADER}" "${NR_GPU_COMPOSITE_BSDF_SHADER}")
+    "${NR_GPU_ADD_SHADER}" "${NR_GPU_COMPOSITE_BSDF_SHADER}")
 
-add_noorray_test(gpu_compute_test unit/gpu/GpuComputeTest.cpp gpu)
-add_dependencies(gpu_compute_test noorray_gpu_test_shader)
-target_compile_definitions(gpu_compute_test PRIVATE GPU_TEST_SHADER="${NR_GPU_ADD_SHADER}")
-target_compile_definitions(gpu_compute_test PRIVATE
-    GPU_TRIANGLE_SHADER="${NR_GPU_TRIANGLE_SHADER}"
+add_noorray_test(composite_bsdf_shader_test unit/materials/CompositeBsdfShaderTest.cpp materials)
+add_dependencies(composite_bsdf_shader_test noorray_gpu_test_shader)
+target_compile_definitions(composite_bsdf_shader_test PRIVATE
     GPU_COMPOSITE_BSDF_SHADER="${NR_GPU_COMPOSITE_BSDF_SHADER}")
-target_link_libraries(gpu_compute_test PRIVATE noorray_gpu)
-
-add_noorray_test(gpu_ray_tracing_test unit/gpu/GpuRayTracingTest.cpp gpu)
-add_dependencies(gpu_ray_tracing_test noorray_gpu_test_shader)
-target_compile_definitions(gpu_ray_tracing_test PRIVATE GPU_RAYTRACING_SHADER="${NR_GPU_RAYTRACING_SHADER}")
-target_link_libraries(gpu_ray_tracing_test PRIVATE noorray_gpu)
+target_link_libraries(composite_bsdf_shader_test PRIVATE gpu::gpu)
 
 add_noorray_test(gpu_noorray_adoption_test unit/gpu/GpuNoorRayAdoptionTest.cpp gpu)
 add_dependencies(gpu_noorray_adoption_test noorray_gpu_test_shader)
 target_compile_definitions(gpu_noorray_adoption_test PRIVATE GPU_TEST_SHADER="${NR_GPU_ADD_SHADER}")
 target_link_libraries(gpu_noorray_adoption_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,noorray_gpu>")
-
-add_noorray_test(vulkan_scene_update_test
-    unit/vulkan/VulkanSceneUpdateTest.cpp "gpu;vulkan")
-target_link_libraries(vulkan_scene_update_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,noorray_gpu>")
-
-add_noorray_test(ply_mesh_loader_test
-    "unit/scene/PlyMeshLoaderTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Geometry/Mesh/Assets/PlyMeshLoader.cpp" ply)
-target_compile_definitions(ply_mesh_loader_test PRIVATE
-    PLY_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
-target_link_libraries(ply_mesh_loader_test PRIVATE
-    tinyply glm Vulkan::Vulkan)
+    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,gpu>")
 
 add_noorray_test(vertex_color_test unit/scene/VertexColorTest.cpp vertex-color)
 target_link_libraries(vertex_color_test PRIVATE glm)
@@ -126,21 +85,6 @@ add_noorray_test(texture_storage_test
 target_link_libraries(texture_storage_test PRIVATE
     "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO>")
 
-add_noorray_test(active_bsdf_test unit/shading/ActiveBsdfTest.cpp bsdf)
-target_link_libraries(active_bsdf_test PRIVATE glm)
-
-add_noorray_test(diffuse_lobe_test unit/shading/DiffuseLobeTest.cpp bsdf)
-target_link_libraries(diffuse_lobe_test PRIVATE glm)
-
-add_noorray_test(composite_bsdf_test unit/shading/CompositeBsdfTest.cpp bsdf)
-target_link_libraries(composite_bsdf_test PRIVATE glm)
-
-add_noorray_test(light_sampling_test unit/shading/LightSamplingTest.cpp light)
-target_link_libraries(light_sampling_test PRIVATE glm)
-
-add_noorray_test(ray_test unit/raytracing/RayTest.cpp raytracing)
-target_link_libraries(ray_test PRIVATE glm)
-
 add_noorray_test(imgui_math_input_test
     "unit/ui/ImGuiMathInputTest.cpp;${CMAKE_SOURCE_DIR}/src/app/UI/MathInput.cpp" ui)
 target_include_directories(imgui_math_input_test PRIVATE "${CMAKE_SOURCE_DIR}/src/app")
@@ -148,7 +92,7 @@ target_link_libraries(imgui_math_input_test PRIVATE imgui)
 
 add_noorray_test(viewport_billboard_picking_test
     unit/ui/ViewportBillboardPickingTest.cpp ui)
-target_link_libraries(viewport_billboard_picking_test PRIVATE glm noorray_gpu)
+target_link_libraries(viewport_billboard_picking_test PRIVATE glm gpu::gpu)
 
 add_noorray_test(materialx_node_catalog_test
     "unit/ui/MaterialXNodeCatalogTest.cpp;${CMAKE_SOURCE_DIR}/src/app/UI/MaterialXNodeCatalog.cpp" ui)
@@ -188,9 +132,6 @@ add_noorray_test(materialx_graph_layout_test
 target_include_directories(materialx_graph_layout_test PRIVATE
     "${CMAKE_SOURCE_DIR}/src/app")
 
-add_noorray_test(resource_registry_test
-    unit/scene/ResourceRegistryTest.cpp scene)
-
 add_noorray_test(scene_importer_cache_test unit/scene/SceneImporterCacheTest.cpp scene)
 target_compile_definitions(scene_importer_cache_test PRIVATE
     TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
@@ -221,10 +162,14 @@ function(add_noorray_render_test target source)
     add_dependencies(${target} NoorRay)
 endfunction()
 
+add_noorray_test(editor_edit_render_test e2e/EditorEditRenderTest.cpp e2e)
+target_link_libraries(editor_edit_render_test PRIVATE
+    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,gpu,NoorRayMaterialX>")
 add_noorray_render_test(render_smoke_test e2e/RenderSmokeTest.cpp)
 add_noorray_render_test(white_furnace_test e2e/WhiteFurnaceTest.cpp)
 add_noorray_render_test(convergence_test e2e/ConvergenceTest.cpp)
 
+add_noorray_render_test(materialx_render_test e2e/MaterialXRenderTest.cpp)
 add_noorray_render_test(materialx_fidelity_test e2e/MaterialXFidelityTest.cpp)
 set(MATERIALXVIEW_EXECUTABLE
     "${CMAKE_BINARY_DIR}/../materialxview/bin/MaterialXView"

@@ -8,19 +8,18 @@
 #include <MaterialXFormat/Util.h>
 #include <MaterialXFormat/XmlIo.h>
 
-namespace mx = MaterialX;
 
 namespace nr::materialx
 {
 
 namespace
 {
-void addNoorRayExtensions(const mx::DocumentPtr& document)
+void addNoorRayExtensions(const MaterialX::DocumentPtr& document)
 {
     if (document->getNodeDef("ND_noorray_sellmeier_ior"))
         return;
 
-    const mx::NodeDefPtr definition = document->addNodeDef(
+    const MaterialX::NodeDefPtr definition = document->addNodeDef(
         "ND_noorray_sellmeier_ior", "float", "noorray_sellmeier_ior");
     definition->setNodeGroup("spectral");
     definition->setAttribute("doc",
@@ -36,22 +35,22 @@ void addNoorRayExtensions(const mx::DocumentPtr& document)
     addInput("c3", "103.560653");
 }
 
-mx::NodePtr addDisneyPrincipled(const mx::DocumentPtr& document,
+MaterialX::NodePtr addDisneyPrincipled(const MaterialX::DocumentPtr& document,
     const std::string& name)
 {
     return document->addNode("disney_principled", name, "surfaceshader");
 }
 } // namespace
 
-mx::DocumentPtr loadStandardLibraries(const std::string& materialXStdlibDir)
+MaterialX::DocumentPtr loadStandardLibraries(const std::string& materialXStdlibDir)
 {
-    mx::DocumentPtr libraries = mx::createDocument();
-    const mx::FilePath path(materialXStdlibDir);
-    mx::FileSearchPath searchPath;
+    MaterialX::DocumentPtr libraries = MaterialX::createDocument();
+    const MaterialX::FilePath path(materialXStdlibDir);
+    MaterialX::FileSearchPath searchPath;
     searchPath.append(path);
     searchPath.append(path.getParentPath());
-    const mx::FilePathVec folders{path.getBaseName()};
-    const mx::StringSet loaded = mx::loadLibraries(folders, searchPath, libraries);
+    const MaterialX::FilePathVec folders{path.getBaseName()};
+    const MaterialX::StringSet loaded = MaterialX::loadLibraries(folders, searchPath, libraries);
     if (loaded.empty())
         throw std::runtime_error(
             "No MaterialX definitions were loaded from " + materialXStdlibDir);
@@ -59,21 +58,21 @@ mx::DocumentPtr loadStandardLibraries(const std::string& materialXStdlibDir)
     return libraries;
 }
 
-mx::DocumentPtr getSharedStandardLibraries()
+MaterialX::DocumentPtr getSharedStandardLibraries()
 {
-    static const mx::DocumentPtr libraries =
+    static const MaterialX::DocumentPtr libraries =
         loadStandardLibraries(NR_MATERIALX_STDLIB_DIR);
     return libraries;
 }
 
-mx::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material,
+MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material,
     const AuthoringTexturePathResolver& texturePathResolver)
 {
-    mx::DocumentPtr document = mx::createDocument();
-    const mx::NodePtr principled = addDisneyPrincipled(document,
+    MaterialX::DocumentPtr document = MaterialX::createDocument();
+    const MaterialX::NodePtr principled = addDisneyPrincipled(document,
         "nr_synthetic_disney");
     principled->setInputValue("baseColor",
-        mx::Color3(material.albedo.r, material.albedo.g, material.albedo.b));
+        MaterialX::Color3(material.albedo.r, material.albedo.g, material.albedo.b));
     principled->setInputValue("metallic", material.metallic);
     principled->setInputValue("specular", material.specular);
     principled->setInputValue("roughness", material.roughness);
@@ -81,50 +80,50 @@ mx::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material,
     if (texturePathResolver && material.albedoIndex >= 0) {
         const std::string texturePath = texturePathResolver(material.albedoIndex);
         if (!texturePath.empty()) {
-            const mx::NodePtr image = document->addNode(
+            const MaterialX::NodePtr image = document->addNode(
                 "image", "nr_albedo_texture", "color3");
             image->setInputValue("file", texturePath);
-            if (const mx::InputPtr file = image->getInput("file"))
+            if (const MaterialX::InputPtr file = image->getInput("file"))
                 file->setAttribute("colorspace", "srgb_texture");
             principled->setConnectedNode("baseColor", image);
         }
     }
-    const mx::NodePtr surfaceMaterial = document->addNode(
+    const MaterialX::NodePtr surfaceMaterial = document->addNode(
         "surfacematerial", "nr_synthetic_material", "material");
     surfaceMaterial->setConnectedNode("surfaceshader", principled);
     document->setDataLibrary(getSharedStandardLibraries());
     return document;
 }
 
-mx::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material)
+MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material)
 {
-    return documentFromAuthoring(material, {});
+    return documentFromSvmMaterial(material, {});
 }
 
-mx::DocumentPtr defaultMaterial()
+MaterialX::DocumentPtr defaultMaterial()
 {
     // Use MaterialX's built-in Disney Principled node for the neutral fallback.
-    mx::DocumentPtr document = mx::createDocument();
-    const mx::NodePtr principled = addDisneyPrincipled(document,
+    MaterialX::DocumentPtr document = MaterialX::createDocument();
+    const MaterialX::NodePtr principled = addDisneyPrincipled(document,
         "nr_default_disney");
-    principled->setInputValue("baseColor", mx::Color3(0.8f, 0.8f, 0.8f));
+    principled->setInputValue("baseColor", MaterialX::Color3(0.8f, 0.8f, 0.8f));
     principled->setInputValue("roughness", 0.5f);
-    const mx::NodePtr surfaceMaterial = document->addNode(
+    const MaterialX::NodePtr surfaceMaterial = document->addNode(
         "surfacematerial", "nr_default_material_material", "material");
     surfaceMaterial->setConnectedNode("surfaceshader", principled);
     document->setDataLibrary(getSharedStandardLibraries());
     return document;
 }
 
-std::vector<MaterialXImageNode> collectImageNodes(const mx::DocumentPtr& document)
+std::vector<MaterialXImageNode> collectImageNodes(const MaterialX::DocumentPtr& document)
 {
     std::vector<MaterialXImageNode> result;
-    for (const mx::ElementPtr& elem : document->traverseTree())
+    for (const MaterialX::ElementPtr& elem : document->traverseTree())
     {
-        const mx::NodePtr node = elem->asA<mx::Node>();
+        const MaterialX::NodePtr node = elem->asA<MaterialX::Node>();
         if (!node || node->getCategory() != "image")
             continue;
-        const mx::InputPtr fileInput = node->getInput("file");
+        const MaterialX::InputPtr fileInput = node->getInput("file");
         if (!fileInput)
             continue;
         const std::string raw = fileInput->getValueString();

@@ -25,9 +25,7 @@ void EnvironmentPanel::renderUi() {
 
         if (selectedHdriTexture < 0
             || selectedHdriTexture >= static_cast<int>(textures.size())
-            || scene.getTexture(selectedHdriTexture >= 0
-                ? scene.getTextureHandle(static_cast<uint32_t>(selectedHdriTexture))
-                : TextureHandle{}) == nullptr)
+            || scene.getTexture(static_cast<uint32_t>(selectedHdriTexture)) == nullptr)
             selectedHdriTexture = -1;
 
         const char* comboPreview = "No Texture";
@@ -62,13 +60,13 @@ void EnvironmentPanel::renderUi() {
             if (selectedHdriTexture == -1)
                 scene.clearEnvironmentTexture();
             else
-                scene.setEnvironmentTexture(scene.getTextureHandle(
+                scene.setEnvironmentTexture(scene.getTexture(
                     static_cast<uint32_t>(selectedHdriTexture)));
             anyChanged = true;
         }
 
-        ImGuiManager::colorEdit3Row("HDRI Color", environment.color, [&](const vec3 v) {
-            scene.synchronizeBeforeMutation(); environment.color = v; anyChanged = true;
+        ImGuiManager::colorEdit3Row("HDRI Color", environment.data.color, [&](const vec3 v) {
+            scene.synchronizeBeforeMutation(); environment.data.color = v; anyChanged = true;
         });
         
         if (environment.textureIndex != -1) {
@@ -85,8 +83,8 @@ void EnvironmentPanel::renderUi() {
     
     if (anyChanged) {
         environment.updateDerivedSettings();
-        // The Vulkan renderer consumes an immutable environment snapshot.
-        // Every editor change must publish that snapshot, not only reset the
+        // The Vulkan renderer consumes an immutable environment record.
+        // Every editor change must publish that record, not only reset the
         // accumulation buffer.
         scene.setDirtyFlag(EnvironmentCdf);
         scene.setDirtyFlag(Accumulation);

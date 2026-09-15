@@ -11,7 +11,7 @@ void bindRenderSettings(nanobind::module_& module);
 void bindTexture(nanobind::module_& module);
 void bindEnvironment(nanobind::module_& module);
 void bindSceneObject(nanobind::module_& module);
-void bindMeshAsset(nanobind::module_& module);
+void bindMesh(nanobind::module_& module);
 void bindMeshInstance(nanobind::module_& module);
 void bindSensor(nanobind::module_& module);
 void bindRectangularSensor(nanobind::module_& module);

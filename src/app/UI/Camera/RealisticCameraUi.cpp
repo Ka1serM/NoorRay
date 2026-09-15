@@ -1,4 +1,4 @@
-#include "Rendering/Camera/RealisticCamera.h"
+#include "Camera/RealisticCamera.h"
 #include <array>
 #include <cstdio>
 #include <imgui.h>

@@ -29,7 +29,6 @@
 #include <utility>
 #include <vector>
 
-namespace mx = MaterialX;
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -113,14 +112,14 @@ std::string TextureFilePath(const VtValue& value)
 // consumed entirely within NoorRay's own vendored MaterialXCore -- see
 // docs/MaterialX.md on why two independently-compiled copies of the same
 // namespaced MaterialX types must never trade live objects.
-const mx::DocumentPtr& GetSharedMaterialXLibraries()
+const MaterialX::DocumentPtr& GetSharedMaterialXLibraries()
 {
-    static const mx::DocumentPtr libraries =
+    static const MaterialX::DocumentPtr libraries =
         nr::materialx::loadStandardLibraries(NR_MATERIALX_STDLIB_DIR);
     return libraries;
 }
 
-void SetMxInputValue(const mx::NodePtr& node, const std::string& inputName,
+void SetMxInputValue(const MaterialX::NodePtr& node, const std::string& inputName,
     const std::string& mxType, const VtValue& value)
 {
     if (mxType == "float")
@@ -135,19 +134,19 @@ void SetMxInputValue(const mx::NodePtr& node, const std::string& inputName,
                                      : FloatValue(value, 0.0f) != 0.0f);
     else if (mxType == "color3") {
         const glm::vec3 c = ColorValue(value, glm::vec3(0.0f));
-        node->setInputValue(inputName, mx::Color3(c.x, c.y, c.z));
+        node->setInputValue(inputName, MaterialX::Color3(c.x, c.y, c.z));
     } else if (mxType == "color4") {
         const glm::vec3 c = ColorValue(value, glm::vec3(0.0f));
-        node->setInputValue(inputName, mx::Color4(c.x, c.y, c.z, 1.0f));
+        node->setInputValue(inputName, MaterialX::Color4(c.x, c.y, c.z, 1.0f));
     } else if (mxType == "vector3" || mxType == "normal" || mxType == "point") {
         const glm::vec3 c = ColorValue(value, glm::vec3(0.0f));
-        node->setInputValue(inputName, mx::Vector3(c.x, c.y, c.z));
+        node->setInputValue(inputName, MaterialX::Vector3(c.x, c.y, c.z));
     } else if (mxType == "vector2") {
         const glm::vec2 c = Vec2Value(value, glm::vec2(0.0f));
-        node->setInputValue(inputName, mx::Vector2(c.x, c.y));
+        node->setInputValue(inputName, MaterialX::Vector2(c.x, c.y));
     } else if (mxType == "vector4") {
         const glm::vec3 c = ColorValue(value, glm::vec3(0.0f));
-        node->setInputValue(inputName, mx::Vector4(c.x, c.y, c.z, 0.0f));
+        node->setInputValue(inputName, MaterialX::Vector4(c.x, c.y, c.z, 0.0f));
     } else if (mxType == "filename") {
         const std::string path = TextureFilePath(value);
         if (!path.empty())
@@ -167,14 +166,14 @@ void SetMxInputValue(const mx::NodePtr& node, const std::string& inputName,
 }
 
 // Recursively translates one HdMaterialNetwork2 node (and everything it
-// depends on) into NoorRay's own mx::Document, resolving each node's
+// depends on) into NoorRay's own MaterialX::Document, resolving each node's
 // MaterialX category/type from its nodedef in `libraries` -- the same
 // technique OpenUSD's own hdMtlx uses (HdMtlxCreateMtlxDocumentFromHdNetwork),
 // reimplemented against NoorRay's vendored MaterialX instead of calling into
 // Blender-USD's embedded copy (see this file's header comment on why).
-mx::NodePtr TranslateNode(const HdMaterialNetwork2& network, const SdfPath& path,
-    const mx::DocumentPtr& doc, const mx::DocumentPtr& libraries,
-    std::map<SdfPath, mx::NodePtr>& created, std::set<SdfPath>& visiting)
+MaterialX::NodePtr TranslateNode(const HdMaterialNetwork2& network, const SdfPath& path,
+    const MaterialX::DocumentPtr& doc, const MaterialX::DocumentPtr& libraries,
+    std::map<SdfPath, MaterialX::NodePtr>& created, std::set<SdfPath>& visiting)
 {
     const auto existing = created.find(path);
     if (existing != created.end())
@@ -187,7 +186,7 @@ mx::NodePtr TranslateNode(const HdMaterialNetwork2& network, const SdfPath& path
         return nullptr;
     const HdMaterialNode2& hdNode = nodeIt->second;
 
-    const mx::NodeDefPtr nodeDef = libraries->getNodeDef(hdNode.nodeTypeId.GetString());
+    const MaterialX::NodeDefPtr nodeDef = libraries->getNodeDef(hdNode.nodeTypeId.GetString());
     if (!nodeDef) {
         TF_WARN("hdNoorRay: no MaterialX nodedef for node type '%s' at %s -- skipping",
             hdNode.nodeTypeId.GetText(), path.GetText());
@@ -200,17 +199,17 @@ mx::NodePtr TranslateNode(const HdMaterialNetwork2& network, const SdfPath& path
     // without embedding USD instance identity in the document.
     const std::string nodeName =
         "nr_node_" + std::to_string(doc->getNodes().size());
-    const mx::NodePtr mxNode =
+    const MaterialX::NodePtr mxNode =
         doc->addNode(nodeDef->getNodeString(), nodeName, nodeDef->getType());
 
-    for (const mx::InputPtr& declInput : nodeDef->getActiveInputs()) {
+    for (const MaterialX::InputPtr& declInput : nodeDef->getActiveInputs()) {
         const std::string& inputName = declInput->getName();
         const TfToken inputToken(inputName);
 
         const auto connIt = hdNode.inputConnections.find(inputToken);
         if (connIt != hdNode.inputConnections.end() && !connIt->second.empty()) {
             const HdMaterialConnection2& connection = connIt->second.front();
-            const mx::NodePtr upstream = TranslateNode(
+            const MaterialX::NodePtr upstream = TranslateNode(
                 network, connection.upstreamNode, doc, libraries, created, visiting);
             if (upstream) {
                 mxNode->setConnectedNode(inputName, upstream);
@@ -223,12 +222,12 @@ mx::NodePtr TranslateNode(const HdMaterialNetwork2& network, const SdfPath& path
                 // upstream node's own declared output count up rather than
                 // trusting the connection's output name is meaningful here.
                 const auto upstreamNodeIt = network.nodes.find(connection.upstreamNode);
-                const mx::NodeDefPtr upstreamNodeDef = upstreamNodeIt != network.nodes.end()
+                const MaterialX::NodeDefPtr upstreamNodeDef = upstreamNodeIt != network.nodes.end()
                     ? libraries->getNodeDef(upstreamNodeIt->second.nodeTypeId.GetString())
                     : nullptr;
                 if (!connection.upstreamOutputName.IsEmpty() && upstreamNodeDef
                     && upstreamNodeDef->getActiveOutputs().size() > 1) {
-                    if (const mx::InputPtr mxInput = mxNode->getInput(inputName))
+                    if (const MaterialX::InputPtr mxInput = mxNode->getInput(inputName))
                         mxInput->setOutputString(connection.upstreamOutputName.GetString());
                 }
             }
@@ -248,10 +247,10 @@ mx::NodePtr TranslateNode(const HdMaterialNetwork2& network, const SdfPath& path
 // Pre-load textures and hand a fully authored document to the shared
 // asynchronous compiler tail. Keeping this path common to direct XML and
 // Hydra graph translation makes both ingestion modes share all caches.
-bool QueueMaterialXDocument(mx::DocumentPtr doc, const SdfPath& materialId,
+bool QueueMaterialXDocument(MaterialX::DocumentPtr doc, const SdfPath& materialId,
     HdNoorRayRenderParam& param)
 {
-    const mx::DocumentPtr& libraries = GetSharedMaterialXLibraries();
+    const MaterialX::DocumentPtr& libraries = GetSharedMaterialXLibraries();
 
     // Pre-load every <image> node's texture (with the color/data encoding
     // collectImageNodes knows -- see MaterialXImageNode's comment) before
@@ -261,15 +260,15 @@ bool QueueMaterialXDocument(mx::DocumentPtr doc, const SdfPath& materialId,
         std::unordered_map<std::string, std::uint32_t>>();
     for (const nr::materialx::MaterialXImageNode& image :
         nr::materialx::collectImageNodes(doc)) {
-        const TextureHandle texture = param.GetOrCreateTexture(
+        Texture* texture = param.GetOrCreateTexture(
             image.rawFilePath,
             image.colorSpace == nr::materialx::MaterialXImageColorSpace::Srgb
                 ? TextureEncoding::Srgb8
                 : TextureEncoding::Linear8);
-        if (!param.session.scene.getTexture(texture))
+        if (texture == nullptr)
             continue;
         (*resolvedTextures)[image.rawFilePath] =
-            static_cast<std::uint32_t>(texture.index());
+            static_cast<std::uint32_t>(texture->sceneIndex);
     }
 
     // A data library is resolved transparently by MaterialX but remains one
@@ -279,7 +278,7 @@ bool QueueMaterialXDocument(mx::DocumentPtr doc, const SdfPath& materialId,
     doc->setDataLibrary(libraries);
     // The shared_ptr is copied for the async compile before the document is
     // handed to the compile queue (which publishes it to the Scene slot).
-    const mx::DocumentPtr compileDocument = doc;
+    const MaterialX::DocumentPtr compileDocument = doc;
     param.QueueMaterialCompilation(materialId, std::move(doc),
         [compileDocument, resolvedTextures]() {
             HdNoorRayRenderParam::MaterialCompilationOutput output;
@@ -296,19 +295,19 @@ bool QueueMaterialXNetwork(const HdMaterialNetwork2& network,
     const SdfPath& materialId, const SdfPath& terminalPath,
     HdNoorRayRenderParam& param)
 {
-    const mx::DocumentPtr& libraries = GetSharedMaterialXLibraries();
+    const MaterialX::DocumentPtr& libraries = GetSharedMaterialXLibraries();
 
-    mx::DocumentPtr doc = mx::createDocument();
-    std::map<SdfPath, mx::NodePtr> created;
+    MaterialX::DocumentPtr doc = MaterialX::createDocument();
+    std::map<SdfPath, MaterialX::NodePtr> created;
     std::set<SdfPath> visiting;
-    const mx::NodePtr terminalNode =
+    const MaterialX::NodePtr terminalNode =
         TranslateNode(network, terminalPath, doc, libraries, created, visiting);
     if (!terminalNode) {
         TF_WARN("hdNoorRay: could not translate MaterialX terminal at %s",
             terminalPath.GetText());
         return false;
     }
-    const mx::NodePtr materialNode =
+    const MaterialX::NodePtr materialNode =
         doc->addNode("surfacematerial", "NR_hdnoorray_material", "material");
     materialNode->setConnectedNode("surfaceshader", terminalNode);
     return QueueMaterialXDocument(
@@ -318,21 +317,21 @@ bool QueueMaterialXNetwork(const HdMaterialNetwork2& network,
 bool QueueMaterialXXml(const std::string& xml, const SdfPath& materialId,
     HdNoorRayRenderParam& param)
 {
-    mx::DocumentPtr doc = mx::createDocument();
-    mx::readFromXmlString(doc, xml);
+    MaterialX::DocumentPtr doc = MaterialX::createDocument();
+    MaterialX::readFromXmlString(doc, xml);
     return QueueMaterialXDocument(
         std::move(doc), materialId, param);
 }
 
 } // namespace
 
-const mx::DocumentPtr& GetSharedNativeFallbackMaterial()
+const MaterialX::DocumentPtr& GetSharedNativeFallbackMaterial()
 {
-    static const mx::DocumentPtr fallback = []() {
-        MaterialAuthoring authoring;
-        authoring.albedo = glm::vec3(0.8f);
-        authoring.roughness = 0.5f;
-        return nr::materialx::documentFromAuthoring(authoring);
+    static const MaterialX::DocumentPtr fallback = []() {
+        SvmMaterial material;
+        material.albedo = glm::vec3(0.8f);
+        material.roughness = 0.5f;
+        return nr::materialx::documentFromSvmMaterial(material);
     }();
     return fallback;
 }
@@ -361,7 +360,7 @@ void HdNoorRayMaterial::Sync(
         }
     };
 
-    const mx::DocumentPtr& fallbackMaterial = GetSharedNativeFallbackMaterial();
+    const MaterialX::DocumentPtr& fallbackMaterial = GetSharedNativeFallbackMaterial();
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     struct MaterialSyncSlot
     {

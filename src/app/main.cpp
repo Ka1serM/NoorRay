@@ -7,17 +7,12 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include "UI/NoorRayUi.h"
-#include "Log.h"
-#include "Backend/Vulkan/Raytracer/RaytracerRenderer.h"
-#include "Backend/Vulkan/Raytracer/CameraSnapshot.h"
+#include "Logging/Log.h"
+#include "Raytracing/Raytracer.h"
 #include <gpu/gpu.hpp>
 #include "Materials/MaterialX/MaterialXSceneRuntime.h"
-#include "Rendering/Camera/CameraInstance.h"
-#include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/ThinLensCamera.h"
-#include "Rendering/Camera/FisheyeCamera.h"
+#include "Camera/CameraInstance.h"
 #include "Scene/Scene.h"
 #include "IO/BitmapWriter.h"
 #include "IO/Bitmap.h"
@@ -25,7 +20,7 @@
 namespace
 {
 
-Bitmap readColor(VulkanRaytracer& renderer)
+Bitmap readColor(Raytracer& renderer)
 {
     const auto beauty = renderer.readBeauty();
     std::vector<glm::vec4> pixels(static_cast<std::size_t>(renderer.width())
@@ -37,53 +32,14 @@ Bitmap readColor(VulkanRaytracer& renderer)
     return Bitmap(renderer.width(), renderer.height(), std::move(pixels));
 }
 
-void uploadActiveCamera(VulkanRaytracer& renderer, const Scene& scene)
-{
-    VulkanCameraSnapshot snapshot{};
-    nr::optics::LensSnapshot lens{};
-    if (const CameraInstance* instance = scene.getRenderCamera())
-    {
-        const Camera* camera = instance->getCamera();
-        for (uint32_t row = 0; row < 4; ++row)
-            for (uint32_t column = 0; column < 4; ++column)
-                snapshot.cameraToWorld[row * 4u + column]
-                    = camera->cameraToWorld[column][row];
-        snapshot.projection = static_cast<uint32_t>(instance->getProjectionType());
-        snapshot.sensorWidthMm = camera->getSensor().filmWidth();
-        snapshot.sensorHeightMm = camera->getSensor().filmHeight();
-        snapshot.focalLengthMm = camera->getFocalLengthMm();
-        snapshot.focusDistanceCm = camera->getFocusDistanceCm();
-        snapshot.sensorOrigin = static_cast<uint32_t>(
-            camera->getSensor().origin());
-        snapshot.exposure = camera->exposure;
-        if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>())
-        {
-            snapshot.apertureDiameterMm = realistic->apertureDiameterMm;
-            lens = realistic->optics;
-        }
-        else if (const auto* thinLens = camera->CastOrNullptr<ThinLensCamera>())
-            snapshot.apertureDiameterMm = thinLens->apertureDiameterMm;
-        else if (const auto* fisheye = camera->CastOrNullptr<FisheyeCamera>())
-            snapshot.apertureDiameterMm = fisheye->apertureDiameterMm;
-    }
-    renderer.uploadLensSnapshot(lens);
-    renderer.uploadCameraSnapshot(snapshot);
-}
-
-void uploadCompiledMaterials(VulkanRaytracer& renderer, Scene& scene,
+void uploadCompiledMaterials(Raytracer& renderer, Scene& scene,
     const std::string& scenePath)
 {
     MaterialXSceneRuntime materialRuntime;
     const std::string sceneDirectory =
         std::filesystem::path(scenePath).parent_path().string();
-    do
-    {
-        materialRuntime.compilePending(scene, sceneDirectory);
-        if (materialRuntime.hasPendingCompilations())
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    } while (materialRuntime.hasPendingCompilations());
-    renderer.uploadMaterials(scene, materialRuntime.programs().words(),
-        materialRuntime.programs().textureIndices());
+    materialRuntime.compileAndWait(scene, sceneDirectory);
+    renderer.uploadMaterials(scene);
     renderer.uploadEnvironment(scene);
 }
 
@@ -232,7 +188,7 @@ void runCli(const CliOptions& options)
         gpu::Device device;
         // The scene-less smoke mode uses the tiny native triangle scene to
         // validate the AS/query layer before a full imported scene is added.
-        VulkanRaytracer renderer(device, width, height,
+        Raytracer renderer(device, width, height,
             options.scenePath.empty());
         std::unique_ptr<Scene> nativeScene;
         if (!options.scenePath.empty())
@@ -247,21 +203,23 @@ void runCli(const CliOptions& options)
                     *options.gaussianProxyType;
             renderer.uploadScene(*nativeScene);
             uploadCompiledMaterials(renderer, *nativeScene, options.scenePath);
-            uploadActiveCamera(renderer, *nativeScene);
+            renderer.updateCamera(*nativeScene);
         }
-        LOG_INFO("Vulkan raytracer smoke: recording dispatch");
+        NR_LOG_INFO("Vulkan raytracer smoke: recording dispatch");
+        renderer.commit();
         renderer.render(0, 0);
-        LOG_INFO("Vulkan raytracer smoke: waiting for dispatch");
+        NR_LOG_INFO("Vulkan raytracer smoke: waiting for dispatch");
         device.synchronize();
 
-        LOG_INFO("Vulkan raytracer smoke: reading back image");
+        NR_LOG_INFO("Vulkan raytracer smoke: reading back image");
         const Bitmap bitmap = readColor(renderer);
         std::string error;
         if (!BitmapWriter::write(options.outputPath, bitmap, {}, &error))
             throw std::runtime_error("Failed to save Vulkan raytracer smoke image: " + error);
-        LOG_INFO("Saved Vulkan raytracer smoke image: " << options.outputPath);
+        NR_LOG_INFO("Saved Vulkan raytracer smoke image: " << options.outputPath);
         return;
     }
+    gpu::Device device;
     Scene scene;
     scene.load(options.scenePath);
     if (options.gaussianShadingMode)
@@ -278,11 +236,11 @@ void runCli(const CliOptions& options)
         ? static_cast<uint32_t>(options.width) : sceneResolution.x;
     const uint32_t height = options.height > 0
         ? static_cast<uint32_t>(options.height) : sceneResolution.y;
-    gpu::Device device;
-    VulkanRaytracer renderer(device, width, height, false);
+    Raytracer renderer(device, width, height, false);
     renderer.uploadScene(scene);
     uploadCompiledMaterials(renderer, scene, options.scenePath);
-    uploadActiveCamera(renderer, scene);
+    renderer.updateCamera(scene);
+    renderer.commit();
     double rayTracingMilliseconds = 0.0;
     double minimumDispatchMilliseconds = std::numeric_limits<double>::max();
     double maximumDispatchMilliseconds = 0.0;
@@ -314,7 +272,7 @@ void runCli(const CliOptions& options)
     std::string error;
     if (!BitmapWriter::write(options.outputPath, bitmap, {}, &error))
         throw std::runtime_error("Failed to save Vulkan render: " + error);
-    LOG_INFO("Saved: " << options.outputPath);
+    NR_LOG_INFO("Saved: " << options.outputPath);
 }
 
 }
@@ -342,7 +300,7 @@ int main(const int argc, char* argv[])
     }
     catch (const std::exception& e)
     {
-        LOG_ERROR(e.what());
+        NR_LOG_ERROR(e.what());
         printUsage();
         return 1;
     }

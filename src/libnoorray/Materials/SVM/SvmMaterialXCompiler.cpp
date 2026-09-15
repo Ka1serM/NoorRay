@@ -18,7 +18,6 @@
 #include "Materials/MaterialX/MaterialXDocument.h"
 #include "Materials/SVM/SvmTypes.h"
 
-namespace mx = MaterialX;
 
 namespace nr::svm
 {
@@ -71,14 +70,14 @@ std::uint32_t floatWord(const float value)
 // and several exporters). Closure composition must accept both forms; using
 // only getConnectedNode() silently drops a mix branch when the latter form is
 // used.
-mx::NodePtr connectedNode(const mx::NodePtr& node, const char* inputName)
+MaterialX::NodePtr connectedNode(const MaterialX::NodePtr& node, const char* inputName)
 {
     if (!node)
         return {};
-    const mx::InputPtr input = node->getInput(inputName);
+    const MaterialX::InputPtr input = node->getInput(inputName);
     if (!input)
         return {};
-    if (const mx::OutputPtr output = input->getConnectedOutput())
+    if (const MaterialX::OutputPtr output = input->getConnectedOutput())
         return output->getConnectedNode();
     return input->getConnectedNode();
 }
@@ -127,23 +126,23 @@ bool isNativelySupportedCategory(const std::string& category)
 // Return only nodes that can contribute to a renderable terminal. MaterialX
 // documents commonly contain spare nodes while they are being authored; those
 // nodes must not be validated, flattened, or counted as live SVM inputs.
-std::unordered_set<const mx::Node*> reachableMaterialNodes(
-    const mx::DocumentPtr& document)
+std::unordered_set<const MaterialX::Node*> reachableMaterialNodes(
+    const MaterialX::DocumentPtr& document)
 {
-    std::unordered_set<const mx::Node*> reachable;
-    std::function<void(const mx::NodePtr&)> visit = [&](const mx::NodePtr& node) {
+    std::unordered_set<const MaterialX::Node*> reachable;
+    std::function<void(const MaterialX::NodePtr&)> visit = [&](const MaterialX::NodePtr& node) {
         if (!node || !reachable.insert(node.get()).second)
             return;
-        for (const mx::InputPtr& input : node->getInputs()) {
+        for (const MaterialX::InputPtr& input : node->getInputs()) {
             if (!input)
                 continue;
-            if (const mx::OutputPtr output = input->getConnectedOutput())
+            if (const MaterialX::OutputPtr output = input->getConnectedOutput())
                 visit(output->getConnectedNode());
             visit(input->getConnectedNode());
         }
     };
 
-    for (const mx::NodePtr& node : document->getNodes()) {
+    for (const MaterialX::NodePtr& node : document->getNodes()) {
         if (!node)
             continue;
         if (node->getCategory() == "surfacematerial") {
@@ -165,15 +164,15 @@ std::unordered_set<const mx::Node*> reachableMaterialNodes(
 // target-specific shader source. Nodes already handled by isNativelySupportedCategory are
 // left untouched (the filter returns false for them) so previously-compiled
 // materials emit identical bytecode.
-bool hasResolvableNodeDefs(const mx::DocumentPtr& document,
+bool hasResolvableNodeDefs(const MaterialX::DocumentPtr& document,
     std::string& unresolved)
 {
-    const mx::ConstDocumentPtr library = document->getDataLibrary();
+    const MaterialX::ConstDocumentPtr library = document->getDataLibrary();
     const std::string documentUri = document->getSourceUri();
-    const std::unordered_set<const mx::Node*> reachable =
+    const std::unordered_set<const MaterialX::Node*> reachable =
         reachableMaterialNodes(document);
-    const auto validateGraph = [&](const mx::GraphElementPtr& graph) {
-        for (const mx::NodePtr& node : graph->getNodes()) {
+    const auto validateGraph = [&](const MaterialX::GraphElementPtr& graph) {
+        for (const MaterialX::NodePtr& node : graph->getNodes()) {
             if (!node || !reachable.contains(node.get())
                 || isNativelySupportedCategory(node->getCategory()))
                 continue;
@@ -189,10 +188,10 @@ bool hasResolvableNodeDefs(const mx::DocumentPtr& document,
             bool found = false;
             if (library) {
                 const auto definitions = node->hasNodeDefString()
-                    ? std::vector<mx::NodeDefPtr>{
+                    ? std::vector<MaterialX::NodeDefPtr>{
                         library->getNodeDef(node->getNodeDefString())}
                     : library->getMatchingNodeDefs(node->getCategory());
-                for (const mx::NodeDefPtr& definition : definitions) {
+                for (const MaterialX::NodeDefPtr& definition : definitions) {
                     if (definition && definition->getType() == node->getType()) {
                         found = true;
                         break;
@@ -210,7 +209,7 @@ bool hasResolvableNodeDefs(const mx::DocumentPtr& document,
     if (!validateGraph(document))
         return false;
 
-    for (const mx::NodeGraphPtr& graph : document->getNodeGraphs()) {
+    for (const MaterialX::NodeGraphPtr& graph : document->getNodeGraphs()) {
         // getNodeGraphs() can expose implementation graphs from the attached
         // MaterialX data library. They are immutable definitions, not part of
         // the authored material graph, and must not be validated or rewritten.
@@ -225,7 +224,7 @@ bool hasResolvableNodeDefs(const mx::DocumentPtr& document,
     return true;
 }
 
-void flattenNodeGraphs(const mx::DocumentPtr& document)
+void flattenNodeGraphs(const MaterialX::DocumentPtr& document)
 {
     std::string unresolved;
     if (!hasResolvableNodeDefs(document, unresolved))
@@ -236,10 +235,10 @@ void flattenNodeGraphs(const mx::DocumentPtr& document)
     // SVM nodes is unnecessary and, with some authored node ordering, can
     // trigger its internal "Invalid child index" guard. Only enter the
     // rewrite path when this graph actually contains a non-native node.
-    const std::unordered_set<const mx::Node*> reachable =
+    const std::unordered_set<const MaterialX::Node*> reachable =
         reachableMaterialNodes(document);
-    const auto needsFlatten = [&reachable](const mx::GraphElementPtr& graph) {
-        for (const mx::NodePtr& node : graph->getNodes()) {
+    const auto needsFlatten = [&reachable](const MaterialX::GraphElementPtr& graph) {
+        for (const MaterialX::NodePtr& node : graph->getNodes()) {
             if (reachable.contains(node.get())
                 && !isNativelySupportedCategory(node->getCategory()))
                 return true;
@@ -249,7 +248,7 @@ void flattenNodeGraphs(const mx::DocumentPtr& document)
 
     // Use an unknown target so MaterialX selects the target-agnostic
     // implementation when a nodegraph is available.
-    const mx::NodePredicate filter = [&reachable](const mx::NodePtr& node) {
+    const MaterialX::NodePredicate filter = [&reachable](const MaterialX::NodePtr& node) {
         return node && reachable.contains(node.get())
             && !isNativelySupportedCategory(node->getCategory());
     };
@@ -268,7 +267,7 @@ void flattenNodeGraphs(const mx::DocumentPtr& document)
     // input/nodegraph="...") is a separate GraphElement whose children it
     // never visits, so flatten each one too.
     const std::string documentUri = document->getSourceUri();
-    for (const mx::NodeGraphPtr& nodeGraph : document->getNodeGraphs()) {
+    for (const MaterialX::NodeGraphPtr& nodeGraph : document->getNodeGraphs()) {
         // getNodeGraphs() can expose implementation graphs from the attached
         // MaterialX data library. They are immutable definitions, not part of
         // the authored material graph, and must never be rewritten in place.
@@ -288,13 +287,13 @@ void flattenNodeGraphs(const mx::DocumentPtr& document)
     }
 }
 
-float floatInput(const mx::NodePtr& node, const char* name, const float fallback)
+float floatInput(const MaterialX::NodePtr& node, const char* name, const float fallback)
 {
-    const mx::InputPtr input = node->getInput(name);
+    const MaterialX::InputPtr input = node->getInput(name);
     if (!input || input->getValueString().empty())
         return fallback;
     try {
-        const mx::ValuePtr value = node->getInputValue(name);
+        const MaterialX::ValuePtr value = node->getInputValue(name);
         if (!value)
             return fallback;
         if (input->getType() == "integer")
@@ -303,38 +302,38 @@ float floatInput(const mx::NodePtr& node, const char* name, const float fallback
             return value->asA<bool>() ? 1.0f : 0.0f;
         return value->asA<float>();
     }
-    catch (const mx::Exception&) {
+    catch (const MaterialX::Exception&) {
         throw SvmCompileError("SVM: expected float input '" + std::string(name)
             + "' on MaterialX node '" + node->getName() + "'");
     }
 }
 
-mx::Color3 colorInput(const mx::NodePtr& node, const char* name,
-    const mx::Color3& fallback)
+MaterialX::Color3 colorInput(const MaterialX::NodePtr& node, const char* name,
+    const MaterialX::Color3& fallback)
 {
-    const mx::InputPtr input = node->getInput(name);
+    const MaterialX::InputPtr input = node->getInput(name);
     if (!input || input->getValueString().empty())
         return fallback;
     try {
-        const mx::ValuePtr value = node->getInputValue(name);
+        const MaterialX::ValuePtr value = node->getInputValue(name);
         if (!value)
             return fallback;
         // Preserve the authored MaterialX value type.
         if (input->getType() == "vector3") {
-            const mx::Vector3 v = value->asA<mx::Vector3>();
+            const MaterialX::Vector3 v = value->asA<MaterialX::Vector3>();
             return {v[0], v[1], v[2]};
         }
         if (input->getType() == "vector2") {
-            const mx::Vector2 v = value->asA<mx::Vector2>();
+            const MaterialX::Vector2 v = value->asA<MaterialX::Vector2>();
             return {v[0], v[1], 0.0f};
         }
         if (input->getType() == "vector4") {
-            const mx::Vector4 v = value->asA<mx::Vector4>();
+            const MaterialX::Vector4 v = value->asA<MaterialX::Vector4>();
             return {v[0], v[1], v[2]};
         }
-        return value->asA<mx::Color3>();
+        return value->asA<MaterialX::Color3>();
     }
-    catch (const mx::Exception&) {
+    catch (const MaterialX::Exception&) {
         throw SvmCompileError("SVM: expected color3 input '" + std::string(name)
             + "' on MaterialX node '" + node->getName() + "'");
     }
@@ -357,7 +356,7 @@ int valueWidth(const std::string& type)
     return 1;
 }
 
-TransformSpace parseTransformSpace(const mx::InputPtr& input)
+TransformSpace parseTransformSpace(const MaterialX::InputPtr& input)
 {
     if (!input)
         return TransformSpace::Identity;
@@ -378,13 +377,13 @@ public:
 
     int maxStackSize() const { return maxStackSize_; }
 
-    void setRemainingUses(std::unordered_map<const mx::Node*, std::uint32_t> uses)
+    void setRemainingUses(std::unordered_map<const MaterialX::Node*, std::uint32_t> uses)
     {
         remainingUses_ = std::move(uses);
     }
 
-    ValueRef input(const mx::NodePtr& node, const char* name, const bool vector,
-        const float fallback = 0.0f, const mx::Color3 colorFallback = mx::Color3(0.0f))
+    ValueRef input(const MaterialX::NodePtr& node, const char* name, const bool vector,
+        const float fallback = 0.0f, const MaterialX::Color3 colorFallback = MaterialX::Color3(0.0f))
     {
         const auto finishConnectedValue = [this, vector](ValueRef value) {
             value = coerce(value, vector);
@@ -395,11 +394,11 @@ public:
                 retainValue(value);
             return value;
         };
-        const mx::InputPtr port = node->getInput(name);
+        const MaterialX::InputPtr port = node->getInput(name);
         // Resolve named nodegraph outputs to their upstream node and output.
         if (port) {
-            if (const mx::OutputPtr output = port->getConnectedOutput()) {
-                if (const mx::NodePtr connected = output->getConnectedNode()) {
+            if (const MaterialX::OutputPtr output = port->getConnectedOutput()) {
+                if (const MaterialX::NodePtr connected = output->getConnectedNode()) {
                     const ValueRef value = compileOutput(connected, output->getOutputString());
                     if (!consumptionScopes_.empty())
                         consumptionScopes_.back().push_back(connected.get());
@@ -408,7 +407,7 @@ public:
             }
         }
         if (port && port->getConnectedNode()) {
-            const mx::NodePtr connected = port->getConnectedNode();
+            const MaterialX::NodePtr connected = port->getConnectedNode();
             const ValueRef value = compileOutput(connected, port->getOutputString());
             if (!consumptionScopes_.empty())
                 consumptionScopes_.back().push_back(connected.get());
@@ -421,17 +420,17 @@ public:
             NodeMatrixValue instruction{};
             instruction.resultOffset = out;
             instruction.width = static_cast<StackOffset>(width);
-            const mx::ValuePtr value = node->getInputValue(name);
+            const MaterialX::ValuePtr value = node->getInputValue(name);
             if (value) {
                 if (dimension == 3) {
-                    const mx::Matrix33 matrix = value->asA<mx::Matrix33>();
+                    const MaterialX::Matrix33 matrix = value->asA<MaterialX::Matrix33>();
                     for (int row = 0; row < 3; ++row)
                         for (int column = 0; column < 3; ++column)
                             instruction.values[row * 3 + column] =
                                 floatWord(matrix[row][column]);
                 }
                 else {
-                    const mx::Matrix44 matrix = value->asA<mx::Matrix44>();
+                    const MaterialX::Matrix44 matrix = value->asA<MaterialX::Matrix44>();
                     for (int row = 0; row < 4; ++row)
                         for (int column = 0; column < 4; ++column)
                             instruction.values[row * 4 + column] =
@@ -451,26 +450,26 @@ public:
         if (!vector) {
             float scalar = fallback;
             if (port && (port->getType() == "color3" || port->getType() == "vector3")) {
-                const mx::ValuePtr value = node->getInputValue(name);
+                const MaterialX::ValuePtr value = node->getInputValue(name);
                 if (value) {
                     scalar = port->getType() == "color3"
-                        ? value->asA<mx::Color3>()[0] : value->asA<mx::Vector3>()[0];
+                        ? value->asA<MaterialX::Color3>()[0] : value->asA<MaterialX::Vector3>()[0];
                 }
             } else if (port && port->getType() == "vector2") {
                 // e.g. dielectric_bsdf/conductor_bsdf's anisotropic `roughness`
                 // fed a vector2: NoorRayCompositeBsdf's lobes only model
                 // isotropic roughness, so take the first (U) component.
-                const mx::ValuePtr value = node->getInputValue(name);
+                const MaterialX::ValuePtr value = node->getInputValue(name);
                 if (value)
-                    scalar = value->asA<mx::Vector2>()[0];
+                    scalar = value->asA<MaterialX::Vector2>()[0];
             } else if (port && port->getType() == "color4") {
-                const mx::ValuePtr value = node->getInputValue(name);
+                const MaterialX::ValuePtr value = node->getInputValue(name);
                 if (value)
-                    scalar = value->asA<mx::Color4>()[0];
+                    scalar = value->asA<MaterialX::Color4>()[0];
             } else if (port && port->getType() == "vector4") {
-                const mx::ValuePtr value = node->getInputValue(name);
+                const MaterialX::ValuePtr value = node->getInputValue(name);
                 if (value)
-                    scalar = value->asA<mx::Vector4>()[0];
+                    scalar = value->asA<MaterialX::Vector4>()[0];
             } else {
                 scalar = floatInput(node, name, fallback);
             }
@@ -478,27 +477,27 @@ public:
             return {word, word, word, false};
         }
         if (port && (port->getType() == "color4" || port->getType() == "vector4")) {
-            const mx::ValuePtr value = node->getInputValue(name);
+            const MaterialX::ValuePtr value = node->getInputValue(name);
             if (value) {
                 const glm::vec4 components = port->getType() == "color4"
-                    ? glm::vec4(value->asA<mx::Color4>()[0], value->asA<mx::Color4>()[1],
-                        value->asA<mx::Color4>()[2], value->asA<mx::Color4>()[3])
-                    : glm::vec4(value->asA<mx::Vector4>()[0], value->asA<mx::Vector4>()[1],
-                        value->asA<mx::Vector4>()[2], value->asA<mx::Vector4>()[3]);
+                    ? glm::vec4(value->asA<MaterialX::Color4>()[0], value->asA<MaterialX::Color4>()[1],
+                        value->asA<MaterialX::Color4>()[2], value->asA<MaterialX::Color4>()[3])
+                    : glm::vec4(value->asA<MaterialX::Vector4>()[0], value->asA<MaterialX::Vector4>()[1],
+                        value->asA<MaterialX::Vector4>()[2], value->asA<MaterialX::Vector4>()[3]);
                 return {floatWord(components.x), floatWord(components.y),
                     floatWord(components.z), true, floatWord(components.w), 4};
             }
         }
-        const mx::Color3 color = colorInput(node, name, colorFallback);
+        const MaterialX::Color3 color = colorInput(node, name, colorFallback);
         return {floatWord(color[0]), floatWord(color[1]), floatWord(color[2]), true,
             0, static_cast<std::uint8_t>(port && (port->getType() == "color2"
                 || port->getType() == "vector2") ? 2 : 3)};
     }
 
-    bool sellmeierInput(const mx::NodePtr& node, const char* name,
+    bool sellmeierInput(const MaterialX::NodePtr& node, const char* name,
         NodeSellmeierIor& result) const
     {
-        const mx::NodePtr source = connectedNode(node, name);
+        const MaterialX::NodePtr source = connectedNode(node, name);
         if (!source || source->getCategory() != "noorray_sellmeier_ior")
             return false;
         const auto found = sellmeierOutputs_.find(source.get());
@@ -508,7 +507,7 @@ public:
         return true;
     }
 
-    ValueRef compile(const mx::NodePtr& node)
+    ValueRef compile(const MaterialX::NodePtr& node)
     {
         const auto found = values_.find(node.get());
         if (found != values_.end())
@@ -601,7 +600,7 @@ public:
         }
         else if (category == "constant") {
             // ND_constant_*: passes its `value` input straight through.
-            result = input(node, "value", vector, 0.0f, mx::Color3(0.0f));
+            result = input(node, "value", vector, 0.0f, MaterialX::Color3(0.0f));
         }
         else if (category == "noorray_sellmeier_ior") {
             // MaterialX and Blender expose a scalar IOR socket, so retain a
@@ -838,7 +837,7 @@ public:
                 static_cast<StackOffset>(out + 2), static_cast<StackOffset>(out + 3)});
             result = stackWidth(out, 4);
             auto& outputs = namedOutputs_[node.get()];
-            const mx::InputPtr inputPort = node->getInput("in");
+            const MaterialX::InputPtr inputPort = node->getInput("in");
             if (inputPort && inputPort->getType() == "color4") {
                 outputs.emplace("outr", stack(out, false));
                 outputs.emplace("outg", stack(static_cast<StackOffset>(out + 1), false));
@@ -879,7 +878,7 @@ public:
             emitter_.add(NodeType::SeparateColor, instruction);
             result = stackWidth(out, separateWidth);
             auto& outputs = namedOutputs_[node.get()];
-            const mx::InputPtr inputPort = node->getInput("in");
+            const MaterialX::InputPtr inputPort = node->getInput("in");
             if (inputPort && inputPort->getType() == "color3") {
                 outputs.emplace("outr", stack(out, false));
                 outputs.emplace("outg", stack(static_cast<StackOffset>(out + 1), false));
@@ -917,15 +916,15 @@ public:
             // value nodes and their associated stack lifetimes.
             const ValueRef value = coerceWidth(input(node, "in", vector), width);
             const ValueRef inLow = coerceWidth(
-                input(node, "inlow", vector, 0.0f, mx::Color3(0.0f)), width);
+                input(node, "inlow", vector, 0.0f, MaterialX::Color3(0.0f)), width);
             const ValueRef inHigh = coerceWidth(
-                input(node, "inhigh", vector, 1.0f, mx::Color3(1.0f)), width);
+                input(node, "inhigh", vector, 1.0f, MaterialX::Color3(1.0f)), width);
             const ValueRef gamma = coerceWidth(
-                input(node, "gamma", vector, 1.0f, mx::Color3(1.0f)), width);
+                input(node, "gamma", vector, 1.0f, MaterialX::Color3(1.0f)), width);
             const ValueRef outLow = coerceWidth(
-                input(node, "outlow", vector, 0.0f, mx::Color3(0.0f)), width);
+                input(node, "outlow", vector, 0.0f, MaterialX::Color3(0.0f)), width);
             const ValueRef outHigh = coerceWidth(
-                input(node, "outhigh", vector, 1.0f, mx::Color3(1.0f)), width);
+                input(node, "outhigh", vector, 1.0f, MaterialX::Color3(1.0f)), width);
             const StackOffset out = allocate(width == 4 ? 4 : vector ? 3 : 1);
             if (width == 4) {
                 NodeRange4 instruction{};
@@ -993,7 +992,7 @@ public:
             // invert. Keep its vector/scalar variants in the existing opcode.
             const ValueRef value = input(node, "in", vector);
             const ValueRef amount = input(node, "amount", vector, 1.0f,
-                mx::Color3(1.0f));
+                MaterialX::Color3(1.0f));
             const StackOffset out = allocate(width);
             if (!vector) {
                 emitter_.add(NodeType::Invert, NodeInvert{
@@ -1012,9 +1011,9 @@ public:
         else if (category == "contrast") {
             const ValueRef value = input(node, "in", vector);
             const ValueRef amount = input(node, "amount", vector, 1.0f,
-                mx::Color3(1.0f));
+                MaterialX::Color3(1.0f));
             const ValueRef pivot = input(node, "pivot", vector, 0.5f,
-                mx::Color3(0.5f));
+                MaterialX::Color3(0.5f));
             const StackOffset out = allocate(width);
             if (!vector) {
                 emitter_.add(NodeType::Contrast, NodeContrast{
@@ -1039,7 +1038,7 @@ public:
             instruction.colorX = color.x; instruction.colorY = color.y; instruction.colorZ = color.z;
             instruction.amount = input(node, "amount", false, 1.0f).x;
             const ValueRef luma = input(node, "lumacoeffs", true, 0.0f,
-                mx::Color3(0.2722287f, 0.6740818f, 0.0536895f));
+                MaterialX::Color3(0.2722287f, 0.6740818f, 0.0536895f));
             instruction.lumaX = luma.x; instruction.lumaY = luma.y; instruction.lumaZ = luma.z;
             instruction.resultOffset = out;
             emitter_.add(NodeType::Saturate, instruction);
@@ -1093,8 +1092,8 @@ public:
         }
         else if (category == "clamp") {
             const ValueRef value = input(node, "in", vector);
-            const ValueRef low = input(node, "low", vector, 0.0f, mx::Color3(0.0f));
-            const ValueRef high = input(node, "high", vector, 1.0f, mx::Color3(1.0f));
+            const ValueRef low = input(node, "low", vector, 0.0f, MaterialX::Color3(0.0f));
+            const ValueRef high = input(node, "high", vector, 1.0f, MaterialX::Color3(1.0f));
             const StackOffset out = allocate(width);
             const std::uint32_t values[4]{value.x, value.y, value.z, value.w};
             const std::uint32_t lows[4]{low.x, low.y, low.z, low.w};
@@ -1120,7 +1119,7 @@ public:
                 category == "geomcolor" && node->getType() == "color4";
             const StackOffset out = allocate(vertexAlpha ? 4 : 3);
             NodeTexCoord instruction{};
-            const mx::InputPtr space = node->getInput("space");
+            const MaterialX::InputPtr space = node->getInput("space");
             const std::string spaceName = space ? space->getValueString() : "object";
             instruction.source = vertexAlpha ? TexCoordSource::VertexColorAlpha
                 : category == "texcoord" ? TexCoordSource::UV
@@ -1140,11 +1139,11 @@ public:
         else if (category == "mapping") {
             const ValueRef value = input(node, "in", true);
             const ValueRef translation = input(node, "translation", true,
-                0.0f, mx::Color3(0.0f));
+                0.0f, MaterialX::Color3(0.0f));
             const ValueRef rotation = input(node, "rotation", true,
-                0.0f, mx::Color3(0.0f));
+                0.0f, MaterialX::Color3(0.0f));
             const ValueRef scale = input(node, "scale", true,
-                1.0f, mx::Color3(1.0f));
+                1.0f, MaterialX::Color3(1.0f));
             const StackOffset out = allocate(3);
             emitter_.add(NodeType::Mapping, NodeMapping{
                 value.x, value.y, value.z,
@@ -1155,7 +1154,7 @@ public:
             result = stack(out, true);
         }
         else if (category == "geompropvalue") {
-            const mx::InputPtr propertyPort = node->getInput("geomprop");
+            const MaterialX::InputPtr propertyPort = node->getInput("geomprop");
             const std::string property = propertyPort ? propertyPort->getValueString() : "";
             const bool outputVector = vector;
 
@@ -1183,7 +1182,7 @@ public:
                 // MaterialX requires a declared default for missing primvars;
                 // using it as the standard fallback rather than inventing a
                 // renderer-specific value.
-                result = input(node, "default", outputVector, 0.0f, mx::Color3(0.0f));
+                result = input(node, "default", outputVector, 0.0f, MaterialX::Color3(0.0f));
             }
             else {
                 const bool alpha = (node->getType() == "color4" || node->getType() == "vector4")
@@ -1203,7 +1202,7 @@ public:
         }
         else if (category == "gradient") {
             const ValueRef position = input(node, "in", true);
-            const mx::InputPtr gradientPort = node->getInput("gradient");
+            const MaterialX::InputPtr gradientPort = node->getInput("gradient");
             const std::string gradient = gradientPort ? gradientPort->getValueString() : "LINEAR";
             const auto gradientType = gradient == "QUADRATIC" ? GradientType::Quadratic
                 : gradient == "EASING" ? GradientType::Easing
@@ -1226,7 +1225,7 @@ public:
         }
         else if (category == "rotate3d") {
             const ValueRef in = input(node, "in", true);
-            const ValueRef axis = input(node, "axis", true, 0.0f, mx::Color3(0.0f, 1.0f, 0.0f));
+            const ValueRef axis = input(node, "axis", true, 0.0f, MaterialX::Color3(0.0f, 1.0f, 0.0f));
             const StackOffset out = allocate(3);
             NodeRotate3d instruction{};
             instruction.inX = in.x; instruction.inY = in.y; instruction.inZ = in.z;
@@ -1262,7 +1261,7 @@ public:
             instruction.width = static_cast<StackOffset>(matrixWidth);
             for (int row = 0; row < dimension; ++row) {
                 const std::string inputName = "in" + std::to_string(row + 1);
-                const mx::InputPtr inputPort = node->getInput(inputName);
+                const MaterialX::InputPtr inputPort = node->getInput(inputName);
                 const ValueRef value = coerceWidth(input(node, inputName.c_str(), true), dimension);
                 for (int column = 0; column < dimension; ++column)
                     instruction.values[row * dimension + column] =
@@ -1293,7 +1292,7 @@ public:
             result = stackWidth(out, outputWidth);
         }
         else if (category == "image") {
-            const mx::InputPtr file = node->getInput("file");
+            const MaterialX::InputPtr file = node->getInput("file");
             if (!file || file->getValueString().empty())
                 throw SvmCompileError("SVM: image node '" + node->getName() + "' has no file");
             const auto texture = resolvedTextures_.find(file->getValueString());
@@ -1307,19 +1306,19 @@ public:
                 static_cast<std::uint32_t>(textureSlots_.size()));
             if (inserted)
                 textures_.push_back(texture->second);
-            const ValueRef uv = input(node, "texcoord", true, 0.0f, mx::Color3(0.0f));
+            const ValueRef uv = input(node, "texcoord", true, 0.0f, MaterialX::Color3(0.0f));
             instruction.textureSlot = static_cast<std::int32_t>(slot->second);
             instruction.uvX = uv.x; instruction.uvY = uv.y;
             instruction.resultColorOffset = out;
             instruction.resultAlphaOffset = alpha;
             const auto addressMode = [&](const char* name) -> StackOffset {
-                const mx::InputPtr port = node->getInput(name);
+                const MaterialX::InputPtr port = node->getInput(name);
                 const std::string value = port ? port->getValueString() : "periodic";
                 return value == "clamp" ? 1 : value == "mirror" ? 2 : value == "constant" ? 3 : 0;
             };
             instruction.uAddressMode = addressMode("uaddressmode");
             instruction.vAddressMode = addressMode("vaddressmode");
-            const mx::InputPtr filter = node->getInput("filtertype");
+            const MaterialX::InputPtr filter = node->getInput("filtertype");
             instruction.filterType = filter && filter->getValueString() == "closest" ? 1 : 0;
             emitter_.add(NodeType::ImageTexture, instruction);
             const bool outputFour = node->getType() == "color4"
@@ -1330,13 +1329,13 @@ public:
         }
         else if (category == "normalmap") {
             const StackOffset out = allocate(3);
-            const ValueRef color = input(node, "in", true, 0.0f, mx::Color3(0.5f, 0.5f, 1.0f));
-            const mx::InputPtr scalePort = node->getInput("scale");
+            const ValueRef color = input(node, "in", true, 0.0f, MaterialX::Color3(0.5f, 0.5f, 1.0f));
+            const MaterialX::InputPtr scalePort = node->getInput("scale");
             const bool vectorScale = scalePort && scalePort->getType() == "vector2";
-            const ValueRef scale = input(node, "scale", vectorScale, 1.0f, mx::Color3(1.0f));
+            const ValueRef scale = input(node, "scale", vectorScale, 1.0f, MaterialX::Color3(1.0f));
             const auto geometry = [&](const char* name, const TexCoordSource fallback,
                                       std::uint32_t& x, std::uint32_t& y, std::uint32_t& z) {
-                const mx::InputPtr port = node->getInput(name);
+                const MaterialX::InputPtr port = node->getInput(name);
                 if (port && port->getConnectedNode()) {
                     const ValueRef value = input(node, name, true);
                     x = value.x; y = value.y; z = value.z;
@@ -1370,7 +1369,7 @@ public:
             // Luminance returns a grayscale value and preserves color4 alpha.
             const ValueRef color = input(node, "in", true);
             const ValueRef coefficients = input(node, "lumacoeffs", true, 0.0f,
-                mx::Color3(0.2722287f, 0.6740818f, 0.0536895f));
+                MaterialX::Color3(0.2722287f, 0.6740818f, 0.0536895f));
             const StackOffset gray = allocate(1);
             NodeVectorMath instruction{};
             instruction.mathType = static_cast<std::uint32_t>(VectorMathOp::DotProduct);
@@ -1410,8 +1409,8 @@ public:
         else if (category == "extract") {
             const int index = static_cast<int>(floatInput(node, "index", 0.0f));
             if (index == 3) {
-                const mx::InputPtr inputPort = node->getInput("in");
-                const mx::NodePtr source = inputPort ? inputPort->getConnectedNode() : nullptr;
+                const MaterialX::InputPtr inputPort = node->getInput("in");
+                const MaterialX::NodePtr source = inputPort ? inputPort->getConnectedNode() : nullptr;
                 const ValueRef in = input(node, "in", true);
                 if (in.width >= 4 && isStackOffset(in.w)) {
                     result = stack(static_cast<StackOffset>(decodeStackOffset(in.w)), false);
@@ -1485,9 +1484,9 @@ public:
             // Retain all four standard MaterialX noise inputs.
             const bool is2d = category == "fractal2d";
             const ValueRef position = is2d
-                ? input(node, "texcoord", true, 0.0f, mx::Color3(0.0f))
-                : input(node, "position", true, 0.0f, mx::Color3(0.0f));
-            const ValueRef amplitude = input(node, "amplitude", vector, 1.0f, mx::Color3(1.0f));
+                ? input(node, "texcoord", true, 0.0f, MaterialX::Color3(0.0f))
+                : input(node, "position", true, 0.0f, MaterialX::Color3(0.0f));
+            const ValueRef amplitude = input(node, "amplitude", vector, 1.0f, MaterialX::Color3(1.0f));
             const StackOffset out = allocate(vector ? 3 : 1);
             NodeProceduralTexture instruction{};
             instruction.posX = position.x;
@@ -1511,9 +1510,9 @@ public:
             // fractal3d while keeping its non-octave semantics distinct.
             const bool is2d = category == "noise2d";
             const ValueRef position = is2d
-                ? input(node, "texcoord", true, 0.0f, mx::Color3(0.0f))
-                : input(node, "position", true, 0.0f, mx::Color3(0.0f));
-            const ValueRef amplitude = input(node, "amplitude", vector, 1.0f, mx::Color3(1.0f));
+                ? input(node, "texcoord", true, 0.0f, MaterialX::Color3(0.0f))
+                : input(node, "position", true, 0.0f, MaterialX::Color3(0.0f));
+            const ValueRef amplitude = input(node, "amplitude", vector, 1.0f, MaterialX::Color3(1.0f));
             const StackOffset out = allocate(vector ? 3 : 1);
             NodeNoiseTexture instruction{};
             instruction.posX = position.x; instruction.posY = position.y; instruction.posZ = position.z;
@@ -1530,8 +1529,8 @@ public:
         else if (category == "worleynoise2d" || category == "worleynoise3d") {
             const bool is2d = category == "worleynoise2d";
             const ValueRef position = is2d
-                ? input(node, "texcoord", true, 0.0f, mx::Color3(0.0f))
-                : input(node, "position", true, 0.0f, mx::Color3(0.0f));
+                ? input(node, "texcoord", true, 0.0f, MaterialX::Color3(0.0f))
+                : input(node, "position", true, 0.0f, MaterialX::Color3(0.0f));
             const StackOffset out = allocate(vector ? 3 : 1);
             NodeWorleyNoiseTexture instruction{};
             instruction.posX = position.x; instruction.posY = position.y; instruction.posZ = position.z;
@@ -1545,8 +1544,8 @@ public:
         }
         else if (category == "cellnoise2d" || category == "cellnoise3d") {
             const ValueRef position = category == "cellnoise2d"
-                ? input(node, "texcoord", true, 0.0f, mx::Color3(0.0f))
-                : input(node, "position", true, 0.0f, mx::Color3(0.0f));
+                ? input(node, "texcoord", true, 0.0f, MaterialX::Color3(0.0f))
+                : input(node, "position", true, 0.0f, MaterialX::Color3(0.0f));
             const StackOffset out = allocate(1);
             NodeCellNoiseTexture instruction{};
             instruction.posX = position.x; instruction.posY = position.y; instruction.posZ = position.z;
@@ -1562,10 +1561,10 @@ public:
             // the fixed interpreter implementation of the same operation.
             const bool is2d = category == "unifiednoise2d";
             const ValueRef position = is2d
-                ? input(node, "texcoord", true, 0.0f, mx::Color3(0.0f))
-                : input(node, "position", true, 0.0f, mx::Color3(0.0f));
-            const ValueRef frequency = input(node, "freq", true, 1.0f, mx::Color3(1.0f));
-            const ValueRef coordinateOffset = input(node, "offset", true, 0.0f, mx::Color3(0.0f));
+                ? input(node, "texcoord", true, 0.0f, MaterialX::Color3(0.0f))
+                : input(node, "position", true, 0.0f, MaterialX::Color3(0.0f));
+            const ValueRef frequency = input(node, "freq", true, 1.0f, MaterialX::Color3(1.0f));
+            const ValueRef coordinateOffset = input(node, "offset", true, 0.0f, MaterialX::Color3(0.0f));
             const StackOffset out = allocate(1);
             NodeUnifiedNoiseTexture instruction{};
             instruction.posX = position.x; instruction.posY = position.y; instruction.posZ = position.z;
@@ -1588,12 +1587,12 @@ public:
         else if (category == "checkerboard") {
             // Direct collapse of NG_checkerboard_color3's multiply,
             // subtract, floor, dot, modulo and mix sequence.
-            const ValueRef color1 = input(node, "color1", true, 0.0f, mx::Color3(1.0f));
-            const ValueRef color2 = input(node, "color2", true, 0.0f, mx::Color3(0.0f));
+            const ValueRef color1 = input(node, "color1", true, 0.0f, MaterialX::Color3(1.0f));
+            const ValueRef color2 = input(node, "color2", true, 0.0f, MaterialX::Color3(0.0f));
             const ValueRef tiling = input(node, "uvtiling", true, 0.0f,
-                mx::Color3(8.0f, 8.0f, 0.0f));
-            const ValueRef offset = input(node, "uvoffset", true, 0.0f, mx::Color3(0.0f));
-            const ValueRef uv = input(node, "texcoord", true, 0.0f, mx::Color3(0.0f));
+                MaterialX::Color3(8.0f, 8.0f, 0.0f));
+            const ValueRef offset = input(node, "uvoffset", true, 0.0f, MaterialX::Color3(0.0f));
+            const ValueRef uv = input(node, "texcoord", true, 0.0f, MaterialX::Color3(0.0f));
             const StackOffset out = allocate(3);
             NodeCheckerTexture instruction{};
             instruction.color1X = color1.x; instruction.color1Y = color1.y; instruction.color1Z = color1.z;
@@ -1640,7 +1639,7 @@ public:
             // Direct port of mx_roughness_dual.glsl.  roughness.y < 0 means
             // "use roughness.x for both axes"; select branchlessly with the
             // same Math(compare) + Mix pattern ifgreater/ifequal use above.
-            const ValueRef roughness = input(node, "roughness", true, 0.0f, mx::Color3(0.0f));
+            const ValueRef roughness = input(node, "roughness", true, 0.0f, MaterialX::Color3(0.0f));
             const StackOffset useX = allocate(1);
             emitter_.add(NodeType::Math, NodeMath{static_cast<std::uint32_t>(MathOp::GreaterThan),
                 floatWord(0.0f), roughness.y, 0, useX});
@@ -1662,8 +1661,8 @@ public:
             // ND_artistic_ior has two named outputs.  Keep the MaterialX
             // standard-library operation intact as one SVM instruction,
             // Keep multi-result texture nodes compact.
-            const ValueRef reflectivity = input(node, "reflectivity", true, 0.0f, mx::Color3(0.5f));
-            const ValueRef edgeColor = input(node, "edge_color", true, 0.0f, mx::Color3(1.0f));
+            const ValueRef reflectivity = input(node, "reflectivity", true, 0.0f, MaterialX::Color3(0.5f));
+            const ValueRef edgeColor = input(node, "edge_color", true, 0.0f, MaterialX::Color3(1.0f));
             ValueRef extinction{};
             result = artisticIor(reflectivity, edgeColor, extinction);
             namedOutputs_[node.get()].emplace("ior", result);
@@ -1675,9 +1674,9 @@ public:
         }
         active_.erase(node.get());
         values_.emplace(node.get(), result);
-        const std::vector<const mx::Node*> consumed = std::move(consumptionScopes_.back());
+        const std::vector<const MaterialX::Node*> consumed = std::move(consumptionScopes_.back());
         consumptionScopes_.pop_back();
-        for (const mx::Node* consumedNode : consumed)
+        for (const MaterialX::Node* consumedNode : consumed)
             consume(consumedNode);
         return result;
     }
@@ -1740,7 +1739,7 @@ public:
     }
 
 private:
-    ValueRef compileUnary(const mx::NodePtr& node, const int width, const std::string& category)
+    ValueRef compileUnary(const MaterialX::NodePtr& node, const int width, const std::string& category)
     {
         const bool vector = width > 1;
         const ValueRef inputValue = coerceWidth(input(node, "in", vector), width);
@@ -1770,7 +1769,7 @@ private:
         return stackWidth(out, width);
     }
 
-    ValueRef compileBinary(const mx::NodePtr& node, const int width, const std::string& category)
+    ValueRef compileBinary(const MaterialX::NodePtr& node, const int width, const std::string& category)
     {
         const bool vector = width > 1;
         const ValueRef a = coerceWidth(input(node, "in1", vector), width);
@@ -1797,7 +1796,7 @@ private:
         return stackWidth(out, width);
     }
 
-    ValueRef compileOutput(const mx::NodePtr& node, const std::string& output)
+    ValueRef compileOutput(const MaterialX::NodePtr& node, const std::string& output)
     {
         const ValueRef primary = compile(node);
         if (output.empty())
@@ -1836,7 +1835,7 @@ private:
         throw SvmCompileError("SVM: stack exhausted (SVM stack has 255 float slots)");
     }
 
-    void consume(const mx::Node* node)
+    void consume(const MaterialX::Node* node)
     {
         const auto use = remainingUses_.find(node);
         if (use == remainingUses_.end() || use->second == 0 || --use->second != 0)
@@ -1860,7 +1859,7 @@ private:
                     freeValue(output);
     }
 
-    bool hasLiveAlias(const mx::Node* owner, const ValueRef value) const
+    bool hasLiveAlias(const MaterialX::Node* owner, const ValueRef value) const
     {
         if (!isStackOffset(value.x))
             return false;
@@ -1978,12 +1977,12 @@ private:
 
     Emitter& emitter_;
     const std::unordered_map<std::string, std::uint32_t>& resolvedTextures_;
-    std::unordered_map<const mx::Node*, ValueRef> values_;
-    std::unordered_map<const mx::Node*, std::unordered_map<std::string, ValueRef>> namedOutputs_;
-    std::unordered_map<const mx::Node*, NodeSellmeierIor> sellmeierOutputs_;
-    std::unordered_set<const mx::Node*> active_;
-    std::unordered_map<const mx::Node*, std::uint32_t> remainingUses_;
-    std::vector<std::vector<const mx::Node*>> consumptionScopes_;
+    std::unordered_map<const MaterialX::Node*, ValueRef> values_;
+    std::unordered_map<const MaterialX::Node*, std::unordered_map<std::string, ValueRef>> namedOutputs_;
+    std::unordered_map<const MaterialX::Node*, NodeSellmeierIor> sellmeierOutputs_;
+    std::unordered_set<const MaterialX::Node*> active_;
+    std::unordered_map<const MaterialX::Node*, std::uint32_t> remainingUses_;
+    std::vector<std::vector<const MaterialX::Node*>> consumptionScopes_;
     std::unordered_map<std::uint32_t, std::uint32_t> textureSlots_;
     std::vector<std::uint32_t> textures_;
     std::array<bool, StackSize> stackUsed_{};
@@ -1991,13 +1990,13 @@ private:
     int maxStackSize_{1};
 };
 
-NodeClosureOpenPbrSurface compileOpenPbr(const mx::NodePtr& node, GraphCompiler& graph)
+NodeClosureOpenPbrSurface compileOpenPbr(const MaterialX::NodePtr& node, GraphCompiler& graph)
 {
     NodeClosureOpenPbrSurface result{};
     const auto scalar = [&](const char* name, const float fallback) {
         return graph.input(node, name, false, fallback).x;
     };
-    const auto color = [&](const char* name, const mx::Color3& fallback,
+    const auto color = [&](const char* name, const MaterialX::Color3& fallback,
                            std::uint32_t& x, std::uint32_t& y, std::uint32_t& z) {
         const ValueRef value = graph.input(node, name, true, 0.0f, fallback);
         x = value.x;
@@ -2005,31 +2004,31 @@ NodeClosureOpenPbrSurface compileOpenPbr(const mx::NodePtr& node, GraphCompiler&
         z = value.z;
     };
 
-    color("base_color", mx::Color3(0.8f), result.baseColorX, result.baseColorY, result.baseColorZ);
+    color("base_color", MaterialX::Color3(0.8f), result.baseColorX, result.baseColorY, result.baseColorZ);
     result.baseWeight = scalar("base_weight", 1.0f);
     result.baseDiffuseRoughness = scalar("base_diffuse_roughness", 0.0f);
     result.metalness = scalar("base_metalness", 0.0f);
     result.specularWeight = scalar("specular_weight", 1.0f);
     result.specularRoughness = scalar("specular_roughness", 0.5f);
     result.specularIor = scalar("specular_ior", 1.5f);
-    color("specular_color", mx::Color3(1.0f),
+    color("specular_color", MaterialX::Color3(1.0f),
         result.specularColorX, result.specularColorY, result.specularColorZ);
     result.transmissionWeight = scalar("transmission_weight", 0.0f);
-    color("transmission_color", mx::Color3(1.0f),
+    color("transmission_color", MaterialX::Color3(1.0f),
         result.transmissionColorX, result.transmissionColorY, result.transmissionColorZ);
     result.subsurfaceWeight = scalar("subsurface_weight", 0.0f);
-    color("subsurface_color", mx::Color3(0.8f),
+    color("subsurface_color", MaterialX::Color3(0.8f),
         result.subsurfaceColorX, result.subsurfaceColorY, result.subsurfaceColorZ);
     result.fuzzWeight = scalar("fuzz_weight", 0.0f);
-    color("fuzz_color", mx::Color3(1.0f), result.fuzzColorX, result.fuzzColorY, result.fuzzColorZ);
+    color("fuzz_color", MaterialX::Color3(1.0f), result.fuzzColorX, result.fuzzColorY, result.fuzzColorZ);
     result.fuzzRoughness = scalar("fuzz_roughness", 0.5f);
     result.coatWeight = scalar("coat_weight", 0.0f);
-    color("coat_color", mx::Color3(1.0f), result.coatColorX, result.coatColorY, result.coatColorZ);
+    color("coat_color", MaterialX::Color3(1.0f), result.coatColorX, result.coatColorY, result.coatColorZ);
     result.coatRoughness = scalar("coat_roughness", 0.0f);
     result.coatIor = scalar("coat_ior", 1.5f);
     graph.sellmeierInput(node, "specular_ior", result.specularSellmeier);
     graph.sellmeierInput(node, "coat_ior", result.coatSellmeier);
-    if (const mx::InputPtr normal = node->getInput("geometry_normal");
+    if (const MaterialX::InputPtr normal = node->getInput("geometry_normal");
         normal && normal->getConnectedNode()) {
         const ValueRef value = graph.input(node, "geometry_normal", true);
         result.normalX = value.x;
@@ -2041,7 +2040,7 @@ NodeClosureOpenPbrSurface compileOpenPbr(const mx::NodePtr& node, GraphCompiler&
         result.normalY = encodeStackOffset(InvalidOffset);
         result.normalZ = encodeStackOffset(InvalidOffset);
     }
-    color("emission_color", mx::Color3(0.0f),
+    color("emission_color", MaterialX::Color3(0.0f),
         result.emissionColorX, result.emissionColorY, result.emissionColorZ);
     result.emissionLuminance = scalar("emission_luminance", 0.0f);
     result.opacity = scalar("geometry_opacity", 1.0f);
@@ -2056,42 +2055,42 @@ NodeClosureOpenPbrSurface compileOpenPbr(const mx::NodePtr& node, GraphCompiler&
 // spectral conversion, Fresnel, transmission and energy compensation in the
 // NoorRay BSDFs.  Consequently standard_surface can be freely composed with
 // add/mix closure nodes exactly like any other MaterialX shader closure.
-NodeClosureOpenPbrSurface compileStandardSurface(const mx::NodePtr& node, GraphCompiler& graph)
+NodeClosureOpenPbrSurface compileStandardSurface(const MaterialX::NodePtr& node, GraphCompiler& graph)
 {
     NodeClosureOpenPbrSurface result{};
     const auto scalar = [&](const char* name, const float fallback) {
         return graph.input(node, name, false, fallback).x;
     };
-    const auto color = [&](const char* name, const mx::Color3& fallback,
+    const auto color = [&](const char* name, const MaterialX::Color3& fallback,
                            std::uint32_t& x, std::uint32_t& y, std::uint32_t& z) {
         const ValueRef value = graph.input(node, name, true, 0.0f, fallback);
         x = value.x; y = value.y; z = value.z;
     };
 
-    color("base_color", mx::Color3(1.0f), result.baseColorX, result.baseColorY, result.baseColorZ);
+    color("base_color", MaterialX::Color3(1.0f), result.baseColorX, result.baseColorY, result.baseColorZ);
     result.baseWeight = scalar("base", 0.8f);
     result.baseDiffuseRoughness = scalar("diffuse_roughness", 0.0f);
     result.metalness = scalar("metalness", 0.0f);
     result.specularWeight = scalar("specular", 1.0f);
-    color("specular_color", mx::Color3(1.0f), result.specularColorX, result.specularColorY, result.specularColorZ);
+    color("specular_color", MaterialX::Color3(1.0f), result.specularColorX, result.specularColorY, result.specularColorZ);
     result.specularRoughness = scalar("specular_roughness", 0.2f);
     result.specularIor = scalar("specular_IOR", 1.5f);
     result.transmissionWeight = scalar("transmission", 0.0f);
-    color("transmission_color", mx::Color3(1.0f), result.transmissionColorX,
+    color("transmission_color", MaterialX::Color3(1.0f), result.transmissionColorX,
         result.transmissionColorY, result.transmissionColorZ);
     result.subsurfaceWeight = scalar("subsurface", 0.0f);
-    color("subsurface_color", mx::Color3(1.0f), result.subsurfaceColorX,
+    color("subsurface_color", MaterialX::Color3(1.0f), result.subsurfaceColorX,
         result.subsurfaceColorY, result.subsurfaceColorZ);
     result.fuzzWeight = scalar("sheen", 0.0f);
-    color("sheen_color", mx::Color3(1.0f), result.fuzzColorX, result.fuzzColorY, result.fuzzColorZ);
+    color("sheen_color", MaterialX::Color3(1.0f), result.fuzzColorX, result.fuzzColorY, result.fuzzColorZ);
     result.fuzzRoughness = scalar("sheen_roughness", 0.3f);
     result.coatWeight = scalar("coat", 0.0f);
-    color("coat_color", mx::Color3(1.0f), result.coatColorX, result.coatColorY, result.coatColorZ);
+    color("coat_color", MaterialX::Color3(1.0f), result.coatColorX, result.coatColorY, result.coatColorZ);
     result.coatRoughness = scalar("coat_roughness", 0.1f);
     result.coatIor = scalar("coat_IOR", 1.5f);
     graph.sellmeierInput(node, "specular_IOR", result.specularSellmeier);
     graph.sellmeierInput(node, "coat_IOR", result.coatSellmeier);
-    if (const mx::InputPtr normal = node->getInput("normal");
+    if (const MaterialX::InputPtr normal = node->getInput("normal");
         normal && normal->getConnectedNode()) {
         const ValueRef value = graph.input(node, "normal", true);
         result.normalX = value.x; result.normalY = value.y; result.normalZ = value.z;
@@ -2101,7 +2100,7 @@ NodeClosureOpenPbrSurface compileStandardSurface(const mx::NodePtr& node, GraphC
         result.normalY = encodeStackOffset(InvalidOffset);
         result.normalZ = encodeStackOffset(InvalidOffset);
     }
-    color("emission_color", mx::Color3(1.0f), result.emissionColorX,
+    color("emission_color", MaterialX::Color3(1.0f), result.emissionColorX,
         result.emissionColorY, result.emissionColorZ);
     result.emissionLuminance = scalar("emission", 0.0f);
     // Standard Surface opacity is color3.  GraphCompiler's scalar coercion
@@ -2116,14 +2115,14 @@ NodeClosureOpenPbrSurface compileStandardSurface(const mx::NodePtr& node, GraphC
 // transmission lobe. NoorRay keeps Disney as a regular MaterialX node, but
 // lowers the node itself so its authored roughness also controls metallic and
 // specTrans closures instead of being lost during nodegraph flattening.
-NodeClosureOpenPbrSurface compileDisneyPrincipled(const mx::NodePtr& node,
+NodeClosureOpenPbrSurface compileDisneyPrincipled(const MaterialX::NodePtr& node,
     GraphCompiler& graph)
 {
     NodeClosureOpenPbrSurface result{};
     const auto scalar = [&](const char* name, const float fallback) {
         return graph.input(node, name, false, fallback).x;
     };
-    const auto color = [&](const char* name, const mx::Color3& fallback,
+    const auto color = [&](const char* name, const MaterialX::Color3& fallback,
                            std::uint32_t& x, std::uint32_t& y, std::uint32_t& z) {
         const ValueRef value = graph.input(node, name, true, 0.0f, fallback);
         x = value.x;
@@ -2131,7 +2130,7 @@ NodeClosureOpenPbrSurface compileDisneyPrincipled(const mx::NodePtr& node,
         z = value.z;
     };
 
-    color("baseColor", mx::Color3(0.16f),
+    color("baseColor", MaterialX::Color3(0.16f),
         result.baseColorX, result.baseColorY, result.baseColorZ);
     result.baseWeight = floatWord(1.0f);
     result.baseDiffuseRoughness = scalar("roughness", 0.5f);
@@ -2143,15 +2142,15 @@ NodeClosureOpenPbrSurface compileDisneyPrincipled(const mx::NodePtr& node,
     result.specularColorX = result.specularColorY = result.specularColorZ =
         floatWord(1.0f);
     result.transmissionWeight = scalar("specTrans", 0.0f);
-    color("baseColor", mx::Color3(1.0f),
+    color("baseColor", MaterialX::Color3(1.0f),
         result.transmissionColorX, result.transmissionColorY,
         result.transmissionColorZ);
     result.subsurfaceWeight = scalar("subsurface", 0.0f);
-    color("baseColor", mx::Color3(1.0f),
+    color("baseColor", MaterialX::Color3(1.0f),
         result.subsurfaceColorX, result.subsurfaceColorY,
         result.subsurfaceColorZ);
     result.fuzzWeight = scalar("sheen", 0.0f);
-    color("baseColor", mx::Color3(1.0f),
+    color("baseColor", MaterialX::Color3(1.0f),
         result.fuzzColorX, result.fuzzColorY, result.fuzzColorZ);
     result.fuzzRoughness = scalar("roughness", 0.5f);
     result.coatWeight = scalar("clearcoat", 0.0f);
@@ -2179,7 +2178,7 @@ void emitWeight(Emitter& emitter, const ValueRef value)
         NodeClosureWeight{weight.x, weight.y, weight.z});
 }
 
-ValueRef closureWeight(GraphCompiler& graph, const mx::NodePtr& node,
+ValueRef closureWeight(GraphCompiler& graph, const MaterialX::NodePtr& node,
     const ValueRef& inherited)
 {
     const ValueRef local = graph.input(node, "weight", false, 1.0f);
@@ -2190,10 +2189,10 @@ ValueRef closureWeight(GraphCompiler& graph, const mx::NodePtr& node,
     return graph.multiply(inherited, local);
 }
 
-void emitClosureNormal(GraphCompiler& graph, const mx::NodePtr& node,
+void emitClosureNormal(GraphCompiler& graph, const MaterialX::NodePtr& node,
     std::uint32_t& x, std::uint32_t& y, std::uint32_t& z)
 {
-    const mx::InputPtr normal = node->getInput("normal");
+    const MaterialX::InputPtr normal = node->getInput("normal");
     if (normal && (normal->getConnectedNode() || normal->getConnectedOutput())) {
         const ValueRef value = graph.input(node, "normal", true);
         x = value.x;
@@ -2208,16 +2207,16 @@ void emitClosureNormal(GraphCompiler& graph, const mx::NodePtr& node,
 }
 
 void emitClosure(Emitter& emitter, GraphCompiler& graph,
-    const mx::NodePtr& node, const ValueRef& inheritedWeight)
+    const MaterialX::NodePtr& node, const ValueRef& inheritedWeight)
 {
     if (!node)
         return;
 
     const std::string& category = node->getCategory();
     if (category == "surface") {
-        if (const mx::NodePtr bsdf = connectedNode(node, "bsdf"))
+        if (const MaterialX::NodePtr bsdf = connectedNode(node, "bsdf"))
             emitClosure(emitter, graph, bsdf, inheritedWeight);
-        if (const mx::NodePtr edf = connectedNode(node, "edf"))
+        if (const MaterialX::NodePtr edf = connectedNode(node, "edf"))
             emitClosure(emitter, graph, edf, inheritedWeight);
         emitter.add(NodeType::SurfaceOutput,
             NodeSurfaceOutput{graph.input(node, "opacity", false, 1.0f).x});
@@ -2225,7 +2224,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
     }
     if (category == "surface_unlit") {
         const ValueRef color = graph.input(node, "emission_color", true,
-            1.0f, mx::Color3(1.0f));
+            1.0f, MaterialX::Color3(1.0f));
         const ValueRef strength = graph.input(node, "emission", false, 1.0f);
         emitWeight(emitter, inheritedWeight);
         emitter.add(NodeType::ClosureUniformEdf,
@@ -2235,9 +2234,9 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         return;
     }
     if (category == "add") {
-        if (const mx::NodePtr a = connectedNode(node, "in1"))
+        if (const MaterialX::NodePtr a = connectedNode(node, "in1"))
             emitClosure(emitter, graph, a, inheritedWeight);
-        if (const mx::NodePtr b = connectedNode(node, "in2"))
+        if (const MaterialX::NodePtr b = connectedNode(node, "in2"))
             emitClosure(emitter, graph, b, inheritedWeight);
         return;
     }
@@ -2248,9 +2247,9 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // The OpenPBR surface layers its coat (an unweighted sum of
         // both lobes, each already carrying its own Fresnel falloff) rather
         // than adding new shade-time attenuation machinery.
-        if (const mx::NodePtr top = connectedNode(node, "top"))
+        if (const MaterialX::NodePtr top = connectedNode(node, "top"))
             emitClosure(emitter, graph, top, inheritedWeight);
-        if (const mx::NodePtr base = connectedNode(node, "base"))
+        if (const MaterialX::NodePtr base = connectedNode(node, "base"))
             emitClosure(emitter, graph, base, inheritedWeight);
         return;
     }
@@ -2259,7 +2258,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // the two branch weights.  Do the same here; otherwise out-of-range
         // MaterialX values can produce negative closure energy.
         const ValueRef factor = graph.clamp01(graph.input(node, "mix", false));
-        if (const mx::NodePtr background = connectedNode(node, "bg")) {
+        if (const MaterialX::NodePtr background = connectedNode(node, "bg")) {
             // The closure tree emits JUMP_IF_ONE before the
             // first branch, avoiding all branch-local work when the factor is
             // one. The offset is patched after the branch has been emitted.
@@ -2270,7 +2269,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
             emitter.patch(jumpStart + 2,
                 static_cast<std::uint32_t>(emitter.size() - (jumpStart + 3)));
         }
-        if (const mx::NodePtr foreground = connectedNode(node, "fg")) {
+        if (const MaterialX::NodePtr foreground = connectedNode(node, "fg")) {
             const std::size_t jumpStart = emitter.size();
             emitter.add(NodeType::JumpIfZero, NodeJump{factor.x, 0});
             emitClosure(emitter, graph, foreground,
@@ -2285,13 +2284,13 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // MaterialX uses the same category for numeric multiplication and
         // closure scaling.  Once we are walking a closure-typed node, in1 is
         // the closure and in2 is its scalar/color contribution weight.
-        if (const mx::NodePtr inputClosure = connectedNode(node, "in1")) {
-            const mx::InputPtr scalePort = node->getInput("in2");
+        if (const MaterialX::NodePtr inputClosure = connectedNode(node, "in1")) {
+            const MaterialX::InputPtr scalePort = node->getInput("in2");
             const bool vectorScale = scalePort
                 && (scalePort->getType() == "color3" || scalePort->getType() == "vector3");
             emitClosure(emitter, graph, inputClosure,
                 graph.multiply(inheritedWeight, graph.input(node, "in2", vectorScale,
-                    1.0f, mx::Color3(1.0f))));
+                    1.0f, MaterialX::Color3(1.0f))));
         }
         return;
     }
@@ -2321,7 +2320,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
     emitWeight(emitter, weighted);
     if (category == "oren_nayar_diffuse_bsdf" || category == "burley_diffuse_bsdf"
         || category == "translucent_bsdf") {
-        const ValueRef color = graph.input(node, "color", true, 0.0f, mx::Color3(0.8f));
+        const ValueRef color = graph.input(node, "color", true, 0.0f, MaterialX::Color3(0.8f));
         NodeClosureDiffuseBsdf instruction{};
         instruction.colorX = color.x; instruction.colorY = color.y; instruction.colorZ = color.z;
         instruction.roughness = graph.input(node, "roughness", false, 0.0f).x;
@@ -2332,7 +2331,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         return;
     }
     if (category == "dielectric_bsdf") {
-        const ValueRef tint = graph.input(node, "tint", true, 0.0f, mx::Color3(1.0f));
+        const ValueRef tint = graph.input(node, "tint", true, 0.0f, MaterialX::Color3(1.0f));
         NodeClosureDielectricBsdf instruction{};
         instruction.colorX = tint.x; instruction.colorY = tint.y; instruction.colorZ = tint.z;
         instruction.roughness = graph.input(node, "roughness", false, 0.0f).x;
@@ -2342,7 +2341,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // modes in the compact closure payload: R=0, T=1, RT=2. The SVM
         // evaluator uses this to disable the unwanted lobe, rather than
         // treating T and RT as the same kind of glass.
-        const mx::InputPtr scatterMode = node->getInput("scatter_mode");
+        const MaterialX::InputPtr scatterMode = node->getInput("scatter_mode");
         const std::string mode = scatterMode
             ? scatterMode->getValueString() : "R";
         instruction.transmission = floatWord(
@@ -2352,8 +2351,8 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         return;
     }
     if (category == "conductor_bsdf") {
-        const ValueRef ior = graph.input(node, "ior", true, 0.0f, mx::Color3(1.5f));
-        const ValueRef extinction = graph.input(node, "extinction", true, 0.0f, mx::Color3(1.0f));
+        const ValueRef ior = graph.input(node, "ior", true, 0.0f, MaterialX::Color3(1.5f));
+        const ValueRef extinction = graph.input(node, "extinction", true, 0.0f, MaterialX::Color3(1.0f));
         NodeClosureConductorBsdf instruction{};
         instruction.colorX = instruction.colorY = instruction.colorZ = floatWord(1.0f);
         instruction.roughness = graph.input(node, "roughness", false, 0.0f).x;
@@ -2366,7 +2365,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         return;
     }
     if (category == "sheen_bsdf") {
-        const ValueRef color = graph.input(node, "color", true, 0.0f, mx::Color3(1.0f));
+        const ValueRef color = graph.input(node, "color", true, 0.0f, MaterialX::Color3(1.0f));
         NodeClosureSheenBsdf instruction{};
         instruction.colorX = color.x; instruction.colorY = color.y; instruction.colorZ = color.z;
         instruction.roughness = graph.input(node, "roughness", false, 0.0f).x;
@@ -2375,7 +2374,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         return;
     }
     if (category == "subsurface_bsdf") {
-        const ValueRef color = graph.input(node, "color", true, 0.0f, mx::Color3(1.0f));
+        const ValueRef color = graph.input(node, "color", true, 0.0f, MaterialX::Color3(1.0f));
         NodeClosureSubsurfaceBsdf instruction{};
         instruction.colorX = color.x; instruction.colorY = color.y; instruction.colorZ = color.z;
         instruction.roughness = floatWord(0.0f);
@@ -2384,7 +2383,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         return;
     }
     if (category == "uniform_edf") {
-        const ValueRef color = graph.input(node, "color", true, 0.0f, mx::Color3(0.0f));
+        const ValueRef color = graph.input(node, "color", true, 0.0f, MaterialX::Color3(0.0f));
         emitWeight(emitter, closureWeight(graph, node, inheritedWeight));
         emitter.add(NodeType::ClosureUniformEdf,
             NodeClosureUniformEdf{color.x, color.y, color.z, floatWord(1.0f)});
@@ -2394,7 +2393,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // Approximated as a uniform EDF: the cone falloff (inner_angle/
         // outer_angle) needs a shade-time directional term NoorRayCompositeBsdf's
         // EDF lobe does not carry yet, so only the emitted color survives.
-        const ValueRef color = graph.input(node, "color", true, 0.0f, mx::Color3(1.0f));
+        const ValueRef color = graph.input(node, "color", true, 0.0f, MaterialX::Color3(1.0f));
         emitWeight(emitter, inheritedWeight);
         emitter.add(NodeType::ClosureUniformEdf,
             NodeClosureUniformEdf{color.x, color.y, color.z, floatWord(1.0f)});
@@ -2404,8 +2403,8 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // Approximated by tinting the base EDF with color0 (the normal-
         // incidence Schlick term): the grazing-angle color90 term needs a
         // view-dependent evaluation this compile-time EDF tree cannot express.
-        const ValueRef color0 = graph.input(node, "color0", true, 0.0f, mx::Color3(1.0f));
-        if (const mx::NodePtr base = connectedNode(node, "base"))
+        const ValueRef color0 = graph.input(node, "color0", true, 0.0f, MaterialX::Color3(1.0f));
+        if (const MaterialX::NodePtr base = connectedNode(node, "base"))
             emitClosure(emitter, graph, base, graph.multiply(inheritedWeight, color0));
         return;
     }
@@ -2416,11 +2415,11 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // exactly as conductor_bsdf/dielectric_bsdf do below.  This loses the
         // curve's `exponent` shaping (fixed at the physical Schlick exponent
         // of 5) and anisotropic roughness (only roughness.x is used).
-        const ValueRef color0 = graph.input(node, "color0", true, 0.0f, mx::Color3(1.0f));
-        const ValueRef color90 = graph.input(node, "color90", true, 0.0f, mx::Color3(1.0f));
-        const mx::InputPtr scatterMode = node->getInput("scatter_mode");
+        const ValueRef color0 = graph.input(node, "color0", true, 0.0f, MaterialX::Color3(1.0f));
+        const ValueRef color90 = graph.input(node, "color90", true, 0.0f, MaterialX::Color3(1.0f));
+        const MaterialX::InputPtr scatterMode = node->getInput("scatter_mode");
         const std::string mode = scatterMode ? scatterMode->getValueString() : "R";
-        const mx::InputPtr roughnessPort = node->getInput("roughness");
+        const MaterialX::InputPtr roughnessPort = node->getInput("roughness");
         const bool vectorRoughness = roughnessPort && roughnessPort->getType() == "vector2";
         // Keep the encoded SVM input word intact.  For the Disney graph this
         // is usually a stack reference produced by roughness_anisotropy;
@@ -2428,7 +2427,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
         // reference into a literal, so metallic and transmission roughness
         // silently stop following the authored roughness.
         const std::uint32_t roughness = graph.input(node, "roughness",
-            vectorRoughness, 0.05f, mx::Color3(0.05f)).x;
+            vectorRoughness, 0.05f, MaterialX::Color3(0.05f)).x;
         const ValueRef weighted = closureWeight(graph, node, inheritedWeight);
         emitWeight(emitter, weighted);
         std::uint32_t normalX, normalY, normalZ;
@@ -2462,7 +2461,7 @@ void emitClosure(Emitter& emitter, GraphCompiler& graph,
 }
 } // namespace
 
-CompiledSvmProgram SvmCompiler::compile(const mx::DocumentPtr& document,
+CompiledSvmProgram SvmCompiler::compile(const MaterialX::DocumentPtr& document,
     const std::string& elementName,
     const std::unordered_map<std::string, std::uint32_t>& resolvedTextures)
 {
@@ -2482,11 +2481,11 @@ CompiledSvmProgram SvmCompiler::compile(const mx::DocumentPtr& document,
     // surface terminal or compiling anything.
     flattenNodeGraphs(document);
 
-    mx::NodePtr surface;
+    MaterialX::NodePtr surface;
     if (!elementName.empty())
         surface = document->getNode(elementName);
     if (!surface) {
-        for (const mx::NodePtr& node : document->getNodes()) {
+        for (const MaterialX::NodePtr& node : document->getNodes()) {
             if (node->getCategory() == "surfacematerial") {
                 surface = connectedNode(node, "surfaceshader");
                 if (surface)
@@ -2495,7 +2494,7 @@ CompiledSvmProgram SvmCompiler::compile(const mx::DocumentPtr& document,
         }
     }
     if (!surface) {
-        for (const mx::NodePtr& node : document->getNodes()) {
+        for (const MaterialX::NodePtr& node : document->getNodes()) {
             if (node->getCategory() == "open_pbr_surface") {
                 surface = node;
                 break;
@@ -2503,7 +2502,7 @@ CompiledSvmProgram SvmCompiler::compile(const mx::DocumentPtr& document,
         }
     }
     if (!surface) {
-        for (const mx::NodePtr& node : document->getNodes()) {
+        for (const MaterialX::NodePtr& node : document->getNodes()) {
             if (node->getCategory() == "standard_surface") {
                 surface = node;
                 break;
@@ -2515,24 +2514,24 @@ CompiledSvmProgram SvmCompiler::compile(const mx::DocumentPtr& document,
 
     Emitter emitter;
     GraphCompiler graph(emitter, resolvedTextures);
-    std::unordered_map<const mx::Node*, std::uint32_t> useCounts;
-    const std::unordered_set<const mx::Node*> reachable =
+    std::unordered_map<const MaterialX::Node*, std::uint32_t> useCounts;
+    const std::unordered_set<const MaterialX::Node*> reachable =
         reachableMaterialNodes(document);
-    const auto countUses = [&useCounts, &reachable](const mx::GraphElementPtr& graph) {
-        for (const mx::NodePtr& node : graph->getNodes()) {
+    const auto countUses = [&useCounts, &reachable](const MaterialX::GraphElementPtr& graph) {
+        for (const MaterialX::NodePtr& node : graph->getNodes()) {
             if (!node || !reachable.contains(node.get()))
                 continue;
-            for (const mx::InputPtr& input : node->getInputs()) {
-                if (const mx::NodePtr upstream = input->getConnectedNode())
+            for (const MaterialX::InputPtr& input : node->getInputs()) {
+                if (const MaterialX::NodePtr upstream = input->getConnectedNode())
                     ++useCounts[upstream.get()];
-                if (const mx::OutputPtr output = input->getConnectedOutput())
-                    if (const mx::NodePtr upstream = output->getConnectedNode())
+                if (const MaterialX::OutputPtr output = input->getConnectedOutput())
+                    if (const MaterialX::NodePtr upstream = output->getConnectedNode())
                         ++useCounts[upstream.get()];
             }
         }
     };
     countUses(document);
-    for (const mx::NodeGraphPtr& graphNode : document->getNodeGraphs())
+    for (const MaterialX::NodeGraphPtr& graphNode : document->getNodeGraphs())
         countUses(graphNode);
     graph.setRemainingUses(std::move(useCounts));
     emitClosure(emitter, graph, surface,

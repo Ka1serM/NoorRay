@@ -1,12 +1,6 @@
 ﻿#include "SceneObject.h"
 #include <glm/gtc/type_ptr.hpp>
 #include "Scene.h"
-#include "Scene/SceneObjectVisitor.h"
-
-void SceneObject::accept(SceneObjectVisitor& visitor)
-{
-    visitor.visit(*this);
-}
 
 SceneObject::SceneObject(const std::string& name, const Transform& transform)
     : name(name), transform(transform), visible(true)

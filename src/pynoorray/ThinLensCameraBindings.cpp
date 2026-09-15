@@ -2,7 +2,7 @@
 
 #include <nanobind/stl/unique_ptr.h>
 
-#include "Rendering/Camera/ThinLensCamera.h"
+#include "Camera/ThinLensCamera.h"
 
 namespace nb = nanobind;
 

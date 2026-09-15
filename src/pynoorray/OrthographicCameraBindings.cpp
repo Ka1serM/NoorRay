@@ -2,7 +2,7 @@
 
 #include <nanobind/stl/unique_ptr.h>
 
-#include "Rendering/Camera/OrthographicCamera.h"
+#include "Camera/OrthographicCamera.h"
 
 namespace nb = nanobind;
 

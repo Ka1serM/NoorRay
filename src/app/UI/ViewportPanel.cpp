@@ -8,16 +8,16 @@
 #include "ImGuizmo.h"
 #define IMVIEWGUIZMO_IMPLEMENTATION
 #include "ImViewGuizmo.h"
-#include "Log.h"
+#include "Logging/Log.h"
 #include "glm/gtc/type_ptr.hpp"
 #include "SDL3/SDL_mouse.h"
-#include "Rendering/Camera/CameraInstance.h"
-#include "Scene/Objects/MeshInstance.h"
-#include "Scene/Objects/GaussianInstance.h"
-#include "Geometry/Mesh/Assets/GaussianAsset.h"
-#include "Scene/Objects/LightInstance.h"
-#include "Backend/Vulkan/Raytracer/RaytracerRenderer.h"
-#include "Backend/Vulkan/Viewport/Viewport.h"
+#include "Camera/CameraInstance.h"
+#include "Scene/MeshInstance.h"
+#include "Scene/GaussianInstance.h"
+#include "Mesh/Assets/Gaussian.h"
+#include "Scene/LightInstance.h"
+#include "NoorRaySession.h"
+#include "Viewport/Viewport.h"
 #include "UI/Window.h"
 
 namespace
@@ -39,23 +39,20 @@ CameraInstance::InputState cameraInputState()
 }
 
 ViewportPanel::ViewportPanel(const std::string& name, Window& window,
-    Scene& scene, VulkanRaytracer& raytracer)
-    : ImGuiComponent(name), window(window), scene(scene),
-    raytracer(raytracer), width(raytracer.width()), height(raytracer.height()),
+    noorray::NoorRaySession& session)
+    : ImGuiComponent(name), window(window), session(session),
+    scene(session.scene()),
+    width(session.outputWidth()), height(session.outputHeight()),
     uiScale(window.getDpiScale())
 {
-    const ViewportInputs inputs{raytracer.colorHandle(), raytracer.albedoHandle(),
-        raytracer.normalHandle(), raytracer.cryptomatteHandle(),
-        raytracer.positionHandle(), raytracer.gaussianOverdrawHandle()};
-    compositor = std::make_unique<Viewport>(raytracer.device(), width, height,
-        inputs, gpu::ImageFormat::Bgra8Unorm);
+    session.prepareViewport();
     vk::SamplerCreateInfo samplerInfo{};
     samplerInfo.magFilter = vk::Filter::eLinear;
     samplerInfo.minFilter = vk::Filter::eLinear;
     samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
     samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    const auto handles = gpu::interop::device_handles(raytracer.device());
+    const auto handles = gpu::interop::device_handles(session.device());
     sampler = vk::Device(reinterpret_cast<VkDevice>(handles.device)).createSamplerUnique(samplerInfo);
     
     updateDisplayDescriptor();
@@ -106,9 +103,9 @@ ViewportPanel::ViewportPanel(const std::string& name, Window& window,
 void ViewportPanel::updateDisplayDescriptor()
 {
     const vk::ImageView view(reinterpret_cast<VkImageView>(gpu::interop::image_view(
-        raytracer.device(), compositor->getOutputImage().handle())));
-    width = compositor->getOutputImage().width();
-    height = compositor->getOutputImage().height();
+        session.device(), session.outputImageHandle())));
+    width = session.outputWidth();
+    height = session.outputHeight();
     if (!view || view == observedImageView)
         return;
     if (outputImageDescriptorSet != VK_NULL_HANDLE)
@@ -118,22 +115,16 @@ void ViewportPanel::updateDisplayDescriptor()
     observedImageView = view;
 }
 
+void ViewportPanel::preparePresentation()
+{
+    session.prepareViewport();
+    width = session.outputWidth();
+    height = session.outputHeight();
+}
+
 void ViewportPanel::recordPresentation()
 {
-    const ViewportInputs inputs{raytracer.colorHandle(), raytracer.albedoHandle(),
-        raytracer.normalHandle(), raytracer.cryptomatteHandle(),
-        raytracer.positionHandle(), raytracer.gaussianOverdrawHandle()};
-    compositor->resize(raytracer.width(), raytracer.height(), inputs,
-        gpu::ImageFormat::Bgra8Unorm);
-    compositor->updateBillboards(scene);
-    glm::mat4 viewProjection(1.0f);
-    if (const CameraInstance* camera = scene.getRenderCamera())
-        viewProjection = camera->getProjectionMatrix() * camera->getViewMatrix();
-    const RenderSettings& settings = scene.getRenderSettings();
-    compositor->dispatch(~0u, viewProjection,
-        0.0f, static_cast<int>(settings.bufferVisualization),
-        settings.gaussianProxyOverdrawMax,
-        settings.tonemappingEnabled, m_showOverlays);
+    session.renderViewport(~0u, m_showOverlays);
 }
 
 void ViewportPanel::updateLayout() {
@@ -243,7 +234,7 @@ void ViewportPanel::beginMouseCapture() {
         return;
     SDL_GetMouseState(&oldX, &oldY);
     if (!window.setRelativeMouseMode(true)) {
-        LOG_ERROR("Failed to enable relative mouse mode: " << SDL_GetError());
+        NR_LOG_ERROR("Failed to enable relative mouse mode: " << SDL_GetError());
         return;
     }
     ImGuiIO& io = ImGui::GetIO();
@@ -257,7 +248,7 @@ void ViewportPanel::endMouseCapture() {
         return;
     isCapturingMouse = false;
     if (!window.setRelativeMouseMode(false))
-        LOG_ERROR("Failed to disable relative mouse mode: " << SDL_GetError());
+        NR_LOG_ERROR("Failed to disable relative mouse mode: " << SDL_GetError());
     window.warpMouse(oldX, oldY);
     if (!imguiMouseWasDisabled)
         ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
@@ -551,14 +542,14 @@ void ViewportPanel::handlePositionPicking() const {
         return;
 
     const ivec2 pixel = screenToPixel();
-    const std::vector<gpu::float4> positions = raytracer.readPosition();
+    const std::vector<gpu::float4> positions = session.readPosition();
     const size_t index = static_cast<size_t>(pixel.y) * width + pixel.x;
     if (index >= positions.size())
         return;
     const gpu::float4 value = positions[index];
     const vec3 position(value.x, value.y, value.z);
 
-    LOG_INFO( "Picked Position: (" << position.x << ", " << position.y << ", " << position.z << ")");
+    NR_LOG_INFO( "Picked Position: (" << position.x << ", " << position.y << ", " << position.z << ")");
     
     camera->setArcballPivot(position);
     camera->setArcballActive(true);
@@ -609,11 +600,11 @@ void ViewportPanel::handleObjectPicking() {
         return;
 
     const ivec2 pixel = screenToPixel();
-    const std::vector<uint32_t> ids = raytracer.readCryptomatte();
+    const std::vector<uint32_t> ids = session.readCryptomatte();
     const size_t pixelIndex = static_cast<size_t>(pixel.y) * width + pixel.x;
     const uint32_t instanceId = pixelIndex < ids.size() ? ids[pixelIndex] : ~0u;
 
-    LOG_INFO( "Picked instance ID: " << instanceId);
+    NR_LOG_INFO( "Picked instance ID: " << instanceId);
     
     const auto meshInstances = scene.getMeshInstances();
     if (instanceId != ~0u && instanceId < meshInstances.size()) {
@@ -649,5 +640,5 @@ ViewportPanel::~ViewportPanel() {
     if (outputImageDescriptorSet != VK_NULL_HANDLE)
         ImGui_ImplVulkan_RemoveTexture(outputImageDescriptorSet);
 
-    LOG_INFO( "Destroying ViewportPanel");
+    NR_LOG_INFO( "Destroying ViewportPanel");
 }

@@ -37,7 +37,7 @@ TEST_CASE("gpu API supplies the device used by NoorRay") {
     auto input = device->buffer<float>(1);
     auto output = device->buffer<float>(1);
     const float value = 41.0f;
-    device->upload(input, std::span<const float>(&value, 1));
+    input.upload(std::span<const float>(&value, 1));
     struct Args {
         gpu::GpuPtr<float> input;
         gpu::GpuPtr<float> b;
@@ -48,6 +48,6 @@ TEST_CASE("gpu API supplies the device used by NoorRay") {
     device->synchronize();
 
     float actual = 0;
-    device->download(std::span<float>(&actual, 1), output);
+    output.download(std::span<float>(&actual, 1));
     REQUIRE(actual == 82.0f);
 }

@@ -1,7 +1,7 @@
 #include <imgui.h>
 
-#include "Geometry/Mesh/Assets/GaussianAsset.h"
-#include "Scene/Objects/GaussianInstance.h"
+#include "Mesh/Assets/Gaussian.h"
+#include "Scene/GaussianInstance.h"
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"
 
@@ -21,7 +21,7 @@ bool renderGaussianInstance(GaussianInstance& instance)
 
 }
 
-void ObjectUiVisitor::visit(GaussianInstance& instance)
+bool object_ui::render(GaussianInstance& instance)
 {
-    changed |= renderGaussianInstance(instance);
+    return renderGaussianInstance(instance);
 }

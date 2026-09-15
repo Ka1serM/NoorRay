@@ -3,7 +3,6 @@
 #include <gpu/interop.hpp>
 #include <vulkan/vulkan.hpp>
 #include "UI/ImGuiComponent.h"
-#include <memory>
 #include <string>
 #include "imgui.h" //needed here for ImGuizmo!
 #include "ImGuizmo.h"
@@ -11,8 +10,7 @@
 #include <SDL3/SDL_events.h>
 
 class Window;
-class VulkanRaytracer;
-class Viewport;
+namespace noorray { class NoorRaySession; }
 
 class ViewportPanel : public ImGuiComponent {
 public:
@@ -29,16 +27,16 @@ public:
     bool needsContinuousRedraw() const { return isCapturingMouse; }
     uint32_t getSelectedGaussianIndex() const { return selectedGaussianIndex; }
 
-    ViewportPanel(const std::string& name, Window& window, Scene& scene,
-        VulkanRaytracer& raytracer);
+    ViewportPanel(const std::string& name, Window& window,
+        noorray::NoorRaySession& session);
     void updateLayout();
     void recordPresentation();
+    void preparePresentation();
 
 private:
     Window& window;
+    noorray::NoorRaySession& session;
     Scene& scene;
-    VulkanRaytracer& raytracer;
-    std::unique_ptr<Viewport> compositor;
     
     uint32_t width;
     uint32_t height;

@@ -1,18 +1,19 @@
 #pragma once
 
-#include "Scene/SceneObjectVisitor.h"
+class SceneObject;
+class MeshInstance;
+class GaussianInstance;
+class LightInstance;
+class CameraInstance;
 
-class ObjectUiVisitor final : public SceneObjectVisitor
+namespace object_ui
 {
-public:
-    void visit(SceneObject& object) override;
-    void visit(MeshInstance& instance) override;
-    void visit(GaussianInstance& instance) override;
-    void visit(LightInstance& instance) override;
-    void visit(CameraInstance& instance) override;
-
-    bool changed{};
-};
+bool render(SceneObject& object);
+bool render(MeshInstance& instance);
+bool render(GaussianInstance& instance);
+bool render(LightInstance& instance);
+bool render(CameraInstance& instance);
+}
 
 namespace domain_ui
 {

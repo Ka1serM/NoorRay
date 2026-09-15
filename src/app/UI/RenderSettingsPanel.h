@@ -4,9 +4,9 @@
 #include <string>
 
 #include "UI/ImGuiComponent.h"
+#include "Shared/RenderSettings.h"
 
 class Scene;
-enum class BufferVisualization : int;
 
 class RenderSettingsPanel : public ImGuiComponent
 {

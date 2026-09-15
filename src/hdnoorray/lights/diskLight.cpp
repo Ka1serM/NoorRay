@@ -6,8 +6,8 @@
 #include <numbers>
 #include <variant>
 
-#include "Rendering/Lighting/RectLight.h"
-#include "Scene/Objects/LightInstance.h"
+#include "Shared/Light.h"
+#include "Scene/LightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 

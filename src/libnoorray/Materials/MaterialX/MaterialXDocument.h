@@ -13,14 +13,9 @@
 #include <string>
 #include <vector>
 
-#include "Materials/Shading/Material.h"
+#include <MaterialXCore/Document.h>
 
-namespace MaterialX_v1_39_4
-{
-class Document;
-using DocumentPtr = std::shared_ptr<Document>;
-}
-namespace MaterialX = MaterialX_v1_39_4;
+#include "Materials/SVM/SvmMaterial.h"
 
 namespace nr::materialx
 {
@@ -37,7 +32,7 @@ MaterialX::DocumentPtr getSharedStandardLibraries();
 // what a graph is fallen back to when it no longer compiles.
 MaterialX::DocumentPtr defaultMaterial();
 
-// Lowers one authoring struct -- the simple record an importer fills in --
+// Lowers one simple SVM material record -- the compact record an importer fills in --
 // into a canonical MaterialX surface graph (a built-in disney_principled
 // wrapped in a surfacematerial). Importers convert their
 // materials through this function
@@ -45,13 +40,13 @@ MaterialX::DocumentPtr defaultMaterial();
 // what gets stored with the material, so every material in the Scene is a
 // real MaterialX document and compiles through the same MaterialX -> SVM
 // pipeline as authored .mtlx graphs.
-MaterialX::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material);
+MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material);
 
-// Variant used by importers whose authoring record references a scene texture
+// Variant used by importers whose material record references a scene texture
 // slot. The resolver returns that scene texture's registry name so the
 // resulting MaterialX graph can retain the authored image connection.
 using AuthoringTexturePathResolver = std::function<std::string(int)>;
-MaterialX::DocumentPtr documentFromAuthoring(const MaterialAuthoring& material,
+MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material,
     const AuthoringTexturePathResolver& texturePathResolver);
 
 // Resolves an <image> node's (already filesystem-resolved) file path to

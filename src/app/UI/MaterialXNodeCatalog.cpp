@@ -8,7 +8,6 @@
 #include <cctype>
 #include <sstream>
 
-namespace mx = MaterialX;
 
 namespace
 {
@@ -53,7 +52,7 @@ MaterialXNodeCatalog::MaterialXNodeCatalog()
         return;
     }
 
-    for (const mx::NodeDefPtr& definition : libraries_->getNodeDefs()) {
+    for (const MaterialX::NodeDefPtr& definition : libraries_->getNodeDefs()) {
         if (!definition || definition->getNodeString().empty())
             continue;
         MaterialXNodeType type;
@@ -130,20 +129,20 @@ std::vector<const MaterialXNodeType*> MaterialXNodeCatalog::inGroup(
     return results;
 }
 
-mx::ConstNodeDefPtr MaterialXNodeCatalog::findNodeDef(const MaterialXNodeType& type) const
+MaterialX::ConstNodeDefPtr MaterialXNodeCatalog::findNodeDef(const MaterialXNodeType& type) const
 {
     return libraries_ ? libraries_->getNodeDef(type.nodeDefName) : nullptr;
 }
 
-std::vector<mx::InputPtr> exposedInputs(const mx::NodePtr& node)
+std::vector<MaterialX::InputPtr> exposedInputs(const MaterialX::NodePtr& node)
 {
-    std::vector<mx::InputPtr> result;
+    std::vector<MaterialX::InputPtr> result;
     if (!node)
         return result;
 
-    if (const mx::ConstNodeDefPtr declaration = MaterialXNodeCatalog::instance()
+    if (const MaterialX::ConstNodeDefPtr declaration = MaterialXNodeCatalog::instance()
             .findNodeDef(node->getCategory(), node->getType())) {
-        for (const mx::InputPtr& declared : declaration->getActiveInputs()) {
+        for (const MaterialX::InputPtr& declared : declaration->getActiveInputs()) {
             if (declared && !(node->getCategory() == "noorray_sellmeier_ior"
                     && declared->getName() == "reference_ior"))
                 result.push_back(declared);
@@ -153,14 +152,14 @@ std::vector<mx::InputPtr> exposedInputs(const mx::NodePtr& node)
     // A hand-authored document, or a definition the catalog failed to load,
     // can carry inputs the declaration has never heard of. Dropping those
     // would hide parts of a document the editor is about to write back.
-    for (const mx::InputPtr& authored : node->getInputs()) {
+    for (const MaterialX::InputPtr& authored : node->getInputs()) {
         if (!authored)
             continue;
         if (node->getCategory() == "noorray_sellmeier_ior"
             && authored->getName() == "reference_ior")
             continue;
         const bool declared = std::ranges::any_of(result,
-            [&authored](const mx::InputPtr& candidate) {
+            [&authored](const MaterialX::InputPtr& candidate) {
                 return candidate && candidate->getName() == authored->getName();
             });
         if (!declared)
@@ -169,7 +168,7 @@ std::vector<mx::InputPtr> exposedInputs(const mx::NodePtr& node)
     return result;
 }
 
-mx::ConstNodeDefPtr MaterialXNodeCatalog::findNodeDef(
+MaterialX::ConstNodeDefPtr MaterialXNodeCatalog::findNodeDef(
     const std::string& category, const std::string& outputType) const
 {
     if (!libraries_)

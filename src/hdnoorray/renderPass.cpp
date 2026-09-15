@@ -3,11 +3,11 @@
 #include "renderBuffer.h"
 #include "renderParam.h"
 
-#include "Backend/Vulkan/Raytracer/RaytracerRenderer.h"
-#include "Rendering/Camera/CameraInstance.h"
-#include "Rendering/Camera/FisheyeCamera.h"
-#include "Rendering/Camera/RealisticCamera.h"
-#include "Rendering/Camera/ThinLensCamera.h"
+#include "Raytracing/Raytracer.h"
+#include "Camera/CameraInstance.h"
+#include "Camera/FisheyeCamera.h"
+#include "Camera/RealisticCamera.h"
+#include "Camera/ThinLensCamera.h"
 #include <gpu/interop.hpp>
 
 #include <pxr/base/tf/diagnostic.h>
@@ -69,8 +69,19 @@ bool GetOpenGlColorTarget(GLuint& texture, unsigned int& width, unsigned int& he
 }
 
 void UploadBgra(const GLuint texture, const unsigned int width, const unsigned int height,
-    const std::vector<std::byte>& pixels)
+    const std::vector<gpu::float4>& source)
 {
+    std::vector<std::byte> pixels(source.size() * 4u);
+    const auto encode = [](const float value) -> std::byte {
+        return static_cast<std::byte>(static_cast<unsigned char>(
+            std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f));
+    };
+    for (size_t i = 0; i < source.size(); ++i) {
+        pixels[4 * i] = encode(source[i].z);
+        pixels[4 * i + 1] = encode(source[i].y);
+        pixels[4 * i + 2] = encode(source[i].x);
+        pixels[4 * i + 3] = encode(source[i].w);
+    }
     GLint oldTexture = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -114,7 +125,7 @@ bool HdNoorRayRenderPass::_EnsureInteropImage(const unsigned int width,
         return false;
     try {
         const auto exported = gpu::interop::export_image_memory(
-            *renderParam_.session.device, renderParam_.session.raytracer->colorHandle());
+            renderParam_.session.device(), renderParam_.session.outputImageHandle());
         glCreateMemoryObjectsEXT(1, &interopMemory_);
         glImportMemoryFdEXT(interopMemory_, exported.allocation_size,
             GL_HANDLE_TYPE_OPAQUE_FD_EXT, exported.fd);
@@ -181,18 +192,17 @@ bool HdNoorRayRenderPass::_PresentLastFrame(const unsigned int targetTexture,
     const unsigned int width, const unsigned int height)
 {
     auto& session = renderParam_.session;
-    if (!session.raytracer)
+    if (!session.hasRenderer())
         return false;
     if (_EnsureInteropImage(width, height)) {
         try {
-            const auto semaphore = gpu::interop::signal_external(*session.device);
+            const auto semaphore = gpu::interop::signal_external(session.device());
             if (_PresentInterop(targetTexture, width, height, semaphore.fd))
                 return true;
         } catch (...) {
         }
     }
-    session.raytracer->device().synchronize();
-    UploadBgra(targetTexture, width, height, session.raytracer->readColor());
+    UploadBgra(targetTexture, width, height, session.readOutput());
     return true;
 }
 
@@ -210,8 +220,8 @@ void HdNoorRayRenderPass::_Execute(const HdRenderPassStateSharedPtr& state,
     try {
         _Render(state);
     } catch (const std::exception& error) {
-        fprintf(stderr, "[hdNoorRay] Vulkan render failed: %s\n", error.what());
-        TF_RUNTIME_ERROR("hdNoorRay Vulkan render failed: %s", error.what());
+        fprintf(stderr, "[hdNoorRay] render failed: %s\n", error.what());
+        TF_RUNTIME_ERROR("hdNoorRay render failed: %s", error.what());
         SetBuffersConverged(state->GetAovBindings(), false);
     }
 }
@@ -264,11 +274,11 @@ void HdNoorRayRenderPass::_Render(const HdRenderPassStateSharedPtr& state)
     const bool compiledMaterialsChanged = renderParam_.ProcessMaterialCompilations();
     std::unique_lock lock(renderParam_.mutex);
     auto& session = renderParam_.session;
-    if (!session.raytracer) {
+    if (!session.hasRenderer()) {
         session.initializeHeadlessRenderer(width, height, viewport);
         session.rebuildNativeScene();
-    } else if (session.raytracer->width() != width || session.raytracer->height() != height)
-        session.raytracer->resize(width, height);
+    } else if (session.outputWidth() != width || session.outputHeight() != height)
+        session.resize(width, height);
 
     HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
     // Material compilation takes seconds on a large import, and rendering
@@ -312,7 +322,7 @@ void HdNoorRayRenderPass::_Render(const HdRenderPassStateSharedPtr& state)
         accumulatedSamples_ = 0; converged_ = false; renderParam_.ResetClock();
     }
 
-    if (CameraInstance* instance = session.scene.getRenderCamera()) {
+    if (CameraInstance* instance = session.scene().getRenderCamera()) {
         const int requestedProjection = delegate->GetRenderSetting<int>(
             TfToken("cameraProjection"), -1);
         // Hybrid PSF was a legacy camera. The Vulkan backend uses the
@@ -357,7 +367,7 @@ void HdNoorRayRenderPass::_Render(const HdRenderPassStateSharedPtr& state)
         session.updateNativeCamera();
     }
 
-    RenderSettings& settings = session.scene.getRenderSettings();
+    RenderSettings& settings = session.scene().getRenderSettings();
     settings.samples = 1;
     settings.maxSamples = static_cast<int>(targetSamples);
     settings.maxBounces = std::max(1, delegate->GetRenderSetting<int>(TfToken("maxBounces"), 8));
@@ -379,25 +389,28 @@ void HdNoorRayRenderPass::_Render(const HdRenderPassStateSharedPtr& state)
         delegate->GetRenderSetting<int>(TfToken("bufferVisualization"), 0), 0, 5));
 
     if (reset)
-        session.raytracer->uploadScene(session.scene);
+        session.rebuildNativeScene();
+
+    session.prepareViewport();
 
     if (accumulatedSamples_ < targetSamples) {
         session.pollNativeScene();
-        session.raytracer->render(accumulatedSamples_, accumulatedSamples_);
+        session.prepareViewport();
+        session.commit();
+        session.render(accumulatedSamples_, accumulatedSamples_);
         ++accumulatedSamples_;
     }
     bool interopPresented = false;
     if (viewport && accumulatedSamples_ > 0) {
+        session.renderViewport(~0u, true);
         interopPresented = _PresentLastFrame(glTexture, width, height);
         if (debug)
             fprintf(stderr, "[hdNoorRay] frame: present %s (interop=%d)\n",
                 interopPresented ? "ok" : "fallback", interopPresented ? 1 : 0);
     }
-    if (!interopPresented)
-        session.raytracer->device().synchronize();
-    renderParam_.AccumulateGpuTimeMs(static_cast<float>(session.raytracer->lastDispatchMilliseconds()));
+    renderParam_.AccumulateGpuTimeMs(static_cast<float>(session.lastDispatchMilliseconds()));
     if (colorBuffer) {
-        const auto beauty = session.raytracer->readBeauty();
+        const auto beauty = session.readBeauty();
         colorBuffer->CopyFromHost(beauty.data(), beauty.size() * sizeof(beauty.front()));
     }
     // Blender stops scheduling viewport redraws once the pass reports

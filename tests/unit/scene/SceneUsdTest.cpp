@@ -1,7 +1,7 @@
 #include "NoorRaySession.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 #include "Scene/Import/SceneReader.h"
 #include "Scene/Import/SceneWriter.h"
@@ -27,14 +27,14 @@ TEST_CASE("USD scene round-trip preserves geometry and embedded MaterialX", "[sc
     noorray::NoorRaySession session;
     Scene& scene = session.scene;
     const auto material = nr::materialx::defaultMaterial();
-    const auto asset = scene.add(MeshAsset::CreateSphere(scene, "RoundTripSphere", material, 8, 16));
+    const auto asset = scene.add(Mesh::CreateSphere(scene, "RoundTripSphere", material, 8, 16));
     std::vector<Vertex> authoredVertices(
-        asset.get()->getVertices().begin(), asset.get()->getVertices().end());
+        asset->getVertices().begin(), asset->getVertices().end());
     authoredVertices[1].color = nr::vertex_color::packLinear(
         glm::vec4(0.2f, 0.4f, 0.8f, 0.6f));
     authoredVertices[1].tangent = glm::vec3(0.0f, 0.0f, 1.0f);
     authoredVertices[1].tangentSign = -1.0f;
-    asset.get()->updateVertexData(authoredVertices);
+    asset->updateVertexData(authoredVertices);
     scene.add(std::make_unique<MeshInstance>(scene, "RoundTripSphere", asset, Transform{}));
 
     const std::filesystem::path path = std::filesystem::temp_directory_path() / "noorray-usd-roundtrip.usda";
@@ -44,12 +44,12 @@ TEST_CASE("USD scene round-trip preserves geometry and embedded MaterialX", "[sc
     Scene reloaded;
     SceneReader::Read(reloaded, path.string());
     REQUIRE(reloaded.getMeshInstances().size() == 1);
-    const MeshAsset& reloadedAsset = reloaded.getMeshInstances().front()->getMeshAsset();
-    REQUIRE(reloadedAsset.getVertices().size() == asset.get()->getVertices().size());
-    REQUIRE(reloadedAsset.getIndices().size() == asset.get()->getIndices().size());
-    REQUIRE(reloadedAsset.getFaces().size() == asset.get()->getFaces().size());
-    for (size_t i = 0; i < asset.get()->getVertices().size(); ++i) {
-        const Vertex& expected = asset.get()->getVertices()[i];
+    const Mesh& reloadedAsset = reloaded.getMeshInstances().front()->getMesh();
+    REQUIRE(reloadedAsset.getVertices().size() == asset->getVertices().size());
+    REQUIRE(reloadedAsset.getIndices().size() == asset->getIndices().size());
+    REQUIRE(reloadedAsset.getFaces().size() == asset->getFaces().size());
+    for (size_t i = 0; i < asset->getVertices().size(); ++i) {
+        const Vertex& expected = asset->getVertices()[i];
         const Vertex& actual = reloadedAsset.getVertices()[i];
         for (int component = 0; component < 3; ++component) {
             REQUIRE(actual.position[component] == expected.position[component]);
@@ -61,11 +61,11 @@ TEST_CASE("USD scene round-trip preserves geometry and embedded MaterialX", "[sc
         REQUIRE(actual.uv.y == expected.uv.y);
         REQUIRE(actual.color == expected.color);
     }
-    for (size_t i = 0; i < asset.get()->getIndices().size(); ++i)
-        REQUIRE(reloadedAsset.getIndices()[i] == asset.get()->getIndices()[i]);
-    for (size_t i = 0; i < asset.get()->getFaces().size(); ++i)
+    for (size_t i = 0; i < asset->getIndices().size(); ++i)
+        REQUIRE(reloadedAsset.getIndices()[i] == asset->getIndices()[i]);
+    for (size_t i = 0; i < asset->getFaces().size(); ++i)
         REQUIRE(reloadedAsset.getFaces()[i].materialIndex
-            == asset.get()->getFaces()[i].materialIndex);
+            == asset->getFaces()[i].materialIndex);
     REQUIRE(reloadedAsset.getMaterialCount() == 1);
     REQUIRE(reloaded.getMaterialXDocuments().size() > reloadedAsset.getMaterialIds()[0]);
     REQUIRE(reloaded.getMaterialXDocuments()[reloadedAsset.getMaterialIds()[0]]);

@@ -25,7 +25,13 @@ set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
 # the heaviest thing in the dependency graph: it pulls a Blender-provided
 # libusd_ms.so and libpython into every link. Keeping it optional lets those
 # hosts build and ship without either.
-option(NR_ENABLE_USD "Build USD scene import/export" ON)
+# Keep the default editor/renderer build small. USD, Python, tests, and the
+# standalone API examples remain opt-in integrations for developers who need
+# them; they should not enlarge the normal NoorRay dependency graph.
+option(NR_ENABLE_USD "Build USD scene import/export" OFF)
+# Consumed by src/gpu, which owns the example targets, so it must be declared
+# before that subdirectory is added.
+option(NR_BUILD_EXAMPLES "Build the standalone gpu API examples" OFF)
 if(NR_ENABLE_USD)
     set(NR_USD_ROOT "${PROJECT_SOURCE_DIR}/external/blender-usd" CACHE PATH
         "Blender USD SDK root (auto-vendored by default)")
@@ -116,9 +122,21 @@ target_link_libraries(gauss_forge_readers PUBLIC spz::spz webp nlohmann_json::nl
 # Vulkan + slangc
 # ---------------------------------------------------------------------------
 find_package(Vulkan REQUIRED)
+# An unset VULKAN_SDK must not turn into a "/bin" hint: that silently picks the
+# distribution's older tools over the SDK's (the system spirv-val takes tens of
+# minutes on the ray-tracing modules).
+set(NR_VULKAN_SDK_BIN_HINTS "/home/marcel/Programs/VulkanSDK/current/bin")
+if(DEFINED ENV{VULKAN_SDK} AND NOT "$ENV{VULKAN_SDK}" STREQUAL "")
+    list(PREPEND NR_VULKAN_SDK_BIN_HINTS "$ENV{VULKAN_SDK}/bin")
+endif()
 find_program(NR_SLANGC_EXECUTABLE NAMES slangc
-    HINTS "$ENV{VULKAN_SDK}/bin" "/home/marcel/Programs/VulkanSDK/current/bin"
+    HINTS ${NR_VULKAN_SDK_BIN_HINTS}
     NO_CACHE REQUIRED)
+# Optional: when present, every compiled module is checked against the Vulkan
+# 1.4 SPIR-V environment, which is where descriptor-heap lowering bugs show up.
+find_program(NR_SPIRV_VAL_EXECUTABLE NAMES spirv-val
+    HINTS ${NR_VULKAN_SDK_BIN_HINTS}
+    NO_CACHE)
 set(Vulkan_INCLUDE_DIR "${Vulkan_INCLUDE_DIR}" CACHE PATH "")
 
 # ---------------------------------------------------------------------------
@@ -153,7 +171,7 @@ target_link_libraries(imnodeflow PUBLIC imgui)
 add_library(NoorRayIO STATIC
     src/libnoorray/IO/BitmapReader.cpp
     src/libnoorray/IO/BitmapWriter.cpp
-    src/libnoorray/StbImpl.cpp)
+    src/libnoorray/IO/StbImpl.cpp)
 set_target_properties(NoorRayIO PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(NoorRayIO PUBLIC cxx_std_23)
 target_include_directories(NoorRayIO PUBLIC "${NR_CORE_DIR}")
@@ -162,11 +180,11 @@ target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 # ---------------------------------------------------------------------------
 # gpu - small Vulkan graphics abstraction
 # ---------------------------------------------------------------------------
-add_library(NoorRayVma STATIC src/gpu/src/vma_impl.cpp)
-set_target_properties(NoorRayVma PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_features(NoorRayVma PUBLIC cxx_std_23)
-target_link_libraries(NoorRayVma PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
-
+# src/gpu is a standalone project: it compiles its own VMA implementation TU
+# and can be configured on its own. Its examples and tests follow NoorRay's
+# own switches when it is built from here.
+set(GPU_BUILD_EXAMPLES ${NR_BUILD_EXAMPLES} CACHE BOOL "" FORCE)
+set(GPU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(src/gpu)
 
 # ---------------------------------------------------------------------------
@@ -176,7 +194,6 @@ file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
     "${NR_CORE_DIR}/*.cpp" "${NR_CORE_DIR}/*.h")
 set(NR_CORE_X
     "/Materials/MaterialX/MaterialXDocument\\.cpp$"
-    "/Materials/Shading/EnergyLut/GenerateEnergyLuts\\.cpp$" "/Materials/Shading/EnergyLut\\.cpp$"
     "/IO/BitmapReader\\.cpp$" "/IO/BitmapWriter\\.cpp$" "/StbImpl\\.cpp$"
     "/Materials/SVM/references/")
 if(NOT NR_ENABLE_USD)
@@ -202,7 +219,7 @@ target_compile_definitions(libnoorray PUBLIC
     VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
     NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
 target_link_libraries(libnoorray PUBLIC
-    NoorRayIO noorray_gpu NoorRayVma portable_file_dialogs glm Vulkan::Vulkan
+    NoorRayIO gpu::gpu portable_file_dialogs glm Vulkan::Vulkan
     tinygltf tinyobjloader tinyply tinyexr stb gauss_forge_readers
     GPUOpen::VulkanMemoryAllocator glaze TBB::tbb
     NoorRayMaterialX MaterialXFormat MaterialXCore)
@@ -245,9 +262,11 @@ set_target_properties(NoorRayMaterialX PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # ---------------------------------------------------------------------------
 # Vulkan shaders (Viewport, ViewportBillboards)
 # ---------------------------------------------------------------------------
-set(NR_SHADER_DIR "${NR_CORE_DIR}/Backend/Vulkan/Shaders")
+set(NR_SHADER_DIR "${NR_CORE_DIR}/Shaders")
 file(GLOB NR_RAYTRACER_SHADER_INCLUDES CONFIGURE_DEPENDS
     "${NR_SHADER_DIR}/Raytracer/*.slang")
+file(GLOB NR_SHARED_SHADER_ABI CONFIGURE_DEPENDS
+    "${NR_CORE_DIR}/Shared/*.h")
 set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
     "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
     "${NR_SHADER_DIR}/Raytracer/RaytracingAbi.slang"
@@ -271,70 +290,71 @@ set(NR_SHADER_OUT "${NR_SHADER_DIR}/Viewport/Viewport.spv" "${NR_SHADER_DIR}/Vie
     "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.spv"
     "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.spv"
     "${NR_SHADER_DIR}/Raytracer/GaussianHit.spv")
+set(NR_SHADER_VALIDATE_COMMANDS)
+if(NR_SPIRV_VAL_EXECUTABLE)
+    foreach(_spv IN LISTS NR_SHADER_OUT)
+        list(APPEND NR_SHADER_VALIDATE_COMMANDS
+            COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.4
+                --scalar-block-layout "${_spv}")
+    endforeach()
+endif()
 add_custom_command(OUTPUT ${NR_SHADER_OUT}
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/Viewport.slang"
-        -entry main -target spirv -profile spirv_1_5+SPV_EXT_descriptor_heap
+        -entry main -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Viewport/Viewport.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
         -entry vertMain -stage vertex -entry fragMain -stage fragment
-        -target spirv -profile spirv_1_5+SPV_EXT_descriptor_heap
+        -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Viewport/ViewportBillboards.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
         -entry main -stage raygeneration -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap
+        -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Raytracer/Raytracer.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.slang"
         -entry main -stage miss -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap
+        -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingHit.slang"
         -entry main -stage closesthit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap
+        -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Raytracer/RaytracingHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/EmissionHit.slang"
         -entry main -stage closesthit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap
+        -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Raytracer/EmissionHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
         -entry main -stage anyhit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap
+        -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
         -entry main -stage anyhit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap
+        -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
         -entry main -stage closesthit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+SPV_EXT_descriptor_heap
+        -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -spirv-resource-heap-stride 128
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_DIR}/Raytracer/GaussianHit.spv"
-    DEPENDS ${NR_SHADER_SRC} COMMENT "Compiling viewport shaders" VERBATIM)
+    ${NR_SHADER_VALIDATE_COMMANDS}
+    DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
+    COMMENT "Compiling viewport shaders" VERBATIM)
 add_custom_target(NoorRayShaders DEPENDS ${NR_SHADER_OUT})
 
 # ---------------------------------------------------------------------------
@@ -375,7 +395,7 @@ endif()
 # ---------------------------------------------------------------------------
 # _pynoorray (Python bindings)
 # ---------------------------------------------------------------------------
-option(NR_BUILD_PYTHON "Build Python bindings" ON)
+option(NR_BUILD_PYTHON "Build Python bindings" OFF)
 if(NR_BUILD_PYTHON)
     # Do not pin the bindings to the build host's Python minor version.  The
     # extension ABI is selected by the interpreter/development package CMake
@@ -418,18 +438,10 @@ endif()
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-option(NR_BUILD_TESTS "Build tests" ON)
+option(NR_BUILD_TESTS "Build tests" OFF)
 if(NR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
-endif()
-
-# ---------------------------------------------------------------------------
-# gpu API examples
-# ---------------------------------------------------------------------------
-option(NR_BUILD_EXAMPLES "Build the standalone gpu API examples" ON)
-if(NR_BUILD_EXAMPLES)
-    add_subdirectory(examples/gpu_api)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -445,7 +457,7 @@ endif()
 # wrapped in a linker group by the consumer, so the single-pass Unix linker does
 # not care about the exact ordering within it.
 set(NR_LINK_MANIFEST_TARGETS
-    libnoorray noorray_gpu NoorRayVma NoorRayIO NoorRayMaterialX
+    libnoorray gpu NoorRayIO NoorRayMaterialX
     gauss_forge_readers tinyply tinyexr TBB::tbb spz
     webp sharpyuv zlibstatic
     MaterialXGenShader MaterialXFormat MaterialXCore)

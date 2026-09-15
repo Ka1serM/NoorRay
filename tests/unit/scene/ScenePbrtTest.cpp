@@ -1,10 +1,10 @@
 #include "NoorRaySession.h"
-#include "Rendering/Camera/CameraInstance.h"
-#include "Rendering/Camera/PerspectiveCamera.h"
+#include "Camera/CameraInstance.h"
+#include "Camera/PerspectiveCamera.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Scene/Objects/LightInstance.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Scene/LightInstance.h"
+#include "Scene/MeshInstance.h"
 #include "Scene/Import/PbrtParser.h"
 #include "Scene/Scene.h"
 #include "Scene/Import/SceneImporter.h"
@@ -20,11 +20,11 @@
 TEST_CASE("PBRT scene export is readable by the PBRT importer", "[scene][pbrt]")
 {
     noorray::NoorRaySession session;
-    Scene& scene = session.scene;
+    Scene& scene = session.scene();
     scene.getRenderSettings().maxSamples = 17;
 
-    const auto material = nr::materialx::documentFromAuthoring(MaterialAuthoring{});
-    const auto asset = scene.add(MeshAsset::CreateSphere(scene, "ExportSphere", material, 8, 16));
+    const auto material = nr::materialx::documentFromSvmMaterial(SvmMaterial{});
+    const auto asset = scene.add(Mesh::CreateSphere(scene, "ExportSphere", material, 8, 16));
     scene.add(std::make_unique<MeshInstance>(scene, "ExportSphere", asset,
         Transform({1.f, 2.f, -3.f}, {10.f, 20.f, 30.f}, {2.f, 1.f, 0.5f})));
 

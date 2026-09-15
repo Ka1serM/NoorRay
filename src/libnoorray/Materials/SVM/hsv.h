@@ -7,12 +7,11 @@
 
 #include <glm/vec3.hpp>
 
-#include "Backend/Host/Platform.h"
 
 namespace nr::svm::detail
 {
 
-NR_GPU inline glm::vec3 svmRgbToHsv(const glm::vec3 rgb)
+inline glm::vec3 svmRgbToHsv(const glm::vec3 rgb)
 {
     const float cmax = fmaxf(rgb.x, fmaxf(rgb.y, rgb.z));
     const float cmin = fminf(rgb.x, fminf(rgb.y, rgb.z));
@@ -30,7 +29,7 @@ NR_GPU inline glm::vec3 svmRgbToHsv(const glm::vec3 rgb)
     return {h, s, cmax};
 }
 
-NR_GPU inline glm::vec3 svmHsvToRgb(glm::vec3 hsv)
+inline glm::vec3 svmHsvToRgb(glm::vec3 hsv)
 {
     if (hsv.y == 0.0f)
         return glm::vec3(hsv.z);

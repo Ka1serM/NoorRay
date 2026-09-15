@@ -16,8 +16,8 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "Geometry/Mesh/Transform.h"
-#include "Scene/Objects/LightInstance.h"
+#include "Mesh/Transform.h"
+#include "Scene/LightInstance.h"
 #include "Scene/Scene.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -129,7 +129,7 @@ void HdNoorRayAnalyticLight::Sync(
 {
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     std::scoped_lock lock(param.mutex);
-    Scene& scene = param.session.scene;
+    Scene& scene = param.session.scene();
 
     const int requestedType = NoorRayLightType(delegate);
     if (!scene.isValid(object_) || requestedType != lightType_) {
@@ -165,7 +165,7 @@ void HdNoorRayAnalyticLight::Finalize(HdRenderParam* renderParam)
 {
     auto& param = *static_cast<HdNoorRayRenderParam*>(renderParam);
     std::scoped_lock lock(param.mutex);
-    if (param.session.scene.removeObject(object_)) {
+    if (param.session.scene().removeObject(object_)) {
         object_ = {};
         lightType_ = -1;
     }

@@ -1,6 +1,5 @@
 #include "UI/MaterialXNodes/MaterialXGraphNodeRegistry.h"
 
-namespace mx = MaterialX;
 
 MaterialXGraphNodeRegistry& MaterialXGraphNodeRegistry::instance()
 {
@@ -33,7 +32,7 @@ const MaterialXGraphNodeCreator* MaterialXGraphNodeRegistry::find(
 }
 
 std::shared_ptr<MaterialXGraphNode> addMaterialXGraphNode(
-    ImFlow::ImNodeFlow& flow, const ImVec2& position, mx::NodePtr node)
+    ImFlow::ImNodeFlow& flow, const ImVec2& position, MaterialX::NodePtr node)
 {
     if (!node)
         return nullptr;

@@ -17,14 +17,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Materials/SVM/SvmTypes.h"
+#include <MaterialXCore/Document.h>
 
-namespace MaterialX_v1_39_4
-{
-class Document;
-using DocumentPtr = std::shared_ptr<Document>;
-}
-namespace MaterialX = MaterialX_v1_39_4;
+#include "Materials/SVM/SvmTypes.h"
 
 namespace nr::svm
 {

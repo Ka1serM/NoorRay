@@ -6,12 +6,11 @@
 
 #include <glm/common.hpp>
 
-#include "Backend/Host/Platform.h"
 #include "Materials/SVM/SvmTypes.h"
 
 namespace nr::svm::detail
 {
-NR_GPU inline glm::vec3 materialXMixColor(const MaterialXBlendType type, const float t,
+inline glm::vec3 materialXMixColor(const MaterialXBlendType type, const float t,
     const glm::vec3 a, const glm::vec3 b)
 {
     const float tm = 1.0f - t;

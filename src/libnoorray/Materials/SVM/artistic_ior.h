@@ -11,12 +11,11 @@
 #include <glm/common.hpp>
 #include <glm/exponential.hpp>
 
-#include "Backend/Host/Platform.h"
 
 namespace nr::svm::detail
 {
 
-NR_GPU inline void svmArtisticIor(const glm::vec3 reflectivity,
+inline void svmArtisticIor(const glm::vec3 reflectivity,
     const glm::vec3 edgeColor, glm::vec3& ior, glm::vec3& extinction)
 {
     const glm::vec3 r = glm::clamp(reflectivity, glm::vec3(0.0f), glm::vec3(0.99f));

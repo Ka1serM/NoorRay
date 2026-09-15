@@ -29,12 +29,12 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
-#include "Geometry/Mesh/Assets/GaussianAsset.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
+#include "Mesh/Assets/Gaussian.h"
+#include "Mesh/Assets/Mesh.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Geometry/Mesh/Transform.h"
-#include "Scene/Objects/GaussianInstance.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Mesh/Transform.h"
+#include "Scene/GaussianInstance.h"
+#include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 
 #include <pxr/base/tf/diagnostic.h>
@@ -226,8 +226,7 @@ void PopulateTriangle(
         const float opacity = PrimvarAt(
             primvars.opacities, primvars.opacityInterpolation, pointIndex,
             cornerIndex, faceIndex, 1.0f);
-        vertex.color =
-            nr::vertex_color::packLinear(glm::vec4(color, opacity));
+        vertex.color = glm::vec4(color, opacity);
         vertex.tangentSign = 1.0f;
     }
 
@@ -268,7 +267,7 @@ void PopulateTriangle(
 // in first-encountered order. `materialSlotPaths` receives the SdfPath for
 // slot 0 (always requestedMaterialId, even if no subset uses it) and each
 // subsequent slot in the same order, for the caller to bind via
-// MeshAsset::setMaterial(slot, ...). A face not covered by any subset stays
+// Mesh::setMaterial(slot, ...). A face not covered by any subset stays
 // slot 0, the common case for single-material meshes (unchanged behavior)
 // and for DCCs that, like Blender's Hydra export, already split a
 // multi-material mesh into one Rprim per material rather than using
@@ -530,16 +529,16 @@ void HdNoorRayMesh::UnbindAllMaterials(HdNoorRayRenderParam& param)
     for (size_t slot = 0; slot < boundMaterialIds_.size(); ++slot)
         if (!boundMaterialIds_[slot].IsEmpty())
             param.UnbindMaterial(
-                boundMaterialIds_[slot], meshAsset_.handle(), static_cast<uint32_t>(slot));
+                boundMaterialIds_[slot], mesh_, static_cast<uint32_t>(slot));
     boundMaterialIds_.clear();
 }
 
 void HdNoorRayMesh::ReleaseAll(HdNoorRayRenderParam& param)
 {
-    ReleaseInstances(param.session.scene);
+    ReleaseInstances(param.session.scene());
     UnbindAllMaterials(param);
-    meshAsset_.reset();
-    gaussianAsset_.reset();
+    mesh_ = nullptr;
+    gaussianAsset_ = nullptr;
 }
 
 void HdNoorRayMesh::Sync(
@@ -553,7 +552,7 @@ void HdNoorRayMesh::Sync(
     // also lets them run concurrently if mesh parallel Sync is enabled later;
     // scene registry and renderer mutations remain serialized below.
     std::unique_lock lock(param.mutex);
-    Scene& scene = param.session.scene;
+    Scene& scene = param.session.scene();
     const std::string primName = GetId().GetString();
 
     // --- Gaussian splat detection via UV-encoded marker mesh ---
@@ -566,12 +565,12 @@ void HdNoorRayMesh::Sync(
                 // Path changed — drop the old instances and asset so the new
                 // file is loaded below and the old splat data is freed.
                 ReleaseInstances(scene);
-                gaussianAsset_.reset();
+                gaussianAsset_ = nullptr;
                 splatPath_ = *decodedPath;
             }
         } else if (!splatPath_.empty()) {
             ReleaseInstances(scene);
-            gaussianAsset_.reset();
+            gaussianAsset_ = nullptr;
             splatPath_.clear();
         }
     }
@@ -579,13 +578,13 @@ void HdNoorRayMesh::Sync(
     const bool isGaussian = !splatPath_.empty();
 
     if (isGaussian) {
-        if (meshAsset_.isValid()) {
+        if (mesh_ != nullptr) {
             UnbindAllMaterials(param);
             ReleaseInstances(scene);
-            meshAsset_.reset();
+            mesh_ = nullptr;
         }
 
-        if (!gaussianAsset_.isValid()) {
+        if (gaussianAsset_ == nullptr) {
             try {
                 gaussianAsset_ = scene.add(
                     GaussianAsset::CreateFromFile(scene, primName, splatPath_));
@@ -680,7 +679,7 @@ void HdNoorRayMesh::Sync(
         desiredMaterialIds[0] = requestedMaterialId;
 
     if (geometryDirty) {
-        MeshAsset* asset = meshAsset_.get();
+        Mesh* asset = mesh_;
         const bool rebuildTopology = asset == nullptr || topologyDirty;
         std::vector<Vertex> vertices;
         std::vector<uint32_t> indices;
@@ -701,7 +700,7 @@ void HdNoorRayMesh::Sync(
             desiredMaterialIds = std::move(materialSlotPaths);
 
         // The scene's managed registry can move while the lock is released.
-        asset = meshAsset_.get();
+        asset = mesh_;
         if (asset != nullptr && !topologyDirty) {
             // Positions affect geometric normals and the tangent frame, so a
             // point edit must refresh complete vertex data. Updating positions
@@ -714,20 +713,20 @@ void HdNoorRayMesh::Sync(
             // and published) is what points this mesh at its real materials.
             // Until that happens, a shared native grey material slot (owned
             // and compiled once by the render param) avoids a hole.
-            const MaterialRef material = param.GetNativeGreyMaterial();
+            Material* material = param.GetNativeGreyMaterial();
             if (asset) {
                 asset->replaceGeometry(vertices, indices, faces,
                     static_cast<uint32_t>(desiredMaterialIds.size()));
             } else {
-                meshAsset_ = scene.add(MeshAsset(
+                mesh_ = scene.add(Mesh(
                     scene, GetId().GetString(), vertices, indices, faces,
-                    std::vector<MaterialRef>(
+                    std::vector<Material*>(
                         std::max<size_t>(desiredMaterialIds.size(), 1), material)));
             }
         }
     }
 
-    if (meshAsset_.isValid() && boundMaterialIds_ != desiredMaterialIds) {
+    if (mesh_ != nullptr && boundMaterialIds_ != desiredMaterialIds) {
         const size_t slotCount =
             std::max(boundMaterialIds_.size(), desiredMaterialIds.size());
         for (size_t slot = 0; slot < slotCount; ++slot) {
@@ -738,9 +737,9 @@ void HdNoorRayMesh::Sync(
             if (oldId == newId)
                 continue;
             if (!oldId.IsEmpty())
-                param.UnbindMaterial(oldId, meshAsset_.handle(), static_cast<uint32_t>(slot));
+                param.UnbindMaterial(oldId, mesh_, static_cast<uint32_t>(slot));
             if (!newId.IsEmpty())
-                param.BindMaterial(newId, meshAsset_.handle(), static_cast<uint32_t>(slot));
+                param.BindMaterial(newId, mesh_, static_cast<uint32_t>(slot));
         }
         boundMaterialIds_ = desiredMaterialIds;
     }
@@ -748,7 +747,7 @@ void HdNoorRayMesh::Sync(
     const bool instancesDirty = objects_.empty()
         || (*dirtyBits & (HdChangeTracker::DirtyTransform
             | HdChangeTracker::DirtyInstancer)) != 0;
-    if (meshAsset_.isValid() && instancesDirty) {
+    if (mesh_ != nullptr && instancesDirty) {
         VtMatrix4dArray transforms;
         if (GetInstancerId().IsEmpty()) {
             transforms.push_back(delegate->GetTransform(GetId()));
@@ -769,7 +768,7 @@ void HdNoorRayMesh::Sync(
         }
         while (objects_.size() < transforms.size()) {
             auto instance = std::make_unique<MeshInstance>(
-                scene, GetId().GetString(), meshAsset_, Transform());
+                scene, GetId().GetString(), mesh_, Transform());
             objects_.push_back(scene.add(std::move(instance)));
         }
         for (size_t i = 0; i < transforms.size(); ++i)

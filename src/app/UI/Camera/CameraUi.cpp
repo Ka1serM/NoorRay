@@ -1,15 +1,13 @@
-#include "Rendering/Camera/Camera.h"
+#include "Camera/Camera.h"
 
 #include <algorithm>
 
-#include "Backend/Host/MutationBarrier.h"
 #include "UI/ImGuiManager.h"
 
 bool Camera::renderUi()
 {
     bool changed = false;
     ImGuiManager::dragFloatRow("Exposure", exposure, 0.01f, -100.f, 100.f, [&](float value) {
-        nr::synchronizeBeforeManagedMutation("Camera exposure");
         exposure = value; changed = true;
     });
     float derivedFovDegrees = fovDegreesForFocalLengthMm(focalLengthMm);

@@ -1,8 +1,8 @@
 #include "MaterialXNodeEditorPanel.h"
 
 #include "Materials/MaterialX/MaterialXDocument.h"
-#include "Geometry/Mesh/Assets/MeshAsset.h"
-#include "Scene/Objects/MeshInstance.h"
+#include "Mesh/Assets/Mesh.h"
+#include "Scene/MeshInstance.h"
 #include "UI/MaterialXNodeCatalog.h"
 #include "UI/MathInput.h"
 #include "UI/MaterialXNodes/MaterialXGraphNodeRegistry.h"
@@ -27,14 +27,13 @@
 #include <unordered_set>
 #include <vector>
 
-namespace mx = MaterialX;
 
 namespace
 {
 constexpr const char* PositionXAttribute = "xpos";
 constexpr const char* PositionYAttribute = "ypos";
 
-bool readPosition(const mx::Node& node, ImVec2& position)
+bool readPosition(const MaterialX::Node& node, ImVec2& position)
 {
     if (!node.hasAttribute(PositionXAttribute) || !node.hasAttribute(PositionYAttribute))
         return false;
@@ -44,7 +43,7 @@ bool readPosition(const mx::Node& node, ImVec2& position)
     return true;
 }
 
-void writePosition(mx::Node& node, const ImVec2& position)
+void writePosition(MaterialX::Node& node, const ImVec2& position)
 {
     node.setAttribute(PositionXAttribute, std::to_string(position.x));
     node.setAttribute(PositionYAttribute, std::to_string(position.y));
@@ -119,15 +118,15 @@ MaterialXNodeEditorPanel::MaterialTarget MaterialXNodeEditorPanel::resolveTarget
     MaterialTarget target;
     const auto object = scene.getActiveObjectPtr();
     const auto* mesh = object ? dynamic_cast<const MeshInstance*>(object.get()) : nullptr;
-    if (!mesh || !mesh->hasMeshAsset() || mesh->getMeshAsset().getMaterialCount() == 0)
+    if (!mesh || !mesh->hasMesh() || mesh->getMesh().getMaterialCount() == 0)
         return target;
 
     const uint32_t slot = std::min(scene.getSelectedMaterialSlot(),
-        static_cast<uint32_t>(mesh->getMeshAsset().getMaterialCount() - 1));
-    target.handle = mesh->getMeshAsset().getMaterialHandle(slot);
+        static_cast<uint32_t>(mesh->getMesh().getMaterialCount() - 1));
+    target.material = mesh->getMesh().getMaterialPtr(slot);
     target.valid = true;
 
-    const uint32_t index = target.handle.index();
+    const uint32_t index = scene.getMaterialIndex(target.material);
     if (const auto& paths = scene.getMaterialXSourcePaths(); index < paths.size())
         target.sourcePath = paths[index];
     if (const auto& documents = scene.getMaterialXDocuments(); index < documents.size())
@@ -151,10 +150,10 @@ void MaterialXNodeEditorPanel::loadDocument(const MaterialTarget& target)
 
     try {
         if (!target.sourcePath.empty()) {
-            document = mx::createDocument();
-            const mx::FileSearchPath searchPath(
+            document = MaterialX::createDocument();
+            const MaterialX::FileSearchPath searchPath(
                 std::filesystem::path(target.sourcePath).parent_path().string());
-            mx::readFromXmlFile(document, target.sourcePath, searchPath);
+            MaterialX::readFromXmlFile(document, target.sourcePath, searchPath);
         } else if (target.document) {
             document = target.document->copy();
         } else {
@@ -163,7 +162,7 @@ void MaterialXNodeEditorPanel::loadDocument(const MaterialTarget& target)
             document = nr::materialx::defaultMaterial();
         }
     }
-    catch (const mx::Exception& error) {
+    catch (const MaterialX::Exception& error) {
         loadError = error.what();
         document.reset();
     }
@@ -176,10 +175,10 @@ void MaterialXNodeEditorPanel::persistDocument(
         return;
     try {
         if (!target.sourcePath.empty()) {
-            mx::writeToXmlFile(document, target.sourcePath);
+            MaterialX::writeToXmlFile(document, target.sourcePath);
         } else {
             auto& documents = scene.getMaterialXDocuments();
-            const uint32_t index = target.handle.index();
+            const uint32_t index = scene.getMaterialIndex(target.material);
             if (documents.size() <= index)
                 documents.resize(index + 1);
             documents[index] = document->copy();
@@ -188,9 +187,9 @@ void MaterialXNodeEditorPanel::persistDocument(
             syncedDocument = documents[index];
         }
         if (invalidateMaterial)
-            scene.invalidateMaterial(target.handle);
+            scene.invalidateMaterial(target.material);
     }
-    catch (const mx::Exception& error) {
+    catch (const MaterialX::Exception& error) {
         loadError = error.what();
     }
 }
@@ -273,23 +272,23 @@ void MaterialXNodeEditorPanel::renderUi()
 
 // ── Graph ─────────────────────────────────────────────────────────────────────
 
-std::vector<mx::NodePtr> MaterialXNodeEditorPanel::collectNodes() const
+std::vector<MaterialX::NodePtr> MaterialXNodeEditorPanel::collectNodes() const
 {
-    std::vector<mx::NodePtr> nodes;
-    std::unordered_set<const mx::Node*> seen;
+    std::vector<MaterialX::NodePtr> nodes;
+    std::unordered_set<const MaterialX::Node*> seen;
 
-    mx::NodePtr root;
-    for (const mx::NodePtr& node : document->getNodes()) {
+    MaterialX::NodePtr root;
+    for (const MaterialX::NodePtr& node : document->getNodes()) {
         if (node->getCategory() == "surfacematerial") {
             root = node;
             break;
         }
     }
-    std::function<void(const mx::NodePtr&)> collect = [&](const mx::NodePtr& node) {
+    std::function<void(const MaterialX::NodePtr&)> collect = [&](const MaterialX::NodePtr& node) {
         if (!node || !seen.insert(node.get()).second || nodes.size() >= 256)
             return;
         nodes.push_back(node);
-        for (const mx::InputPtr& input : node->getInputs())
+        for (const MaterialX::InputPtr& input : node->getInputs())
             if (input)
                 collect(input->getConnectedNode());
     };
@@ -297,7 +296,7 @@ std::vector<mx::NodePtr> MaterialXNodeEditorPanel::collectNodes() const
     // Nodes that are not reachable from the material root still belong to the
     // document: a node added from the menu has no connections yet, and would
     // otherwise vanish the moment the graph was rebuilt.
-    for (const mx::NodePtr& node : document->getNodes())
+    for (const MaterialX::NodePtr& node : document->getNodes())
         collect(node);
     return nodes;
 }
@@ -320,9 +319,9 @@ void MaterialXNodeEditorPanel::syncGraph()
         });
     }
 
-    const std::vector<mx::NodePtr> nodes = collectNodes();
-    std::unordered_map<std::string, mx::NodePtr> wanted;
-    for (const mx::NodePtr& node : nodes)
+    const std::vector<MaterialX::NodePtr> nodes = collectNodes();
+    std::unordered_map<std::string, MaterialX::NodePtr> wanted;
+    for (const MaterialX::NodePtr& node : nodes)
         wanted.emplace(node->getName(), node);
     pendingLayoutNodes.clear();
 
@@ -336,7 +335,7 @@ void MaterialXNodeEditorPanel::syncGraph()
         entry = uiNodes.erase(entry);
     }
 
-    for (const mx::NodePtr& node : nodes) {
+    for (const MaterialX::NodePtr& node : nodes) {
         // A node that is already on screen keeps its object, and with it the
         // position the user dragged it to. Only the MaterialX node behind it is
         // swapped for the one from the newly parsed document.
@@ -367,11 +366,11 @@ void MaterialXNodeEditorPanel::syncGraph()
     for (const auto& [nodeName, uiNode] : uiNodes)
         for (const std::shared_ptr<ImFlow::Pin>& pin : uiNode->getIns())
             pin->deleteLink();
-    for (const mx::NodePtr& node : nodes) {
+    for (const MaterialX::NodePtr& node : nodes) {
         const auto target = uiNodes.find(node->getName());
         if (target == uiNodes.end())
             continue;
-        for (const mx::InputPtr& input : node->getInputs()) {
+        for (const MaterialX::InputPtr& input : node->getInputs()) {
             if (!input || !input->getConnectedNode())
                 continue;
             const auto source = uiNodes.find(input->getConnectedNode()->getName());
@@ -405,11 +404,11 @@ bool MaterialXNodeEditorPanel::captureMovedPositions()
 
 void MaterialXNodeEditorPanel::applyAutoLayout()
 {
-    const std::vector<mx::NodePtr> nodes = collectNodes();
+    const std::vector<MaterialX::NodePtr> nodes = collectNodes();
     std::vector<MaterialXGraphLayout::LayoutNode> layoutNodes;
     std::vector<MaterialXGraphLayout::Link> links;
     layoutNodes.reserve(nodes.size());
-    for (const mx::NodePtr& node : nodes) {
+    for (const MaterialX::NodePtr& node : nodes) {
         MaterialXGraphLayout::LayoutNode layout;
         layout.name = node->getName();
         ImVec2 stored(0.0f, 0.0f);
@@ -425,7 +424,7 @@ void MaterialXNodeEditorPanel::applyAutoLayout()
                 layout.height = size.y;
         }
         layoutNodes.push_back(std::move(layout));
-        for (const mx::InputPtr& input : node->getInputs()) {
+        for (const MaterialX::InputPtr& input : node->getInputs()) {
             if (!input || !input->getConnectedNode())
                 continue;
             links.emplace_back(input->getConnectedNode()->getName(), node->getName());
@@ -461,8 +460,8 @@ void MaterialXNodeEditorPanel::copySelectedNode()
     if (entry == uiNodes.end() || !entry->second->materialNode())
         return;
 
-    const mx::NodePtr& source = entry->second->materialNode();
-    clipboardDocument = mx::createDocument();
+    const MaterialX::NodePtr& source = entry->second->materialNode();
+    clipboardDocument = MaterialX::createDocument();
     clipboardNode = clipboardDocument->addNode(
         source->getCategory(), source->getName(), source->getType());
     // copyContentFrom includes authored inputs, values, connection names and
@@ -479,7 +478,7 @@ void MaterialXNodeEditorPanel::pasteNode(const MaterialTarget& target)
     const std::string baseName = clipboardNode->getName().empty()
         ? clipboardNode->getCategory() : clipboardNode->getName();
     const std::string name = document->createValidChildName(baseName + "_copy");
-    const mx::NodePtr pasted = document->addNode(
+    const MaterialX::NodePtr pasted = document->addNode(
         clipboardNode->getCategory(), name, clipboardNode->getType());
     pasted->copyContentFrom(clipboardNode);
 
@@ -667,13 +666,13 @@ void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
 
     std::string newConnectionState;
     for (const auto& [nodeName, uiNode] : uiNodes) {
-        const mx::NodePtr& materialNode = uiNode->materialNode();
+        const MaterialX::NodePtr& materialNode = uiNode->materialNode();
         // Pins are built from exposedInputs(), which includes library defaults
         // that are not authored on the node yet. Iterate the same set here:
         // otherwise a link to a default input such as Disney's `ior` is drawn
         // but never serialized because materialNode->getInputs() is empty for
         // that port.
-        for (const mx::InputPtr& declared : exposedInputs(materialNode)) {
+        for (const MaterialX::InputPtr& declared : exposedInputs(materialNode)) {
             if (!declared)
                 continue;
             const std::string& inputName = declared->getName();
@@ -682,16 +681,16 @@ void MaterialXNodeEditorPanel::drawGraph(const MaterialTarget& target)
             ImFlow::Pin* pin = uiNode->findInputPin(inputName);
             if (!pin)
                 continue;
-            mx::NodePtr connected;
+            MaterialX::NodePtr connected;
             if (const auto link = pin->getLink().lock()) {
                 if (auto* source = dynamic_cast<MaterialXGraphNode*>(link->left()->getParent()))
                     connected = source->materialNode();
             }
-            const mx::InputPtr authored = materialNode->getInput(inputName);
-            const mx::NodePtr old = authored ? authored->getConnectedNode() : nullptr;
+            const MaterialX::InputPtr authored = materialNode->getInput(inputName);
+            const MaterialX::NodePtr old = authored ? authored->getConnectedNode() : nullptr;
             if ((old ? old->getName() : "") != (connected ? connected->getName() : "")) {
                 if (connected) {
-                    const mx::InputPtr target = authored
+                    const MaterialX::InputPtr target = authored
                         ? authored : materialNode->addInput(inputName, declared->getType());
                     target->setConnectedNode(connected);
                 } else if (authored) {
@@ -756,19 +755,19 @@ void MaterialXNodeEditorPanel::drawAddNodeMenu(const MaterialTarget& target)
     ImGui::Separator();
 
     const auto addNode = [&](const MaterialXNodeType& type) {
-        const mx::ConstNodeDefPtr definition = catalog.findNodeDef(type);
+        const MaterialX::ConstNodeDefPtr definition = catalog.findNodeDef(type);
         if (!definition)
             return;
         try {
-            const mx::NodePtr created = document->addNode(type.category,
+            const MaterialX::NodePtr created = document->addNode(type.category,
                 document->createValidChildName(type.category), type.outputType);
             // Copy the declared inputs and their defaults instead of importing
             // the whole standard library into the document, which would be
             // written out with every save.
-            for (const mx::InputPtr& declared : definition->getActiveInputs()) {
+            for (const MaterialX::InputPtr& declared : definition->getActiveInputs()) {
                 if (!declared)
                     continue;
-                const mx::InputPtr input =
+                const MaterialX::InputPtr input =
                     created->addInput(declared->getName(), declared->getType());
                 if (declared->hasValueString())
                     input->setValueString(declared->getValueString());
@@ -788,7 +787,7 @@ void MaterialXNodeEditorPanel::drawAddNodeMenu(const MaterialTarget& target)
             // material yet. If the graph is reloaded before it is connected,
             // the unreferenced node is intentionally discarded.
         }
-        catch (const mx::Exception& error) {
+        catch (const MaterialX::Exception& error) {
             loadError = error.what();
         }
         ImGui::CloseCurrentPopup();
@@ -847,7 +846,7 @@ void MaterialXNodeEditorPanel::drawParameterPane(const MaterialTarget& target)
     const auto entry = uiNodes.find(selectedNodeName);
     if (entry == uiNodes.end())
         return;
-    const mx::NodePtr& editable = entry->second->materialNode();
+    const MaterialX::NodePtr& editable = entry->second->materialNode();
 
     // Keep the heading readable when the properties pane is narrow. The
     // details panel below uses the same table-based layout, which lets labels
@@ -869,13 +868,13 @@ void MaterialXNodeEditorPanel::drawParameterPane(const MaterialTarget& target)
 
     // The declared input list, not the authored one, and an input is written
     // onto the node lazily the first time it is edited (see exposedInputs).
-    for (const mx::InputPtr& declaredInput : exposedInputs(editable)) {
+    for (const MaterialX::InputPtr& declaredInput : exposedInputs(editable)) {
         if (!declaredInput)
             continue;
         const std::string name = declaredInput->getName();
         // The authored input is the value actually in effect; the declared one
         // only supplies the name, type and default.
-        const mx::InputPtr authored = editable->getInput(name);
+        const MaterialX::InputPtr authored = editable->getInput(name);
         if (authored && authored->getConnectedNode()) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -922,7 +921,7 @@ void MaterialXNodeEditorPanel::drawParameterPane(const MaterialTarget& target)
         // Writes go to the node, never to the declaration, which is shared
         // library state owned by the catalog.
         const auto write = [&](const std::string& serialized) {
-            const mx::InputPtr target = authored
+            const MaterialX::InputPtr target = authored
                 ? authored : editable->addInput(name, type);
             target->setValueString(serialized);
         };
@@ -1019,7 +1018,7 @@ void MaterialXNodeEditorPanel::drawParameterPane(const MaterialTarget& target)
             if (changed) {
                 try {
                     write(buffer.data());
-                } catch (const mx::Exception& error) {
+                } catch (const MaterialX::Exception& error) {
                     loadError = error.what();
                     changed = false;
                 }

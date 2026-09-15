@@ -9,9 +9,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "Scene/Resources/Environment.h"
+#include "Environment/Environment.h"
 #include "Scene/Scene.h"
-#include "Scene/Resources/Texture.h"
+#include "Texture/Texture.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -30,19 +30,19 @@ void HdNoorRayDomeLight::Sync(
         ? LightIntensity(delegate, GetId()) : 0.0f;
     const std::string texturePath = AssetPathParam(
         delegate, GetId(), HdLightTokens->textureFile);
-    const TextureHandle texture = texturePath.empty()
-        ? TextureHandle{}
+    Texture* texture = texturePath.empty()
+        ? nullptr
         // Material images use bottom-origin rows to match Blender's UV
         // buffers. Dome maps are sampled by the environment's own
         // equirectangular convention and must retain their source row order.
         : param.GetOrCreateTexture(texturePath, TextureEncoding::Srgb8, false);
 
     std::scoped_lock lock(param.mutex);
-    Scene& scene = param.session.scene;
+    Scene& scene = param.session.scene();
     scene.synchronizeBeforeMutation();
     Environment& environment = scene.getEnvironment();
 
-    environment.color = color;
+    environment.data.color = color;
     environment.lightingExposure = exposure;
     environment.visibleExposure = 0.0f;
     environment.rotation = 0.0f;
@@ -56,7 +56,7 @@ void HdNoorRayDomeLight::Sync(
         glm::vec3(1.0f, 0.0f, 0.0f)));
     environment.setEquirectangularMapping(blenderWorldToNoorRay);
 
-    if (!scene.getTexture(texture))
+    if (texture == nullptr)
         scene.clearEnvironmentTexture();
     else
         scene.setEnvironmentTexture(texture);
@@ -74,11 +74,11 @@ void HdNoorRayDomeLight::Finalize(HdRenderParam* renderParam)
     if (!active_)
         return;
 
-    Scene& scene = param.session.scene;
+    Scene& scene = param.session.scene();
     scene.synchronizeBeforeMutation();
     Environment& environment = scene.getEnvironment();
     scene.clearEnvironmentTexture();
-    environment.color = glm::vec3(0.0f);
+    environment.data.color = glm::vec3(0.0f);
     environment.lightingExposure = 0.0f;
     environment.visibleExposure = 0.0f;
     environment.rotation = 0.0f;

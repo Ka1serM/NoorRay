@@ -79,13 +79,11 @@ std::shared_ptr<GraphicsPipelineImpl> DeviceImpl::create_graphics(const Graphics
         vk::DynamicState::eViewport, vk::DynamicState::eScissor};
     const vk::PipelineDynamicStateCreateInfo dynamic({}, dynamic_states);
 
-    const vk::PipelineCreateFlags2CreateInfo flags2{
-        vk::PipelineCreateFlagBits2::eDescriptorHeapEXT};
     vk::PipelineRenderingCreateInfo rendering({}, result->color_format);
     if (result->uses_depth)
         rendering.depthAttachmentFormat = depth_format;
-    rendering.pNext = &flags2;
 
+    const auto heap_flags = pipeline_heap_flags(&rendering);
     vk::GraphicsPipelineCreateInfo info{};
     info.setStages(stages)
         .setPVertexInputState(&vertex_input)
@@ -96,7 +94,7 @@ std::shared_ptr<GraphicsPipelineImpl> DeviceImpl::create_graphics(const Graphics
         .setPDepthStencilState(&depth)
         .setPColorBlendState(&color_blend)
         .setPDynamicState(&dynamic)
-        .setPNext(&rendering);
+        .setPNext(&heap_flags);
     try {
         result->pipeline = vk_device().createGraphicsPipelineUnique({}, info).value;
     } catch (const vk::SystemError& error) {
@@ -176,6 +174,7 @@ void DeviceImpl::begin_draw(const GraphicsPipelineImpl& pipeline) {
                 ? "graphics pipeline uses depth but the render target has no depth image"
                 : "render target has a depth image but the graphics pipeline ignores it");
     active_command_.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline.pipeline);
+    bind_heaps(active_command_);
     const auto width = static_cast<float>(active_width_);
     const auto height = static_cast<float>(active_height_);
     // A negative height flips Vulkan's Y-down viewport back to the Y-up NDC

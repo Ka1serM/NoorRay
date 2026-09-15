@@ -4,12 +4,12 @@
 
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
-#include "Rendering/Camera/CameraInstance.h"
-#include "Rendering/Camera/PerspectiveCamera.h"
-#include "Rendering/Camera/ThinLensCamera.h"
-#include "Rendering/Camera/OrthographicCamera.h"
-#include "Rendering/Camera/FisheyeCamera.h"
-#include "Rendering/Camera/RealisticCamera.h"
+#include "Camera/CameraInstance.h"
+#include "Camera/PerspectiveCamera.h"
+#include "Camera/ThinLensCamera.h"
+#include "Camera/OrthographicCamera.h"
+#include "Camera/FisheyeCamera.h"
+#include "Camera/RealisticCamera.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;

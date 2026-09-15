@@ -8,43 +8,42 @@
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
-#include "Backend/Host/Platform.h"
 #include "Materials/SVM/fractal_noise.h"
 
 namespace nr::svm::detail
 {
-NR_GPU inline float svmCellNoise3d(const glm::vec3 p)
+inline float svmCellNoise3d(const glm::vec3 p)
 {
     return static_cast<float>(fractalHashInt3(static_cast<int>(floorf(p.x)),
         static_cast<int>(floorf(p.y)), static_cast<int>(floorf(p.z)))) / 4294967295.0f;
 }
-NR_GPU inline float svmCellNoise2d(const glm::vec3 p)
+inline float svmCellNoise2d(const glm::vec3 p)
 {
     return static_cast<float>(fractalHashInt2(static_cast<int>(floorf(p.x)),
         static_cast<int>(floorf(p.y)))) / 4294967295.0f;
 }
-NR_GPU inline glm::vec3 svmCellNoise3dVec3(const glm::vec3 p)
+inline glm::vec3 svmCellNoise3dVec3(const glm::vec3 p)
 {
     const std::uint32_t h = fractalHashInt3(static_cast<int>(floorf(p.x)),
         static_cast<int>(floorf(p.y)), static_cast<int>(floorf(p.z)));
     return glm::vec3(static_cast<float>(h & 0xffu), static_cast<float>((h >> 8u) & 0xffu),
         static_cast<float>((h >> 16u) & 0xffu)) / 255.0f;
 }
-NR_GPU inline glm::vec3 svmCellNoise2dVec3(const glm::vec2 p)
+inline glm::vec3 svmCellNoise2dVec3(const glm::vec2 p)
 {
     const std::uint32_t h = fractalHashInt2(static_cast<int>(floorf(p.x)),
         static_cast<int>(floorf(p.y)));
     return glm::vec3(static_cast<float>(h & 0xffu), static_cast<float>((h >> 8u) & 0xffu),
         static_cast<float>((h >> 16u) & 0xffu)) / 255.0f;
 }
-NR_GPU inline glm::vec3 svmWorleyCellPosition3d(const int x, const int y, const int z,
+inline glm::vec3 svmWorleyCellPosition3d(const int x, const int y, const int z,
     const int xoff, const int yoff, const int zoff, const float jitter)
 {
     glm::vec3 off = svmCellNoise3dVec3(glm::vec3(x + xoff, y + yoff, z + zoff));
     off = (off - glm::vec3(0.5f)) * jitter + glm::vec3(0.5f);
     return glm::vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)) + off;
 }
-NR_GPU inline glm::vec3 svmWorleyNoise3d(const glm::vec3 p, const float jitter,
+inline glm::vec3 svmWorleyNoise3d(const glm::vec3 p, const float jitter,
     const int style, const bool vectorResult)
 {
     const int X = static_cast<int>(floorf(p.x));
@@ -70,7 +69,7 @@ NR_GPU inline glm::vec3 svmWorleyNoise3d(const glm::vec3 p, const float jitter,
     nearest = glm::sqrt(nearest);
     return vectorResult ? nearest : glm::vec3(nearest.x);
 }
-NR_GPU inline glm::vec3 svmWorleyNoise2d(const glm::vec2 p, const float jitter,
+inline glm::vec3 svmWorleyNoise2d(const glm::vec2 p, const float jitter,
     const int style, const bool vectorResult)
 {
     const int X = static_cast<int>(floorf(p.x));

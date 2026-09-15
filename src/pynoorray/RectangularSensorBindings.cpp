@@ -1,6 +1,6 @@
 #include "Bindings.h"
 
-#include "Rendering/Camera/Sensor.h"
+#include "Camera/Sensor.h"
 
 namespace nb = nanobind;
 

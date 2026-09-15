@@ -1,5 +1,6 @@
 ﻿#include "MainMenuBar.h"
 #include "imgui.h"
+#include <MaterialXCore/Document.h>
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Camera/CameraInstance.h"
@@ -17,6 +18,8 @@
 #include <fstream>
 
 #include "ImGuiManager.h"
+
+using glm::vec3;
 
 MainMenuBar::MainMenuBar(std::string name, Scene& scene,
     ImGuiManager& imGuiManager, std::string currentScenePath)

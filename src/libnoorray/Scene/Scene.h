@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <string>
 #include <vector>
-#include <MaterialXCore/Document.h>
+#include "Materials/MaterialX/MaterialXFwd.h"
 #include "Scene/Handle.h"
 #include "Shared/RenderSettings.h"
 #include "Mesh/Assets/Mesh.h"
@@ -22,24 +22,6 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
-
-using glm::ivec2;
-using glm::mat4;
-using glm::quat;
-using glm::vec2;
-using glm::vec3;
-using glm::vec4;
-using glm::angleAxis;
-using glm::cross;
-using glm::dot;
-using glm::inverse;
-using glm::length;
-using glm::mat4_cast;
-using glm::normalize;
-using glm::perspective;
-using glm::quat_cast;
-using glm::radians;
-using glm::transpose;
 
 #include "Environment/Environment.h"
 

@@ -22,10 +22,10 @@ public:
         bool down = false;
     };
 
-    static constexpr vec3 WorldUp{0.f, 1.f, 0.f};
-    static constexpr vec3 LocalForward{0.f, 0.f, -1.f};
-    static constexpr vec3 LocalUp{0.f, 1.f, 0.f};
-    static constexpr vec3 LocalRight{1.f, 0.f, 0.f};
+    static constexpr glm::vec3 WorldUp{0.f, 1.f, 0.f};
+    static constexpr glm::vec3 LocalForward{0.f, 0.f, -1.f};
+    static constexpr glm::vec3 LocalUp{0.f, 1.f, 0.f};
+    static constexpr glm::vec3 LocalRight{1.f, 0.f, 0.f};
 
     explicit CameraInstance(std::unique_ptr<Camera> camera,
         const std::string& name = "Camera",
@@ -42,13 +42,13 @@ public:
 
     Camera* getCamera() { return camera.get(); }
     const Camera* getCamera() const { return camera.get(); }
-    mat4 getViewMatrix() const;
-    virtual mat4 getProjectionMatrix() const;
+    glm::mat4 getViewMatrix() const;
+    virtual glm::mat4 getProjectionMatrix() const;
 
     void markDirty();
 
-    void setArcballPivot(const vec3& pivot);
-    const vec3& getArcballPivot() const { return arcballPivot; }
+    void setArcballPivot(const glm::vec3& pivot);
+    const glm::vec3& getArcballPivot() const { return arcballPivot; }
     void setArcballActive(bool active) { arcballMode = active; }
     bool getArcballActive() const { return arcballMode; }
 
@@ -59,7 +59,7 @@ public:
 
 private:
     std::unique_ptr<Camera> camera;
-    vec3 arcballPivot{};
+    glm::vec3 arcballPivot{};
     bool arcballMode = false;
 
     void allocateCamera(CameraProjectionType type);

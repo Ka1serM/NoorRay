@@ -4,7 +4,6 @@
 #include <cmath>
 #include <stdexcept>
 #include "Logging/Log.h"
-#include "portable-file-dialogs.h"
 namespace { std::string join(const std::vector<std::string>& p) { std::string r; for (const auto& v : p) { if (!r.empty()) r += ';'; r += v; } return r; } }
 RealisticCamera::RealisticCamera() : RealisticCamera(std::make_unique<RectangularSensor>()) {}
 RealisticCamera::RealisticCamera(std::unique_ptr<Sensor> sensor) : Camera(std::move(sensor)) {}

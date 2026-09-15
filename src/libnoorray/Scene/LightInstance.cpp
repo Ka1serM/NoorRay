@@ -4,6 +4,9 @@
 
 #include "Scene/Scene.h"
 
+using glm::quat;
+using glm::vec3;
+
 LightInstance::LightInstance(Scene& scene, const std::string& name,
                              const Transform& transform, int type)
     : SceneObject(scene, name, transform), lightType(type)

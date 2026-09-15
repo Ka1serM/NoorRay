@@ -20,6 +20,15 @@
 #include "Viewport/Viewport.h"
 #include "UI/Window.h"
 
+using glm::dot;
+using glm::inverse;
+using glm::ivec2;
+using glm::mat4;
+using glm::normalize;
+using glm::quat;
+using glm::vec2;
+using glm::vec3;
+
 namespace
 {
 CameraInstance::InputState cameraInputState()

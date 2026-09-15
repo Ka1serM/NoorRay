@@ -1,5 +1,7 @@
 #pragma once
 
+#include <MaterialXCore/Document.h>
+
 #include "UI/MaterialXNodes/MaterialXGraphNode.h"
 
 #include <functional>

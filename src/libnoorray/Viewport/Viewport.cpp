@@ -11,12 +11,12 @@
 namespace
 {
 alignas(uint32_t) constexpr unsigned char noorRayViewportSpv[] = {
-    #embed "../Shaders/Viewport/Viewport.spv"
+    #embed "Viewport/Viewport.spv"
 };
 constexpr std::size_t noorRayViewportSpvLength = sizeof(noorRayViewportSpv);
 
 alignas(uint32_t) constexpr unsigned char noorRayViewportBillboardsSpv[] = {
-    #embed "../Shaders/Viewport/ViewportBillboards.spv"
+    #embed "Viewport/ViewportBillboards.spv"
 };
 constexpr std::size_t noorRayViewportBillboardsSpvLength = sizeof(noorRayViewportBillboardsSpv);
 

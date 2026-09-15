@@ -1,4 +1,5 @@
 #include "UI/MaterialXNodes/MaterialXGraphNode.h"
+#include <MaterialXCore/Document.h>
 
 #include "UI/MaterialXNodeCatalog.h"
 

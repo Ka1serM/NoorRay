@@ -14,7 +14,7 @@ namespace noorray { class NoorRaySession; }
 
 class ViewportPanel : public ImGuiComponent {
 public:
-    ivec2 screenToPixel() const;
+    glm::ivec2 screenToPixel() const;
     void renderUi() override;
     void handleObjectPicking();
     bool handleBillboardPicking() const;

@@ -7,5 +7,4 @@ public:
     RectangularSensor() = default;
     explicit RectangularSensor(const Sensor& other);
     ~RectangularSensor() override = default;
-    bool renderUi(Sensor& owner);
 };

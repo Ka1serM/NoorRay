@@ -65,26 +65,27 @@ float directionalLightSelectionWeight(const DirectionalLight& light)
     return lightSelectionLuminance(light.color) * fmaxf(light.intensity, 0.0f);
 }
 
+// The SPIR-V is compiled into the build tree; --embed-dir points #embed there.
 alignas(uint32_t) constexpr unsigned char raygenSpv[] = {
-    #embed "../Shaders/Raytracer/Raytracer.spv"
+    #embed "Raytracer/Raytracer.spv"
 };
 alignas(uint32_t) constexpr unsigned char missSpv[] = {
-    #embed "../Shaders/Raytracer/RaytracingMiss.spv"
+    #embed "Raytracer/RaytracingMiss.spv"
 };
 alignas(uint32_t) constexpr unsigned char hitSpv[] = {
-    #embed "../Shaders/Raytracer/RaytracingHit.spv"
+    #embed "Raytracer/RaytracingHit.spv"
 };
 alignas(uint32_t) constexpr unsigned char emissionHitSpv[] = {
-    #embed "../Shaders/Raytracer/EmissionHit.spv"
+    #embed "Raytracer/EmissionHit.spv"
 };
 alignas(uint32_t) constexpr unsigned char opacityAnyHitSpv[] = {
-    #embed "../Shaders/Raytracer/OpacityAnyHit.spv"
+    #embed "Raytracer/OpacityAnyHit.spv"
 };
 alignas(uint32_t) constexpr unsigned char gaussianAnyHitSpv[] = {
-    #embed "../Shaders/Raytracer/GaussianAnyHit.spv"
+    #embed "Raytracer/GaussianAnyHit.spv"
 };
 alignas(uint32_t) constexpr unsigned char gaussianHitSpv[] = {
-    #embed "../Shaders/Raytracer/GaussianHit.spv"
+    #embed "Raytracer/GaussianHit.spv"
 };
 constexpr std::size_t raygenSpvLength = sizeof(raygenSpv);
 // Keep texture uploads bounded by the descriptor-heap budget.  The first

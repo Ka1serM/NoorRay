@@ -34,7 +34,6 @@ public:
     Camera(const Camera& other);
     Camera& operator=(const Camera& other);
     virtual ~Camera();
-    bool renderUi();
     Camera* ptr() { return this; }
     const Camera* ptr() const { return this; }
     explicit operator bool() const { return true; }

@@ -10,6 +10,16 @@
 #include "glm/gtx/quaternion.hpp"
 #include "Scene/Scene.h"
 
+using glm::angleAxis;
+using glm::cross;
+using glm::mat4;
+using glm::normalize;
+using glm::perspective;
+using glm::quat;
+using glm::radians;
+using glm::vec3;
+using glm::vec4;
+
 // ── unified-memory allocation ─────────────────────────────────────────────────
 
 void CameraInstance::allocateCamera(CameraProjectionType type)

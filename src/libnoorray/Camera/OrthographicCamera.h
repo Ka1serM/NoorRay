@@ -8,5 +8,4 @@ public:
     explicit OrthographicCamera(std::unique_ptr<Sensor> sensor);
     OrthographicCamera(const OrthographicCamera& other);
     ~OrthographicCamera();
-    bool renderUi();
 };

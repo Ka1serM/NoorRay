@@ -1,8 +1,10 @@
+#include "UI/Camera/CameraUi.h"
+
 #include "Camera/OrthographicCamera.h"
 
-bool OrthographicCamera::renderUi()
+bool camera_ui::render(OrthographicCamera& camera)
 {
-    const bool cameraChanged = Camera::renderUi();
-    const bool sensorChanged = getSensor().renderUi();
+    const bool cameraChanged = renderCommon(camera);
+    const bool sensorChanged = render(camera.getSensor());
     return cameraChanged || sensorChanged;
 }

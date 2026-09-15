@@ -2,6 +2,11 @@
 #include <glm/gtc/type_ptr.hpp>
 #include "Scene.h"
 
+using glm::inverse;
+using glm::mat4;
+using glm::quat;
+using glm::vec3;
+
 SceneObject::SceneObject(const std::string& name, const Transform& transform)
     : name(name), transform(transform), visible(true)
 {

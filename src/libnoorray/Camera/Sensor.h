@@ -7,11 +7,6 @@
 
 #include <glm/vec2.hpp>
 
-namespace pfd {
-class open_file;
-class save_file;
-}
-
 class RectangularSensor;
 class Sensor;
 
@@ -58,7 +53,6 @@ public:
 
     char imageSensorPath[512]{};
     char imageSensorLoadStatus[512]{};
-    pfd::open_file* imageSensorDialog{};
 
     float width() const;
     float height() const;
@@ -90,8 +84,6 @@ public:
         requestedType = -1;
         return true;
     }
-
-    bool renderUi();
 
 private:
     int requestedType{-1};

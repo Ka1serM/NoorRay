@@ -2,6 +2,10 @@
 #include "imgui.h"
 #include <MaterialXCore/Document.h>
 #include "Scene/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/RectLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Camera/CameraInstance.h"
 #include <SDL3/SDL.h>
@@ -59,23 +63,23 @@ void MainMenuBar::renderAddMenu() {
 
         if (ImGui::BeginMenu("Lights")) {
             if (ImGui::MenuItem("Directional Light")) {
-                auto light = std::make_unique<LightInstance>(scene, "Directional Light",
-                    Transform(vec3(0, 0, 0)), LightInstance::TypeDirectional);
+                auto light = std::make_unique<DirectionalLightInstance>(scene,
+                    "Directional Light", Transform(vec3(0, 0, 0)));
                 scene.setActiveObject(scene.add(std::move(light)));
             }
             if (ImGui::MenuItem("Point Light")) {
-                auto light = std::make_unique<LightInstance>(scene, "Point Light",
-                    Transform(vec3(0, 0, 0)), LightInstance::TypePoint);
+                auto light = std::make_unique<PointLightInstance>(scene,
+                    "Point Light", Transform(vec3(0, 0, 0)));
                 scene.setActiveObject(scene.add(std::move(light)));
             }
             if (ImGui::MenuItem("Spot Light")) {
-                auto light = std::make_unique<LightInstance>(scene, "Spot Light",
-                    Transform(vec3(0, 0, 0)), LightInstance::TypeSpot);
+                auto light = std::make_unique<SpotLightInstance>(scene,
+                    "Spot Light", Transform(vec3(0, 0, 0)));
                 scene.setActiveObject(scene.add(std::move(light)));
             }
             if (ImGui::MenuItem("Rect Light")) {
-                auto light = std::make_unique<LightInstance>(scene, "Rect Light",
-                    Transform(vec3(0, 0, 0)), LightInstance::TypeRect);
+                auto light = std::make_unique<RectLightInstance>(scene,
+                    "Rect Light", Transform(vec3(0, 0, 0)));
                 scene.setActiveObject(scene.add(std::move(light)));
             }
             ImGui::EndMenu();

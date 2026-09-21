@@ -5,8 +5,103 @@
 #include "Materials/Material.h"
 
 #include <glm/vec3.hpp>
+#include <algorithm>
 
 #include <catch2/catch_test_macros.hpp>
+#include "Camera/CameraInstance.h"
+#include "Lights/PointLightInstance.h"
+
+TEST_CASE("Scene mutations reach independent consumers", "[scene][notifications]")
+{
+    Scene scene;
+    const auto first = scene.getChangeState();
+    const auto second = first;
+    scene.getEnvironment().setColor({0.2f, 0.4f, 0.6f});
+    CHECK((scene.changesSince(first) & EnvironmentCdf) != 0);
+    CHECK((scene.changesSince(first) & Accumulation) != 0);
+    const auto acknowledged = scene.getChangeState();
+    scene.clearDirtyFlags();
+    CHECK(scene.changesSince(acknowledged) == 0);
+    CHECK((scene.changesSince(second) & EnvironmentCdf) != 0);
+
+    const auto cameraChange = scene.getChangeState();
+    scene.getRenderCamera()->getCamera()->setExposure(2.0f);
+    CHECK((scene.changesSince(cameraChange) & CameraState) != 0);
+    const auto sensorChange = scene.getChangeState();
+    scene.getRenderCamera()->getCamera()->getSensor().setDimensionsMm(36, 24);
+    CHECK((scene.changesSince(sensorChange) & CameraState) != 0);
+
+    const auto addChange = scene.getChangeState();
+    const auto handle = scene.add(std::make_unique<SceneObject>("Object", Transform{}));
+    CHECK((scene.changesSince(addChange) & TLAS) != 0);
+    const auto removeChange = scene.getChangeState();
+    REQUIRE(scene.removeObject(handle));
+    CHECK((scene.changesSince(removeChange) & TLAS) != 0);
+}
+
+TEST_CASE("Renderer publishes direct edits and returns to idle", "[scene][notifications][gpu]")
+{
+    noorray::NoorRaySession session;
+    session.initializeHeadlessRenderer(16, 16);
+    Scene& scene = session.scene();
+    SceneImporter::ImportObjScene(scene, TEST_ASSET_DIR "/dedup_triangle.obj", nullptr);
+    session.rebuildNativeScene();
+    session.pollNativeScene(); // First render-settings publication.
+    CHECK_FALSE(session.pollNativeScene());
+    scene.getEnvironment().setColor({0.25f, 0.5f, 0.75f});
+    CHECK(session.pollNativeScene());
+    CHECK_FALSE(session.pollNativeScene());
+    scene.getRenderCamera()->getCamera()->setExposure(1.0f);
+    CHECK(session.pollNativeScene());
+    CHECK_FALSE(session.pollNativeScene());
+    scene.getRenderSettings().maxBounces = 3;
+    CHECK(session.pollNativeScene());
+    CHECK_FALSE(session.pollNativeScene());
+    scene.clear();
+    CHECK(session.pollNativeScene());
+    CHECK_FALSE(session.pollNativeScene());
+    session.render(0, 0);
+    session.synchronize();
+    const auto clearedIds = session.readCryptomatte();
+    REQUIRE_FALSE(clearedIds.empty());
+    CHECK(std::all_of(clearedIds.begin(), clearedIds.end(),
+                      [](std::uint32_t id) { return id == ~0u; }));
+    // Repeated clears and importing after a clear must use fresh GPU state.
+    scene.clear();
+    CHECK(session.pollNativeScene());
+    CHECK_FALSE(session.pollNativeScene());
+    SceneImporter::ImportObjScene(scene, TEST_ASSET_DIR "/dedup_triangle.obj", nullptr);
+    CHECK_FALSE(scene.getSceneObjects().empty());
+    CHECK(session.pollNativeScene());
+    scene.clear();
+    CHECK(session.pollNativeScene());
+    session.render(0, 0);
+    session.synchronize();
+    const auto clearedAgain = session.readCryptomatte();
+    CHECK(std::all_of(clearedAgain.begin(), clearedAgain.end(),
+                      [](std::uint32_t id) { return id == ~0u; }));
+}
+
+TEST_CASE("Clear retires handles and publishes an empty scene", "[scene][notifications]")
+{
+    Scene scene;
+    const auto handle = scene.add(std::make_unique<PointLightInstance>(scene, "Light", Transform{}));
+    scene.setActiveObject(handle);
+    const auto before = scene.getChangeState();
+    scene.clear();
+    CHECK(scene.getSceneObjects().empty());
+    CHECK(scene.getPointLightCount() == 0);
+    CHECK_FALSE(scene.isValid(handle));
+    CHECK(scene.getActiveObject() == nullptr);
+    CHECK(scene.getRenderCamera() != nullptr);
+    CHECK(scene.changesSince(before) == 0xff);
+    const auto replacement = scene.add(std::make_unique<SceneObject>("Replacement", Transform{}));
+    CHECK_FALSE(scene.isValid(handle));
+    CHECK(scene.isValid(replacement));
+    scene.clear();
+    scene.clear();
+    CHECK(scene.getSceneObjects().empty());
+}
 
 TEST_CASE(
     "re-importing the same OBJ file shares its Mesh instead of re-uploading it",

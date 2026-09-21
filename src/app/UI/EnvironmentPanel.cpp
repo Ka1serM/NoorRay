@@ -15,14 +15,15 @@ void EnvironmentPanel::renderUi() {
 
     if (ImGui::BeginTable("Environment Table", 2, ImGuiTableFlags_SizingStretchProp))
     {
-        ImGuiManager::dragFloatRow("Intensity", environment.lightingExposure, 0.01f, 0.0f, 1000000.0f, [&](const float v) {
-            scene.synchronizeBeforeMutation(); environment.lightingExposure = v; anyChanged = true;
+        float lightingExposure = environment.getLightingExposure();
+        ImGuiManager::dragFloatRow("Intensity", lightingExposure, 0.01f, 0.0f, 1000000.0f, [&](const float v) {
+            scene.synchronizeBeforeMutation(); environment.setLightingExposure(v); anyChanged = true;
         });
         
         ImGuiManager::tableRowLabel("HDRI Texture");
         
         const auto& textures = scene.getTextures();
-        const int oldHdriTexture = environment.textureIndex;
+        const int oldHdriTexture = environment.getTextureIndex();
         int selectedHdriTexture = oldHdriTexture;
 
         if (selectedHdriTexture < 0
@@ -67,16 +68,19 @@ void EnvironmentPanel::renderUi() {
             anyChanged = true;
         }
 
-        ImGuiManager::colorEdit3Row("HDRI Color", environment.data.color, [&](const vec3 v) {
-            scene.synchronizeBeforeMutation(); environment.data.color = v; anyChanged = true;
+        vec3 color = environment.getColor();
+        ImGuiManager::colorEdit3Row("HDRI Color", color, [&](const vec3 v) {
+            scene.synchronizeBeforeMutation(); environment.setColor(v); anyChanged = true;
         });
         
-        if (environment.textureIndex != -1) {
-            ImGuiManager::dragFloatRow("Visible Exposure", environment.visibleExposure, 0.01f, -100.f, 100.f, [&](const float v) {
-                scene.synchronizeBeforeMutation(); environment.visibleExposure = v; anyChanged = true;
+        if (environment.getTextureIndex() != -1) {
+            float visibleExposure = environment.getVisibleExposure();
+            ImGuiManager::dragFloatRow("Visible Exposure", visibleExposure, 0.01f, -100.f, 100.f, [&](const float v) {
+                scene.synchronizeBeforeMutation(); environment.setVisibleExposure(v); anyChanged = true;
             });
-            ImGuiManager::dragFloatRow("Rotation", environment.rotation, 0.1f, 0, 360, [&](const float v) {
-                scene.synchronizeBeforeMutation(); environment.rotation = v; anyChanged = true;
+            float rotation = environment.getRotation();
+            ImGuiManager::dragFloatRow("Rotation", rotation, 0.1f, 0, 360, [&](const float v) {
+                scene.synchronizeBeforeMutation(); environment.setRotation(v); anyChanged = true;
             });
         }
 
@@ -84,7 +88,6 @@ void EnvironmentPanel::renderUi() {
     }
     
     if (anyChanged) {
-        environment.updateDerivedSettings();
         // The Vulkan renderer consumes an immutable environment record.
         // Every editor change must publish that record, not only reset the
         // accumulation buffer.

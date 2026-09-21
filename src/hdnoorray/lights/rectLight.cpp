@@ -3,10 +3,10 @@
 #include <pxr/imaging/hd/sceneDelegate.h>
 
 #include <algorithm>
-#include <variant>
 
 #include "Shared/Light.h"
 #include "Scene/LightInstance.h"
+#include "Lights/RectLightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -24,7 +24,7 @@ void HdNoorRayRectLight::Configure(
     HdSceneDelegate* delegate, const glm::mat4& transform,
     LightInstance& light, float& intensity) const
 {
-    auto& rectangle = std::get<RectLight>(light.getLightData());
+    auto& rectangle = static_cast<RectLightInstance&>(light).data;
     rectangle.width = FloatParam(
         delegate, GetId(), HdLightTokens->width, 1.0f)
         * BasisScale(transform, 0);

@@ -1,4 +1,5 @@
 ﻿#include "ViewportPanel.h"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <ranges>
@@ -17,7 +18,6 @@
 #include "Mesh/Assets/Gaussian.h"
 #include "Scene/LightInstance.h"
 #include "NoorRaySession.h"
-#include "Viewport/Viewport.h"
 #include "UI/Window.h"
 
 using glm::dot;
@@ -133,7 +133,7 @@ void ViewportPanel::preparePresentation()
 
 void ViewportPanel::recordPresentation()
 {
-    session.renderViewport(~0u, m_showOverlays);
+    session.renderViewport(scene.getActiveCryptomatteId(selectedGaussianIndex), true);
 }
 
 void ViewportPanel::updateLayout() {
@@ -193,8 +193,14 @@ void ViewportPanel::drawImageAndUpdateState() {
     // Raygen stores rows in the same bottom-left convention as the former
     // renderer output. ImGui texture UVs are top-left, so presentation alone
     // flips V; the render and camera math remain unchanged.
+    // The output image can be allocated larger than the render; sample only
+    // its bottom-left logical rectangle, flipped vertically.
+    const float uvWidth = static_cast<float>(session.outputWidth())
+        / static_cast<float>(std::max(session.outputImageWidth(), 1u));
+    const float uvHeight = static_cast<float>(session.outputHeight())
+        / static_cast<float>(std::max(session.outputImageHeight(), 1u));
     ImGui::Image(reinterpret_cast<ImTextureID>(outputImageDescriptorSet),
-        viewportSize, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+        viewportSize, ImVec2(0.0f, uvHeight), ImVec2(uvWidth, 0.0f));
     isViewportHovered = ImGui::IsItemHovered();
 }
 
@@ -325,10 +331,6 @@ void ViewportPanel::handleInput() {
             handlePositionPicking();
     }
     rightButtonPressPending = false;
-
-    // Toggle overlays
-    if (ImGui::IsKeyPressed(ImGuiKey_H))
-        m_showOverlays = !m_showOverlays;
 
     // Handle object picking (only if not using a gizmo or moving the camera)
     if (!isCapturingMouse && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsUsing() && !ImViewGuizmo::IsUsing() && !ImViewGuizmo::IsOver() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -527,11 +529,9 @@ void ViewportPanel::renderUi() {
     drawBackground();
     drawImageAndUpdateState();
 
-    if (m_showOverlays) {
-        renderToolbar();
-        handleTransformGizmo();
-        handleViewGizmo();
-    }
+    renderToolbar();
+    handleTransformGizmo();
+    handleViewGizmo();
     handleInput();
     
     if (isCapturingMouse) {
@@ -550,97 +550,29 @@ void ViewportPanel::handlePositionPicking() const {
     if (!camera)
         return;
 
+    // NoorRay samples the position texel; orbiting around it is UI behavior.
     const ivec2 pixel = screenToPixel();
-    const std::vector<noorrhi::float4> positions = session.readPosition();
-    const size_t index = static_cast<size_t>(pixel.y) * width + pixel.x;
-    if (index >= positions.size())
+    const auto position = session.pickPosition(static_cast<uint32_t>(pixel.x),
+        static_cast<uint32_t>(pixel.y));
+    if (!position)
         return;
-    const noorrhi::float4 value = positions[index];
-    const vec3 position(value.x, value.y, value.z);
 
-    NR_LOG_INFO( "Picked Position: (" << position.x << ", " << position.y << ", " << position.z << ")");
-    
-    camera->setArcballPivot(position);
+    NR_LOG_INFO( "Picked Position: (" << position->x << ", " << position->y << ", " << position->z << ")");
+
+    camera->setArcballPivot(*position);
     camera->setArcballActive(true);
 }
 
-
-bool ViewportPanel::handleBillboardPicking() const {
-    auto* camera = scene.getRenderCamera();
-    if (!camera)
-        return false;
-
-    // Match the visual icon so hit-testing scales with the billboard.
-    constexpr float pickRadius = ViewportBillboardPixelRadius;
-
-    const vec2 pixel = vec2(screenToPixel());
-    const mat4 viewProjection = camera->getProjectionMatrix() * camera->getViewMatrix();
-
-    std::shared_ptr<LightInstance> closest;
-    float closestDistSq = pickRadius * pickRadius;
-
-    for (const auto& obj : scene.getSceneObjects()) {
-        const auto light = std::dynamic_pointer_cast<LightInstance>(obj);
-        if (!light)
-            continue;
-
-        vec2 center;
-        if (!projectViewportBillboard(viewProjection,
-                light->getWorldTransform().getPosition(), width, height, center))
-            continue; // behind the camera
-
-        const vec2 delta = pixel - center;
-        const float distSq = dot(delta, delta);
-        if (distSq <= closestDistSq) {
-            closestDistSq = distSq;
-            closest = light;
-        }
-    }
-
-    if (!closest)
-        return false;
-
-    scene.setActiveObject(closest->getHandle());
-    return true;
-}
-
 void ViewportPanel::handleObjectPicking() {
-    if (m_showOverlays && handleBillboardPicking())
-        return;
-
+    // NoorRay resolves what is under the pixel; selecting it is the panel's job.
     const ivec2 pixel = screenToPixel();
-    const std::vector<uint32_t> ids = session.readCryptomatte();
-    const size_t pixelIndex = static_cast<size_t>(pixel.y) * width + pixel.x;
-    const uint32_t instanceId = pixelIndex < ids.size() ? ids[pixelIndex] : ~0u;
-
-    NR_LOG_INFO( "Picked instance ID: " << instanceId);
-    
-    const auto meshInstances = scene.getMeshInstances();
-    if (instanceId != ~0u && instanceId < meshInstances.size()) {
-        selectedGaussianIndex = ~0u;
-        scene.setActiveObject(meshInstances[instanceId]->getHandle());
-    }
-    else if (instanceId != ~0u && instanceId >= meshInstances.size()) {
-        const uint32_t gaussianInstanceIndex = instanceId
-            - static_cast<uint32_t>(meshInstances.size());
-        const auto& gaussianInstances = scene.getGaussianInstances();
-        uint32_t offset = 0;
-        for (const auto& gaussian : gaussianInstances) {
-            const uint32_t count = gaussian->getGaussianAsset().getGaussianCount();
-            if (gaussianInstanceIndex < offset + count) {
-                selectedGaussianIndex = gaussianInstanceIndex;
-                scene.setActiveObject(gaussian->getHandle());
-                return;
-            }
-            offset += count;
-        }
-        selectedGaussianIndex = ~0u;
+    const auto picked = session.pick(static_cast<uint32_t>(pixel.x),
+        static_cast<uint32_t>(pixel.y), true);
+    selectedGaussianIndex = picked.gaussianIndex;
+    if (picked.hit)
+        scene.setActiveObject(picked.object);
+    else
         scene.clearActiveObject();
-    }
-    else {
-        selectedGaussianIndex = ~0u;
-        scene.clearActiveObject();
-    }
 }
 
 ViewportPanel::~ViewportPanel() {

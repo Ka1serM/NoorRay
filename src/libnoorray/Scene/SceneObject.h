@@ -37,7 +37,12 @@ public:
     std::string getType() const { return "Scene Object"; }
 
     bool isVisible() const { return visible; }
-    void setVisible(const bool v) { visible = v; }
+    void setVisible(const bool v) {
+        if (visible == v) return;
+        visible = v;
+        if (scene) scene->setDirtyFlag(TLAS);
+        onTransformUpdated();
+    }
     void setSource(const std::string& type, const std::string& path) { sourceType = type; sourcePath = path; }
     const std::string& getSourceType() const { return sourceType; }
     const std::string& getSourcePath() const { return sourcePath; }

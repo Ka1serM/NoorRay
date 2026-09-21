@@ -23,6 +23,10 @@
 #include "Mesh/Assets/Mesh.h"
 #include "Scene/GaussianInstance.h"
 #include "Scene/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/RectLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Scene.h"
 #include "Scene/Import/SceneFile.h"
@@ -62,9 +66,9 @@ std::string primitiveTypeForMesh(const Mesh& asset)
 nr::sceneio::EnvironmentFile makeEnvironmentFile(const Environment& environment)
 {
     return {
-        .color = fromVec3(environment.data.color),
-        .lighting_exposure = environment.lightingExposure,
-        .visible_exposure = environment.visibleExposure,
+        .color = fromVec3(environment.getColor()),
+        .lighting_exposure = environment.getLightingExposure(),
+        .visible_exposure = environment.getVisibleExposure(),
     };
 }
 
@@ -95,15 +99,15 @@ nr::sceneio::CameraFile makeCameraFile(
     if (!camera->Is<RealisticCamera>())
         file.focal_length_mm = camera->getFocalLengthMm();
     file.focus_distance_cm = camera->getFocusDistanceCm();
-    file.exposure = camera->exposure;
+    file.exposure = camera->getExposure();
     if (const auto* thinLens = camera->CastOrNullptr<ThinLensCamera>()) {
-        file.aperture_diameter_mm = thinLens->apertureDiameterMm;
-        file.bokeh_bias = thinLens->bokehBias;
+        file.aperture_diameter_mm = thinLens->getApertureDiameterMm();
+        file.bokeh_bias = thinLens->getBokehBias();
     } else if (const auto* fisheye = camera->CastOrNullptr<FisheyeCamera>()) {
-        file.aperture_diameter_mm = fisheye->apertureDiameterMm;
-        file.bokeh_bias = fisheye->bokehBias;
+        file.aperture_diameter_mm = fisheye->getApertureDiameterMm();
+        file.bokeh_bias = fisheye->getBokehBias();
     } else if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>()) {
-        file.aperture_diameter_mm = realistic->apertureDiameterMm;
+        file.aperture_diameter_mm = realistic->getApertureDiameterMm();
     }
     file.sensor_width_mm = camera->getSensor().width();
     file.sensor_height_mm = camera->getSensor().height();
@@ -429,23 +433,21 @@ void writePbrtObject(std::ostream& out, const Scene& scene,
 
 void writePbrtLight(std::ostream& out, const LightInstance& instance)
 {
-    const auto& data = instance.getLightData();
-    if (instance.lightType == LightInstance::TypeRect) {
-        const auto* light = std::get_if<RectLight>(&data);
-        if (!light) return;
-        const glm::vec3 normal = glm::normalize(light->direction);
-        const glm::vec3 tangent = glm::normalize(light->tangent);
+    if (instance.getLightType() == LightInstance::TypeRect) {
+        const auto& light = static_cast<const RectLightInstance&>(instance).getData();
+        const glm::vec3 normal = glm::normalize(light.direction);
+        const glm::vec3 tangent = glm::normalize(light.tangent);
         const glm::vec3 bitangent = glm::normalize(glm::cross(normal, tangent));
         glm::mat4 transform(
-            glm::vec4(tangent * light->width, 0.f),
-            glm::vec4(bitangent * light->height, 0.f),
+            glm::vec4(tangent * light.width, 0.f),
+            glm::vec4(bitangent * light.height, 0.f),
             glm::vec4(normal, 0.f),
-            glm::vec4(light->position, 1.f));
+            glm::vec4(light.position, 1.f));
         out << "AttributeBegin\n";
         writeMatrix(out, transform);
         out << "AreaLightSource \"diffuse\" \"rgb L\" [";
-        writeVec3(out, light->color);
-        out << "] \"float scale\" [" << pbrtNumber(light->intensity) << "]\n";
+        writeVec3(out, light.color);
+        out << "] \"float scale\" [" << pbrtNumber(light.intensity) << "]\n";
         out << "Shape \"trianglemesh\" \"integer indices\" [0 1 2 0 2 3] "
             << "\"point3 P\" [-0.5 -0.5 0 0.5 -0.5 0 0.5 0.5 0 -0.5 0.5 0]\n";
         out << "AttributeEnd\n";
@@ -453,31 +455,34 @@ void writePbrtLight(std::ostream& out, const LightInstance& instance)
     }
 
     const glm::vec3 color = instance.getColor();
-    if (const auto* point = std::get_if<PointLight>(&data)) {
+    if (instance.getLightType() == LightInstance::TypePoint) {
+        const auto& point = static_cast<const PointLightInstance&>(instance).getData();
         out << "LightSource \"point\" \"point from\" [";
-        writeVec3(out, point->position);
+        writeVec3(out, point.position);
         out << "] \"rgb I\" [";
         writeVec3(out, color);
-        out << "] \"float scale\" [" << pbrtNumber(point->intensity)
-            << "] \"float radius\" [" << pbrtNumber(point->softRadius) << "]\n";
-    } else if (const auto* spot = std::get_if<SpotLight>(&data)) {
+        out << "] \"float scale\" [" << pbrtNumber(point.intensity)
+            << "] \"float radius\" [" << pbrtNumber(point.softRadius) << "]\n";
+    } else if (instance.getLightType() == LightInstance::TypeSpot) {
+        const auto& spot = static_cast<const SpotLightInstance&>(instance).getData();
         out << "LightSource \"spot\" \"point from\" [";
-        writeVec3(out, spot->position);
+        writeVec3(out, spot.position);
         out << "] \"point to\" [";
-        writeVec3(out, spot->position + glm::normalize(spot->direction));
+        writeVec3(out, spot.position + glm::normalize(spot.direction));
         out << "] \"rgb I\" [";
         writeVec3(out, color);
-        out << "] \"float scale\" [" << pbrtNumber(spot->intensity)
-            << "] \"float radius\" [" << pbrtNumber(spot->softRadius)
-            << "] \"float coneangle\" [" << pbrtNumber(spot->outerConeAngle)
+        out << "] \"float scale\" [" << pbrtNumber(spot.intensity)
+            << "] \"float radius\" [" << pbrtNumber(spot.softRadius)
+            << "] \"float coneangle\" [" << pbrtNumber(spot.outerConeAngle)
             << "] \"float conedeltaangle\" ["
-            << pbrtNumber(spot->outerConeAngle - spot->innerConeAngle) << "]\n";
-    } else if (const auto* directional = std::get_if<DirectionalLight>(&data)) {
+            << pbrtNumber(spot.outerConeAngle - spot.innerConeAngle) << "]\n";
+    } else if (instance.getLightType() == LightInstance::TypeDirectional) {
+        const auto& directional = static_cast<const DirectionalLightInstance&>(instance).getData();
         out << "LightSource \"distant\" \"point from\" [0 0 0] \"point to\" [";
-        writeVec3(out, directional->direction);
+        writeVec3(out, directional.direction);
         out << "] \"rgb L\" [";
         writeVec3(out, color);
-        out << "] \"float scale\" [" << pbrtNumber(directional->intensity) << "]\n";
+        out << "] \"float scale\" [" << pbrtNumber(directional.intensity) << "]\n";
     }
 }
 
@@ -519,7 +524,7 @@ void writePbrtCamera(std::ostream& out, const CameraInstance& instance,
         const auto* thinLens = camera.CastOrNullptr<ThinLensCamera>();
         out << "Camera \"perspective\" \"float fov\" [" << pbrtNumber(fov)
             << "] \"float lensradius\" ["
-            << pbrtNumber(thinLens ? thinLens->apertureDiameterMm / 2000.f : 0.f)
+            << pbrtNumber(thinLens ? thinLens->getApertureDiameterMm() / 2000.f : 0.f)
             << "] \"float focaldistance\" ["
             << pbrtNumber(camera.getFocusDistanceCm() / 100.f) << "]\n";
     } else if (instance.getProjectionType() == CameraProjectionType::Realistic) {
@@ -531,7 +536,7 @@ void writePbrtCamera(std::ostream& out, const CameraInstance& instance,
             out << "Camera \"noorrayrealistic\" \"string lensfile\" ["
                 << pbrtQuote(std::filesystem::path(realistic->getLensPath()).generic_string())
                 << "] \"float aperturediameter\" ["
-                << pbrtNumber(realistic->apertureDiameterMm) << "] \"float focusdistance\" ["
+                << pbrtNumber(realistic->getApertureDiameterMm()) << "] \"float focusdistance\" ["
                 << pbrtNumber(camera.getFocusDistanceCm() / 100.f) << "]\n";
         }
     } else {
@@ -553,8 +558,8 @@ void writePbrt(const Scene& scene, const std::string& filepath)
     out << "WorldBegin\n";
     const Environment& environment = scene.getEnvironment();
     out << "LightSource \"infinite\" \"rgb L\" [";
-    writeVec3(out, environment.data.color);
-    out << "] \"float scale\" [" << pbrtNumber(environment.lightingExposure) << "]\n";
+    writeVec3(out, environment.getColor());
+    out << "] \"float scale\" [" << pbrtNumber(environment.getLightingExposure()) << "]\n";
     for (const auto& object : scene.getRootObjects()) {
         writePbrtObject(out, scene, object, outputPath);
         writePbrtLights(out, object);

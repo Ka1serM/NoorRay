@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <deque>
@@ -101,9 +102,13 @@ class Scene {
     std::shared_ptr<CameraInstance> viewportCamera;
     std::weak_ptr<CameraInstance> activeCamera;
     uint64_t activeCameraRevision{};
+    // Monotonic version of the object hierarchy and row-visible object data.
+    // UI trees use this to avoid walking large scenes on every frame.
+    uint64_t hierarchyRevision{1};
     uint64_t lightRevision{1};
     SceneObjectHandle activeObject;
     uint8_t dirtyFlags = 0;
+    std::array<uint64_t, 8> changeRevisions_{};
 
     std::weak_ptr<SceneObject> copiedObject;
     std::atomic<bool> gpuSyncPending_{false};
@@ -189,9 +194,14 @@ public:
     SceneObject* getObject(SceneObjectHandle handle) const { return findObjectPtr(handle).get(); }
     std::shared_ptr<SceneObject> getObjectPtr(SceneObjectHandle handle) const { return findObjectPtr(handle); }
     const std::vector<std::shared_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
+    uint64_t getHierarchyRevision() const { return hierarchyRevision; }
     std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
     std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
     uint32_t getActiveCryptomatteId(uint32_t selectedGaussianIndex) const;
+    // Inverse of getActiveCryptomatteId: the object a rendered id belongs to,
+    // or nullptr for the background and stale ids. Sets gaussianIndex to the
+    // flattened splat index when the id is a Gaussian, ~0u otherwise.
+    SceneObject* findCryptomatteObject(uint32_t id, uint32_t& gaussianIndex) const;
     Texture* findTexture(const std::string& key) const;
     Mesh* findMesh(const std::string& path) const;
     // Returns the root of a previously imported file's hierarchy (see
@@ -207,7 +217,7 @@ public:
     // Publishes a freshly compiled program for one material and uploads that
     // material's own GPU allocations. No other material is touched.
     void setMaterialProgram(std::size_t materialIndex,
-        nr::svm::CompiledSvmProgram program);
+        nr::svm::CompiledSvmProgram program, MaterialShaderProgram shaderProgram);
     uint32_t getMaterialIndex(const Material* material) const;
     const Material& getMaterial(const Material* material) const { return *material; }
     Material& getMaterial(Material* material) { return *material; }
@@ -238,7 +248,9 @@ public:
     void clearEnvironmentTexture();
 
     // Active object
-    void setActiveObject(SceneObjectHandle handle) { activeObject = handle; }
+    // Selects a live scene object. An invalid/empty handle clears selection;
+    // a stale handle is rejected so UI models cannot publish dangling state.
+    bool setActiveObject(SceneObjectHandle handle);
     void clearActiveObject() { activeObject = {}; }
     SceneObjectHandle getActiveObjectHandle() const { return activeObject; }
     SceneObject* getActiveObject() const { return findObjectPtr(activeObject).get(); }
@@ -284,8 +296,20 @@ public:
     const RenderSettings& getRenderSettings() const { return renderSettings; }
 
     // Dirty flags
+    // Each renderer keeps its own cursor. Clearing legacy dirty flags cannot
+    // hide a mutation from another consumer of the same scene.
+    using ChangeState = std::array<uint64_t, 8>;
+    ChangeState getChangeState() const { return changeRevisions_; }
+    uint8_t changesSince(const ChangeState& previous) const {
+        uint8_t changes = 0;
+        for (unsigned i = 0; i < changeRevisions_.size(); ++i)
+            if (previous[i] != changeRevisions_[i]) changes |= (1u << i);
+        return changes;
+    }
     void setDirtyFlag(DirtyFlag flag) {
         dirtyFlags |= flag;
+        for (unsigned i = 0; i < changeRevisions_.size(); ++i)
+            if (static_cast<uint8_t>(flag) & (1u << i)) ++changeRevisions_[i];
         if (flag == Lights)
             ++lightRevision;
     }

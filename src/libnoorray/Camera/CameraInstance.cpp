@@ -61,8 +61,6 @@ CameraInstance::CameraInstance(
 {
     if (!camera)
         throw std::invalid_argument("CameraInstance requires a Camera");
-    if (!*camera)
-        throw std::invalid_argument("CameraInstance requires a tagged concrete Camera type");
     rebuildCamera();
 }
 
@@ -101,6 +99,7 @@ void CameraInstance::markDirty()
 
 void CameraInstance::rebuildCamera()
 {
+    camera->owner_ = this;
     const quat  rot    = getRotation();
     const vec3  dir    = normalize(rot * LocalForward);
     const vec3  up     = normalize(rot * LocalUp);
@@ -113,6 +112,7 @@ void CameraInstance::rebuildCamera()
         vec4(getPosition(), 1.f));
 
     camera->setCameraToWorld(cameraToWorld);
+    camera->setProjectionType(getProjectionType());
 }
 
 void CameraInstance::onTransformUpdated()

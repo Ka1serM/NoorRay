@@ -418,7 +418,8 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             vertex.tangentSign = tangents && tangents.count > vertexIndex
                 ? tangents.component(vertexIndex, 3) : 1.0f;
             if (colors)
-                vertex.color = gltfVertexColor(model, *colors, vertexIndex);
+                vertex.color = nr::vertex_color::packLinear(
+                    gltfVertexColor(model, *colors, vertexIndex));
             output.geometry.vertices.push_back(vertex);
         }
 
@@ -904,11 +905,11 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                 if (static_cast<size_t>(
                         sourceIndex.vertex_index * 3 + 2)
                     < attrib.colors.size())
-                    vertex.color = glm::vec4(
+                    vertex.color = nr::vertex_color::packLinear(glm::vec4(
                         attrib.colors[3 * sourceIndex.vertex_index],
                         attrib.colors[3 * sourceIndex.vertex_index + 1],
                         attrib.colors[3 * sourceIndex.vertex_index + 2],
-                        1.0f);
+                        1.0f));
             }
             indexOffset += vertexCount;
             if (!validTriangle)

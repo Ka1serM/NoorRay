@@ -9,6 +9,7 @@
 
 class RectangularSensor;
 class Sensor;
+class Camera;
 
 enum class SensorType : int
 {
@@ -29,6 +30,9 @@ enum class SensorFit : uint8_t {
 };
 
 class Sensor {
+    friend class Camera;
+    Camera* owner_{};
+    void notifyChanged();
 public:
     Sensor() = default;
     Sensor(const Sensor& other);
@@ -135,6 +139,7 @@ inline void Sensor::setResolution(uint32_t w, uint32_t h)
 {
     resolutionWidth = w;
     resolutionHeight = h;
+    notifyChanged();
 }
 
 inline void Sensor::setDimensionsMm(float w, float h)
@@ -143,12 +148,14 @@ inline void Sensor::setDimensionsMm(float w, float h)
     heightMm = std::max(0.001f, h);
     filmWidthMm = widthMm;
     filmHeightMm = heightMm;
+    notifyChanged();
 }
 
 inline void Sensor::setFilmDimensionsMm(float w, float h)
 {
     filmWidthMm = std::max(0.001f, w);
     filmHeightMm = std::max(0.001f, h);
+    notifyChanged();
 }
 
 inline void Sensor::setFilmFit(
@@ -174,6 +181,7 @@ inline void Sensor::setFilmFit(
 inline void Sensor::setOrigin(const SensorOrigin value)
 {
     sensorOrigin = value;
+    notifyChanged();
 }
 
 inline void Sensor::copyPhysicalFrom(const Sensor& other)

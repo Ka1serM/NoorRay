@@ -26,6 +26,9 @@
 #include "Mesh/Transform.h"
 #include "Optics/Sellmeier.h"
 #include "Scene/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/Import/AssetPath.h"
 #include "Scene/Import/PbrtParser.h"
@@ -532,12 +535,12 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
             if (type == "infinite") {
                 Environment& environment = scene.getEnvironment();
                 const float colorMagnitude = std::max({color.r, color.g, color.b, 0.f});
-                environment.data.color = colorMagnitude > 0.f
-                    ? color / colorMagnitude : glm::vec3(0.f);
+                environment.setColor(colorMagnitude > 0.f
+                    ? color / colorMagnitude : glm::vec3(0.f));
                 // Despite the legacy member name, lightingExposure is a direct
                 // multiplier. Keep color in display-friendly [0, 1] range and
                 // preserve PBRT radiance as color * intensity.
-                environment.lightingExposure = colorMagnitude * std::max(intensity, 0.f);
+                environment.setLightingExposure(colorMagnitude * std::max(intensity, 0.f));
                 const std::string filename = stringValue(command, "filename");
                 if (!filename.empty()) {
                     const std::filesystem::path hdriPath =
@@ -551,7 +554,6 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                         environment.setEqualAreaMapping(glm::mat3(glm::inverse(state.transform)));
                     }
                 }
-                environment.updateDerivedSettings();
             } else {
                 int lightType = type == "distant" ? LightInstance::TypeDirectional
                     : type == "spot" ? LightInstance::TypeSpot : LightInstance::TypePoint;
@@ -567,13 +569,26 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                     lightTransform = glm::translate(glm::mat4(1.f), glm::vec3(lightTransform[3]))
                         * glm::toMat4(glm::rotation(glm::vec3(0, -1, 0), direction));
                 }
-                auto light = std::make_unique<LightInstance>(scene, type + "_light", Transform(lightTransform), lightType);
+                std::unique_ptr<LightInstance> light;
+                if (lightType == LightInstance::TypeDirectional)
+                    light = std::make_unique<DirectionalLightInstance>(
+                        scene, type + "_light", Transform(lightTransform));
+                else if (lightType == LightInstance::TypeSpot)
+                    light = std::make_unique<SpotLightInstance>(
+                        scene, type + "_light", Transform(lightTransform));
+                else
+                    light = std::make_unique<PointLightInstance>(
+                        scene, type + "_light", Transform(lightTransform));
                 light->setPhotometry(color, intensity);
-                if (type == "point") light->setPointRadius(scalar(command, "radius", 0.f));
+                if (type == "point")
+                    static_cast<PointLightInstance*>(light.get())->setPointRadius(
+                        scalar(command, "radius", 0.f));
                 if (type == "spot") {
-                    light->setSpotRadius(scalar(command, "radius", 0.f));
+                    auto* spot = static_cast<SpotLightInstance*>(light.get());
+                    spot->setSpotRadius(scalar(command, "radius", 0.f));
                     const float outer = scalar(command, "coneangle", 30.f);
-                    light->setSpotAngles(std::max(0.f, outer - scalar(command, "conedeltaangle", 5.f)), outer);
+                    spot->setSpotAngles(
+                        std::max(0.f, outer - scalar(command, "conedeltaangle", 5.f)), outer);
                 }
                 scene.add(std::move(light));
             }
@@ -602,7 +617,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
         camera->setFocalLengthMm(camera->focalLengthMmForFovDegrees(cameraFov));
         camera->setFocusDistanceCm(focalDistance * 100.f);
         if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get()))
-            thinLens->apertureDiameterMm = lensRadius * 2000.f;
+            thinLens->setApertureDiameterMm(lensRadius * 2000.f);
         if (dynamic_cast<RealisticCamera*>(camera.get()) && cameraCommand) {
             const Command& source = *cameraCommand;
             const std::string lens = relativeAssetPath(source, "lensfile");

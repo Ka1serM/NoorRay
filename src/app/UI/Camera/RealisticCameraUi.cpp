@@ -33,11 +33,13 @@ bool camera_ui::render(RealisticCamera& camera) {
     std::array<char, 512> lens{}; std::array<char, 1024> catalogs{}; std::snprintf(lens.data(), lens.size(), "%s", camera.getLensPath().c_str()); std::snprintf(catalogs.data(), catalogs.size(), "%s", camera.getGlassCatalogPaths().c_str());
     ImGuiManager::tableRowLabel("Lens File"); if (ImGui::InputText("##RealisticLens", lens.data(), lens.size())) camera.setOpticsPaths(lens.data(), camera.getGlassCatalogPaths()); ImGui::SameLine(); if (ImGui::Button("Browse##Lens")) pendingLens = {std::make_unique<pfd::open_file>("Select ZMX Lens", ".", std::vector<std::string>{"Zemax lenses", "*.zmx", "All Files", "*"}), &camera};
     ImGuiManager::tableRowLabel("AGF Catalogs"); if (ImGui::InputText("##RealisticCatalogs", catalogs.data(), catalogs.size())) camera.setOpticsPaths(camera.getLensPath(), catalogs.data()); ImGui::SameLine(); if (ImGui::Button("Browse##Catalogs")) pendingGlassCatalogs = {std::make_unique<pfd::open_file>("Select AGF catalogs", ".", std::vector<std::string>{"AGF catalogs", "*.agf *.AGF", "All Files", "*"}, pfd::opt::multiselect), &camera};
-    ImGuiManager::dragFloatRow("Aperture Diameter (mm)", camera.apertureDiameterMm, .1f, 0.f, 64.f, [&](float v) { camera.setApertureDiameterMm(v); changed = true; });
-    ImGuiManager::dragFloatRow("Focus Distance (cm)", camera.focusDistanceCm, 10.f, .1f, 1e6f, [&](float v) { camera.setOpticalFocusDistanceCm(v); changed = true; });
+    float aperture = camera.getApertureDiameterMm();
+    ImGuiManager::dragFloatRow("Aperture Diameter (mm)", aperture, .1f, 0.f, 64.f, [&](float v) { camera.setApertureDiameterMm(v); changed = true; });
+    float focusDistance = camera.getFocusDistanceCm();
+    ImGuiManager::dragFloatRow("Focus Distance (cm)", focusDistance, 10.f, .1f, 1e6f, [&](float v) { camera.setOpticalFocusDistanceCm(v); changed = true; });
     ImGuiManager::tableRowLabel(""); if (ImGui::Button("Reload##Realistic")) changed |= camera.loadLensAndSensor(true); ImGui::SameLine(); ImGui::TextUnformatted(camera.getLoadStatus().c_str());
     const bool sensorChanged = render(sensor); if (sensorChanged && !camera.getLensPath().empty()) changed |= camera.loadLensAndSensor();
-    ImGuiManager::tableRowLabel("Focal Length"); ImGui::Text("%.1f mm", camera.focalLengthMm);
+    ImGuiManager::tableRowLabel("Focal Length"); ImGui::Text("%.1f mm", camera.getFocalLengthMm());
     ImGuiManager::tableRowLabel("Native Optics"); ImGui::Text("%u surfaces, %.2f mm exit pupil", camera.optics.surfaceCount, camera.optics.rearPupilRadius * 2.f);
     return changed || sensorChanged;
 }

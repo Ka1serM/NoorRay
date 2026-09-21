@@ -18,7 +18,10 @@ class NoorRaySession
 {
 public:
     NoorRaySession();
-    explicit NoorRaySession(noorrhi::SurfaceProvider& surfaceProvider);
+    // Renders on a device the host owns, typically the one it also presents
+    // with. The device must outlive the session. The session never presents:
+    // its result is the viewport output texture.
+    NoorRaySession(noorrhi::Device& device, uint32_t width = 1, uint32_t height = 1);
     ~NoorRaySession();
 
     // Publishes the current scene into the native raytracer. Hosts call
@@ -51,6 +54,11 @@ public:
     noorrhi::ImageFormat outputFormat() const;
     uint32_t outputWidth() const;
     uint32_t outputHeight() const;
+    // Allocated size of the output image, at least outputWidth() x
+    // outputHeight(). Presenters sample the bottom-left logical rectangle,
+    // i.e. UVs scaled by outputWidth() / outputImageWidth().
+    uint32_t outputImageWidth() const;
+    uint32_t outputImageHeight() const;
     std::vector<noorrhi::float4> readOutput() const;
     // Creates the headless noorrhi::Device/raytracer pair used by embedded
     // hosts such as Python and Hydra. It is deliberately explicit so merely
@@ -59,28 +67,55 @@ public:
         bool exportColorMemory = false);
     void shutdownRenderer();
 
-    bool hasRenderer() const noexcept { return raytracer_.has_value(); }
+    bool hasRenderer() const noexcept { return static_cast<bool>(raytracer_); }
     bool isHeadless() const noexcept { return headless_; }
     Scene& scene() noexcept { return scene_; }
     const Scene& scene() const noexcept { return scene_; }
+    Raytracer& raytracer();
+    Viewport& viewport();
+    const Viewport& viewport() const;
 
-    // Small host integration surface. The renderer and presentation objects
-    // remain owned by this session; consumers only borrow them for their own
-    // frame/UI integration.
+    // The device the renderer runs on: owned by a headless session, borrowed
+    // from the host otherwise. Presentation is entirely the host's business.
     noorrhi::Device& device();
-    noorrhi::Swapchain& swapchain();
+    // Resizes the renderer and its composited viewport as one operation. The
+    // viewport's output image and all AOV bindings are replaced together, so
+    // hosts never need to rebuild ViewportInputs themselves.
+    // Resizing within the allocation only changes the traced rectangle.
+    void resizeViewport(uint32_t width, uint32_t height);
+    // Allocates the render images at least this large so interactive resizes
+    // up to it never wait on the GPU or replace images. Optional; without it
+    // the allocation always matches the requested viewport size.
+    void reserveViewport(uint32_t width, uint32_t height);
     void resize(uint32_t width, uint32_t height);
     void commit();
     void render(uint32_t frameIndex = 0, uint32_t sampleIndex = 0);
     double lastDispatchMilliseconds();
     void synchronize();
-    noorrhi::Frame beginFrame();
-    void endFrame(noorrhi::Frame&& frame);
     void copyOutputTo(noorrhi::ImageHandle target);
     std::vector<std::byte> readColor();
     std::vector<noorrhi::float4> readBeauty();
     std::vector<std::uint32_t> readCryptomatte();
     std::vector<noorrhi::float4> readPosition();
+
+    // What lies under one pixel of the viewport output.
+    struct ViewportPick
+    {
+        bool hit = false;
+        SceneObjectHandle object{};
+        // Flattened Gaussian index when a splat was hit, ~0u otherwise. Pass it
+        // to Scene::getActiveCryptomatteId to outline exactly that splat.
+        uint32_t gaussianIndex = ~0u;
+    };
+    // Picks the object at render pixel (x, y): origin at the bottom-left of the
+    // output, x < outputWidth(), y < outputHeight(). Light icons are drawn on
+    // top of the render, so they are tested first when includeLights is set
+    // (pass whether billboards are shown). Only the one id texel is read back.
+    // Call outside an open frame.
+    ViewportPick pick(uint32_t x, uint32_t y, bool includeLights = true);
+    // World-space surface position at render pixel (x, y), or nothing where
+    // the pixel shows the background.
+    std::optional<glm::vec3> pickPosition(uint32_t x, uint32_t y);
 
     NoorRaySession(const NoorRaySession&) = delete;
     NoorRaySession& operator=(const NoorRaySession&) = delete;
@@ -88,13 +123,20 @@ public:
     // Member order is load-bearing: scene-owned GPU resources must be released
     // before the device. Members are destroyed in reverse declaration order.
 private:
-    std::optional<noorrhi::Device> device_;
-    std::optional<noorrhi::Swapchain> swapchain_;
-    std::optional<Raytracer> raytracer_;
+    // Set only for headless sessions, which own their device. Hosts that
+    // present pass in their own device instead.
+    std::optional<noorrhi::Device> ownedDevice_;
+    noorrhi::Device* device_{};
+    std::unique_ptr<Raytracer> raytracer_;
     // Declared after raytracer so it is destroyed first; its inputs are views
     // into the raytracer's AOV resources.
     std::optional<Viewport> viewport_;
+    // Set by a render() of sample 0 - the host restarted its accumulation -
+    // and consumed by the next renderViewport(), whose outline history
+    // restarts with it.
+    bool accumulationRestarted_{true};
     Scene scene_;
+    Scene::ChangeState appliedSceneChanges_{};
     bool headless_{true};
     // Owns the immutable host-side MaterialX -> SVM compilation snapshot
     // consumed by the native raytracer dispatch.

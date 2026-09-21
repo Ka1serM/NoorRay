@@ -9,6 +9,7 @@
 #include <glm/trigonometric.hpp>
 
 #include "Scene/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -34,7 +35,8 @@ void HdNoorRayDistantLight::Configure(
     const float halfAngle = std::clamp(
         FloatParam(delegate, GetId(), HdLightTokens->angle, 0.265f),
         0.0f, 180.0f);
-    light.setDirectionalSoftAngle(halfAngle * 2.0f);
+    static_cast<DirectionalLightInstance&>(light).setDirectionalSoftAngle(
+        halfAngle * 2.0f);
     if (!BoolParam(
             delegate, GetId(), HdLightTokens->normalize, false)
         && halfAngle > 0.0f) {

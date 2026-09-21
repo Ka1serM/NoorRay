@@ -7,7 +7,8 @@
 #include <vector>
 
 void Material::upload(noorrhi::Device& device,
-    const std::function<std::uint32_t(std::uint32_t)>& resolveTexture)
+    const std::function<std::uint32_t(std::uint32_t)>& resolveTexture,
+    const std::uint32_t shaderIndex)
 {
     if (hasProgram()) {
         bytecode = device.buffer<std::uint32_t>(program.bytecode.size());
@@ -24,6 +25,13 @@ void Material::upload(noorrhi::Device& device,
         textureHandles = device.buffer<std::uint32_t>(1);
     }
 
+    std::vector<std::uint32_t> words = shaderProgram.parameters;
+    for (const MaterialTextureWord& texture : shaderProgram.textures)
+        words[texture.word] = resolveTexture(texture.texture);
+    shaderParameters = device.buffer<std::uint32_t>(std::max<std::size_t>(words.size(), 1u));
+    if (!words.empty())
+        shaderParameters.upload(std::span<const std::uint32_t>(words));
+
     if (!*this)
         allocate(device);
     data.bytecode = bytecode ? bytecode.ptr().address : 0;
@@ -31,5 +39,7 @@ void Material::upload(noorrhi::Device& device,
     data.bytecodeLength = static_cast<std::uint32_t>(program.bytecode.size());
     data.stackSize = program.stackSize;
     data.shadowOpaque = shadowOpaque;
+    data.shader = shaderIndex;
+    data.shaderParameters = shaderParameters.ptr().address;
     commit();
 }

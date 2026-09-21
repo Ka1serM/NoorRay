@@ -20,7 +20,8 @@ struct Vertex
     float3 tangent;
     float tangentSign;
     float2 uv;
-    float4 color;
+    // R | G << 8 | B << 16 | A << 24 (UNORM8).
+    uint color;
 };
 
 struct Face

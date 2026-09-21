@@ -13,8 +13,9 @@ public:
     float apertureDiameterMm{};
     RealisticCamera(); explicit RealisticCamera(std::unique_ptr<Sensor> sensor); RealisticCamera(const RealisticCamera& other); ~RealisticCamera();
     void load(std::string lensPath, std::string glassCatalogPaths); void load(std::string lensPath, const std::vector<std::string>& glassCatalogPaths);
-    void setApertureDiameterMm(float apertureDiameterMm); void setOpticalFocusDistanceCm(float focusDistanceCm); void prepareOptics(); void setOpticsPaths(std::string lensPath, std::string glassCatalogPaths);
-    const std::string& getLensPath() const { return lensPath; } const std::string& getGlassCatalogPaths() const { return glassCatalogPaths; } float derivedFocalLengthMm() const { return focalLengthMm; }
+    void setApertureDiameterMm(float apertureDiameterMm) override; float getApertureDiameterMm() const override { return apertureDiameterMm; }
+    void setOpticalFocusDistanceCm(float focusDistanceCm); void prepareOptics(); void setOpticsPaths(std::string lensPath, std::string glassCatalogPaths);
+    const std::string& getLensPath() const { return lensPath; } const std::string& getGlassCatalogPaths() const { return glassCatalogPaths; } float derivedFocalLengthMm() const { return getFocalLengthMm(); }
     // Human-readable result of the last lens/sensor load, for display.
     const std::string& getLoadStatus() const { return loadStatus; }
     bool loadLensAndSensor(bool resetLensSettings = false); bool consumeOpticsDirty() { const bool result = opticsDirty; opticsDirty = false; return result; }

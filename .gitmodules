@@ -73,3 +73,15 @@
 	path = external/NoorRHI
 	url = ../NoorRHI
 	branch = main
+[submodule "external/SHARC"]
+	path = external/SHARC
+	url = https://github.com/NVIDIA-RTX/SHARC.git
+[submodule "external/NRD"]
+	path = external/NRD
+	url = https://github.com/NVIDIA-RTX/NRD.git
+[submodule "external/FidelityFX-SDK"]
+	path = external/FidelityFX-SDK
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
+[submodule "external/RTXDI-Library"]
+	path = external/RTXDI-Library
+	url = https://github.com/NVIDIA-RTX/RTXDI-Library.git

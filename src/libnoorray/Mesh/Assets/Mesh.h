@@ -22,7 +22,7 @@ using Vertex = nr::graphics::Vertex;
 
 // Vertex colour is a linear multiplier on albedo, so geometry without authored
 // colours must be explicitly white -- a zero-initialised Vertex renders black.
-inline constexpr glm::vec4 DefaultVertexColor{1.0f, 1.0f, 1.0f, 1.0f};
+inline constexpr uint32_t DefaultVertexColor = nr::vertex_color::White;
 
 // A vertex with every field zeroed except the colour, which defaults to white.
 inline Vertex defaultVertex()
@@ -123,6 +123,9 @@ public:
     void setMaterial(uint32_t materialSlot, Material* material);
     void notifyMaterialsChanged();
 
+    // Uploads buffers and builds the BLAS only when the geometry or material
+    // slots changed since the last upload; scene publication calls this for
+    // every mesh, so unchanged meshes must cost nothing.
     void upload(noorrhi::Device& device);
     void releaseGpu();
     noorrhi::Buffer<std::uint32_t> indexBuffer;
@@ -137,6 +140,7 @@ private:
     Scene& scene;
     std::string path;
     uint32_t index = ~0u;
+    bool gpuDirty = true;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<Face> faces;

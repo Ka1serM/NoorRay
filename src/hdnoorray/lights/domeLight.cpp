@@ -42,10 +42,10 @@ void HdNoorRayDomeLight::Sync(
     scene.synchronizeBeforeMutation();
     Environment& environment = scene.getEnvironment();
 
-    environment.data.color = color;
-    environment.lightingExposure = exposure;
-    environment.visibleExposure = 0.0f;
-    environment.rotation = 0.0f;
+    environment.setColor(color);
+    environment.setLightingExposure(exposure);
+    environment.setVisibleExposure(0.0f);
+    environment.setRotation(0.0f);
 
     // Cycles evaluates Blender world directions as Z-up:
     // longitude = atan2(y, x), latitude = acos(z). NoorRay is Y-up and uses
@@ -60,7 +60,6 @@ void HdNoorRayDomeLight::Sync(
         scene.clearEnvironmentTexture();
     else
         scene.setEnvironmentTexture(texture);
-    environment.updateDerivedSettings();
     active_ = true;
     scene.setDirtyFlag(EnvironmentCdf);
     scene.setDirtyFlag(Accumulation);
@@ -78,12 +77,11 @@ void HdNoorRayDomeLight::Finalize(HdRenderParam* renderParam)
     scene.synchronizeBeforeMutation();
     Environment& environment = scene.getEnvironment();
     scene.clearEnvironmentTexture();
-    environment.data.color = glm::vec3(0.0f);
-    environment.lightingExposure = 0.0f;
-    environment.visibleExposure = 0.0f;
-    environment.rotation = 0.0f;
+    environment.setColor(glm::vec3(0.0f));
+    environment.setLightingExposure(0.0f);
+    environment.setVisibleExposure(0.0f);
+    environment.setRotation(0.0f);
     environment.setEquirectangularMapping();
-    environment.updateDerivedSettings();
     scene.setDirtyFlag(EnvironmentCdf);
     scene.setDirtyFlag(Accumulation);
     active_ = false;

@@ -9,7 +9,7 @@
 
 Sensor::~Sensor() = default;
 Sensor::Sensor(const Sensor& other) : widthMm(other.width()), heightMm(other.height()), filmWidthMm(other.filmWidth()), filmHeightMm(other.filmHeight()), resolutionWidth(other.resolutionX()), resolutionHeight(other.resolutionY()), sensorOrigin(other.origin()) { std::memcpy(imageSensorPath, other.imageSensorPath, sizeof(imageSensorPath)); std::memcpy(imageSensorLoadStatus, other.imageSensorLoadStatus, sizeof(imageSensorLoadStatus)); }
-Sensor& Sensor::operator=(const Sensor& other) { if (this == &other) return *this; widthMm=other.widthMm; heightMm=other.heightMm; filmWidthMm=other.filmWidthMm; filmHeightMm=other.filmHeightMm; resolutionWidth=other.resolutionWidth; resolutionHeight=other.resolutionHeight; sensorOrigin=other.sensorOrigin; std::memcpy(imageSensorPath,other.imageSensorPath,sizeof(imageSensorPath)); std::memcpy(imageSensorLoadStatus,other.imageSensorLoadStatus,sizeof(imageSensorLoadStatus)); return *this; }
+Sensor& Sensor::operator=(const Sensor& other) { if (this == &other) return *this; widthMm=other.widthMm; heightMm=other.heightMm; filmWidthMm=other.filmWidthMm; filmHeightMm=other.filmHeightMm; resolutionWidth=other.resolutionWidth; resolutionHeight=other.resolutionHeight; sensorOrigin=other.sensorOrigin; std::memcpy(imageSensorPath,other.imageSensorPath,sizeof(imageSensorPath)); std::memcpy(imageSensorLoadStatus,other.imageSensorLoadStatus,sizeof(imageSensorLoadStatus)); notifyChanged(); return *this; }
 RectangularSensor::RectangularSensor(const Sensor& other) : Sensor(other) {}
 std::string_view Sensor::getImageSensorPath() const { return imageSensorPath; }
 void Sensor::setImageSensorPath(std::string_view path) { const size_t n=std::min(path.size(),sizeof(imageSensorPath)-1); std::memcpy(imageSensorPath,path.data(),n); imageSensorPath[n]='\0'; }
@@ -41,8 +41,8 @@ bool Sensor::loadImageSensorDimensions() {
             R"("resolutionY"\s*:\s*([-+0-9.eE]+))",
             R"("resolution"\s*:\s*\{[^}]*"height"\s*:\s*([-+0-9.eE]+))"}, "resolution height");
         setDimensionsMm(width, height);
-        resolutionWidth = std::max(1u, static_cast<uint32_t>(resolutionX));
-        resolutionHeight = std::max(1u, static_cast<uint32_t>(resolutionY));
+        setResolution(std::max(1u, static_cast<uint32_t>(resolutionX)),
+                      std::max(1u, static_cast<uint32_t>(resolutionY)));
         std::snprintf(imageSensorLoadStatus, sizeof(imageSensorLoadStatus), "%ux%u", resolutionWidth, resolutionHeight);
         return true;
     }

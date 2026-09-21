@@ -1,4 +1,8 @@
 #include "Scene/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/RectLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 
 #include "UI/ImGuiManager.h"
 #include "UI/ObjectUi.h"
@@ -68,10 +72,38 @@ bool renderLight(DirectionalLight& light)
 
 namespace
 {
+// The typed record is protected on the instance; edit a copy and publish it
+// back only when a widget changed it.
+template<class Instance>
+bool renderTypedLight(LightInstance& instance)
+{
+    auto& typed = static_cast<Instance&>(instance);
+    auto light = typed.getData();
+    const bool changed = renderLight(light);
+    if (changed)
+        typed.setData(light);
+    return changed;
+}
+
 bool renderLightInstance(LightInstance& instance)
 {
-    const bool changed = std::visit(
-        [](auto& light) { return renderLight(light); }, instance.getLightData());
+    bool changed = false;
+    switch (instance.getLightType()) {
+    case LightInstance::TypePoint:
+        changed = renderTypedLight<PointLightInstance>(instance);
+        break;
+    case LightInstance::TypeSpot:
+        changed = renderTypedLight<SpotLightInstance>(instance);
+        break;
+    case LightInstance::TypeRect:
+        changed = renderTypedLight<RectLightInstance>(instance);
+        break;
+    case LightInstance::TypeDirectional:
+        changed = renderTypedLight<DirectionalLightInstance>(instance);
+        break;
+    default:
+        break;
+    }
     if (changed)
         instance.commitLightChanges();
     return changed;

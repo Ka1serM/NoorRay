@@ -7,6 +7,8 @@
 #include <numbers>
 
 #include "Scene/LightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -52,9 +54,8 @@ void HdNoorRaySphereLight::Configure(
         && radius > 0.0f)
         intensity *= 4.0f * std::numbers::pi_v<float> * radius * radius;
 
-    light.setPointRadius(radius);
-    light.setSpotRadius(radius);
     if (NoorRayLightType(delegate) == LightInstance::TypeSpot) {
+        static_cast<SpotLightInstance&>(light).setSpotRadius(radius);
         const float hydraConeAngle = FloatParam(
             delegate, GetId(), HdLightTokens->shapingConeAngle, -1.0f);
         const float usdConeAngle = FloatParam(
@@ -65,9 +66,11 @@ void HdNoorRaySphereLight::Configure(
             delegate, GetId(), UsdLuxTokens->inputsShapingConeSoftness,
             FloatParam(delegate, GetId(), HdLightTokens->shapingConeSoftness, 0.0f)),
             0.0f, 1.0f);
-        light.setSpotAngles(
+        static_cast<SpotLightInstance&>(light).setSpotAngles(
             std::max(coneAngle, 0.0f) * (1.0f - softness),
             std::max(coneAngle, 0.0f));
+    } else {
+        static_cast<PointLightInstance&>(light).setPointRadius(radius);
     }
 }
 

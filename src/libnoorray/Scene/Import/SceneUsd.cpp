@@ -62,6 +62,10 @@
 #include "Geometry/Mesh/VertexColor.h"
 #include "Geometry/Mesh/Transform.h"
 #include "Scene/Objects/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/RectLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 #include "Scene/Objects/MeshInstance.h"
 #include "Scene/Scene.h"
 #include "Scene/Import/SceneFile.h"
@@ -382,7 +386,7 @@ void writeCamera(const CameraInstance& instance, const UsdStageRefPtr& stage,
     usdCamera.CreateHorizontalApertureAttr().Set(camera->getSensor().width());
     usdCamera.CreateVerticalApertureAttr().Set(camera->getSensor().height());
     setAttr(usdCamera.GetPrim(), "nr:active", pxr::SdfValueTypeNames->Bool, active);
-    setAttr(usdCamera.GetPrim(), "nr:exposure", pxr::SdfValueTypeNames->Float, camera->exposure);
+    setAttr(usdCamera.GetPrim(), "nr:exposure", pxr::SdfValueTypeNames->Float, camera->getExposure());
     const auto resolution = camera->getSensor().resolution();
     setAttr(usdCamera.GetPrim(), "nr:resolution", pxr::SdfValueTypeNames->Int2,
         pxr::GfVec2i(resolution.x, resolution.y));
@@ -390,14 +394,14 @@ void writeCamera(const CameraInstance& instance, const UsdStageRefPtr& stage,
     if (const auto realistic = camera->CastOrNullptr<RealisticCamera>()) {
         setAttr(usdCamera.GetPrim(), "nr:lensPath", pxr::SdfValueTypeNames->String, realistic->getLensPath());
         setAttr(usdCamera.GetPrim(), "nr:glassCatalogPaths", pxr::SdfValueTypeNames->String, realistic->getGlassCatalogPaths());
-        setAttr(usdCamera.GetPrim(), "nr:apertureDiameterMm", pxr::SdfValueTypeNames->Float, realistic->apertureDiameterMm);
+        setAttr(usdCamera.GetPrim(), "nr:apertureDiameterMm", pxr::SdfValueTypeNames->Float, realistic->getApertureDiameterMm());
     }
 }
 
 void writeLight(const LightInstance& instance, const UsdStageRefPtr& stage, const SdfPath& path)
 {
     UsdPrim prim;
-    switch (instance.lightType) {
+    switch (instance.getLightType()) {
     case LightInstance::TypePoint:
     case LightInstance::TypeSpot:
         prim = pxr::UsdLuxSphereLight::Define(stage, path).GetPrim();
@@ -415,25 +419,30 @@ void writeLight(const LightInstance& instance, const UsdStageRefPtr& stage, cons
     writeTransform(pxr::UsdGeomXformable(prim), instance);
     const pxr::UsdLuxLightAPI usdLight(prim);
     usdLight.CreateColorAttr().Set(toUsd(instance.getColor()));
-    setAttr(prim, "nr:lightType", pxr::SdfValueTypeNames->Int, instance.lightType);
+    setAttr(prim, "nr:lightType", pxr::SdfValueTypeNames->Int, instance.getLightType());
     setAttr(prim, "nr:color", pxr::SdfValueTypeNames->Color3f, toUsd(instance.getColor()));
-    const float intensity = std::visit([](const auto& light) { return light.intensity; }, instance.getLightData());
+    const float intensity = instance.getIntensity();
     usdLight.CreateIntensityAttr().Set(intensity);
     setAttr(prim, "nr:intensity", pxr::SdfValueTypeNames->Float, intensity);
 
-    if (const auto* point = std::get_if<PointLight>(&instance.getLightData()))
-        pxr::UsdLuxSphereLight(prim).CreateRadiusAttr().Set(point->softRadius);
-    else if (const auto* spot = std::get_if<SpotLight>(&instance.getLightData())) {
-        pxr::UsdLuxSphereLight(prim).CreateRadiusAttr().Set(spot->softRadius);
+    if (instance.getLightType() == LightInstance::TypePoint) {
+        const auto& point = static_cast<const PointLightInstance&>(instance).getData();
+        pxr::UsdLuxSphereLight(prim).CreateRadiusAttr().Set(point.softRadius);
+    } else if (instance.getLightType() == LightInstance::TypeSpot) {
+        const auto& spot = static_cast<const SpotLightInstance&>(instance).getData();
+        pxr::UsdLuxSphereLight(prim).CreateRadiusAttr().Set(spot.softRadius);
         const auto shaping = pxr::UsdLuxShapingAPI::Apply(prim);
         if (shaping)
-            shaping.CreateShapingConeAngleAttr().Set(spot->outerConeAngle);
-    } else if (const auto* rect = std::get_if<RectLight>(&instance.getLightData())) {
+            shaping.CreateShapingConeAngleAttr().Set(spot.outerConeAngle);
+    } else if (instance.getLightType() == LightInstance::TypeRect) {
+        const auto& rect = static_cast<const RectLightInstance&>(instance).getData();
         const pxr::UsdLuxRectLight usdRect(prim);
-        usdRect.CreateWidthAttr().Set(rect->width);
-        usdRect.CreateHeightAttr().Set(rect->height);
-    } else if (const auto* directional = std::get_if<DirectionalLight>(&instance.getLightData()))
-        pxr::UsdLuxDistantLight(prim).CreateAngleAttr().Set(directional->softAngle);
+        usdRect.CreateWidthAttr().Set(rect.width);
+        usdRect.CreateHeightAttr().Set(rect.height);
+    } else if (instance.getLightType() == LightInstance::TypeDirectional) {
+        const auto& directional = static_cast<const DirectionalLightInstance&>(instance).getData();
+        pxr::UsdLuxDistantLight(prim).CreateAngleAttr().Set(directional.softAngle);
+    }
 }
 
 void writeObject(const Scene& scene, const std::shared_ptr<SceneObject>& object,
@@ -605,7 +614,7 @@ void readObject(Scene& scene, const UsdPrim& prim, const UsdStageRefPtr& stage,
         else cameraObject = std::make_unique<PerspectiveCamera>(std::move(sensor));
         cameraObject->setFocalLengthMm(file.focal_length_mm.value_or(50.0f));
         cameraObject->setFocusDistanceCm(file.focus_distance_cm);
-        cameraObject->exposure = file.exposure;
+        cameraObject->setExposure(file.exposure);
         cameraObject->getSensor().setDimensionsMm(file.sensor_width_mm, file.sensor_height_mm);
         cameraObject->getSensor().setResolution(file.resolution[0], file.resolution[1]);
         if (auto realistic = cameraObject->CastOrNullptr<RealisticCamera>()) {
@@ -632,7 +641,15 @@ void readObject(Scene& scene, const UsdPrim& prim, const UsdStageRefPtr& stage,
         else if (prim.IsA<pxr::UsdLuxSphereLight>()) lightType = LightInstance::TypePoint;
     }
     if (lightType >= 0) {
-        auto light = std::make_unique<LightInstance>(scene, name, transform, lightType);
+        std::unique_ptr<LightInstance> light;
+        if (lightType == LightInstance::TypeDirectional)
+            light = std::make_unique<DirectionalLightInstance>(scene, name, transform);
+        else if (lightType == LightInstance::TypeRect)
+            light = std::make_unique<RectLightInstance>(scene, name, transform);
+        else if (lightType == LightInstance::TypeSpot)
+            light = std::make_unique<SpotLightInstance>(scene, name, transform);
+        else
+            light = std::make_unique<PointLightInstance>(scene, name, transform);
         glm::vec3 color(1.0f); float intensity = 1.0f;
         GfVec3f usdColor;
         if (getAttr(prim, "nr:color", &usdColor)) color = toGlm(usdColor);
@@ -643,19 +660,20 @@ void readObject(Scene& scene, const UsdPrim& prim, const UsdStageRefPtr& stage,
         if (lightType == LightInstance::TypePoint || lightType == LightInstance::TypeSpot) {
             float radius = 0.0f;
             if (pxr::UsdLuxSphereLight(prim).GetRadiusAttr().Get(&radius))
-                lightType == LightInstance::TypePoint ? light->setPointRadius(radius) : light->setSpotRadius(radius);
+                if (lightType == LightInstance::TypePoint)
+                    static_cast<PointLightInstance*>(light.get())->setPointRadius(radius);
+                else
+                    static_cast<SpotLightInstance*>(light.get())->setSpotRadius(radius);
         } else if (lightType == LightInstance::TypeRect) {
             float width = 1.0f, height = 1.0f;
             const pxr::UsdLuxRectLight usdRect(prim);
             usdRect.GetWidthAttr().Get(&width);
             usdRect.GetHeightAttr().Get(&height);
-            auto& rect = std::get<RectLight>(light->getLightData());
-            rect.width = width;
-            rect.height = height;
+            static_cast<RectLightInstance*>(light.get())->setRectSize(width, height);
         } else if (lightType == LightInstance::TypeDirectional) {
             float angle = 0.53f;
             if (pxr::UsdLuxDistantLight(prim).GetAngleAttr().Get(&angle))
-                light->setDirectionalSoftAngle(angle);
+                static_cast<DirectionalLightInstance*>(light.get())->setDirectionalSoftAngle(angle);
         }
         light->commitLightChanges();
         scene.add(std::move(light));
@@ -694,11 +712,11 @@ void writeUsd(const Scene& scene, const std::string& filepath)
     stage->GetRootLayer()->SetDefaultPrim(TfToken("NoorRayScene"));
 
     setAttr(root.GetPrim(), "nr:environmentColor", pxr::SdfValueTypeNames->Color3f,
-        toUsd(scene.getEnvironment().data.color));
+        toUsd(scene.getEnvironment().getColor()));
     setAttr(root.GetPrim(), "nr:lightingExposure", pxr::SdfValueTypeNames->Float,
-        scene.getEnvironment().lightingExposure);
+        scene.getEnvironment().getLightingExposure());
     setAttr(root.GetPrim(), "nr:visibleExposure", pxr::SdfValueTypeNames->Float,
-        scene.getEnvironment().visibleExposure);
+        scene.getEnvironment().getVisibleExposure());
     setAttr(root.GetPrim(), "nr:maxSamples", pxr::SdfValueTypeNames->Int, scene.getRenderSettings().maxSamples);
     setAttr(root.GetPrim(), "nr:aovEnabled", pxr::SdfValueTypeNames->Bool, scene.getRenderSettings().aovEnabled);
     setAttr(root.GetPrim(), "nr:indirectLightClamp", pxr::SdfValueTypeNames->Float, scene.getRenderSettings().indirectLightClamp);
@@ -718,15 +736,19 @@ void readUsd(Scene& scene, const std::string& filepath)
     if (!root) root = stage->GetPseudoRoot();
     if (!root) throw std::runtime_error("USD scene has no /NoorRayScene root: " + filepath);
     scene.clear();
-    if (GfVec3f color; getAttr(root, "nr:environmentColor", &color)) scene.getEnvironment().data.color = toGlm(color);
-    getAttr(root, "nr:lightingExposure", &scene.getEnvironment().lightingExposure);
-    getAttr(root, "nr:visibleExposure", &scene.getEnvironment().visibleExposure);
+    if (GfVec3f color; getAttr(root, "nr:environmentColor", &color))
+        scene.getEnvironment().setColor(toGlm(color));
+    float lightingExposure = scene.getEnvironment().getLightingExposure();
+    float visibleExposure = scene.getEnvironment().getVisibleExposure();
+    getAttr(root, "nr:lightingExposure", &lightingExposure);
+    getAttr(root, "nr:visibleExposure", &visibleExposure);
+    scene.getEnvironment().setLightingExposure(lightingExposure);
+    scene.getEnvironment().setVisibleExposure(visibleExposure);
     getAttr(root, "nr:maxSamples", &scene.getRenderSettings().maxSamples);
     getAttr(root, "nr:aovEnabled", &scene.getRenderSettings().aovEnabled);
     getAttr(root, "nr:indirectLightClamp", &scene.getRenderSettings().indirectLightClamp);
     scene.getRenderSettings().indirectLightClamp = std::max(
         scene.getRenderSettings().indirectLightClamp, 0.0f);
-    scene.getEnvironment().updateDerivedSettings();
     MaterialTable materials;
     for (const UsdPrim& prim : root.GetChildren())
         if (prim.GetPath() != SdfPath(kMaterialsRoot)) readObject(scene, prim, stage, materials);

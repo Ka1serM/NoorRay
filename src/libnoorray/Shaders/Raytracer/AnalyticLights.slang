@@ -31,6 +31,30 @@ struct AnalyticLightHit
     bool valid;
 };
 
+// The light records are authored in RGB. Sampling and intersection work in
+// RGB and the spectral entry points upsample only the final estimate, so the
+// RGB renderer shares the exact same light model.
+struct AnalyticLightSampleRgb
+{
+    float3 direction;
+    float distance;
+    float3 radianceOverSelectionPdf;
+    uint instanceIndex;
+    uint primitiveIndex;
+    float2 barycentrics;
+    float emissionMultiplier;
+    bool mesh;
+    bool valid;
+};
+
+struct AnalyticLightHitRgb
+{
+    float3 radiance;
+    float distance;
+    float pdf;
+    bool valid;
+};
+
 // The scene's analytic lights remain separated by kind all the way to the
 // shader. This keeps light-specific fields readable and avoids interpreting a
 // type-dependent parameter array at every sample or intersection.
@@ -187,14 +211,13 @@ bool sampleSphereLight(float3 origin, float3 center, float radius, float2 u,
     return distance > 0.0;
 }
 
-AnalyticLightSample sampleAnalyticLight(LightTable lights,
-    ByteBuffer spectralTables, float3 position,
-    SampledWavelengths wavelengths, inout Rng rng)
+AnalyticLightSampleRgb sampleAnalyticLightRgb(LightTable lights,
+    float3 position, inout Rng rng)
 {
-    AnalyticLightSample result;
+    AnalyticLightSampleRgb result;
     result.direction = float3(0.0);
     result.distance = 0.0;
-    result.radianceOverSelectionPdf = SampledSpectrum(0.0);
+    result.radianceOverSelectionPdf = float3(0.0);
     result.instanceIndex = 0u;
     result.primitiveIndex = 0u;
     result.barycentrics = float2(0.0);
@@ -353,8 +376,29 @@ AnalyticLightSample sampleAnalyticLight(LightTable lights,
     const float selectionReciprocal = finiteWeight / max(selectedWeight, 1.0e-20);
     estimatorRgb *= selectionReciprocal;
     result.emissionMultiplier *= selectionReciprocal;
+    result.radianceOverSelectionPdf = estimatorRgb;
+    result.valid = result.mesh
+        ? result.emissionMultiplier > 0.0
+        : max(estimatorRgb.x, max(estimatorRgb.y, estimatorRgb.z)) > 0.0;
+    return result;
+}
+
+AnalyticLightSample sampleAnalyticLight(LightTable lights,
+    ByteBuffer spectralTables, float3 position,
+    SampledWavelengths wavelengths, inout Rng rng)
+{
+    const AnalyticLightSampleRgb sample = sampleAnalyticLightRgb(lights,
+        position, rng);
+    AnalyticLightSample result;
+    result.direction = sample.direction;
+    result.distance = sample.distance;
     result.radianceOverSelectionPdf = rgbIlluminantToSpectrum(
-        spectralTables, estimatorRgb, wavelengths);
+        spectralTables, sample.radianceOverSelectionPdf, wavelengths);
+    result.instanceIndex = sample.instanceIndex;
+    result.primitiveIndex = sample.primitiveIndex;
+    result.barycentrics = sample.barycentrics;
+    result.emissionMultiplier = sample.emissionMultiplier;
+    result.mesh = sample.mesh;
     result.valid = result.mesh
         ? result.emissionMultiplier > 0.0
         : spectrumMaxComponent(result.radianceOverSelectionPdf) > 0.0;
@@ -422,25 +466,23 @@ bool intersectSphereLight(float3 center, float radius, float3 origin,
     return true;
 }
 
-void publishAnalyticLightHit(inout AnalyticLightHit result,
-    ByteBuffer spectralTables, float3 radianceRgb, float distance,
-    float conditionalPdf, float selectionWeight,
-    SampledWavelengths wavelengths, float finiteWeight)
+void publishAnalyticLightHit(inout AnalyticLightHitRgb result,
+    float3 radianceRgb, float distance, float conditionalPdf,
+    float selectionWeight, float finiteWeight)
 {
-    result.radiance = rgbIlluminantToSpectrum(spectralTables,
-        radianceRgb, wavelengths);
+    result.radiance = radianceRgb;
     result.distance = distance;
     result.pdf = (finiteWeight > 0.0
         ? max(selectionWeight, 0.0) / finiteWeight : 0.0) * conditionalPdf;
-    result.valid = spectrumMaxComponent(result.radiance) > 0.0;
+    result.valid = max(radianceRgb.x, max(radianceRgb.y, radianceRgb.z)) > 0.0;
 }
 
-AnalyticLightHit intersectAnalyticLights(LightTable lights,
-    ByteBuffer spectralTables, float3 origin, float3 direction,
-    float minimumDistance, float maximumDistance, SampledWavelengths wavelengths)
+AnalyticLightHitRgb intersectAnalyticLightsRgb(LightTable lights,
+    float3 origin, float3 direction, float minimumDistance,
+    float maximumDistance)
 {
-    AnalyticLightHit result;
-    result.radiance = SampledSpectrum(0.0);
+    AnalyticLightHitRgb result;
+    result.radiance = float3(0.0);
     result.distance = maximumDistance;
     result.pdf = 0.0;
     result.valid = false;
@@ -456,11 +498,10 @@ AnalyticLightHit intersectAnalyticLights(LightTable lights,
                 direction, minimumDistance, result.distance, distance,
                 conditionalPdf))
             continue;
-        publishAnalyticLightHit(result, spectralTables,
+        publishAnalyticLightHit(result,
             max(light.color, 0.0) * max(light.intensity, 0.0)
                 / max(AnalyticLightPi * light.softRadius * light.softRadius, 1.0e-20),
-            distance, conditionalPdf, light.selectionWeight, wavelengths,
-            finiteWeight);
+            distance, conditionalPdf, light.selectionWeight, finiteWeight);
     }
 
     [loop]
@@ -480,11 +521,10 @@ AnalyticLightHit intersectAnalyticLights(LightTable lights,
         const float cone = saturate((cosine - cos(outer))
             / max(cos(inner) - cos(outer), 1.0e-6));
         const float attenuation = cone * cone * (3.0 - 2.0 * cone);
-        publishAnalyticLightHit(result, spectralTables,
+        publishAnalyticLightHit(result,
             max(light.color, 0.0) * max(light.intensity, 0.0) * attenuation
                 / max(AnalyticLightPi * light.softRadius * light.softRadius, 1.0e-20),
-            distance, conditionalPdf, light.selectionWeight, wavelengths,
-            finiteWeight);
+            distance, conditionalPdf, light.selectionWeight, finiteWeight);
     }
 
     [loop]
@@ -511,10 +551,10 @@ AnalyticLightHit intersectAnalyticLights(LightTable lights,
             ? abs(dot(normal, -direction)) : max(dot(normal, -direction), 0.0);
         if (cosine <= 0.0)
             continue;
-        publishAnalyticLightHit(result, spectralTables,
+        publishAnalyticLightHit(result,
             max(light.color, 0.0) * max(light.intensity, 0.0), distance,
             distance * distance / max(area * cosine, 1.0e-20),
-            light.selectionWeight, wavelengths, finiteWeight);
+            light.selectionWeight, finiteWeight);
     }
 
     [loop]
@@ -541,9 +581,24 @@ AnalyticLightHit intersectAnalyticLights(LightTable lights,
                 * sin(halfAngle) * sin(halfAngle);
             radianceRgb /= max(projectedArea, 1.0e-20);
         }
-        publishAnalyticLightHit(result, spectralTables, radianceRgb,
+        publishAnalyticLightHit(result, radianceRgb,
             maximumDistance, conditionalPdf, light.selectionWeight,
-            wavelengths, finiteWeight);
+            finiteWeight);
     }
+    return result;
+}
+
+AnalyticLightHit intersectAnalyticLights(LightTable lights,
+    ByteBuffer spectralTables, float3 origin, float3 direction,
+    float minimumDistance, float maximumDistance, SampledWavelengths wavelengths)
+{
+    const AnalyticLightHitRgb hit = intersectAnalyticLightsRgb(lights, origin,
+        direction, minimumDistance, maximumDistance);
+    AnalyticLightHit result;
+    result.radiance = rgbIlluminantToSpectrum(spectralTables, hit.radiance,
+        wavelengths);
+    result.distance = hit.distance;
+    result.pdf = hit.pdf;
+    result.valid = spectrumMaxComponent(result.radiance) > 0.0;
     return result;
 }

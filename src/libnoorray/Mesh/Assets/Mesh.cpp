@@ -319,6 +319,7 @@ void Mesh::initializeMaterialIds(const std::vector<Material*>& materials)
 Mesh::Mesh(Mesh&& other) noexcept
     : noorrhi::Shared<nr::graphics::Mesh>(std::move(other)),
       scene(other.scene), path(std::move(other.path)), index(other.index),
+      gpuDirty(other.gpuDirty),
       vertices(std::move(other.vertices)), indices(std::move(other.indices)),
       faces(std::move(other.faces)), materialIds(std::move(other.materialIds)),
       indexBuffer(std::move(other.indexBuffer)),
@@ -346,6 +347,7 @@ void Mesh::setVertices(std::vector<Vertex> value)
 {
     scene.synchronizeBeforeMutation();
     vertices = std::move(value);
+    gpuDirty = true;
     scene.setDirtyFlag(TLAS);
     scene.setDirtyFlag(Accumulation);
 }
@@ -382,6 +384,7 @@ void Mesh::replaceGeometry(MeshGeometry&& geometry, const uint32_t desiredMateri
     vertices = std::move(geometry.vertices);
     indices = std::move(geometry.indices);
     faces = std::move(geometry.faces);
+    gpuDirty = true;
     if (desiredMaterialSlotCount > materialIds.size())
     {
         // Same native grey fallback the first-construction path uses --
@@ -416,14 +419,16 @@ const Material& Mesh::getMaterial(const uint32_t slot) const
 
 void Mesh::notifyMaterialsChanged()
 {
+    gpuDirty = true;
     scene.setDirtyFlag(Meshes);
     scene.setDirtyFlag(Accumulation);
 }
 
 void Mesh::upload(noorrhi::Device& device)
 {
-    if (vertices.empty() || indices.empty())
+    if (!gpuDirty || vertices.empty() || indices.empty())
         return;
+    gpuDirty = false;
 
     if (!vertexBuffer || vertexBuffer.size() != vertices.size())
         vertexBuffer = device.buffer<nr::graphics::Vertex>(vertices.size());
@@ -472,6 +477,7 @@ void Mesh::upload(noorrhi::Device& device)
 
 void Mesh::releaseGpu()
 {
+    gpuDirty = true;
     release();
     blas = {};
     materialBuffer = {};

@@ -8,10 +8,13 @@
 
 class Transform {
 
-    glm::vec3 position{};
-    glm::quat rotation{};
-    glm::vec3 rotationEulerDegrees{};
-    glm::vec3 scale{};
+    // GLM leaves default-constructed types uninitialized unless
+    // GLM_FORCE_CTOR_INIT is enabled. Spell out the identity transform so a
+    // default SceneObject is valid independently of the consumer's GLM flags.
+    glm::vec3 position{0.0f};
+    glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 rotationEulerDegrees{0.0f};
+    glm::vec3 scale{1.0f};
 
 public:
 

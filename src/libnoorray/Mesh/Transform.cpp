@@ -1,9 +1,13 @@
 ﻿#include "Transform.h"
 #include "glm/gtx/quaternion.hpp"
 
-Transform::Transform(const glm::vec3 position) : position(position), rotation(), scale(1.0f) {}
+Transform::Transform(const glm::vec3 position)
+    : position(position), rotation(1.0f, 0.0f, 0.0f, 0.0f),
+      rotationEulerDegrees(0.0f), scale(1.0f) {}
 
-Transform::Transform() : position(), rotation(), scale(1.0f) {}
+Transform::Transform()
+    : position(0.0f), rotation(1.0f, 0.0f, 0.0f, 0.0f),
+      rotationEulerDegrees(0.0f), scale(1.0f) {}
 
 Transform::Transform(const glm::mat4& matrix)
 {

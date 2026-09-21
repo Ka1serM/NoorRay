@@ -119,6 +119,8 @@ const std::vector<half>& Texture::getHalfPixels() const
 
 const std::vector<float>& Texture::getPixels() const
 {
+    if (gpuFormat)
+        throw std::runtime_error("texture is stored in a GPU-only format: " + name);
     if (floatPixels)
         return *floatPixels;
     if (expandedPixels.empty() && usesByteStorage()) {
@@ -173,6 +175,20 @@ Texture::Texture(std::string textureName, std::vector<uint8_t>&& data,
         std::make_shared<const std::vector<uint8_t>>(std::move(data)),
         textureWidth, textureHeight, textureEncoding)
 {
+}
+
+Texture::Texture(std::string textureName, std::vector<uint8_t>&& data,
+    const int textureWidth, const int textureHeight,
+    const noorrhi::ImageFormat textureFormat)
+    : name(std::move(textureName))
+    , width(textureWidth)
+    , height(textureHeight)
+    , gpuFormat(textureFormat)
+    , bytePixels(std::make_shared<const std::vector<uint8_t>>(std::move(data)))
+{
+    path = name;
+    if (width <= 0 || height <= 0)
+        throw std::runtime_error("Texture has invalid dimensions: " + name);
 }
 
 Texture::Texture(std::string textureName, std::vector<half>&& data,
@@ -260,6 +276,12 @@ void Texture::upload(noorrhi::Device& device)
 {
     if (width <= 0 || height <= 0)
         throw std::runtime_error("texture has invalid dimensions: " + name);
+    if (gpuFormat) {
+        image = device.image<std::byte>(width, height, noorrhi::ImageUsage::Sampled,
+            *gpuFormat);
+        image.upload(std::as_bytes(std::span(*bytePixels)));
+        return;
+    }
     // getPixels() exposes linear RGBA floats for all host encodings; uploading
     // one canonical format keeps sRGB conversion identical for byte, half, HDR
     // and EXR source assets.

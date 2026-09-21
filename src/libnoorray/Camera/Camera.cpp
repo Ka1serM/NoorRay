@@ -1,4 +1,5 @@
 #include "Camera/Camera.h"
+#include "Camera/CameraInstance.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,6 +10,11 @@
 
 Camera::~Camera() = default;
 
+Camera::Camera()
+{
+    updateData();
+}
+
 Camera::Camera(std::unique_ptr<Sensor> ownedSensor)
     : sensor(ownedSensor.release())
 {
@@ -16,6 +22,7 @@ Camera::Camera(std::unique_ptr<Sensor> ownedSensor)
         throw std::invalid_argument("Camera requires a Sensor");
     if (!*sensor)
         throw std::invalid_argument("Camera requires a tagged concrete Sensor type");
+    updateData();
 }
 
 Camera::Camera(const Camera& other)
@@ -28,6 +35,8 @@ Camera::Camera(const Camera& other)
         sensor = std::make_unique<RectangularSensor>(*rectangular);
     else
         sensor = std::make_unique<Sensor>(source);
+    sensor->owner_ = this;
+    data = other.data;
 }
 
 Camera& Camera::operator=(const Camera& other)
@@ -38,11 +47,24 @@ Camera& Camera::operator=(const Camera& other)
     focalLengthMm = other.focalLengthMm;
     focusDistanceCm = other.focusDistanceCm;
     exposure = other.exposure;
+    data = other.data;
+    notifyChanged();
     return *this;
+}
+
+void Camera::notifyChanged()
+{
+    if (owner_) owner_->markDirty();
+}
+
+void Sensor::notifyChanged()
+{
+    if (owner_) owner_->updateData();
 }
 
 std::unique_ptr<Sensor> Camera::releaseSensor()
 {
+    if (sensor) sensor->owner_ = nullptr;
     return std::unique_ptr<Sensor>(sensor.release());
 }
 
@@ -54,6 +76,7 @@ void Camera::setSensor(std::unique_ptr<Sensor> newSensor)
         throw std::invalid_argument("Camera requires a tagged concrete Sensor type");
 
     sensor.reset(newSensor.release());
+    updateData();
 }
 
 PerspectiveCamera::PerspectiveCamera()
@@ -110,13 +133,8 @@ float Camera::fovDegreesForFocalLengthMm(const float requestedFocalLengthMm) con
 
 void Camera::setFocalLengthMm(const float requestedFocalLengthMm)
 {
-    if (ptr()) {
-        DispatchCPU([requestedFocalLengthMm](auto* cam) {
-            cam->focalLengthMm = std::max(0.001f, requestedFocalLengthMm);
-        });
-    } else {
-        focalLengthMm = std::max(0.001f, requestedFocalLengthMm);
-    }
+    focalLengthMm = std::max(0.001f, requestedFocalLengthMm);
+    updateData();
 }
 
 void Camera::setFocusDistanceCm(const float requestedFocusDistanceCm)
@@ -125,20 +143,22 @@ void Camera::setFocusDistanceCm(const float requestedFocusDistanceCm)
         realistic->setOpticalFocusDistanceCm(requestedFocusDistanceCm);
     else
         focusDistanceCm = std::max(0.1f, requestedFocusDistanceCm);
+    updateData();
 }
 
 void Camera::setExposure(const float requestedExposure)
 {
-    if (ptr())
-        DispatchCPU([requestedExposure](auto* cam) { cam->exposure = requestedExposure; });
-    else
-        exposure = requestedExposure;
+    exposure = requestedExposure;
+    updateData();
+}
+
+float Camera::getExposure() const
+{
+    return exposure;
 }
 
 float Camera::getFocusDistanceCm() const
 {
-    if (ptr())
-        return DispatchCPU([](const auto* cam) { return cam->focusDistanceCm; });
     return focusDistanceCm;
 }
 
@@ -146,21 +166,47 @@ void Camera::prepareForRender()
 {
     if (auto* realistic = dynamic_cast<RealisticCamera*>(this))
         realistic->prepareOptics();
+    updateData();
 }
 
 float Camera::getFocalLengthMm() const
 {
-    if (ptr())
-        return DispatchCPU([](const auto* cam) { return cam->focalLengthMm; });
     return focalLengthMm;
 }
 
 void Camera::setCameraToWorld(const glm::mat4& m)
 {
-    if (ptr())
-        DispatchCPU([&m](auto* cam) { cam->cameraToWorld = m; });
-    else
-        cameraToWorld = m;
+    cameraToWorld = m;
+    updateData();
+}
+
+void Camera::setProjectionType(const CameraProjectionType projection)
+{
+    data.projection = static_cast<std::uint32_t>(projection);
+    notifyChanged();
+}
+
+void Camera::setApertureDiameterMm(const float value)
+{
+    data.apertureDiameterMm = std::max(0.0f, value);
+    notifyChanged();
+}
+
+void Camera::updateData()
+{
+    if (sensor) sensor->owner_ = this;
+    for (uint32_t row = 0; row < 4; ++row)
+        for (uint32_t column = 0; column < 4; ++column)
+            data.cameraToWorld[row * 4u + column] = cameraToWorld[column][row];
+    if (sensor) {
+        data.sensorWidthMm = sensor->filmWidth();
+        data.sensorHeightMm = sensor->filmHeight();
+        data.sensorOrigin = static_cast<std::uint32_t>(sensor->origin());
+    }
+    data.focalLengthMm = focalLengthMm;
+    data.focusDistanceCm = focusDistanceCm;
+    data.exposure = exposure;
+    notifyChanged();
 }
 
 Camera Camera::cloneBaseState() const
@@ -172,5 +218,6 @@ Camera Camera::cloneBaseState() const
     state.focalLengthMm = source->focalLengthMm;
     state.focusDistanceCm = source->focusDistanceCm;
     state.exposure = source->exposure;
+    state.data = source->data;
     return state;
 }

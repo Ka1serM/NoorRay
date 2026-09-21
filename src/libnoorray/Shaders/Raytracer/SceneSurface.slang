@@ -43,6 +43,70 @@ float3 transformVector(Instance instance, float3 p)
             instance.objectToWorld[10])));
 }
 
+struct SurfaceCoverage
+{
+    uint materialIndex;
+    float vertexAlpha;
+};
+
+// Matches nr::vertex_color::packLinear: RGB is sRGB UNORM8, alpha is linear UNORM8.
+float srgbToLinear(float value)
+{
+    return value <= 0.04045 ? value / 12.92
+        : pow((value + 0.055) / 1.055, 2.4);
+}
+
+float4 unpackVertexColor(uint packed)
+{
+    const float4 encoded = float4(packed & 0xffu, (packed >> 8u) & 0xffu,
+                                  (packed >> 16u) & 0xffu, packed >> 24u) / 255.0;
+    return float4(srgbToLinear(encoded.r), srgbToLinear(encoded.g),
+                  srgbToLinear(encoded.b), encoded.a);
+}
+
+// The subset of loadRegularSurface() an any-hit stage needs to decide
+// whether a candidate can be transparent at all: no transforms, normals or
+// UVs, so opaque candidates are accepted after a handful of loads.
+SurfaceCoverage loadSurfaceCoverage(Scene scene, uint instanceId,
+    uint primitiveId, float2 barycentric)
+{
+    instanceId = min(instanceId, scene.instanceCount - 1u);
+    const Instance instance = scene.instances[instanceId];
+    const uint meshIndex = min(instance.meshIndex, scene.meshCount - 1u);
+    const Mesh mesh = *scene.meshes[meshIndex];
+
+    primitiveId = min(primitiveId, max(mesh.indexCount / 3u, 1u) - 1u);
+    uint i0 = primitiveId * 3u;
+    uint i1 = i0 + 1u;
+    uint i2 = i0 + 2u;
+    if (mesh.indexCount != 0u)
+    {
+        i0 = mesh.indices[i0];
+        i1 = mesh.indices[i1];
+        i2 = mesh.indices[i2];
+    }
+    i0 = min(i0, mesh.vertexCount - 1u);
+    i1 = min(i1, mesh.vertexCount - 1u);
+    i2 = min(i2, mesh.vertexCount - 1u);
+
+    SurfaceCoverage coverage;
+    coverage.vertexAlpha = unpackVertexColor(mesh.vertices[i0].color).a
+            * (1.0 - barycentric.x - barycentric.y)
+        + unpackVertexColor(mesh.vertices[i1].color).a * barycentric.x
+        + unpackVertexColor(mesh.vertices[i2].color).a * barycentric.y;
+    uint localMaterial = 0u;
+    if (mesh.faceCount != 0u)
+    {
+        const uint faceIndex = min(primitiveId, mesh.faceCount - 1u);
+        const int authoredMaterial = mesh.faces[faceIndex].materialIndex;
+        localMaterial = authoredMaterial >= 0 ? uint(authoredMaterial) : 0u;
+        localMaterial = min(localMaterial, max(mesh.materialCount, 1u) - 1u);
+    }
+    coverage.materialIndex = mesh.materialCount != 0u
+        ? mesh.materialIds[localMaterial] : 0u;
+    return coverage;
+}
+
 RegularSurface loadRegularSurface(Scene scene,
     uint instanceId, uint primitiveId, float2 barycentric)
 {
@@ -87,8 +151,9 @@ RegularSurface loadRegularSurface(Scene scene,
     surface.tangentSign = vertex0.tangentSign;
     surface.uv = vertex0.uv * w + vertex1.uv * barycentric.x
         + vertex2.uv * barycentric.y;
-    surface.vertexColor = vertex0.color * w + vertex1.color * barycentric.x
-        + vertex2.color * barycentric.y;
+    surface.vertexColor = unpackVertexColor(vertex0.color) * w
+        + unpackVertexColor(vertex1.color) * barycentric.x
+        + unpackVertexColor(vertex2.color) * barycentric.y;
     surface.instanceIndex = instanceId;
     surface.primitiveIndex = primitiveId;
 

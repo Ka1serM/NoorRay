@@ -80,19 +80,19 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
     else
         throw std::runtime_error("Unknown camera projection: " + file.projection);
     if (auto* realistic = dynamic_cast<RealisticCamera*>(camera.get()))
-        realistic->apertureDiameterMm = file.aperture_diameter_mm;
+        realistic->setApertureDiameterMm(file.aperture_diameter_mm);
     else if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get())) {
-        thinLens->apertureDiameterMm = file.aperture_diameter_mm;
-        thinLens->bokehBias = std::max(0.001f, file.bokeh_bias);
+        thinLens->setApertureDiameterMm(file.aperture_diameter_mm);
+        thinLens->setBokehBias(file.bokeh_bias);
     } else if (auto* fisheye = dynamic_cast<FisheyeCamera*>(camera.get())) {
-        fisheye->apertureDiameterMm = file.aperture_diameter_mm;
-        fisheye->bokehBias = std::max(0.001f, file.bokeh_bias);
+        fisheye->setApertureDiameterMm(file.aperture_diameter_mm);
+        fisheye->setBokehBias(file.bokeh_bias);
     }
 
     if (!dynamic_cast<RealisticCamera*>(camera.get()))
         camera->setFocalLengthMm(file.focal_length_mm.value_or(50.0f));
     camera->setFocusDistanceCm(file.focus_distance_cm);
-    camera->exposure = file.exposure;
+    camera->setExposure(file.exposure);
     camera->getSensor().setImageSensorPath(file.sensor);
     camera->getSensor().setDimensionsMm(
         std::max(file.sensor_width_mm, 0.001f),
@@ -100,6 +100,7 @@ std::unique_ptr<Camera> makeCamera(const nr::sceneio::CameraFile& file)
     camera->getSensor().setResolution(
         std::max(file.resolution[0], 1u),
         std::max(file.resolution[1], 1u));
+    camera->updateData();
     return camera;
 }
 
@@ -260,10 +261,9 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
 
     if (file.environment) {
         Environment& environment = scene.getEnvironment();
-        environment.data.color = toVec3(file.environment->color);
-        environment.lightingExposure = file.environment->lighting_exposure;
-        environment.visibleExposure = file.environment->visible_exposure;
-        environment.updateDerivedSettings();
+        environment.setColor(toVec3(file.environment->color));
+        environment.setLightingExposure(file.environment->lighting_exposure);
+        environment.setVisibleExposure(file.environment->visible_exposure);
     }
 
     if (file.render_settings) {

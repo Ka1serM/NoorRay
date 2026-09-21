@@ -86,6 +86,45 @@ void RenderSettingsPanel::renderUi()
             0.1f, 0.0f, 100000.0f, "%.2f",
             ImGuiSliderFlags_AlwaysClamp);
 
+        static constexpr const char* kRealtimeLightingNames[] =
+            { "ReSTIR DI", "ReSTIR GI", "Single Light Sample" };
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Realtime Lighting");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        int realtimeLighting = static_cast<int>(settings.realtimeLighting);
+        if (ImGui::Combo("##RealtimeLighting", &realtimeLighting,
+            kRealtimeLightingNames, IM_ARRAYSIZE(kRealtimeLightingNames)))
+        {
+            settings.realtimeLighting = static_cast<RealtimeLightingMode>(realtimeLighting);
+            changed = true;
+        }
+
+        // Every realtime stage is one mode selector whose first entry is Off.
+        const auto stageCombo = [&changed]<class Mode>(const char* label, const char* id,
+            Mode& mode, const auto& names) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(label);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            int value = static_cast<int>(mode);
+            if (ImGui::Combo(id, &value, names, IM_ARRAYSIZE(names)))
+            {
+                mode = static_cast<Mode>(value);
+                changed = true;
+            }
+        };
+        static constexpr const char* kRadianceCacheModeNames[] = { "Off", "SHaRC" };
+        static constexpr const char* kDenoiserModeNames[] = { "Off", "REBLUR", "RELAX" };
+        static constexpr const char* kUpscalerModeNames[] = { "Off", "Native AA", "Quality",
+            "Balanced", "Performance", "Ultra Performance" };
+        stageCombo("Radiance Cache", "##RadianceCacheMode", settings.radianceCacheMode,
+            kRadianceCacheModeNames);
+        stageCombo("Denoiser", "##DenoiserMode", settings.denoiserMode, kDenoiserModeNames);
+        stageCombo("Upscaler", "##UpscalerMode", settings.upscalerMode, kUpscalerModeNames);
+
         static constexpr const char* kProxyNames[] =
             { "Icosphere", "Octahedron", "Icosahedron", "Icosphere (Level 2)" };
         ImGui::TableNextRow();

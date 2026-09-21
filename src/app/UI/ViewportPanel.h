@@ -17,13 +17,11 @@ public:
     glm::ivec2 screenToPixel() const;
     void renderUi() override;
     void handleObjectPicking();
-    bool handleBillboardPicking() const;
     void handlePositionPicking() const;
     // Returns true when the viewport owns this event and it must not be sent to ImGui.
     bool processEvent(const SDL_Event& event);
     ~ViewportPanel() override;
 
-    bool showOverlays() const { return m_showOverlays; }
     bool needsContinuousRedraw() const { return isCapturingMouse; }
     uint32_t getSelectedGaussianIndex() const { return selectedGaussianIndex; }
 
@@ -60,7 +58,6 @@ private:
     ImVec2 viewportSize{};
     
     bool isViewportHovered{false};
-    bool m_showOverlays = true;
     float uiScale{1.0f};
     // Precomputed baseGizmoSizeClipSpace * uiScale * referenceViewportWidth; only viewportSize.x varies per frame.
     float gizmoSizeClipSpaceScale{1.0f};

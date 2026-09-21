@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,6 +30,10 @@ public:
         TextureEncoding encoding);
     Texture(std::string name, std::vector<uint8_t>&& data, int width,
         int height, TextureEncoding encoding);
+    // Pixels already in a GPU encoding (for example block-compressed BCn),
+    // uploaded as-is. The CPU cannot read them back through getPixels().
+    Texture(std::string name, std::vector<uint8_t>&& data, int width,
+        int height, noorrhi::ImageFormat gpuFormat);
     Texture(std::string name, std::vector<half>&& data, int width,
         int height, TextureEncoding encoding = TextureEncoding::Float16);
     Texture(std::string name, std::vector<float>&& data, int width,
@@ -92,6 +97,7 @@ private:
     int height{};
     int sceneIndex{-1};
     TextureEncoding encoding{TextureEncoding::Linear8};
+    std::optional<noorrhi::ImageFormat> gpuFormat;
     std::shared_ptr<const std::vector<uint8_t>> bytePixels;
     std::shared_ptr<const std::vector<half>> halfPixels;
     std::shared_ptr<const std::vector<float>> floatPixels;

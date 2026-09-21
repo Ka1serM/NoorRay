@@ -22,7 +22,10 @@
 
 NoorRayUi::NoorRayUi(std::string scenePath,
     const uint32_t windowWidth, const uint32_t windowHeight)
-    : window(windowWidth, windowHeight), session(window)
+    : window(windowWidth, windowHeight)
+    , device(noorrhi::DeviceConfig{.presentation = &window})
+    , swapchain(device, window)
+    , session(device, window.width(), window.height())
 {
     if (!scenePath.empty())
         session.scene().load(scenePath);
@@ -30,7 +33,7 @@ NoorRayUi::NoorRayUi(std::string scenePath,
         session.rebuildNativeScene();
 
     imGuiManager = std::make_unique<ImGuiManager>(window, session.device(),
-        session.swapchain().image_count(), session.swapchain().format());
+        swapchain.image_count(), swapchain.format());
     imGuiManager->addComponent<MainMenuBar>("Menu",
         session.scene(), *imGuiManager, std::move(scenePath));
     debugPanel = imGuiManager->addComponent<DebugPanel>("Timings");
@@ -92,10 +95,13 @@ void NoorRayUi::run()
             window.setFullscreen(fullscreen);
         }
         if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
-            session.swapchain().invalidate();
+            swapchain.invalidate();
     };
     while (running)
     {
+        // Wait for the previous frame's GPU work before polling input, so the
+        // frame built below uses the freshest input it can.
+        swapchain.wait_until_ready();
         SDL_Event event{};
         const bool rendering = session.hasRenderer()
             && accumulatedSamples < maxSamples();
@@ -136,7 +142,7 @@ void NoorRayUi::run()
             if (viewportPanel) viewportPanel->preparePresentation();
         }
         if (session.hasRenderer()) session.commit();
-        noorrhi::Frame frame = session.beginFrame();
+        noorrhi::Frame frame = swapchain.begin_frame();
         if (!frame)
             continue;
         uint32_t submittedSamples = 0;
@@ -171,7 +177,7 @@ void NoorRayUi::run()
             }
         }
         imGuiManager->renderDrawData(frame);
-        session.endFrame(std::move(frame));
+        swapchain.present(std::move(frame));
         ++renderedFrames;
         if (diagnosticFrameLimit != 0u && renderedFrames >= diagnosticFrameLimit)
             running = false;

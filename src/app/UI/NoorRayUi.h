@@ -21,6 +21,10 @@ public:
 
 private:
     Window window;
+    // The UI owns presentation. The session renders on this device into
+    // textures and never touches the swapchain.
+    noorrhi::Device device;
+    noorrhi::Swapchain swapchain;
     noorray::NoorRaySession session;
     std::unique_ptr<ImGuiManager> imGuiManager;
     DebugPanel* debugPanel{};

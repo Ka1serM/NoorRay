@@ -18,6 +18,10 @@
 
 #include "Mesh/Transform.h"
 #include "Scene/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/RectLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 #include "Scene/Scene.h"
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -134,8 +138,19 @@ void HdNoorRayAnalyticLight::Sync(
     const int requestedType = NoorRayLightType(delegate);
     if (!scene.isValid(object_) || requestedType != lightType_) {
         scene.removeObject(object_);
-        auto light = std::make_unique<LightInstance>(
-            scene, GetId().GetString(), Transform(), requestedType);
+        std::unique_ptr<LightInstance> light;
+        if (requestedType == LightInstance::TypeDirectional)
+            light = std::make_unique<DirectionalLightInstance>(
+                scene, GetId().GetString(), Transform());
+        else if (requestedType == LightInstance::TypeRect)
+            light = std::make_unique<RectLightInstance>(
+                scene, GetId().GetString(), Transform());
+        else if (requestedType == LightInstance::TypeSpot)
+            light = std::make_unique<SpotLightInstance>(
+                scene, GetId().GetString(), Transform());
+        else
+            light = std::make_unique<PointLightInstance>(
+                scene, GetId().GetString(), Transform());
         object_ = scene.add(std::move(light));
         lightType_ = requestedType;
     }

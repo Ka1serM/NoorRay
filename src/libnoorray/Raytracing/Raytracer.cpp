@@ -1,5 +1,9 @@
 #include "Raytracer.h"
 
+#include "Materials/MaterialX/SlangMaterialCompiler.h"
+
+#include "RealtimeRaytracer.h"
+
 #include <map>
 #include <unordered_map>
 
@@ -8,6 +12,8 @@
 #include <noorrhi/interop.hpp>
 
 #include <algorithm>
+#include <cstdlib>
+#include <cmath>
 #include <array>
 #include <cstring>
 #include <span>
@@ -65,29 +71,6 @@ float directionalLightSelectionWeight(const DirectionalLight& light)
     return lightSelectionLuminance(light.color) * fmaxf(light.intensity, 0.0f);
 }
 
-// The SPIR-V is compiled into the build tree; --embed-dir points #embed there.
-alignas(uint32_t) constexpr unsigned char raygenSpv[] = {
-    #embed "Raytracer/Raytracer.spv"
-};
-alignas(uint32_t) constexpr unsigned char missSpv[] = {
-    #embed "Raytracer/RaytracingMiss.spv"
-};
-alignas(uint32_t) constexpr unsigned char hitSpv[] = {
-    #embed "Raytracer/RaytracingHit.spv"
-};
-alignas(uint32_t) constexpr unsigned char emissionHitSpv[] = {
-    #embed "Raytracer/EmissionHit.spv"
-};
-alignas(uint32_t) constexpr unsigned char opacityAnyHitSpv[] = {
-    #embed "Raytracer/OpacityAnyHit.spv"
-};
-alignas(uint32_t) constexpr unsigned char gaussianAnyHitSpv[] = {
-    #embed "Raytracer/GaussianAnyHit.spv"
-};
-alignas(uint32_t) constexpr unsigned char gaussianHitSpv[] = {
-    #embed "Raytracer/GaussianHit.spv"
-};
-constexpr std::size_t raygenSpvLength = sizeof(raygenSpv);
 // Keep texture uploads bounded by the descriptor-heap budget.  The first
 // entry is reserved for the white fallback, leaving room for render targets,
 // scene buffers, and repeated immutable material updates.
@@ -115,6 +98,8 @@ Raytracer::Raytracer(noorrhi::Device& device,
     const uint32_t width, const uint32_t height, const bool exportColorMemory)
     : renderWidth(std::max(width, 1u))
     , renderHeight(std::max(height, 1u))
+    , imageWidth_(renderWidth)
+    , imageHeight_(renderHeight)
     , gpuDevice(&device)
     , exportColorMemory(exportColorMemory)
 {
@@ -122,8 +107,6 @@ Raytracer::Raytracer(noorrhi::Device& device,
     NR_LOG_INFO("graphics API raytracer: using NoorRHI API (rayQuery="
         << gpuDevice->features().ray_query << ", rayTracing="
         << gpuDevice->features().ray_tracing << ")");
-    NR_LOG_INFO("graphics API raytracer: creating ray-tracing pipeline");
-    createPipeline();
     NR_LOG_INFO("graphics API raytracer: creating output images");
     createImages();
     NR_LOG_INFO("graphics API raytracer: creating upload buffers");
@@ -165,36 +148,14 @@ Raytracer::Raytracer(noorrhi::Device& device,
 
 Raytracer::~Raytracer() = default;
 
-void Raytracer::createPipeline()
+std::unique_ptr<Raytracer> Raytracer::create(noorrhi::Device& device,
+    const uint32_t width, const uint32_t height,
+    const bool exportColorMemory)
 {
-    const auto raygen_bytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(raygenSpv), raygenSpvLength);
-    const auto miss_bytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(missSpv), sizeof(missSpv));
-    const auto hit_bytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(hitSpv), sizeof(hitSpv));
-    const auto emission_hit_bytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(emissionHitSpv), sizeof(emissionHitSpv));
-    const auto opacity_any_hit_bytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(opacityAnyHitSpv), sizeof(opacityAnyHitSpv));
-    const auto gaussian_any_hit_bytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(gaussianAnyHitSpv), sizeof(gaussianAnyHitSpv));
-    const auto gaussian_hit_bytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(gaussianHitSpv), sizeof(gaussianHitSpv));
-    raygenShader = gpuDevice->create_shader(raygen_bytes, "main");
-    missShader = gpuDevice->create_shader(miss_bytes, "main");
-    hitShader = gpuDevice->create_shader(hit_bytes, "main");
-    emissionHitShader = gpuDevice->create_shader(emission_hit_bytes, "main");
-    opacityAnyHitShader = gpuDevice->create_shader(opacity_any_hit_bytes, "main");
-    gaussianAnyHitShader = gpuDevice->create_shader(gaussian_any_hit_bytes, "main");
-    gaussianHitShader = gpuDevice->create_shader(gaussian_hit_bytes, "main");
-    // Two ray types per geometry: primary/shadow and emission lookup.
-    // Gaussian uses its normal stochastic any-hit for both ray types; a
-    // Gaussian closest hit cannot be mistaken for mesh emission (hit == 3).
-    pipeline = gpuDevice->ray_tracing({raygenShader, {missShader},
-        {hitShader, emissionHitShader, gaussianHitShader, gaussianHitShader},
-        {opacityAnyHitShader, opacityAnyHitShader,
-            gaussianAnyHitShader, gaussianAnyHitShader}, {}});
+    // Realtime RGB is the active renderer for now. Keep the factory so the
+    // spectral implementation can be reintroduced without changing hosts.
+    return std::make_unique<RealtimeRaytracer>(device, width, height,
+        exportColorMemory);
 }
 
 void Raytracer::createImages()
@@ -205,22 +166,22 @@ void Raytracer::createImages()
     // radiance and alpha values through readBeauty().
     const auto color_usage = exportColorMemory
         ? storage | noorrhi::ImageUsage::ExternalMemory : storage;
-    colorImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, color_usage,
+    colorImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, color_usage,
         noorrhi::ImageFormat::Rgba32Float);
-    albedoImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
+    albedoImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
         noorrhi::ImageFormat::Rgba32Float);
-    normalImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
+    normalImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
         noorrhi::ImageFormat::Rgba32Float);
-    positionImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
+    positionImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
         noorrhi::ImageFormat::Rgba32Float);
-    cryptomatteImage = gpuDevice->image<std::byte>(renderWidth, renderHeight, storage,
+    cryptomatteImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
         noorrhi::ImageFormat::R32Uint);
-    gaussianOverdrawBuffer = gpuDevice->buffer<std::uint32_t>(
-        static_cast<std::size_t>(renderWidth) * renderHeight);
-    accumulationBuffer = gpuDevice->buffer<noorrhi::float4>(
-        static_cast<std::size_t>(renderWidth) * renderHeight);
-    std::vector<noorrhi::float4> clear(static_cast<std::size_t>(renderWidth)
-        * renderHeight, noorrhi::float4{});
+    // Per-pixel buffers are indexed with the logical width as the stride, so
+    // any logical size up to the image allocation fits inside them.
+    const std::size_t pixelCount = static_cast<std::size_t>(imageWidth_) * imageHeight_;
+    gaussianOverdrawBuffer = gpuDevice->buffer<std::uint32_t>(pixelCount);
+    accumulationBuffer = gpuDevice->buffer<noorrhi::float4>(pixelCount);
+    std::vector<noorrhi::float4> clear(pixelCount, noorrhi::float4{});
     accumulationBuffer.upload(std::span<const noorrhi::float4>(clear));
 }
 
@@ -257,7 +218,6 @@ void Raytracer::updateRoot()
     data.accumulation = address(accumulationBuffer);
     data.width = renderWidth;
     data.height = renderHeight;
-    data.exposure = 0.0f;
     // The TLAS handle is its device address, converted back to a traceable
     // structure in the shader.
     data.topLevelAS = topLevel.value;
@@ -273,10 +233,40 @@ void Raytracer::resize(const uint32_t width, const uint32_t height)
     if (width == 0 || height == 0
         || (width == renderWidth && height == renderHeight))
         return;
-    gpuDevice->synchronize();
     renderWidth = width;
     renderHeight = height;
+    const bool reserved = reservedWidth_ != 0 && reservedHeight_ != 0;
+    const bool fits = reserved
+        ? width <= imageWidth_ && height <= imageHeight_
+        : width == imageWidth_ && height == imageHeight_;
+    if (fits)
+    {
+        // Only the traced rectangle changes. Work already recorded against
+        // these images stays valid, so there is nothing to wait for.
+        updateRoot();
+        return;
+    }
+    reallocate(std::max(width, reservedWidth_), std::max(height, reservedHeight_));
+}
+
+void Raytracer::reserve(const uint32_t width, const uint32_t height)
+{
+    reservedWidth_ = width;
+    reservedHeight_ = height;
+    const uint32_t targetWidth = std::max(width, renderWidth);
+    const uint32_t targetHeight = std::max(height, renderHeight);
+    if (targetWidth != imageWidth_ || targetHeight != imageHeight_)
+        reallocate(targetWidth, targetHeight);
+}
+
+void Raytracer::reallocate(const uint32_t width, const uint32_t height)
+{
+    // In-flight command buffers may still reference the images being replaced.
+    gpuDevice->synchronize();
+    imageWidth_ = width;
+    imageHeight_ = height;
     createImages();
+    onImageAllocationChanged();
     updateRoot();
 }
 
@@ -286,7 +276,6 @@ void Raytracer::commit()
     // The Environment commits its own record; data.environment is published
     // by uploadEnvironment().
     data.lens = lens.ptr().address;
-    data.exposure = data.camera.exposure;
 }
 
 void Raytracer::uploadScene(Scene& scene)
@@ -342,37 +331,20 @@ void Raytracer::applyRenderSettings(const RenderSettings& settings)
     data.gaussianOverdrawMax = static_cast<std::uint32_t>(std::max(
         settings.gaussianProxyOverdrawMax, 1));
     data.aovEnabled = settings.aovEnabled ? 1u : 0u;
+    onRenderSettingsApplied(settings);
 }
 
 void Raytracer::updateCamera(const Scene& scene)
 {
     nr::graphics::Camera snapshot{};
-    nr::graphics::Lens optics{};
     if (const CameraInstance* instance = scene.getRenderCamera())
     {
         const Camera* camera = instance->getCamera();
-        for (uint32_t row = 0; row < 4; ++row)
-            for (uint32_t column = 0; column < 4; ++column)
-                snapshot.cameraToWorld[row * 4u + column]
-                    = camera->cameraToWorld[column][row];
-        snapshot.projection = static_cast<uint32_t>(instance->getProjectionType());
-        snapshot.sensorWidthMm = camera->getSensor().filmWidth();
-        snapshot.sensorHeightMm = camera->getSensor().filmHeight();
-        snapshot.focalLengthMm = camera->getFocalLengthMm();
-        snapshot.focusDistanceCm = camera->getFocusDistanceCm();
-        snapshot.sensorOrigin = static_cast<uint32_t>(camera->getSensor().origin());
-        snapshot.exposure = camera->exposure;
-        if (const auto* realistic = camera->CastOrNullptr<RealisticCamera>())
-        {
-            snapshot.apertureDiameterMm = realistic->apertureDiameterMm;
-            optics = realistic->optics;
-        }
-        else if (const auto* thinLens = camera->CastOrNullptr<ThinLensCamera>())
-            snapshot.apertureDiameterMm = thinLens->apertureDiameterMm;
-        else if (const auto* fisheye = camera->CastOrNullptr<FisheyeCamera>())
-            snapshot.apertureDiameterMm = fisheye->apertureDiameterMm;
+        snapshot = camera->getData();
     }
-    lens.data = optics;
+    if (const CameraInstance* instance = scene.getRenderCamera())
+        if (const auto* realistic = instance->getCamera()->CastOrNullptr<RealisticCamera>())
+            lens.setData(realistic->optics);
     data.camera = snapshot;
 }
 
@@ -452,13 +424,15 @@ void Raytracer::uploadLights(const Scene& scene)
         directionalRecords.push_back(record);
     }
 
-    // Emissive SVM programs become triangle light candidates. Store the
-    // world-space triangle directly in the compact record so sampling does
-    // not depend on backend-private vertex buffers. Emission is evaluated by
-    // SVM at the sampled barycentric point in closest-hit.
+    // Emissive SVM programs become triangle light candidates for the spectral
+    // integrator. The realtime RGB path deliberately reaches emissive meshes
+    // through BSDF sampling, avoiding a CPU triangle scan and a second light
+    // sampling path in the interactive shader.
     const auto meshInstances = scene.getMeshInstances();
     const auto& materials = scene.getMaterials();
-    for (uint32_t instanceIndex = 0; instanceIndex < meshInstances.size(); ++instanceIndex)
+    for (uint32_t instanceIndex = 0;
+        supportsMeshLights()
+            && instanceIndex < meshInstances.size(); ++instanceIndex)
     {
         const MeshInstance& instance = *meshInstances[instanceIndex];
         const Mesh& mesh = instance.getMesh();
@@ -500,11 +474,34 @@ void Raytracer::uploadLights(const Scene& scene)
     }
 
     float finiteWeight = 0.0f;
-    auto upload = [this](auto& buffer, const auto& records) {
+    // Callers synchronize the device before scene mutations are applied, so
+    // no dispatch still reads these buffers and they can be patched in place.
+    const bool inPlace = lightBuffersValid_
+        && pointRecords.size() == pointLightData_.size()
+        && spotRecords.size() == spotLightData_.size()
+        && rectRecords.size() == rectLightData_.size()
+        && directionalRecords.size() == directionalLightData_.size()
+        && meshRecords.size() == meshLightData_.size();
+    auto upload = [this, inPlace](auto& buffer, auto& mirror, auto& records) {
         using Record = typename std::decay_t<decltype(records)>::value_type;
-        buffer = gpuDevice->buffer<Record>(std::max<std::size_t>(records.size(), 1u));
-        if (!records.empty())
-            buffer.upload(std::span<const Record>(records));
+        if (!inPlace) {
+            buffer = gpuDevice->buffer<Record>(std::max<std::size_t>(records.size(), 1u));
+            if (!records.empty())
+                buffer.upload(std::span<const Record>(records));
+        } else {
+            std::size_t first = records.size();
+            std::size_t last = 0;
+            for (std::size_t index = 0; index < records.size(); ++index) {
+                if (std::memcmp(&records[index], &mirror[index], sizeof(Record)) == 0)
+                    continue;
+                first = std::min(first, index);
+                last = index;
+            }
+            if (first < records.size())
+                buffer.upload(std::span<const Record>(records.data() + first,
+                    last - first + 1), first);
+        }
+        mirror = std::move(records);
     };
     auto accumulateWeight = [&finiteWeight](const auto& records) {
         for (const auto& record : records)
@@ -516,22 +513,24 @@ void Raytracer::uploadLights(const Scene& scene)
     accumulateWeight(directionalRecords);
     accumulateWeight(meshRecords);
 
-    upload(pointLights, pointRecords);
-    upload(spotLights, spotRecords);
-    upload(rectLights, rectRecords);
-    upload(directionalLights, directionalRecords);
-    upload(meshLights, meshRecords);
+    upload(pointLights, pointLightData_, pointRecords);
+    upload(spotLights, spotLightData_, spotRecords);
+    upload(rectLights, rectLightData_, rectRecords);
+    upload(directionalLights, directionalLightData_, directionalRecords);
+    upload(meshLights, meshLightData_, meshRecords);
+    lightBuffersValid_ = true;
     data.pointLights = pointLights.ptr().address;
-    data.pointLightCount = static_cast<std::uint32_t>(pointRecords.size());
+    data.pointLightCount = static_cast<std::uint32_t>(pointLightData_.size());
     data.spotLights = spotLights.ptr().address;
-    data.spotLightCount = static_cast<std::uint32_t>(spotRecords.size());
+    data.spotLightCount = static_cast<std::uint32_t>(spotLightData_.size());
     data.rectLights = rectLights.ptr().address;
-    data.rectLightCount = static_cast<std::uint32_t>(rectRecords.size());
+    data.rectLightCount = static_cast<std::uint32_t>(rectLightData_.size());
     data.directionalLights = directionalLights.ptr().address;
-    data.directionalLightCount = static_cast<std::uint32_t>(directionalRecords.size());
+    data.directionalLightCount = static_cast<std::uint32_t>(directionalLightData_.size());
     data.meshLights = meshLights.ptr().address;
-    data.meshLightCount = static_cast<std::uint32_t>(meshRecords.size());
+    data.meshLightCount = static_cast<std::uint32_t>(meshLightData_.size());
     data.lightFiniteWeight = finiteWeight;
+    onLightsUploaded();
 }
 
 void Raytracer::uploadTextures(Scene& scene)
@@ -555,10 +554,10 @@ void Raytracer::uploadEnvironment(Scene& scene)
     // texture changes. Per-frame scalar edits only republish its small record.
     ::Environment& environment = scene.getEnvironment();
     uploadTextures(scene);
-    if (!environment.hdriImage && environment.textureIndex >= 0
-        && static_cast<std::size_t>(environment.textureIndex) < scene.getTextures().size())
+    if (!environment.hdriImage && environment.getTextureIndex() >= 0
+        && static_cast<std::size_t>(environment.getTextureIndex()) < scene.getTextures().size())
         environment.uploadImages(*gpuDevice,
-            &scene.getTextures()[environment.textureIndex]);
+            &scene.getTextures()[environment.getTextureIndex()]);
     else
         environment.uploadRecord(*gpuDevice);
     data.environment = environment.ptr().address;
@@ -573,9 +572,24 @@ void Raytracer::uploadMaterials(Scene& scene)
             return scene.getTextures()[index].sampledHandle().value;
         return whiteTexture.sampled_handle().value;
     };
-    for (Material& material : scene.getMaterials())
-        if (!material)
-            material.upload(*gpuDevice, resolveTexture);
+    const std::size_t shaderCount = materialShaders_.size();
+    for (Material& material : scene.getMaterials()) {
+        if (material)
+            continue;
+        std::uint32_t shaderIndex = ~0u;
+        if (const auto& shader = material.shaderProgram.shader) {
+            const auto found = std::ranges::find(materialShaderPrograms_, shader);
+            shaderIndex = static_cast<std::uint32_t>(found - materialShaderPrograms_.begin());
+            if (found == materialShaderPrograms_.end()) {
+                materialShaderPrograms_.push_back(shader);
+                materialShaders_.push_back(gpuDevice->create_shader(
+                    std::as_bytes(std::span(shader->spirv)), "main"));
+            }
+        }
+        material.upload(*gpuDevice, resolveTexture, shaderIndex);
+    }
+    if (materialShaders_.size() != shaderCount)
+        onMaterialShadersChanged(materialShaders_);
 
     std::vector<std::uint64_t> pointers;
     pointers.reserve(std::max<std::size_t>(scene.getMaterials().size(), 1u));
@@ -600,9 +614,12 @@ void Raytracer::render(const uint32_t frameIndex, const uint32_t sampleIndex)
 
     // Inside a noorrhi::Frame this batches into the frame's command buffer; with
     // no frame open it is submitted on its own, which is the offline path.
-    gpuDevice->measure(dispatchTimestamp, [this] {
-        pipeline.trace({renderWidth, renderHeight, 1}, data);
-    });
+    gpuDevice->measure(dispatchTimestamp, [this] { renderImpl(); });
+}
+
+void Raytracer::renderImpl()
+{
+    pipeline.trace({renderWidth, renderHeight, 1}, data);
 }
 
 double Raytracer::lastDispatchMilliseconds()
@@ -626,32 +643,68 @@ std::vector<std::byte> Raytracer::readColor() {
     return result;
 }
 
+template<class T>
+std::vector<T> Raytracer::cropToRender(std::vector<T> pixels) const
+{
+    // Downloads cover the whole allocation, where texel (x, y) is at
+    // y * imageWidth + x. Keep only the logical rectangle, row by row.
+    if (imageWidth_ == renderWidth && imageHeight_ == renderHeight)
+        return pixels;
+    std::vector<T> result(static_cast<std::size_t>(renderWidth) * renderHeight);
+    for (uint32_t y = 0; y < renderHeight; ++y)
+        std::copy_n(pixels.begin() + static_cast<std::ptrdiff_t>(y) * imageWidth_,
+            renderWidth, result.begin() + static_cast<std::ptrdiff_t>(y) * renderWidth);
+    return result;
+}
+
 std::vector<noorrhi::float4> Raytracer::readBeauty()
 {
-    std::vector<noorrhi::float4> result(static_cast<std::size_t>(renderWidth)
-        * renderHeight);
+    std::vector<noorrhi::float4> result(static_cast<std::size_t>(imageWidth_)
+        * imageHeight_);
     colorImage.download(std::as_writable_bytes(std::span(result)));
-    return result;
+    return cropToRender(std::move(result));
 }
 
 std::vector<std::uint32_t> Raytracer::readCryptomatte()
 {
-    std::vector<std::uint32_t> result(static_cast<std::size_t>(renderWidth)
-        * renderHeight);
+    std::vector<std::uint32_t> result(static_cast<std::size_t>(imageWidth_)
+        * imageHeight_);
     std::vector<std::byte> bytes(result.size() * sizeof(result.front()));
     cryptomatteImage.download(std::span<std::byte>(bytes));
     std::memcpy(result.data(), bytes.data(), bytes.size());
-    return result;
+    return cropToRender(std::move(result));
 }
 
 std::vector<noorrhi::float4> Raytracer::readPosition()
 {
-    std::vector<noorrhi::float4> result(static_cast<std::size_t>(renderWidth)
-        * renderHeight);
+    std::vector<noorrhi::float4> result(static_cast<std::size_t>(imageWidth_)
+        * imageHeight_);
     std::vector<std::byte> bytes(result.size() * sizeof(result.front()));
     positionImage.download(std::span<std::byte>(bytes));
     std::memcpy(result.data(), bytes.data(), bytes.size());
-    return result;
+    return cropToRender(std::move(result));
+}
+
+std::uint32_t Raytracer::readCryptomatteAt(const uint32_t x, const uint32_t y)
+{
+    std::uint32_t id = ~0u;
+    if (x >= renderWidth || y >= renderHeight)
+        return id;
+    std::array<std::byte, sizeof(id)> bytes{};
+    cryptomatteImage.download_region(x, y, 1, 1, std::span<std::byte>(bytes));
+    std::memcpy(&id, bytes.data(), bytes.size());
+    return id;
+}
+
+noorrhi::float4 Raytracer::readPositionAt(const uint32_t x, const uint32_t y)
+{
+    noorrhi::float4 position{};
+    if (x >= renderWidth || y >= renderHeight)
+        return position;
+    std::array<std::byte, sizeof(position)> bytes{};
+    positionImage.download_region(x, y, 1, 1, std::span<std::byte>(bytes));
+    std::memcpy(&position, bytes.data(), bytes.size());
+    return position;
 }
 
 namespace
@@ -964,7 +1017,8 @@ void Raytracer::buildTopLevel(const Scene& scene)
         }
         tlasInstances.push_back({asset->blas,
             instance->getWorldTransform().getGpuTransform(),
-            meshInstanceIndex++, 0u, 0xff});
+            meshInstanceIndex++, 0u,
+            static_cast<std::uint8_t>(nr::graphics::RaytracingMaskMesh)});
         meshInstanceAssetIndices.push_back(found->second);
     }
     // instanceCustomIndex is 24 bits, so it cannot address more than 16.7M
@@ -975,13 +1029,17 @@ void Raytracer::buildTopLevel(const Scene& scene)
     for (uint32_t gaussianId = 0; gaussianId < gaussianTransforms.size(); ++gaussianId)
     {
         tlasInstances.push_back({gaussianProxy.blas, gaussianTransforms[gaussianId],
-            0u, 2u, 0xff});
+            0u, 2u, static_cast<std::uint8_t>(nr::graphics::RaytracingMaskGaussian)});
     }
     meshInstanceCount_ = meshInstanceIndex;
     gaussianInstanceCount_ = static_cast<uint32_t>(scene.getGaussianInstances().size());
     instanceCount_ = static_cast<uint32_t>(tlasInstances.size());
-    if (tlasInstances.empty())
+    if (tlasInstances.empty()) {
+        // Publishing an empty scene must retire the previous GPU snapshot.
+        // The ray-generation shader treats a null TLAS as an environment miss.
+        tlas = {};
         return;
+    }
     tlas = (*gpuDevice).build_tlas(std::span<const noorrhi::Instance>(tlasInstances));
 }
 

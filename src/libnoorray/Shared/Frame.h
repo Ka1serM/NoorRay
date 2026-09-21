@@ -56,7 +56,6 @@ struct Frame
     uint height;
     uint frameIndex;
     uint sampleIndex;
-    float exposure;
     float shutterOpen;
     float shutterClose;
     uint gaussianCount;
@@ -71,6 +70,10 @@ struct Frame
     uint aovEnabled;
     uint gaussianInstanceBase;
     Camera camera;
+    // Slang does not pad a struct to its alignment, C++ does: this keeps the
+    // size a multiple of 8 in both, so records that follow a Frame (see
+    // RealtimeArgs) sit at the same offset on the host and the GPU.
+    uint padding;
 };
 
 #ifdef __cplusplus

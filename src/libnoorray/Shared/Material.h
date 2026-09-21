@@ -17,6 +17,12 @@ struct Material
     uint bytecodeLength;
     uint stackSize;
     uint shadowOpaque;
+    // Shader-binding-table index of the realtime renderer's callable shader
+    // for this material, compiled from its MaterialX document; ~0u while it
+    // has none.
+    uint shader;
+    // The parameter block that shader reads (MaterialInterface.slang).
+    GpuPtr(uint) shaderParameters;
 };
 
 #ifdef __cplusplus

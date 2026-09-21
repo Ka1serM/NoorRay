@@ -11,9 +11,9 @@ RealisticCamera::~RealisticCamera() = default;
 RealisticCamera::RealisticCamera(const RealisticCamera& o) : Camera(o), optics(o.optics), sensorWidthCm(o.sensorWidthCm), sensorHeightCm(o.sensorHeightCm), filmDiagonalCm(o.filmDiagonalCm), apertureDiameterMm(o.apertureDiameterMm), lensPath(o.lensPath), glassCatalogPaths(o.glassCatalogPaths), loadStatus(o.loadStatus), opticsDirty(o.opticsDirty), opticsUpdatePending(o.opticsUpdatePending), sourceOptics(o.sourceOptics) {}
 void RealisticCamera::load(std::string p, std::string c) { setOpticsPaths(std::move(p), std::move(c)); loadLensAndSensor(); }
 void RealisticCamera::load(std::string p, const std::vector<std::string>& c) { load(std::move(p), join(c)); }
-void RealisticCamera::setOpticsPaths(std::string p, std::string c) { lensPath = std::move(p); glassCatalogPaths = std::move(c); }
-void RealisticCamera::setApertureDiameterMm(float v) { v = std::max(0.f, v); if (v != apertureDiameterMm) { apertureDiameterMm = v; opticsUpdatePending = sourceOptics.surfaceCount != 0; } }
-void RealisticCamera::setOpticalFocusDistanceCm(float v) { v = std::max(.1f, v); if (v != focusDistanceCm) { focusDistanceCm = v; opticsUpdatePending = sourceOptics.surfaceCount != 0; } }
+void RealisticCamera::setOpticsPaths(std::string p, std::string c) { lensPath = std::move(p); glassCatalogPaths = std::move(c); notifyChanged(); }
+void RealisticCamera::setApertureDiameterMm(float v) { v = std::max(0.f, v); if (v != apertureDiameterMm) { apertureDiameterMm = v; data.apertureDiameterMm = v; opticsUpdatePending = sourceOptics.surfaceCount != 0; notifyChanged(); } }
+void RealisticCamera::setOpticalFocusDistanceCm(float v) { v = std::max(.1f, v); if (v != focusDistanceCm) { focusDistanceCm = v; updateData(); opticsUpdatePending = sourceOptics.surfaceCount != 0; } }
 void RealisticCamera::prepareOptics() { if (opticsUpdatePending) updateLensSettings(); }
 void RealisticCamera::updateLensSettings() {
     opticsUpdatePending = false; if (!sourceOptics.surfaceCount) return;
@@ -26,7 +26,7 @@ void RealisticCamera::updateLensSettings() {
     optics.sensorHeightMm = getSensor().filmHeight();
 }
 bool RealisticCamera::loadLensAndSensor(bool reset) {
-    if (lensPath.empty()) { optics = {}; sourceOptics = {}; loadStatus = "No lens file loaded"; opticsDirty = true; return true; }
+    if (lensPath.empty()) { optics = {}; sourceOptics = {}; loadStatus = "No lens file loaded"; opticsDirty = true; updateData(); return true; }
     try {
         if (!getSensor().getImageSensorPath().empty() && !getSensor().loadImageSensorDimensions()) throw std::runtime_error("Failed to load image sensor");
         const auto loaded = nr::optics::loadZmx(lensPath, nr::optics::splitCatalogPaths(glassCatalogPaths)); sourceOptics = loaded.snapshot;
@@ -34,6 +34,6 @@ bool RealisticCamera::loadLensAndSensor(bool reset) {
         sensorWidthCm = getSensor().width() * .1f; sensorHeightCm = getSensor().height() * .1f; filmDiagonalCm = std::sqrt(sensorWidthCm * sensorWidthCm + sensorHeightCm * sensorHeightCm); focalLengthMm = sourceOptics.focalLengthMm;
         sourceOptics.sensorWidthMm = getSensor().filmWidth();
         sourceOptics.sensorHeightMm = getSensor().filmHeight();
-        opticsUpdatePending = true; updateLensSettings(); loadStatus = loaded.message + ", focal length: " + std::to_string(focalLengthMm) + " mm"; NR_LOG_INFO("RealisticCamera: " << loadStatus); return true;
+        opticsUpdatePending = true; updateLensSettings(); updateData(); loadStatus = loaded.message + ", focal length: " + std::to_string(focalLengthMm) + " mm"; NR_LOG_INFO("RealisticCamera: " << loadStatus); return true;
     } catch (const std::exception& e) { loadStatus = e.what(); NR_LOG_ERROR("RealisticCamera: " << loadStatus); return false; }
 }

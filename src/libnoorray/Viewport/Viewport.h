@@ -3,6 +3,7 @@
 #include <noorrhi/noorrhi.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <glm/mat4x4.hpp>
@@ -10,6 +11,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "Scene/Handle.h"
 #include "Shared/Viewport.h"
 
 class Scene;
@@ -20,28 +22,17 @@ class Scene;
 // represents.
 using ViewportBillboard = nr::graphics::ViewportBillboard;
 
-// Fixed screen-space half-size of a billboard icon, in pixels. Shared with
-// ViewportPanel's click-picking radius so hit-testing matches what's drawn.
-constexpr float ViewportBillboardPixelRadius = 32.0f;
-
-// Projects a billboard's world position into the renderer's bottom-left pixel
-// space - the same space ViewportPanel::screenToPixel reports clicks in, and
-// the one the overlay raster pass draws into (Y-up NDC into an unflipped
-// graphics API viewport, presented with a single V flip). Hit-testing a click against
-// the drawn icon only agrees when both sides use this mapping. Returns false
-// when the billboard sits behind the camera and is not drawn at all.
-inline bool projectViewportBillboard(const glm::mat4& viewProjection,
-    const glm::vec3& worldPosition, const uint32_t width, const uint32_t height,
-    glm::vec2& pixel)
-{
-    const glm::vec4 clip = viewProjection * glm::vec4(worldPosition, 1.0f);
-    if (clip.w <= 0.0f)
-        return false;
-    const glm::vec2 ndc = glm::vec2(clip) / clip.w;
-    pixel = glm::vec2((ndc.x * 0.5f + 0.5f) * static_cast<float>(width),
-        (ndc.y * 0.5f + 0.5f) * static_cast<float>(height));
-    return true;
-}
+// Screen-space half-size of a billboard icon, in pixels. Icons at or closer
+// than the near distance (view-space, scene units) draw at the maximum size and
+// shrink linearly to the minimum at the far distance.
+constexpr float ViewportBillboardMinPixelRadius = 18.0f;
+constexpr float ViewportBillboardMaxPixelRadius = 32.0f;
+constexpr float ViewportBillboardNearDistance = 2.0f;
+constexpr float ViewportBillboardFarDistance = 60.0f;
+// Fraction of the icon's half-size stamped into the light-id buffer for
+// picking. The glyphs reach about 0.7 of the quad, so this covers them without
+// the corners.
+constexpr float ViewportBillboardPickScale = 0.8f;
 
 // The AOV images the composite pass reads. These are descriptor-heap handles of
 // images the raytracer created through noorrhi::Device, plus the device address of
@@ -63,25 +54,48 @@ struct ViewportInputs
 
 class Viewport {
 public:
+    // width/height is the logical render size; traceWidth/traceHeight is the
+    // resolution the raytracer actually traced (equal to the logical size
+    // unless it upscales); imageWidth/imageHeight is the allocation of the
+    // raytracer's AOV images, which the output matches.
     Viewport(noorrhi::Device& gpu_device, uint32_t width, uint32_t height,
+             uint32_t traceWidth, uint32_t traceHeight,
+             uint32_t imageWidth, uint32_t imageHeight,
              const ViewportInputs& inputs, noorrhi::ImageFormat outputImageFormat,
              bool exportOutputMemory = false);
     ~Viewport();
 
     // Recorded into whatever noorrhi::Frame is open around the call.
+    // The selection outline averages its estimate over frames, like the
+    // renderer accumulates samples; `restartOutline` says the renderer's
+    // accumulation restarted (the camera or the scene changed), so the
+    // outline's does too.
     void dispatch(
         uint32_t selectedCryptomatteId,
+        bool restartOutline,
         const glm::mat4& viewProjection,
         float exposure,
         int bufferVisualization,
         int gaussianOverdrawMax,
         bool tonemappingEnabled,
-        bool showBillboards = true);
+        bool showBillboards = true,
+        SceneObjectHandle selectedObject = {});
     // Refreshes the persistent overlay buffer only after a light mutation.
-    // Calling this each frame is an O(1) revision check in the common case.
+    // Calling this each frame is an O(1) revision check in the common case; a
+    // moved or edited light rewrites only the records that changed, and only
+    // adding or removing scene objects rebuilds the list.
     void updateBillboards(const Scene& scene);
-    void resize(uint32_t width, uint32_t height, const ViewportInputs& inputs,
-                noorrhi::ImageFormat outputImageFormat);
+    // The light whose icon covers output pixel (x, y) (bottom-left origin),
+    // read back from the light-id buffer the last dispatch stamped. Invalid /
+    // nothing where no icon was drawn, including while icons are hidden.
+    SceneObjectHandle lightAt(uint32_t x, uint32_t y) const;
+    std::optional<glm::vec3> lightPositionAt(uint32_t x, uint32_t y) const;
+    // Replaces the output image only when the allocation or format changes;
+    // a new logical size alone is free.
+    void resize(uint32_t width, uint32_t height,
+                uint32_t traceWidth, uint32_t traceHeight,
+                uint32_t imageWidth, uint32_t imageHeight,
+                const ViewportInputs& inputs, noorrhi::ImageFormat outputImageFormat);
 
     // The composited viewport is the public render result. It includes the
     // selected AOV visualization, tonemapping, and optional scene billboards.
@@ -91,13 +105,29 @@ public:
     noorrhi::TextureHandle outputTexture() const { return outputImage.sampled_handle(); }
     noorrhi::TextureHandle outputStorageTexture() const { return outputImage.storage_handle(); }
     noorrhi::ImageFormat outputFormat() const { return outputFormat_; }
-    uint32_t outputWidth() const { return outputImage.width(); }
-    uint32_t outputHeight() const { return outputImage.height(); }
+    // Logical size of the composited render.
+    uint32_t outputWidth() const { return logicalWidth; }
+    uint32_t outputHeight() const { return logicalHeight; }
+    // Allocated size of the output image. The render occupies its bottom-left
+    // outputWidth() x outputHeight() texels.
+    uint32_t outputImageWidth() const { return outputImage.width(); }
+    uint32_t outputImageHeight() const { return outputImage.height(); }
     std::vector<noorrhi::float4> readOutput() const;
 
 private:
     noorrhi::Device& gpuDevice;
     noorrhi::Image<std::byte> outputImage;
+    // Per-pixel selection distance field: the running average of every
+    // frame's estimate since the outline's accumulation last restarted.
+    noorrhi::Image<std::byte> selectionSdfImage;
+    uint32_t outlinedCryptomatteId_ = ~0u;
+    uint32_t outlineSampleCount_ = 0;
+    uint32_t logicalWidth{};
+    uint32_t logicalHeight{};
+    // The resolution behind the AOVs. Only their silhouette sharpness depends
+    // on it, so it is a plain value with no resource attached.
+    uint32_t traceWidth_{};
+    uint32_t traceHeight_{};
     noorrhi::ImageFormat outputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     bool exportOutputMemory_{};
     ViewportInputs inputs{};
@@ -111,15 +141,27 @@ private:
     noorrhi::Shader billboardVertexShader;
     noorrhi::Shader billboardFragmentShader;
     noorrhi::GraphicsPipeline billboardPipeline;
+    // Light picking: one uint per output pixel, billboard index + 1 or 0,
+    // cleared and stamped by two compute passes after the icons are drawn.
+    noorrhi::Buffer<std::uint32_t> lightIdBuffer;
+    noorrhi::Shader lightIdClearShader;
+    noorrhi::Shader lightIdStampShader;
+    noorrhi::ComputePipeline lightIdClearPipeline;
+    noorrhi::ComputePipeline lightIdStampPipeline;
     noorrhi::Buffer<std::byte> billboardBuffer;
     std::vector<ViewportBillboard> billboardData;
+    // The light each billboard record was built from, by record index.
+    std::vector<SceneObjectHandle> billboardHandles;
     uint32_t billboardCapacity{};
     noorrhi::GpuPtr<std::byte> billboardEntry{};
     uint32_t billboardCount{};
     uint64_t observedLightRevision{};
+    uint64_t observedHierarchyRevision{};
 
     void createOutputImage(uint32_t width, uint32_t height, noorrhi::ImageFormat format);
     void createBillboardPipeline();
     void reserveBillboards(uint32_t capacity);
-    void drawBillboards(const glm::mat4& viewProjection);
+    void rebuildBillboards(const Scene& scene);
+    std::optional<uint32_t> billboardAt(uint32_t x, uint32_t y) const;
+    void drawBillboards(const glm::mat4& viewProjection, SceneObjectHandle selectedObject);
 };

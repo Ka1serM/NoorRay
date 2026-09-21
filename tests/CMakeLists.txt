@@ -101,6 +101,12 @@ target_compile_definitions(materialx_node_catalog_test PRIVATE
     NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
 target_link_libraries(materialx_node_catalog_test PRIVATE NoorRayMaterialX)
 
+add_noorray_test(slang_default_materialx_nodes_test
+    unit/materialx/SlangDefaultNodesTest.cpp materials)
+target_compile_definitions(slang_default_materialx_nodes_test PRIVATE
+    NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
+target_link_libraries(slang_default_materialx_nodes_test PRIVATE NoorRayMaterialX)
+
 add_noorray_test(svm_materialx_compiler_test
     "unit/svm/SvmMaterialXCompilerTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Materials/SVM/SvmMaterialXCompiler.cpp" svm)
 target_compile_definitions(svm_materialx_compiler_test PRIVATE

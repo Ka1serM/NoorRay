@@ -6,7 +6,7 @@
 
 class Scene;
 
-// Owns asynchronous MaterialX-to-SVM compilation for one application session.
+// Owns asynchronous MaterialX compilation, to realtime shaders and SVM, for one application session.
 class MaterialXSceneRuntime
 {
 public:
@@ -20,10 +20,14 @@ public:
     void shutdown();
     // Processes completions and queues invalidated materials. This is called
     // from explicit material-change notifications, not from the render loop.
-    void processPending(Scene& scene, const std::string& sceneDirectory = {});
+    // `svmPrograms` also compiles each material's SVM program, for renderers
+    // that interpret them; every material gets its realtime shader.
+    void processPending(Scene& scene, bool svmPrograms,
+        const std::string& sceneDirectory = {});
     // Synchronous entry point for CLI/startup code. Waiting is condition-
     // variable based; it never polls futures or sleeps between checks.
-    void compileAndWait(Scene& scene, const std::string& sceneDirectory = {});
+    void compileAndWait(Scene& scene, bool svmPrograms,
+        const std::string& sceneDirectory = {});
     bool needsCompilation(const Scene& scene) const;
 private:
     struct Impl;

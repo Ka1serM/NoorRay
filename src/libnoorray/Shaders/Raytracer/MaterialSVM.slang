@@ -427,11 +427,40 @@ struct EmissionOnlyMaterialSink : IMaterialSvmClosureSink
     [mutating] bool prepare(ByteBuffer energyLuts) { return true; }
 };
 
-bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
+// How authored RGB reaches the closures. The spectral renderer upsamples each
+// colour at the path's wavelengths; the RGB renderer passes the channels
+// through unchanged, leaving the fourth SampledSpectrum channel at zero.
+interface IMaterialSvmColorModel
+{
+    SampledSpectrum albedo(float3 rgb);
+    SampledSpectrum refractiveIndex(float3 b, float3 c);
+};
+
+struct SpectralMaterialSvmColors : IMaterialSvmColorModel
+{
+    SampledWavelengths wavelengths;
+    ByteBuffer spectralTables;
+
+    SampledSpectrum albedo(float3 rgb)
+    { return rgbAlbedoToSpectrum(spectralTables, rgb, wavelengths); }
+    SampledSpectrum refractiveIndex(float3 b, float3 c)
+    { return sellmeierSpectrum(b, c, wavelengths); }
+};
+
+struct RgbMaterialSvmColors : IMaterialSvmColorModel
+{
+    SampledSpectrum albedo(float3 rgb) { return SampledSpectrum(rgb, 0.0); }
+    // Without wavelengths there is no dispersion: use the sodium D line,
+    // where catalogue refractive indices are quoted.
+    SampledSpectrum refractiveIndex(float3 b, float3 c)
+    { return SampledSpectrum(sellmeierIor(b, c, 589.3)); }
+};
+
+bool evaluateMaterialSvmColors<T : IMaterialSvmTextures,
+    C : IMaterialSvmClosureSink, M : IMaterialSvmColorModel>(
     T textures, inout C sink, ByteBuffer words,
     uint bytecodeOffset, uint bytecodeLength, MaterialSvmContext context,
-    SampledWavelengths wavelengths, ByteBuffer spectralTables,
-    ByteBuffer energyLuts, bool exiting,
+    M colors, ByteBuffer energyLuts, bool exiting,
     out MaterialSvmResult result)
 {
     // MaterialX programs may read values produced by earlier graph nodes;
@@ -718,12 +747,11 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
             result.shadingNormal = normalize(normal);
             result.flags |= SVM_HAS_SHADING_NORMAL;
             DiffuseLobe lobe = makeDiffuseLobe();
-            lobe.albedo = rgbAlbedoToSpectrum(spectralTables, color, wavelengths);
+            lobe.albedo = colors.albedo(color);
             lobe.roughness = saturate(roughness);
             lobe.burley = svmWord(words, base + 7u) != 0u;
             lobe.translucent = svmWord(words, base + 8u) != 0u;
-            sink.diffuse(rgbAlbedoToSpectrum(spectralTables, closureWeight,
-                wavelengths), lobe, svmInvalidInput(normalX) ? float3(0.0) : normal);
+            sink.diffuse(colors.albedo(closureWeight), lobe, svmInvalidInput(normalX) ? float3(0.0) : normal);
             offset += 9u;
             break;
         }
@@ -738,17 +766,14 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
             result.shadingNormal = normalize(normal);
             result.flags |= SVM_HAS_SHADING_NORMAL;
             ConductorLobe lobe = makeConductorLobe();
-            lobe.eta = rgbAlbedoToSpectrum(spectralTables,
-                svmColor(words, stack, svmWord(words, base + 5u),
-                    svmWord(words, base + 6u), svmWord(words, base + 7u)), wavelengths);
-            lobe.extinction = rgbAlbedoToSpectrum(spectralTables,
-                svmColor(words, stack, svmWord(words, base + 8u),
-                    svmWord(words, base + 9u), svmWord(words, base + 10u)), wavelengths);
+            lobe.eta = colors.albedo(svmColor(words, stack, svmWord(words, base + 5u),
+                    svmWord(words, base + 6u), svmWord(words, base + 7u)));
+            lobe.extinction = colors.albedo(svmColor(words, stack, svmWord(words, base + 8u),
+                    svmWord(words, base + 9u), svmWord(words, base + 10u)));
             lobe.roughness = saturate(svmValue(words, stack,
                 svmWord(words, base + 3u)));
             const uint normalX = svmWord(words, base + 11u);
-            sink.conductor(rgbAlbedoToSpectrum(spectralTables,
-                    closureWeight * color, wavelengths), lobe,
+            sink.conductor(colors.albedo(closureWeight * color), lobe,
                 svmInvalidInput(normalX) ? float3(0.0) : normal);
             offset += 14u;
             break;
@@ -769,8 +794,7 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
                     svmWord(words, normalBase + 1u), svmWord(words, normalBase + 2u)));
                 result.flags |= SVM_HAS_SHADING_NORMAL;
             }
-            const SampledSpectrum tint = rgbAlbedoToSpectrum(spectralTables,
-                color, wavelengths);
+            const SampledSpectrum tint = colors.albedo(color);
             DielectricLobe lobe = makeDielectricLobe();
             const bool hasReflection = transmission < 0.5 || transmission > 1.5;
             const bool hasTransmission = transmission > 0.5;
@@ -789,12 +813,11 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
                 const float3 c = svmColor(words, stack,
                     svmWord(words, base + 9u), svmWord(words, base + 10u),
                     svmWord(words, base + 11u));
-                lobe.spectralIor = sellmeierSpectrum(b, c, wavelengths);
+                lobe.spectralIor = colors.refractiveIndex(b, c);
                 lobe.useSpectralIor = true;
             }
             lobe.exiting = exiting;
-            sink.dielectric(rgbAlbedoToSpectrum(spectralTables,
-                    closureWeight, wavelengths), lobe,
+            sink.dielectric(colors.albedo(closureWeight), lobe,
                 svmInvalidInput(normalX) ? float3(0.0) : result.shadingNormal);
             offset += 16u;
             break;
@@ -806,8 +829,7 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
                 svmWord(words, base + 1u), svmWord(words, base + 2u));
             result.albedo = closureWeight * color;
             DielectricLobe lobe = makeDielectricLobe();
-            lobe.reflectionTint = rgbAlbedoToSpectrum(spectralTables,
-                color, wavelengths);
+            lobe.reflectionTint = colors.albedo(color);
             lobe.roughness = saturate(svmValue(words, stack,
                 svmWord(words, base + 3u)));
             lobe.exiting = exiting;
@@ -815,8 +837,7 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
             const float3 normal = svmInvalidInput(normalX) ? float3(0.0)
                 : svmColor(words, stack, normalX, svmWord(words, base + 5u),
                     svmWord(words, base + 6u));
-            sink.dielectric(rgbAlbedoToSpectrum(spectralTables,
-                closureWeight, wavelengths), lobe, normal);
+            sink.dielectric(colors.albedo(closureWeight), lobe, normal);
             offset += 7u;
             break;
         }
@@ -827,15 +848,14 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
                 svmWord(words, base + 1u), svmWord(words, base + 2u));
             result.albedo = closureWeight * color;
             DiffuseLobe lobe = makeDiffuseLobe();
-            lobe.albedo = rgbAlbedoToSpectrum(spectralTables, color, wavelengths);
+            lobe.albedo = colors.albedo(color);
             lobe.roughness = saturate(svmValue(words, stack,
                 svmWord(words, base + 3u)));
             const uint normalX = svmWord(words, base + 4u);
             const float3 normal = svmInvalidInput(normalX) ? float3(0.0)
                 : svmColor(words, stack, normalX, svmWord(words, base + 5u),
                     svmWord(words, base + 6u));
-            sink.diffuse(rgbAlbedoToSpectrum(spectralTables,
-                closureWeight, wavelengths), lobe, normal);
+            sink.diffuse(colors.albedo(closureWeight), lobe, normal);
             offset += 7u;
             break;
         }
@@ -907,20 +927,13 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
                     result.shadingNormal);
             }
 
-            const SampledSpectrum baseSpectrum = rgbAlbedoToSpectrum(
-                spectralTables, baseColor, wavelengths);
-            const SampledSpectrum specularSpectrum = rgbAlbedoToSpectrum(
-                spectralTables, specularColor, wavelengths);
-            const SampledSpectrum transmissionSpectrum = rgbAlbedoToSpectrum(
-                spectralTables, transmissionColor, wavelengths);
-            const SampledSpectrum subsurfaceSpectrum = rgbAlbedoToSpectrum(
-                spectralTables, subsurfaceColor, wavelengths);
-            const SampledSpectrum fuzzSpectrum = rgbAlbedoToSpectrum(
-                spectralTables, fuzzColor, wavelengths);
-            const SampledSpectrum coatSpectrum = rgbAlbedoToSpectrum(
-                spectralTables, coatColor, wavelengths);
-            const SampledSpectrum weight = rgbAlbedoToSpectrum(
-                spectralTables, closureWeight, wavelengths);
+            const SampledSpectrum baseSpectrum = colors.albedo(baseColor);
+            const SampledSpectrum specularSpectrum = colors.albedo(specularColor);
+            const SampledSpectrum transmissionSpectrum = colors.albedo(transmissionColor);
+            const SampledSpectrum subsurfaceSpectrum = colors.albedo(subsurfaceColor);
+            const SampledSpectrum fuzzSpectrum = colors.albedo(fuzzColor);
+            const SampledSpectrum coatSpectrum = colors.albedo(coatColor);
+            const SampledSpectrum weight = colors.albedo(closureWeight);
             const bool spectralTransmission = svmWord(words, base + 9u) != 0u
                 && transmissionWeight > 0.0;
             SampledSpectrum specularIor = SampledSpectrum(ior);
@@ -932,7 +945,7 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
                 const float3 c = svmColor(words, stack,
                     svmWord(words, base + 13u), svmWord(words, base + 14u),
                     svmWord(words, base + 15u));
-                specularIor = sellmeierSpectrum(b, c, wavelengths);
+                specularIor = colors.refractiveIndex(b, c);
             }
 
             if (baseWeight > 0.0 && metalness < 1.0
@@ -1036,7 +1049,7 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
                     const float3 c = svmColor(words, stack,
                         svmWord(words, base + 42u), svmWord(words, base + 43u),
                         svmWord(words, base + 44u));
-                    coat.spectralIor = sellmeierSpectrum(b, c, wavelengths);
+                    coat.spectralIor = colors.refractiveIndex(b, c);
                     coat.useSpectralIor = true;
                 }
                 coat.exiting = exiting;
@@ -1060,4 +1073,18 @@ bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
         }
     }
     return false;
+}
+
+bool evaluateMaterialSvm<T : IMaterialSvmTextures, C : IMaterialSvmClosureSink>(
+    T textures, inout C sink, ByteBuffer words,
+    uint bytecodeOffset, uint bytecodeLength, MaterialSvmContext context,
+    SampledWavelengths wavelengths, ByteBuffer spectralTables,
+    ByteBuffer energyLuts, bool exiting,
+    out MaterialSvmResult result)
+{
+    SpectralMaterialSvmColors colors;
+    colors.wavelengths = wavelengths;
+    colors.spectralTables = spectralTables;
+    return evaluateMaterialSvmColors(textures, sink, words, bytecodeOffset,
+        bytecodeLength, context, colors, energyLuts, exiting, result);
 }

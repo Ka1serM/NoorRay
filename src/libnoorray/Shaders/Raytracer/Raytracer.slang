@@ -3,37 +3,12 @@
 #include "Environment.slang"
 #include "RgbToSpectrum.slang"
 #include "Sampling.slang"
-#include "CameraLens.slang"
+#include "CameraRay.slang"
 #include "AnalyticLights.slang"
 
 // Raygen owns only camera-ray construction, traversal, and output writes.
 // Surface decoding, MaterialX SVM, Gaussian acceptance, and Gaussian shading
 // live in hit stages so the dispatch shader stays small and predictable.
-float3 cameraTransformPoint(Camera camera, float3 p)
-{
-    return float3(
-        dot(float4(p, 1.0), float4(camera.cameraToWorld[0],
-            camera.cameraToWorld[1], camera.cameraToWorld[2],
-            camera.cameraToWorld[3])),
-        dot(float4(p, 1.0), float4(camera.cameraToWorld[4],
-            camera.cameraToWorld[5], camera.cameraToWorld[6],
-            camera.cameraToWorld[7])),
-        dot(float4(p, 1.0), float4(camera.cameraToWorld[8],
-            camera.cameraToWorld[9], camera.cameraToWorld[10],
-            camera.cameraToWorld[11])));
-}
-
-float3 cameraTransformVector(Camera camera, float3 v)
-{
-    return normalize(float3(
-        dot(v, float3(camera.cameraToWorld[0], camera.cameraToWorld[1],
-            camera.cameraToWorld[2])),
-        dot(v, float3(camera.cameraToWorld[4], camera.cameraToWorld[5],
-            camera.cameraToWorld[6])),
-        dot(v, float3(camera.cameraToWorld[8], camera.cameraToWorld[9],
-            camera.cameraToWorld[10]))));
-}
-
 [shader("raygeneration")]
 void main()
 {
@@ -49,7 +24,6 @@ void main()
     RWTexture2D<uint> cryptomatte = ResourceDescriptorHeap[frame.cryptomatteImage];
     uint* gaussianOverdraw = frame.gaussianOverdraw;
     float4* accumulation = frame.accumulation;
-    Camera camera = frame.camera;
     ByteBuffer spectralTables = byteBuffer(frame.spectralTables);
 
     const uint pixel = dispatchId.y * frame.width + dispatchId.x;
@@ -68,116 +42,19 @@ void main()
         ? float2(0.5) : primarySampler.next2D(0u);
     const float2 uv = (float2(dispatchId.xy) + pixelSample)
         / float2(frame.width, frame.height);
-    const float sensorWidth = max(camera.sensorWidthMm, 0.001);
-    const float sensorHeight = max(camera.sensorHeightMm, 0.001);
-    const float focalLength = max(camera.focalLengthMm, 0.001);
     const float wavelengthSample = primarySampler.next1D(2u);
     SampledWavelengths wavelengths = sampleWavelengthsVisible(
         wavelengthSample);
-    const uint projection = camera.projection;
-    const float focusDistance = max(camera.focusDistanceCm, 0.1) * 0.01;
-    const float apertureRadius = max(camera.apertureDiameterMm, 0.0) * 0.0005;
-    float2 normalizedSensor = (uv - 0.5) * 2.0;
-    // Presentation flips the storage image back to NoorRay's historical
-    // bottom-left GPU convention. Upper-left therefore already has positive
-    // film Y at the displayed top; lower-left reverses that camera mapping.
-    if (camera.sensorOrigin != 0u)
-        normalizedSensor.y = -normalizedSensor.y;
-    float3 localOrigin = float3(0.0);
-    float3 localDirection;
-    if (projection == 1u) // Orthographic
-    {
-        const float height = 10.0 * 21.0 / focalLength;
-        localOrigin = float3(normalizedSensor.x * height
-            * sensorWidth / sensorHeight * 0.5,
-            normalizedSensor.y * height * 0.5, 0.0);
-        localDirection = float3(0.0, 0.0, -1.0);
-    }
-    else if (projection == 2u) // Fisheye
-    {
-        const float aspect = sensorWidth / sensorHeight;
-        const float2 p = float2(normalizedSensor.x * aspect,
-            normalizedSensor.y);
-        const float radius = length(p);
-        if (radius < 1.0e-6)
-            localDirection = float3(0.0, 0.0, -1.0);
-        else
-        {
-            const float radiusMax = sqrt(aspect * aspect + 1.0);
-            const float halfFov = atan(sensorWidth / (2.0 * focalLength));
-            const float theta = radius / radiusMax * halfFov;
-            localDirection = float3(p * (sin(theta) / radius), -cos(theta));
-        }
-    }
-    else // Perspective and thin lens
-    {
-        localDirection = normalize(float3(
-            normalizedSensor.x * sensorWidth / (2.0 * focalLength),
-            normalizedSensor.y * sensorHeight / (2.0 * focalLength), -1.0));
-    }
-    bool cameraRayValid = true;
-    float cameraWeight = 1.0;
-    if (projection == 4u) // Realistic sequential lens
-    {
-        Lens* lens = (Lens*)frame.lens;
-        const uint surfaceCount = lens->surfaceCount;
-        const float pupilZ = lens->rearPupilZ;
-        const float pupilRadius = lens->rearPupilRadius;
-        if (surfaceCount == 0u || pupilRadius <= 0.0)
-            cameraRayValid = false;
-        else
-        {
-            const float2 square = proxyOverdraw ? float2(0.0)
-                : primarySampler.next2D(3u) * 2.0 - 1.0;
-            float pupilR;
-            float pupilPhi;
-            if (abs(square.x) > abs(square.y))
-            {
-                pupilR = square.x;
-                pupilPhi = 0.785398163 * square.y
-                    / (square.x == 0.0 ? 1.0 : square.x);
-            }
-            else
-            {
-                pupilR = square.y;
-                pupilPhi = 1.570796327 - 0.785398163 * square.x
-                    / (square.y == 0.0 ? 1.0 : square.y);
-            }
-            const float2 pupil = pupilRadius * pupilR
-                * float2(cos(pupilPhi), sin(pupilPhi));
-            float3 lensOrigin = float3(-normalizedSensor.x * sensorWidth * 0.5,
-                -normalizedSensor.y * sensorHeight * 0.5, 0.0);
-            float3 lensDirection = normalize(float3(pupil, pupilZ) - lensOrigin);
-            wavelengths.terminateSecondary();
-            cameraRayValid = traceLensFilmToWorld(lens, lensOrigin,
-                lensDirection, wavelengths.lambda.x);
-            if (cameraRayValid)
-            {
-                const float cosineSquared = lensDirection.z * lensDirection.z;
-                cameraWeight = 3.141592654 * pupilRadius * pupilRadius
-                    * cosineSquared * cosineSquared
-                    / max(1.0e-6, pupilZ * pupilZ);
-                localOrigin = lensOrigin * 0.001;
-                localDirection = normalize(float3(lensDirection.xy,
-                    -lensDirection.z));
-            }
-        }
-    }
-    else if ((projection == 2u || projection == 3u)
-        && apertureRadius > 0.0)
-    {
-        const float2 lensSample = proxyOverdraw ? float2(0.5)
-            : primarySampler.next2D(3u);
-        const float angle = 6.28318530718 * lensSample.x;
-        const float radius = apertureRadius * sqrt(lensSample.y);
-        localOrigin = float3(cos(angle) * radius, sin(angle) * radius, 0.0);
-        const float3 focusPoint = localDirection
-            * (focusDistance / max(-localDirection.z, 1.0e-5));
-        localDirection = normalize(focusPoint - localOrigin);
-    }
-
-    float3 rayOrigin = cameraTransformPoint(camera, localOrigin);
-    float3 rayDirection = cameraTransformVector(camera, localDirection);
+    const CameraRay cameraRay = generateCameraRay(frame, uv,
+        proxyOverdraw ? float2(0.5) : primarySampler.next2D(3u),
+        wavelengths.lambda.x);
+    // The sequential lens refracted the ray at the hero wavelength only.
+    if (cameraRay.lensTraced)
+        wavelengths.terminateSecondary();
+    const bool cameraRayValid = cameraRay.valid;
+    const float cameraWeight = cameraRay.weight;
+    float3 rayOrigin = cameraRay.origin;
+    float3 rayDirection = cameraRay.direction;
     SampledSpectrum throughput = SampledSpectrum(cameraWeight);
     SampledSpectrum pathRadiance = SampledSpectrum(0.0);
     float3 firstAlbedo = float3(0.0);
@@ -376,7 +253,7 @@ void main()
     }
 
     const float3 beauty = max(xyzToLinearSRGB(spectrumToXYZ(
-        pathRadiance, wavelengths, spectralTables)), 0.0) * exp2(frame.exposure);
+        pathRadiance, wavelengths, spectralTables)), 0.0) * exp2(frame.camera.exposure);
     // The sample count is already known from the push ABI, so the alpha slot
     // accumulates coverage instead. A single sample only ever reports full or
     // zero coverage; averaging it is what antialiases the transparent

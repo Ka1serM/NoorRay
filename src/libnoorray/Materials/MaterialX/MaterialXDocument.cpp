@@ -49,6 +49,9 @@ MaterialX::DocumentPtr loadStandardLibraries(const std::string& materialXStdlibD
     MaterialX::FileSearchPath searchPath;
     searchPath.append(path);
     searchPath.append(path.getParentPath());
+    // `libraries` is the MaterialX default-library root. Its direct child
+    // folders cover stdlib, pbrlib, bxdf, lights, etc. Loading through this
+    // one root avoids scanning overlapping search paths and XInclude cycles.
     const MaterialX::FilePathVec folders{path.getBaseName()};
     const MaterialX::StringSet loaded = MaterialX::loadLibraries(folders, searchPath, libraries);
     if (loaded.empty())
@@ -126,7 +129,12 @@ std::vector<MaterialXImageNode> collectImageNodes(const MaterialX::DocumentPtr& 
         const MaterialX::InputPtr fileInput = node->getInput("file");
         if (!fileInput)
             continue;
-        const std::string raw = fileInput->getValueString();
+        // File inputs in reusable MaterialX nodegraphs commonly point at a
+        // graph interface. Resolve that value before collecting textures; the
+        // image node itself deliberately has no local `value` attribute.
+        const MaterialX::InputPtr interfaceInput = fileInput->getInterfaceInput();
+        const std::string raw = interfaceInput
+            ? interfaceInput->getValueString() : fileInput->getValueString();
         if (raw.empty())
             continue;
         const std::string& type = node->getType();

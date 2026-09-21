@@ -2,6 +2,10 @@
 #include <algorithm>
 #include "Camera/CameraInstance.h"
 #include "Scene/LightInstance.h"
+#include "Lights/DirectionalLightInstance.h"
+#include "Lights/PointLightInstance.h"
+#include "Lights/RectLightInstance.h"
+#include "Lights/SpotLightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/GaussianInstance.h"
 #include <tbb/blocked_range.h>
@@ -15,8 +19,10 @@ using glm::mat4;
 using glm::vec3;
 
 Scene::Scene()
-    : environment(std::make_unique<Environment>())
 {
+    // Attach after all Scene members are initialized: environment setters
+    // publish changes during construction too.
+    environment = std::make_unique<Environment>(this);
     auto camera = std::make_unique<PerspectiveCamera>();
     viewportCamera = std::make_shared<CameraInstance>(
         std::move(camera), "Viewport Camera", Transform(vec3(0.f, 0.f, 5.f)));
@@ -120,6 +126,7 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     const uint32_t denseIndex = static_cast<uint32_t>(sceneObjects.size());
     sharedObject->setHandle(allocateObjectSlot(denseIndex));
     sceneObjects.push_back(std::move(sharedObject));
+    ++hierarchyRevision;
     if (gaussianInstance && gaussianInstance->hasGaussianAsset())
     {
         gaussianCount += gaussianInstance->getGaussianAsset().getGaussianCount();
@@ -155,6 +162,7 @@ void Scene::clear() {
     activateCamera(nullptr);
     copiedObject.reset();
     sceneObjects.clear();
+    ++hierarchyRevision;
     // Retire the slots rather than dropping the table, so handles that outlive
     // the clear stay detectably stale instead of aliasing a future object.
     for (uint32_t slot = 0; slot < objectSlots.size(); ++slot) {
@@ -187,15 +195,14 @@ void Scene::clear() {
     activeObject = {};
     renderSettings = {};
     environment->clearHdriTexture();
-    environment->data.color = vec3(1.0f);
-    environment->rotation = 0.0f;
-    environment->visibleExposure = 0.0f;
-    environment->lightingExposure = 1.0f;
+    environment->setColor(vec3(1.0f));
+    environment->setRotation(0.0f);
+    environment->setVisibleExposure(0.0f);
+    environment->setLightingExposure(1.0f);
     environment->setEquirectangularMapping();
-    environment->updateDerivedSettings();
-    dirtyFlags = TLAS | Meshes | Textures | EnvironmentCdf | Lights
-        | CameraState | Accumulation | GaussianData;
-    ++lightRevision;
+    for (const auto flag : {TLAS, Meshes, Textures, EnvironmentCdf, Lights,
+                           CameraState, Accumulation, GaussianData})
+        setDirtyFlag(flag);
 }
 
 SceneObjectHandle Scene::add(std::unique_ptr<SceneObject> sceneObject) {
@@ -250,6 +257,11 @@ void Scene::updateMaterialDocument(
     synchronizeBeforeMutation();
     materialxDocuments[index] = std::move(document);
     materialxSourcePaths[index].clear();
+    // The published programs were compiled from the old document.
+    material->program = {};
+    material->shaderProgram = {};
+    material->compiled = false;
+    material->mayEmit = 0;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
     notifyMaterialChanged();
@@ -263,6 +275,8 @@ void Scene::invalidateMaterial(Material* material)
     // Dropping the program is what marks the material for recompilation; its
     // GPU allocations are replaced wholesale when the new one is published.
     material->program = {};
+    material->shaderProgram = {};
+    material->compiled = false;
     material->mayEmit = 0;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
@@ -321,17 +335,11 @@ void Scene::setEnvironmentTexture(Texture* texture) {
         clearEnvironmentTexture();
         return;
     }
-    synchronizeBeforeMutation();
     environment->setHdriTexture(*texture);
-    setDirtyFlag(EnvironmentCdf);
-    setDirtyFlag(Accumulation);
 }
 
 void Scene::clearEnvironmentTexture() {
-    synchronizeBeforeMutation();
     environment->clearHdriTexture();
-    setDirtyFlag(EnvironmentCdf);
-    setDirtyFlag(Accumulation);
 }
 
 bool Scene::remove(SceneObject* objToRemove) {
@@ -381,6 +389,7 @@ bool Scene::remove(SceneObject* objToRemove) {
             static_cast<uint32_t>(std::distance(sceneObjects.begin(), follower));
     rebuildGaussianInstanceCache();
     notifyGeometryChanged();
+    ++hierarchyRevision;
     return true;
 }
 
@@ -446,6 +455,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
         copiedObject = sceneObjects[index];
 
     notifyGeometryChanged();
+    ++hierarchyRevision;
     return true;
 }
 
@@ -480,30 +490,41 @@ bool Scene::setActiveCamera(CameraInstance* camera) {
     return true;
 }
 
+bool Scene::setActiveObject(const SceneObjectHandle handle) {
+    if (!handle.isValid()) {
+        activeObject = {};
+        return true;
+    }
+    if (!isValid(handle))
+        return false;
+    activeObject = handle;
+    return true;
+}
+
 // ── Light management ─────────────────────────────────────────────────────────
 
 uint32_t Scene::registerLight(LightInstance& light)
 {
     uint32_t idx = UINT32_MAX;
-    switch (light.lightType) {
+    switch (light.getLightType()) {
     case LightInstance::TypePoint:
         idx = static_cast<uint32_t>(pointLights.size());
-        pointLights.push_back(std::get<PointLight>(light.light));
+        pointLights.push_back(static_cast<PointLightInstance&>(light).getData());
         break;
     case LightInstance::TypeSpot:
         idx = static_cast<uint32_t>(spotLights.size());
-        spotLights.push_back(std::get<SpotLight>(light.light));
+        spotLights.push_back(static_cast<SpotLightInstance&>(light).getData());
         break;
     case LightInstance::TypeRect:
         idx = static_cast<uint32_t>(rectLights.size());
-        rectLights.push_back(std::get<RectLight>(light.light));
+        rectLights.push_back(static_cast<RectLightInstance&>(light).getData());
         break;
     case LightInstance::TypeDirectional:
         idx = static_cast<uint32_t>(directionalLights.size());
-        directionalLights.push_back(std::get<DirectionalLight>(light.light));
+        directionalLights.push_back(static_cast<DirectionalLightInstance&>(light).getData());
         break;
     }
-    light.lightIndex = idx;
+    light.setLightIndex(idx);
     setDirtyFlag(Lights);
     setDirtyFlag(Accumulation);
     return idx;
@@ -511,16 +532,16 @@ uint32_t Scene::registerLight(LightInstance& light)
 
 void Scene::unregisterLight(LightInstance& light)
 {
-    const uint32_t idx = light.lightIndex;
-    switch (light.lightType) {
+    const uint32_t idx = light.getLightIndex();
+    switch (light.getLightType()) {
     case LightInstance::TypePoint:
         { const uint32_t displaced = static_cast<uint32_t>(pointLights.size() - 1);
         if (idx != displaced) pointLights[idx] = std::move(pointLights.back());
         pointLights.pop_back();
         for (auto& obj : sceneObjects)
             if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->lightType == LightInstance::TypePoint && li->lightIndex == displaced)
-                    { li->lightIndex = idx; break; }
+                if (li->getLightType() == LightInstance::TypePoint && li->getLightIndex() == displaced)
+                    { li->setLightIndex(idx); break; }
         }
         break;
     case LightInstance::TypeSpot:
@@ -529,8 +550,8 @@ void Scene::unregisterLight(LightInstance& light)
         spotLights.pop_back();
         for (auto& obj : sceneObjects)
             if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->lightType == LightInstance::TypeSpot && li->lightIndex == displaced)
-                    { li->lightIndex = idx; break; }
+                if (li->getLightType() == LightInstance::TypeSpot && li->getLightIndex() == displaced)
+                    { li->setLightIndex(idx); break; }
         }
         break;
     case LightInstance::TypeRect:
@@ -539,8 +560,8 @@ void Scene::unregisterLight(LightInstance& light)
         rectLights.pop_back();
         for (auto& obj : sceneObjects)
             if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->lightType == LightInstance::TypeRect && li->lightIndex == displaced)
-                    { li->lightIndex = idx; break; }
+                if (li->getLightType() == LightInstance::TypeRect && li->getLightIndex() == displaced)
+                    { li->setLightIndex(idx); break; }
         }
         break;
     case LightInstance::TypeDirectional:
@@ -549,12 +570,12 @@ void Scene::unregisterLight(LightInstance& light)
         directionalLights.pop_back();
         for (auto& obj : sceneObjects)
             if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->lightType == LightInstance::TypeDirectional && li->lightIndex == displaced)
-                    { li->lightIndex = idx; break; }
+                if (li->getLightType() == LightInstance::TypeDirectional && li->getLightIndex() == displaced)
+                    { li->setLightIndex(idx); break; }
         }
         break;
     }
-    light.lightIndex = UINT32_MAX;
+    light.setLightIndex(UINT32_MAX);
     setDirtyFlag(Lights);
     setDirtyFlag(Accumulation);
 }
@@ -587,6 +608,7 @@ void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {
         objectToMove->clearParent();
         objectToMove->setLocalTransform(Transform{oldWorldMatrix});
     }
+    ++hierarchyRevision;
 }
 
 bool Scene::reparentObject(
@@ -765,6 +787,44 @@ uint32_t Scene::getActiveCryptomatteId(const uint32_t selectedGaussianIndex) con
     return ~0u;
 }
 
+SceneObject* Scene::findCryptomatteObject(const uint32_t id, uint32_t& gaussianIndex) const
+{
+    gaussianIndex = ~0u;
+    if (id == ~0u)
+        return nullptr;
+    // Same ordering as getActiveCryptomatteId and the TLAS: mesh instances
+    // that have geometry first, then every Gaussian, flattened in scene order.
+    uint32_t meshIndex = 0;
+    for (const auto& object : sceneObjects)
+    {
+        if (const auto mesh = std::dynamic_pointer_cast<MeshInstance>(object);
+            mesh && mesh->hasMesh())
+        {
+            if (meshIndex == id)
+                return object.get();
+            ++meshIndex;
+        }
+    }
+
+    const uint32_t flattened = id - meshIndex;
+    uint32_t gaussianOffset = 0;
+    for (const auto& object : sceneObjects)
+    {
+        if (const auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object);
+            gaussian && gaussian->hasGaussianAsset())
+        {
+            const uint32_t gaussianCount = gaussian->getGaussianAsset().getGaussianCount();
+            if (flattened < gaussianOffset + gaussianCount)
+            {
+                gaussianIndex = flattened;
+                return object.get();
+            }
+            gaussianOffset += gaussianCount;
+        }
+    }
+    return nullptr;
+}
+
 Texture* Scene::findTexture(const std::string& key) const {
     const auto found = texturesByKey_.find(key);
     return found != texturesByKey_.end() ? found->second : nullptr;
@@ -816,12 +876,14 @@ std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObjectHandle handle
 }
 
 void Scene::setMaterialProgram(const std::size_t materialIndex,
-    nr::svm::CompiledSvmProgram program)
+    nr::svm::CompiledSvmProgram program, MaterialShaderProgram shaderProgram)
 {
     synchronizeBeforeMutation();
     Material& material = materials[materialIndex];
     material.releaseGpu();
     material.program = std::move(program);
+    material.shaderProgram = std::move(shaderProgram);
+    material.compiled = true;
     material.mayEmit = material.program.mayEmit ? 1u : 0u;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);

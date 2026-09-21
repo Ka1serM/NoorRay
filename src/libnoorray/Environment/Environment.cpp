@@ -9,21 +9,65 @@
 #include <glm/gtc/matrix_inverse.hpp>
 
 #include "Texture/Texture.h"
+#include "Scene/Scene.h"
 
 static constexpr float kPi = 3.14159265f;
 
-Environment::Environment()
+Environment::Environment(Scene* owner) : owner_(owner)
 {
     // The record is value-initialised, so any default that is not zero has to
     // be established here rather than in a member initialiser.
     data.color = glm::vec3(1.0f);
     setEquirectangularMapping();
-    updateDerivedSettings();
+    setRotation(rotation);
+    setLightingExposure(lightingExposure);
+    setVisibleExposure(visibleExposure);
 }
 
 Environment::~Environment()
 {
     destroyCdf();
+}
+
+void Environment::markChanged()
+{
+    cdfDirty = 1;
+    if (owner_) {
+        owner_->synchronizeBeforeMutation();
+        owner_->setDirtyFlag(EnvironmentCdf);
+        owner_->setDirtyFlag(Accumulation);
+    }
+}
+
+float Environment::getRotation() const
+{
+    return rotation;
+}
+
+float Environment::getVisibleExposure() const
+{
+    return visibleExposure;
+}
+
+float Environment::getLightingExposure() const
+{
+    return lightingExposure;
+}
+
+int Environment::getTextureIndex() const
+{
+    return textureIndex;
+}
+
+void Environment::setTextureIndex(const int value)
+{
+    textureIndex = value;
+    markChanged();
+}
+
+glm::vec3 Environment::getColor() const
+{
+    return data.color;
 }
 
 glm::mat3 Environment::environmentFromWorld() const
@@ -49,37 +93,18 @@ void Environment::destroyCdf() noexcept
     cdfDirty = 1;
 }
 
-void Environment::updateDerivedSettings()
-{
-    const float rotationRadians = rotation * (kPi / 180.f);
-    data.rotationSin = std::sin(rotationRadians);
-    data.rotationCos = std::cos(rotationRadians);
-    data.lightingExposureScale = lightingExposure;
-    // Intensity is the base multiplier for both illumination and the visible
-    // background. Visible Exposure is an additional camera-only stop offset.
-    data.visibleExposureScale = lightingExposure * std::pow(2.f, visibleExposure);
-    const float luminance = std::max(0.2126f * data.color.r
-        + 0.7152f * data.color.g + 0.0722f * data.color.b, 0.0f);
-    data.importanceWeight =
-        4.0f * kPi * luminance * std::max(data.lightingExposureScale, 0.0f);
-    cdfDirty = 1;
-}
-
 void Environment::setHdriTexture(const Texture& texture)
 {
     if (texture.getSceneIndex() < 0)
         throw std::invalid_argument("The HDRI texture must be added to a Scene first");
     textureIndex = texture.getSceneIndex();
-    cdfDirty = 1;
+    markChanged();
 }
 
 void Environment::clearHdriTexture()
 {
     textureIndex = -1;
-    hdriImage = {};
-    cdfImage = {};
-    release();
-    cdfDirty = 1;
+    markChanged();
 }
 
 void Environment::setMapping(const EnvironmentMapping newMapping, const glm::mat3& transform)
@@ -88,7 +113,7 @@ void Environment::setMapping(const EnvironmentMapping newMapping, const glm::mat
     for (int column = 0; column < 3; ++column)
         data.environmentFromWorld[column] = float4(transform[column], 0.0f);
     worldFromEnvironment = glm::inverse(transform);
-    cdfDirty = 1;
+    markChanged();
 }
 
 void Environment::setEquirectangularMapping(const glm::mat3& transform)

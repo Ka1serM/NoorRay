@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
@@ -39,7 +40,7 @@ void uploadCompiledMaterials(Raytracer& renderer, Scene& scene,
     MaterialXSceneRuntime materialRuntime;
     const std::string sceneDirectory =
         std::filesystem::path(scenePath).parent_path().string();
-    materialRuntime.compileAndWait(scene, sceneDirectory);
+    materialRuntime.compileAndWait(scene, renderer.needsSvmPrograms(), sceneDirectory);
     renderer.uploadMaterials(scene);
     renderer.uploadEnvironment(scene);
 }
@@ -51,18 +52,32 @@ struct CliOptions
     int samplesPerPixel{64};
     uint32_t sampleSeed{};
     int maxBounces{-1};
+    std::optional<UpscalerMode> upscalerMode;
     int width{};
     int height{};
     int windowWidth{};
     int windowHeight{};
     std::optional<GaussianShadingMode> gaussianShadingMode;
     std::optional<GaussianProxyType> gaussianProxyType;
+    std::optional<RealtimeLightingMode> realtimeLighting;
+    std::optional<RadianceCacheMode> radianceCacheMode;
+    std::optional<DenoiserMode> denoiserMode;
     bool aovEnabled{};
     bool statsEnabled{};
     bool cliMode{};
     bool vulkanRaytracerSmoke{};
     bool showHelp{};
 };
+
+void applyStageOptions(RenderSettings& settings, const CliOptions& options)
+{
+    if (options.radianceCacheMode)
+        settings.radianceCacheMode = *options.radianceCacheMode;
+    if (options.denoiserMode)
+        settings.denoiserMode = *options.denoiserMode;
+    if (options.upscalerMode)
+        settings.upscalerMode = *options.upscalerMode;
+}
 
 void printUsage()
 {
@@ -79,6 +94,17 @@ void printUsage()
         << "  --window-width <int>  GUI window width (default: auto, 2/3 of display)\n"
         << "  --window-height <int> GUI window height (default: auto, 2/3 of display)\n"
         << "  --max-bounces <int>  Maximum path depth (default: from scene)\n"
+        << "  --fsr-mode <native|quality|balanced|performance|ultra-performance>\n"
+        << "                       Realtime FSR mode, which sets the trace resolution\n"
+        << "  --lighting <di|gi|single>\n"
+        << "                       Realtime light sampling: ReSTIR DI, ReSTIR GI (which also\n"
+        << "                       resamples direct light with ReSTIR DI), or\n"
+        << "                       one light sample per vertex without RTXDI\n"
+        << "  --no-sharc           Trace indirect paths without the SHaRC radiance cache\n"
+        << "  --nrd-mode <reblur|relax>\n"
+        << "                       Realtime NRD denoiser\n"
+        << "  --no-nrd             Composite the noisy radiance without NRD\n"
+        << "  --no-fsr             Trace at the output resolution without FSR\n"
         << "  --gaussian-shading <direct|gi>\n"
         << "                       Override the scene's Gaussian shading mode\n"
         << "  --gaussian-proxy <icosphere|octahedron|icosahedron|icosphere2>\n"
@@ -129,6 +155,51 @@ CliOptions parseOptions(const int argc, char* argv[])
             options.windowHeight = std::stoi(requireValue(argc, argv, i));
         else if (arg == "--max-bounces")
             options.maxBounces = std::stoi(requireValue(argc, argv, i));
+        else if (arg == "--fsr-mode")
+        {
+            const std::string mode = requireValue(argc, argv, i);
+            if (mode == "native")
+                options.upscalerMode = UpscalerMode::NativeAA;
+            else if (mode == "quality")
+                options.upscalerMode = UpscalerMode::Quality;
+            else if (mode == "balanced")
+                options.upscalerMode = UpscalerMode::Balanced;
+            else if (mode == "performance")
+                options.upscalerMode = UpscalerMode::Performance;
+            else if (mode == "ultra-performance")
+                options.upscalerMode = UpscalerMode::UltraPerformance;
+            else
+                throw std::invalid_argument("--fsr-mode must be 'native', 'quality', "
+                    "'balanced', 'performance' or 'ultra-performance'");
+        }
+        else if (arg == "--nrd-mode")
+        {
+            const std::string mode = requireValue(argc, argv, i);
+            if (mode == "reblur")
+                options.denoiserMode = DenoiserMode::Reblur;
+            else if (mode == "relax")
+                options.denoiserMode = DenoiserMode::Relax;
+            else
+                throw std::invalid_argument("--nrd-mode must be 'reblur' or 'relax'");
+        }
+        else if (arg == "--no-sharc")
+            options.radianceCacheMode = RadianceCacheMode::Off;
+        else if (arg == "--no-nrd")
+            options.denoiserMode = DenoiserMode::Off;
+        else if (arg == "--no-fsr")
+            options.upscalerMode = UpscalerMode::Off;
+        else if (arg == "--lighting")
+        {
+            const std::string mode = requireValue(argc, argv, i);
+            if (mode == "di")
+                options.realtimeLighting = RealtimeLightingMode::ReSTIRDI;
+            else if (mode == "gi")
+                options.realtimeLighting = RealtimeLightingMode::ReSTIRGI;
+            else if (mode == "single")
+                options.realtimeLighting = RealtimeLightingMode::SingleSample;
+            else
+                throw std::invalid_argument("--lighting must be 'di', 'gi' or 'single'");
+        }
         else if (arg == "--gaussian-shading")
         {
             const std::string mode = requireValue(argc, argv, i);
@@ -189,7 +260,7 @@ void runCli(const CliOptions& options)
         noorrhi::Device device;
         // The scene-less smoke mode uses the tiny native triangle scene to
         // validate the AS/query layer before a full imported scene is added.
-        Raytracer renderer(device, width, height,
+        const auto renderer = Raytracer::create(device, width, height,
             options.scenePath.empty());
         std::unique_ptr<Scene> nativeScene;
         if (!options.scenePath.empty())
@@ -199,21 +270,24 @@ void runCli(const CliOptions& options)
             if (options.gaussianShadingMode)
                 nativeScene->getRenderSettings().gaussianShadingMode =
                     *options.gaussianShadingMode;
+            if (options.realtimeLighting)
+                nativeScene->getRenderSettings().realtimeLighting = *options.realtimeLighting;
+            applyStageOptions(nativeScene->getRenderSettings(), options);
             if (options.gaussianProxyType)
                 nativeScene->getRenderSettings().gaussianProxyType =
                     *options.gaussianProxyType;
-            renderer.uploadScene(*nativeScene);
-            uploadCompiledMaterials(renderer, *nativeScene, options.scenePath);
-            renderer.updateCamera(*nativeScene);
+            renderer->uploadScene(*nativeScene);
+            uploadCompiledMaterials(*renderer, *nativeScene, options.scenePath);
+            renderer->updateCamera(*nativeScene);
         }
         NR_LOG_INFO("Vulkan raytracer smoke: recording dispatch");
-        renderer.commit();
-        renderer.render(0, 0);
+        renderer->commit();
+        renderer->render(0, 0);
         NR_LOG_INFO("Vulkan raytracer smoke: waiting for dispatch");
         device.synchronize();
 
         NR_LOG_INFO("Vulkan raytracer smoke: reading back image");
-        const Bitmap bitmap = readColor(renderer);
+        const Bitmap bitmap = readColor(*renderer);
         std::string error;
         if (!BitmapWriter::write(options.outputPath, bitmap, {}, &error))
             throw std::runtime_error("Failed to save Vulkan raytracer smoke image: " + error);
@@ -225,8 +299,12 @@ void runCli(const CliOptions& options)
     scene.load(options.scenePath);
     if (options.gaussianShadingMode)
         scene.getRenderSettings().gaussianShadingMode = *options.gaussianShadingMode;
+    if (options.realtimeLighting)
+        scene.getRenderSettings().realtimeLighting = *options.realtimeLighting;
+    applyStageOptions(scene.getRenderSettings(), options);
     if (options.gaussianProxyType)
         scene.getRenderSettings().gaussianProxyType = *options.gaussianProxyType;
+    scene.getRenderSettings().raytracer = RaytracerType::Realtime;
     if (options.maxBounces > 0)
         scene.getRenderSettings().maxBounces = options.maxBounces;
     const auto* cameraInstance = scene.getRenderCamera();
@@ -237,21 +315,25 @@ void runCli(const CliOptions& options)
         ? static_cast<uint32_t>(options.width) : sceneResolution.x;
     const uint32_t height = options.height > 0
         ? static_cast<uint32_t>(options.height) : sceneResolution.y;
-    Raytracer renderer(device, width, height, false);
-    renderer.uploadScene(scene);
-    uploadCompiledMaterials(renderer, scene, options.scenePath);
-    renderer.updateCamera(scene);
-    renderer.commit();
+    const auto renderer = Raytracer::create(device, width, height);
+    renderer->uploadScene(scene);
+    uploadCompiledMaterials(*renderer, scene, options.scenePath);
+    renderer->updateCamera(scene);
+    renderer->commit();
     double rayTracingMilliseconds = 0.0;
     double minimumDispatchMilliseconds = std::numeric_limits<double>::max();
     double maximumDispatchMilliseconds = 0.0;
     for (uint32_t sample = 0; sample < static_cast<uint32_t>(options.samplesPerPixel); ++sample)
     {
-        renderer.render(options.sampleSeed, sample);
+        renderer->render(options.sampleSeed, sample);
         device.synchronize();
+        if (const char* dump = std::getenv("TMP_DUMP"); dump && sample + 8 >= static_cast<uint32_t>(options.samplesPerPixel)) {
+            std::string error;
+            BitmapWriter::write(std::string(dump) + std::to_string(sample) + ".png", readColor(*renderer), {}, &error);
+        }
         if (options.statsEnabled)
         {
-            const double milliseconds = renderer.lastDispatchMilliseconds();
+            const double milliseconds = renderer->lastDispatchMilliseconds();
             rayTracingMilliseconds += milliseconds;
             minimumDispatchMilliseconds = std::min(
                 minimumDispatchMilliseconds, milliseconds);
@@ -269,7 +351,7 @@ void runCli(const CliOptions& options)
             << average << " ms/sample, " << minimumDispatchMilliseconds
             << " ms min, " << maximumDispatchMilliseconds << " ms max\n";
     }
-    const Bitmap bitmap = readColor(renderer);
+    const Bitmap bitmap = readColor(*renderer);
     std::string error;
     if (!BitmapWriter::write(options.outputPath, bitmap, {}, &error))
         throw std::runtime_error("Failed to save Vulkan render: " + error);

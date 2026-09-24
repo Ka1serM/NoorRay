@@ -15,6 +15,23 @@ constexpr char MaterialInterfaceSource[] = {
     #embed "RealtimeRaytracer/MaterialInterface.slang"
     , '\0'
 };
+// MaterialHit.slang with its includes expanded at build time.
+constexpr char MaterialHitSource[] = {
+    #embed "RealtimeRaytracer/MaterialHit.preprocessed.slang"
+    , '\0'
+};
+
+struct HitStage
+{
+    const char* entryPoint;
+    SlangStage stage;
+    std::vector<std::uint32_t> MaterialShader::* spirv;
+};
+constexpr HitStage HitStages[] = {
+    {"closestHit", SLANG_STAGE_CLOSEST_HIT, &MaterialShader::closestHit},
+    {"anyHit", SLANG_STAGE_ANY_HIT, &MaterialShader::anyHit},
+    {"shadowAnyHit", SLANG_STAGE_ANY_HIT, &MaterialShader::shadowAnyHit},
+};
 
 void check(SlangResult result, slang::IBlob* diagnostics, const std::string& what)
 {
@@ -82,6 +99,9 @@ SlangMaterialCompiler::SlangMaterialCompiler()
     slang::IModule* module = impl_->session->loadModuleFromSourceString("MaterialInterface",
         "MaterialInterface.slang", MaterialInterfaceSource, diagnostics.writeRef());
     check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "MaterialInterface.slang does not compile");
+    module = impl_->session->loadModuleFromSourceString("MaterialHit",
+        "MaterialHit.slang", MaterialHitSource, diagnostics.writeRef());
+    check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "MaterialHit.slang does not compile");
 }
 
 SlangMaterialCompiler::~SlangMaterialCompiler() = default;
@@ -94,26 +114,27 @@ std::shared_ptr<const MaterialShader> SlangMaterialCompiler::compile(const std::
         (name + ".slang").c_str(), source.c_str(), diagnostics.writeRef());
     check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "Generated material does not compile");
 
-    Slang::ComPtr<slang::IEntryPoint> entryPoint;
-    check(module->findAndCheckEntryPoint("main", SLANG_STAGE_CALLABLE,
-        entryPoint.writeRef(), diagnostics.writeRef()), diagnostics,
-        "Generated material has no callable entry point");
-    slang::IComponentType* parts[] = {module, entryPoint.get()};
-    Slang::ComPtr<slang::IComponentType> composite;
-    check(impl_->session->createCompositeComponentType(parts, 2, composite.writeRef(),
-        diagnostics.writeRef()), diagnostics, "Generated material does not compose");
-    Slang::ComPtr<slang::IComponentType> linked;
-    check(composite->link(linked.writeRef(), diagnostics.writeRef()), diagnostics,
-        "Generated material does not link");
-    Slang::ComPtr<slang::IBlob> code;
-    check(linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef()),
-        diagnostics, "Generated material produced no SPIR-V");
-
     auto shader = std::make_shared<MaterialShader>();
     shader->source = source;
-    shader->spirv.resize(code->getBufferSize() / sizeof(std::uint32_t));
-    std::memcpy(shader->spirv.data(), code->getBufferPointer(),
-        shader->spirv.size() * sizeof(std::uint32_t));
+    for (const HitStage& stage : HitStages) {
+        Slang::ComPtr<slang::IEntryPoint> entryPoint;
+        check(module->findAndCheckEntryPoint(stage.entryPoint, stage.stage,
+            entryPoint.writeRef(), diagnostics.writeRef()), diagnostics,
+            std::string("Generated material has no ") + stage.entryPoint + " entry point");
+        slang::IComponentType* parts[] = {module, entryPoint.get()};
+        Slang::ComPtr<slang::IComponentType> composite;
+        check(impl_->session->createCompositeComponentType(parts, 2, composite.writeRef(),
+            diagnostics.writeRef()), diagnostics, "Generated material does not compose");
+        Slang::ComPtr<slang::IComponentType> linked;
+        check(composite->link(linked.writeRef(), diagnostics.writeRef()), diagnostics,
+            "Generated material does not link");
+        Slang::ComPtr<slang::IBlob> code;
+        check(linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef()),
+            diagnostics, "Generated material produced no SPIR-V");
+        std::vector<std::uint32_t>& spirv = (*shader).*stage.spirv;
+        spirv.resize(code->getBufferSize() / sizeof(std::uint32_t));
+        std::memcpy(spirv.data(), code->getBufferPointer(), spirv.size() * sizeof(std::uint32_t));
+    }
     return shader;
 }
 

@@ -15,7 +15,6 @@
 #include <MaterialXFormat/XmlIo.h>
 
 #include <Materials/MaterialX/MaterialXDocument.h>
-#include <Materials/SVM/SvmCompiler.h>
 
 #include <algorithm>
 #include <chrono>
@@ -115,7 +114,7 @@ std::string TextureFilePath(const VtValue& value)
 const MaterialX::DocumentPtr& GetSharedMaterialXLibraries()
 {
     static const MaterialX::DocumentPtr libraries =
-        nr::materialx::loadStandardLibraries(NR_MATERIALX_STDLIB_DIR);
+        nr::materialx::loadStandardLibraries();
     return libraries;
 }
 
@@ -256,19 +255,12 @@ bool QueueMaterialXDocument(MaterialX::DocumentPtr doc, const SdfPath& materialI
     // collectImageNodes knows -- see MaterialXImageNode's comment) before
     // attaching the standard library. traverseTree() consequently only walks
     // this material's own handful of elements.
-    auto resolvedTextures = std::make_shared<
-        std::unordered_map<std::string, std::uint32_t>>();
     for (const nr::materialx::MaterialXImageNode& image :
         nr::materialx::collectImageNodes(doc)) {
-        Texture* texture = param.GetOrCreateTexture(
-            image.rawFilePath,
+        param.GetOrCreateTexture(image.rawFilePath,
             image.colorSpace == nr::materialx::MaterialXImageColorSpace::Srgb
                 ? TextureEncoding::Srgb8
                 : TextureEncoding::Linear8);
-        if (texture == nullptr)
-            continue;
-        (*resolvedTextures)[image.rawFilePath] =
-            static_cast<std::uint32_t>(texture->sceneIndex);
     }
 
     // A data library is resolved transparently by MaterialX but remains one
@@ -276,16 +268,7 @@ bool QueueMaterialXDocument(MaterialX::DocumentPtr doc, const SdfPath& materialI
     // stdlib into every user document and is prohibitively expensive for
     // scenes containing thousands of materials.
     doc->setDataLibrary(libraries);
-    // The shared_ptr is copied for the async compile before the document is
-    // handed to the compile queue (which publishes it to the Scene slot).
-    const MaterialX::DocumentPtr compileDocument = doc;
-    param.QueueMaterialCompilation(materialId, std::move(doc),
-        [compileDocument, resolvedTextures]() {
-            HdNoorRayRenderParam::MaterialCompilationOutput output;
-            nr::svm::SvmCompiler compiler;
-            output.program = compiler.compile(compileDocument, {}, *resolvedTextures);
-            return output;
-        });
+    param.QueueMaterialCompilation(materialId, std::move(doc));
     return true;
 }
 
@@ -328,10 +311,10 @@ bool QueueMaterialXXml(const std::string& xml, const SdfPath& materialId,
 const MaterialX::DocumentPtr& GetSharedNativeFallbackMaterial()
 {
     static const MaterialX::DocumentPtr fallback = []() {
-        SvmMaterial material;
+        BasicMaterial material;
         material.albedo = glm::vec3(0.8f);
         material.roughness = 0.5f;
-        return nr::materialx::documentFromSvmMaterial(material);
+        return nr::materialx::documentFromBasicMaterial(material);
     }();
     return fallback;
 }

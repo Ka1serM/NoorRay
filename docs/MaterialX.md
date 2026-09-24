@@ -1,52 +1,40 @@
 # MaterialX in NoorRay
 
-NoorRay compiles MaterialX documents and Blender-exported MaterialX graphs
-directly to shared SVM bytecode. The fixed SVM interpreter evaluates that
-bytecode on the host and Vulkan; the graph does not create a per-material GPU program.
+NoorRay compiles MaterialX documents and Blender-exported MaterialX graphs to
+Slang with MaterialX's Slang generator, then to SPIR-V callable shaders that the
+realtime renderer invokes per hit.
 
 ## Data flow
 
 Standalone `.mtlx` files and Hydra materials follow the same path:
 
     MaterialX document
-        -> node-graph normalization and nodegraph flattening
-        -> SvmCompiler
-        -> SVM bytecode and texture-index table
-        -> SvmEval
-        -> MaterialEvaluation and NoorRayCompositeBsdf
+        -> SlangMaterialGenerator (MaterialXGenSlang, NoorRay target)
+        -> Slang module implementing IMaterial + parameter block
+        -> SlangMaterialCompiler (Slang library)
+        -> SPIR-V callable shader
 
-The compiler resolves value nodes, transforms, textures, normals, arithmetic,
-conditionals, and surface closures. Closure leaves are accumulated into the
-fixed composite BSDF, with opacity and emission carried as terminal material
-outputs.
+Pattern nodes keep their MaterialX genslang implementations; BSDF, EDF and
+surface nodes build the closures of `MaterialInterface.slang` instead of lighting
+the surface. Every editable input lives in the parameter block, so documents
+that differ only in values or texture bindings share one compiled shader.
+
+The MaterialX libraries are embedded in the binary and unpacked to the user
+cache on first use, because MaterialX reads definitions and generator sources
+only from files.
 
 ## Blender integration
 
 The Blender extension exports original Blender node names into a MaterialX
 document and preserves links, defaults, color/vector widths, normals, and
 shader mixing. The exporter reports every reached Blender node without a
-semantic handler instead of silently claiming complete support.
-
-The supported node catalog is generated from the installed MaterialX libraries
-and the NoorRay extensions. Coverage reports are maintained in:
-
-* [MaterialX SVM coverage](MaterialX_SVM_Coverage.md)
-* [Blender exporter coverage](Blender_MaterialX_Exporter_Coverage.md)
+semantic handler instead of silently claiming complete support. Its coverage
+is tracked in [Blender exporter coverage](Blender_MaterialX_Exporter_Coverage.md).
 
 ## Current boundaries
 
-The SVM path is intended for regular surface node graphs. Volume transport,
-light-source and emission-distribution graphs, and other features that need
-integrator-level transport changes remain explicitly outside the surface
-compiler until their runtime contracts are implemented.
+The spectral path tracer does not evaluate materials yet: it shades every
+surface as a neutral diffuse until it runs the same compiled shaders.
 
-Unsupported nodes fail compilation with their MaterialX category. Blender
-export validation fails when a reached Blender node has no exporter handler.
-
-## Verification
-
-Focused unit tests cover compiler dispatch, value widths, matrix operations,
-normal-map convention, texture alpha, and closure accumulation. The Blender
-validation script checks node reachability, XML conversion, and exporter
-coverage; the fidelity harness compares SVM renders with an independent
-MaterialX reference render.
+Documents with no renderable surface, or with closures the realtime renderer
+cannot express, fail generation and fall back to the default material.

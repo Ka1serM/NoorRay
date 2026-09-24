@@ -258,14 +258,15 @@ bool realtimeVisible(float3 position, float3 geometricNormal, float3 direction,
     ray.Direction = direction;
     ray.TMin = 0.001;
     ray.TMax = distance < 1.0e15 ? max(distance - 2.0e-4, ray.TMin) : 1.0e30;
-    RealtimeRayPayload payload = {};
-    // Stays set unless the miss stage runs.
-    payload.hit = RealtimeSurfaceHit;
+    // Traced through the pipeline, not an inline query, so the materials'
+    // any-hit stages apply their opacity; only ray-generation stages call this.
+    RealtimeShadowPayload payload;
+    payload.occluded = 1u;
     TraceRay(RaytracingAccelerationStructure(frame.topLevelAS),
-        RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH
-            | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-        RaytracingMaskMesh, 0, 2, 0, ray, payload);
-    return payload.hit == RealtimeMiss;
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        RaytracingMaskMesh, RealtimeRayTypeShadow, RaytracingRayTypeCount,
+        RealtimeMissShadow, ray, payload);
+    return payload.occluded == 0u;
 }
 
 // Sample positions on scene geometry (ReSTIR GI's) stop just short of their

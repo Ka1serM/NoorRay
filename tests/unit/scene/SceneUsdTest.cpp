@@ -5,7 +5,7 @@
 #include "Scene/Scene.h"
 #include "Scene/Import/SceneReader.h"
 #include "Scene/Import/SceneWriter.h"
-#include "Materials/SVM/SvmCompiler.h"
+#include "Materials/MaterialX/SlangMaterialGenerator.h"
 
 #include <MaterialXCore/Document.h>
 
@@ -17,9 +17,7 @@ TEST_CASE("default MaterialX material compiles with its own libraries",
     "[materialx][default]")
 {
     const auto document = nr::materialx::defaultMaterial();
-    nr::svm::SvmCompiler compiler;
-    const auto program = compiler.compile(document);
-    REQUIRE_FALSE(program.bytecode.empty());
+    REQUIRE_FALSE(nr::materialx::SlangMaterialGenerator().generate(document).source.empty());
 }
 
 TEST_CASE("USD scene round-trip preserves geometry and embedded MaterialX", "[scene][usd][materialx]")
@@ -72,12 +70,11 @@ TEST_CASE("USD scene round-trip preserves geometry and embedded MaterialX", "[sc
 
     // USD stores the MaterialX XML, not the document's in-memory data-library
     // pointer. A reopened document must resolve its standard nodedefs again
-    // before the SVM compiler sees it.
+    // before the shader generator sees it.
     const auto reloadedMaterial =
         reloaded.getMaterialXDocuments()[reloadedAsset.getMaterialIds()[0]];
     reloadedMaterial->setDataLibrary(nr::materialx::getSharedStandardLibraries());
-    nr::svm::SvmCompiler compiler;
-    REQUIRE_FALSE(compiler.compile(reloadedMaterial).bytecode.empty());
+    REQUIRE_FALSE(nr::materialx::SlangMaterialGenerator().generate(reloadedMaterial).source.empty());
 
     std::filesystem::remove(path);
 }

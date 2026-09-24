@@ -179,12 +179,12 @@ target_compile_features(hdnoorray PRIVATE cxx_std_23)
 target_compile_definitions(hdnoorray PRIVATE HDNOORRAY_EXPORTS ARCH_HAS_GNU_STL_EXTENSIONS)
 target_link_libraries(hdnoorray PRIVATE
         libnoorray
+        NoorRayIO
+        NoorRayImport
         NoorRayHydraUsd
         OpenGL::GL)
 target_include_directories(hdnoorray PRIVATE
         "${PROJECT_SOURCE_DIR}/external/materialx/source")
-target_compile_definitions(hdnoorray PRIVATE
-        NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
 if(UNIX AND NOT APPLE)
     target_link_options(hdnoorray PRIVATE "LINKER:-rpath,$ORIGIN")
     # Blender and its USD/OIIO dependencies load their own TBB ABI, so

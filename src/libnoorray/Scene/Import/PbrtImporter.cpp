@@ -33,6 +33,7 @@
 #include "Scene/Import/AssetPath.h"
 #include "Scene/Import/PbrtParser.h"
 #include "Scene/Scene.h"
+#include "IO/TextureReader.h"
 #include "Texture/Texture.h"
 #include "Optics/KolbLens.h"
 
@@ -252,10 +253,10 @@ glm::mat4 lookAtCameraFromWorld(const Command& command)
     return glm::inverse(worldFromCamera);
 }
 
-SvmMaterial makeMaterial(const Command& command,
+BasicMaterial makeMaterial(const Command& command,
     const std::unordered_map<std::string, int>& textures)
 {
-    SvmMaterial material{};
+    BasicMaterial material{};
     const std::string type = command.arguments.empty() ? "diffuse" : command.arguments.front();
     if (type != "diffuse" && type != "coateddiffuse" && type != "conductor"
         && type != "coatedconductor" && type != "dielectric" && type != "thindielectric")
@@ -284,13 +285,13 @@ SvmMaterial makeMaterial(const Command& command,
 struct ShapeRecord {
     Command command;
     glm::mat4 transform{1.f};
-    SvmMaterial material{};
+    BasicMaterial material{};
     bool reverse{};
 };
 
 struct State {
     glm::mat4 transform{1.f};
-    SvmMaterial material{};
+    BasicMaterial material{};
     std::string namedMaterial;
     glm::vec3 areaEmission{};
     bool reverse{};
@@ -318,7 +319,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
     if (shape.command.arguments.empty()) return;
     const std::string& type = shape.command.arguments.front();
     const std::string name = type + "_" + std::to_string(index);
-    SvmMaterial material = shape.material;
+    BasicMaterial material = shape.material;
     const auto texturePathResolver = [&scene](const int textureIndex) {
         const auto& textures = scene.getTextures();
         if (textureIndex < 0 || static_cast<size_t>(textureIndex) >= textures.size())
@@ -326,7 +327,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
         return textures[static_cast<size_t>(textureIndex)].getName();
     };
     const MaterialX::DocumentPtr materialDocument =
-        nr::materialx::documentFromSvmMaterial(material, texturePathResolver);
+        nr::materialx::documentFromBasicMaterial(material, texturePathResolver);
     glm::mat4 transform = shape.transform;
     Mesh* mesh;
 
@@ -383,7 +384,7 @@ void addShape(Scene& scene, const ShapeRecord& shape, const size_t index)
             }
         } else computeMissingNormals(vertices, indices);
         mesh = scene.add(Mesh(scene, name, vertices, indices,
-            std::vector<Face>(indices.size() / 3, Face{0}),
+            singleSection(indices),
             std::vector<MaterialX::DocumentPtr>{materialDocument}));
     } else {
         NR_LOG_ERROR("PBRT shape '" << type << "' is not supported; skipping "
@@ -415,7 +416,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
     state.material.roughness = 1.f;
     std::vector<State> stack;
     std::unordered_map<std::string, glm::mat4> coordinateSystems;
-    std::unordered_map<std::string, SvmMaterial> namedMaterials;
+    std::unordered_map<std::string, BasicMaterial> namedMaterials;
     std::unordered_map<std::string, int> textures;
     std::unordered_map<std::string, std::vector<ShapeRecord>> objectDefinitions;
     std::vector<ShapeRecord> shapes;
@@ -475,7 +476,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                         NR_LOG_WARN("PBRT texture not found; skipping: " << texturePath.string()
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
-                        Texture* texture = scene.addTexture(Texture(
+                        Texture* texture = scene.addTexture(TextureReader::read(
                             texturePath.string(), TextureEncoding::Srgb8));
                         textures[command.arguments[0]] =
                             texture->getSceneIndex();
@@ -500,7 +501,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                 : rgb(command, "L", glm::vec3(1.f)) * scalar(command, "scale", 1.f);
         } else if (name == "ReverseOrientation") state.reverse = !state.reverse;
         else if (name == "Shape") {
-                SvmMaterial material = state.material;
+                BasicMaterial material = state.material;
             if (glm::length2(state.areaEmission) > 0.f) {
                 material.emission = state.areaEmission;
                 material.emissionStrength = 1.f;
@@ -550,7 +551,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
                             << " (" << command.source.string() << ':' << command.line << ')');
                     } else {
                         scene.setEnvironmentTexture(
-                            scene.addTexture(Texture(hdriPath.string())));
+                            scene.addTexture(TextureReader::read(hdriPath.string())));
                         environment.setEqualAreaMapping(glm::mat3(glm::inverse(state.transform)));
                     }
                 }

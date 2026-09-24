@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <vector>
 
 #include <noorrhi/noorrhi.hpp>
 
@@ -21,11 +22,7 @@ namespace rtxdi { class ImportanceSamplingContext; }
 class Restir
 {
 public:
-    // `stages` holds the realtime miss and hit stages the screen-space passes
-    // trace visibility rays through.
-    Restir(noorrhi::Device& device, noorrhi::RayTracingPipelineDesc stages);
-    // Rebuilds the ray-tracing pipelines around new miss, hit and callable stages.
-    void setTraceStages(noorrhi::RayTracingPipelineDesc stages);
+    explicit Restir(noorrhi::Device& device);
     ~Restir();
 
     void setMode(RealtimeLightingMode mode) { mode_ = mode; }
@@ -46,11 +43,14 @@ public:
     // Draws the local lights into RTXDI's RIS tiles and ReGIR cells, which the
     // radiance cache update and the image pass sample from.
     void presample(const nr::graphics::RealtimeArgs& args, nr::graphics::RealtimeRoot root) const;
+    // The passes that test visibility trace shadow rays, so they are
+    // ray-generation stages of the realtime trace pipeline.
+    std::vector<noorrhi::Shader> raygens() const;
     // After the image pass: ReSTIR DI and, in ReSTIRGI mode, ReSTIR GI, which
     // add their light to the lobes in the render targets and pack them for
-    // the denoiser.
+    // the denoiser. `tracePipeline` must contain raygens().
     void resample(const nr::graphics::RealtimeArgs& args, nr::graphics::RealtimeRoot root,
-        Extent render) const;
+        Extent render, const noorrhi::RayTracingPipeline& tracePipeline) const;
 
 private:
     noorrhi::Device& device_;
@@ -58,15 +58,15 @@ private:
     std::unique_ptr<rtxdi::ImportanceSamplingContext> context_;
     noorrhi::ComputePipeline presampleLightsPipeline_;
     noorrhi::ComputePipeline presampleReGIRPipeline_;
-    noorrhi::RayTracingPipeline diInitialPipeline_;
-    noorrhi::RayTracingPipeline diTemporalPipeline_;
+    noorrhi::Shader diInitialRaygen_;
+    noorrhi::Shader diTemporalRaygen_;
     noorrhi::ComputePipeline diBoilingPipeline_;
-    noorrhi::RayTracingPipeline diSpatialPipeline_;
-    noorrhi::RayTracingPipeline diShadePipeline_;
-    noorrhi::RayTracingPipeline giTemporalPipeline_;
+    noorrhi::Shader diSpatialRaygen_;
+    noorrhi::Shader diShadeRaygen_;
+    noorrhi::Shader giTemporalRaygen_;
     noorrhi::ComputePipeline giBoilingPipeline_;
-    noorrhi::RayTracingPipeline giSpatialPipeline_;
-    noorrhi::RayTracingPipeline giShadePipeline_;
+    noorrhi::Shader giSpatialRaygen_;
+    noorrhi::Shader giShadeRaygen_;
     // uint2 entries: light index and inverse source pdf.
     noorrhi::Buffer<std::uint32_t> risBuffer_;
     // RTXDI_PackedDIReservoir (24 bytes) and RTXDI_PackedGIReservoir (32 bytes).

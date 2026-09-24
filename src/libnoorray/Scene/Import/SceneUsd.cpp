@@ -358,7 +358,13 @@ void writeMesh(const Scene& scene, const MeshInstance& instance,
     setAttr(mesh.GetPrim(), "nr:materialIndices", pxr::SdfValueTypeNames->IntArray,
         [&] { VtIntArray result; for (uint32_t id : asset.getMaterialIds()) result.push_back(static_cast<int>(id)); return result; }());
     setAttr(mesh.GetPrim(), "nr:faceMaterialIndices", pxr::SdfValueTypeNames->IntArray,
-        [&] { VtIntArray result; for (const Face& face : asset.getFaces()) result.push_back(face.materialIndex); return result; }());
+        [&] {
+            VtIntArray result;
+            for (const MeshSection& section : asset.getSections())
+                for (uint32_t triangle = 0; triangle < section.triangleCount; ++triangle)
+                    result.push_back(static_cast<int>(section.slot));
+            return result;
+        }());
 
     VtStringArray materialPaths;
     for (size_t slot = 0; slot < asset.getMaterialCount(); ++slot) {
@@ -545,7 +551,7 @@ void readMesh(Scene& scene, const pxr::UsdGeomMesh& mesh, const std::string& nam
             glm::vec4(color, opacity));
     }
     std::vector<uint32_t> triangleIndices;
-    std::vector<Face> faces;
+    std::vector<uint32_t> triangleSlots;
     VtIntArray faceMaterialIndices;
     getAttr(mesh.GetPrim(), "nr:faceMaterialIndices", &faceMaterialIndices);
     size_t cursor = 0;
@@ -555,9 +561,9 @@ void readMesh(Scene& scene, const pxr::UsdGeomMesh& mesh, const std::string& nam
             triangleIndices.push_back(static_cast<uint32_t>(indices[cursor]));
             triangleIndices.push_back(static_cast<uint32_t>(indices[cursor + i]));
             triangleIndices.push_back(static_cast<uint32_t>(indices[cursor + i + 1]));
-            const size_t faceIndex = faces.size();
-            faces.push_back({faceIndex < faceMaterialIndices.size()
-                ? faceMaterialIndices[faceIndex] : 0});
+            const size_t faceIndex = triangleSlots.size();
+            triangleSlots.push_back(faceIndex < faceMaterialIndices.size()
+                ? static_cast<uint32_t>(std::max(faceMaterialIndices[faceIndex], 0)) : 0u);
         }
         cursor += static_cast<size_t>(count);
     }
@@ -567,10 +573,12 @@ void readMesh(Scene& scene, const pxr::UsdGeomMesh& mesh, const std::string& nam
     for (const std::string& path : materialPaths)
         materialRefs.push_back(loadMaterial(stage, path, scene, materials));
     if (materialRefs.empty()) materialRefs.push_back(scene.addMaterial(nr::materialx::defaultMaterial()));
+    for (uint32_t& slot : triangleSlots)
+        slot = std::min(slot, static_cast<uint32_t>(materialRefs.size() - 1));
     MeshGeometry geometry;
     geometry.vertices = std::vector<Vertex>(vertices.begin(), vertices.end());
-    geometry.indices = std::vector<uint32_t>(triangleIndices.begin(), triangleIndices.end());
-    geometry.faces = std::vector<Face>(faces.begin(), faces.end());
+    geometry.indices = std::move(triangleIndices);
+    geometry.sections = sortTrianglesBySlot(geometry.indices, triangleSlots);
     auto asset = scene.add(MeshAsset(scene, name, std::move(geometry), materialRefs));
     scene.add(std::make_unique<MeshInstance>(scene, name, asset, transform));
 }

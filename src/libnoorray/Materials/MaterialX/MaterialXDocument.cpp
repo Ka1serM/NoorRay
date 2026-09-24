@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include <MaterialXCore/Document.h>
-#include <MaterialXFormat/File.h>
-#include <MaterialXFormat/Util.h>
 #include <MaterialXFormat/XmlIo.h>
+
+#include "Materials/MaterialX/MaterialXLibraryFiles.h"
 
 
 namespace nr::materialx
@@ -42,33 +45,37 @@ MaterialX::NodePtr addDisneyPrincipled(const MaterialX::DocumentPtr& document,
 }
 } // namespace
 
-MaterialX::DocumentPtr loadStandardLibraries(const std::string& materialXStdlibDir)
+std::string_view embeddedLibraryFile(const std::string_view path)
+{
+    const auto file = std::ranges::find(embeddedLibraryFiles, path, &EmbeddedLibraryFile::path);
+    if (file == embeddedLibraryFiles.end())
+        throw std::runtime_error("MaterialX library file is not embedded: " + std::string(path));
+    return {reinterpret_cast<const char*>(file->content.data()), file->content.size()};
+}
+
+MaterialX::DocumentPtr loadStandardLibraries()
 {
     MaterialX::DocumentPtr libraries = MaterialX::createDocument();
-    const MaterialX::FilePath path(materialXStdlibDir);
-    MaterialX::FileSearchPath searchPath;
-    searchPath.append(path);
-    searchPath.append(path.getParentPath());
-    // `libraries` is the MaterialX default-library root. Its direct child
-    // folders cover stdlib, pbrlib, bxdf, lights, etc. Loading through this
-    // one root avoids scanning overlapping search paths and XInclude cycles.
-    const MaterialX::FilePathVec folders{path.getBaseName()};
-    const MaterialX::StringSet loaded = MaterialX::loadLibraries(folders, searchPath, libraries);
-    if (loaded.empty())
-        throw std::runtime_error(
-            "No MaterialX definitions were loaded from " + materialXStdlibDir);
+    for (const EmbeddedLibraryFile& file : embeddedLibraryFiles) {
+        if (!file.path.ends_with(".mtlx"))
+            continue;
+        MaterialX::DocumentPtr library = MaterialX::createDocument();
+        MaterialX::readFromXmlString(library, std::string(embeddedLibraryFile(file.path)));
+        // Implementations name their source files relative to this URI.
+        library->setSourceUri(std::string(file.path));
+        libraries->importLibrary(library);
+    }
     addNoorRayExtensions(libraries);
     return libraries;
 }
 
 MaterialX::DocumentPtr getSharedStandardLibraries()
 {
-    static const MaterialX::DocumentPtr libraries =
-        loadStandardLibraries(NR_MATERIALX_STDLIB_DIR);
+    static const MaterialX::DocumentPtr libraries = loadStandardLibraries();
     return libraries;
 }
 
-MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material,
+MaterialX::DocumentPtr documentFromBasicMaterial(const BasicMaterial& material,
     const AuthoringTexturePathResolver& texturePathResolver)
 {
     MaterialX::DocumentPtr document = MaterialX::createDocument();
@@ -98,9 +105,9 @@ MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material,
     return document;
 }
 
-MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material)
+MaterialX::DocumentPtr documentFromBasicMaterial(const BasicMaterial& material)
 {
-    return documentFromSvmMaterial(material, {});
+    return documentFromBasicMaterial(material, {});
 }
 
 MaterialX::DocumentPtr defaultMaterial()

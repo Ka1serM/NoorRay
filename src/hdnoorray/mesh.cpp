@@ -30,6 +30,7 @@
 #include <tbb/parallel_for.h>
 
 #include "Mesh/Assets/Gaussian.h"
+#include "Scene/Import/GaussianReader.h"
 #include "Mesh/Assets/Mesh.h"
 #include "Materials/MaterialX/MaterialXDocument.h"
 #include "Mesh/Transform.h"
@@ -300,7 +301,7 @@ void BuildTriangleMesh(
     HdSceneDelegate* delegate, const SdfPath& id,
     const HdMeshTopology& topology, const std::vector<glm::vec3>& positions,
     std::vector<Vertex>& vertices, std::vector<uint32_t>* indices,
-    std::vector<Face>* faces, const SdfPath& requestedMaterialId,
+    std::vector<uint32_t>* triangleSlots, const SdfPath& requestedMaterialId,
     std::vector<SdfPath>* materialSlotPaths,
     const VtValue* prefetchedSt = nullptr)
 {
@@ -312,7 +313,7 @@ void BuildTriangleMesh(
     std::vector<SdfPath> localMaterialSlotPaths;
     std::vector<SdfPath>& slotPaths =
         materialSlotPaths != nullptr ? *materialSlotPaths : localMaterialSlotPaths;
-    const std::vector<int> faceSlots = (faces != nullptr)
+    const std::vector<int> faceSlots = (triangleSlots != nullptr)
         ? BuildFaceMaterialSlots(topology, requestedMaterialId, counts.size(), slotPaths)
         : std::vector<int>();
 
@@ -337,11 +338,8 @@ void BuildTriangleMesh(
         vertices.resize(cornerCount);
         if (indices != nullptr)
             indices->resize(cornerCount);
-        if (faces != nullptr) {
-            faces->resize(triangleCount);
-            for (size_t faceIndex = 0; faceIndex < triangleCount; ++faceIndex)
-                (*faces)[faceIndex] = Face{faceSlots[faceIndex]};
-        }
+        if (triangleSlots != nullptr)
+            triangleSlots->assign(faceSlots.begin(), faceSlots.end());
 
         const auto populateRange = [&](const size_t begin, const size_t end) {
             for (size_t faceIndex = begin; faceIndex < end; ++faceIndex) {
@@ -389,8 +387,8 @@ void BuildTriangleMesh(
     vertices.reserve(maximumTriangleCount * 3);
     if (indices != nullptr)
         indices->reserve(maximumTriangleCount * 3);
-    if (faces != nullptr)
-        faces->reserve(maximumTriangleCount);
+    if (triangleSlots != nullptr)
+        triangleSlots->reserve(maximumTriangleCount);
 
     const bool flip = topology.GetOrientation() == HdTokens->leftHanded;
     size_t sourceOffset = 0;
@@ -428,8 +426,8 @@ void BuildTriangleMesh(
                     indices->push_back(static_cast<uint32_t>(vertices.size()));
                 vertices.push_back(triangle[c]);
             }
-            if (faces != nullptr)
-                faces->push_back(Face{faceSlots[faceIndex]});
+            if (triangleSlots != nullptr)
+                triangleSlots->push_back(static_cast<uint32_t>(faceSlots[faceIndex]));
         }
         sourceOffset += static_cast<size_t>(count);
     }
@@ -587,7 +585,7 @@ void HdNoorRayMesh::Sync(
         if (gaussianAsset_ == nullptr) {
             try {
                 gaussianAsset_ = scene.add(
-                    GaussianAsset::CreateFromFile(scene, primName, splatPath_));
+                    GaussianReader::read(scene, primName, splatPath_));
             } catch (const std::exception& error) {
                 // A missing or malformed splat file is a scene authoring
                 // mistake, not a reason to take the host process down.
@@ -683,7 +681,7 @@ void HdNoorRayMesh::Sync(
         const bool rebuildTopology = asset == nullptr || topologyDirty;
         std::vector<Vertex> vertices;
         std::vector<uint32_t> indices;
-        std::vector<Face> faces;
+        std::vector<uint32_t> triangleSlots;
         std::vector<SdfPath> materialSlotPaths;
         lock.unlock();
         const std::vector<glm::vec3> positions =
@@ -691,7 +689,7 @@ void HdNoorRayMesh::Sync(
         BuildTriangleMesh(
             delegate, GetId(), GetMeshTopology(delegate), positions, vertices,
             rebuildTopology ? &indices : nullptr,
-            rebuildTopology ? &faces : nullptr,
+            rebuildTopology ? &triangleSlots : nullptr,
             requestedMaterialId, rebuildTopology ? &materialSlotPaths : nullptr,
             prefetchedSt ? &*prefetchedSt : nullptr);
         lock.lock();
@@ -708,18 +706,19 @@ void HdNoorRayMesh::Sync(
             if (!vertices.empty())
                 asset->updateVertexData(vertices);
         } else if (!vertices.empty() && !indices.empty()) {
-            // Topology changed or first sync — build new index/face data too.
+            // Topology changed or first sync — build new index/section data too.
             // BindMaterial (below, once each slot's material Sprim has synced
             // and published) is what points this mesh at its real materials.
             // Until that happens, a shared native grey material slot (owned
             // and compiled once by the render param) avoids a hole.
             Material* material = param.GetNativeGreyMaterial();
+            const std::vector<MeshSection> sections = sortTrianglesBySlot(indices, triangleSlots);
             if (asset) {
-                asset->replaceGeometry(vertices, indices, faces,
+                asset->replaceGeometry(vertices, indices, sections,
                     static_cast<uint32_t>(desiredMaterialIds.size()));
             } else {
                 mesh_ = scene.add(Mesh(
-                    scene, GetId().GetString(), vertices, indices, faces,
+                    scene, GetId().GetString(), vertices, indices, sections,
                     std::vector<Material*>(
                         std::max<size_t>(desiredMaterialIds.size(), 1), material)));
             }

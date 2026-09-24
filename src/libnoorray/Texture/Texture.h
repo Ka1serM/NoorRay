@@ -22,10 +22,10 @@ enum class TextureEncoding
 class Texture
 {
     friend class Scene;
+    // Records the file path of the textures it reads.
+    friend class TextureReader;
 
 public:
-    explicit Texture(const std::string& filepath,
-        TextureEncoding encoding = TextureEncoding::Linear8);
     Texture(std::string name, const void* data, int width, int height,
         TextureEncoding encoding);
     Texture(std::string name, std::vector<uint8_t>&& data, int width,

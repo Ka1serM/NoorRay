@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <span>
 #include <noorrhi/noorrhi.hpp>
 
 #include "Materials/Material.h"
@@ -32,7 +33,24 @@ inline Vertex defaultVertex()
     return vertex;
 }
 
-using Face = nr::graphics::Face;
+// A contiguous run of triangles drawn with one material slot, as Unreal's
+// mesh sections are. A mesh's sections tile its triangles in order; several
+// may use the same slot. Each is one BLAS geometry, and its shader-binding-
+// table records select the hit groups of that slot's material.
+struct MeshSection
+{
+    uint32_t slot{};
+    uint32_t firstTriangle{};
+    uint32_t triangleCount{};
+};
+
+// For sources that assign a material slot per triangle: stably reorders the
+// triangles of `indices` by slot and returns the sections that result.
+std::vector<MeshSection> sortTrianglesBySlot(std::vector<uint32_t>& indices,
+    std::span<const uint32_t> triangleSlots);
+
+// The one section of a mesh drawn with a single material.
+std::vector<MeshSection> singleSection(const std::vector<uint32_t>& indices);
 
 // Move-owned final geometry storage. Importers can fill these managed buffers
 // directly on worker threads, then hand them to Mesh without a second
@@ -47,7 +65,7 @@ struct MeshGeometry
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    std::vector<Face> faces;
+    std::vector<MeshSection> sections;
 };
 
 // Each mesh owns its shader record, reached through the inherited `data`
@@ -65,9 +83,9 @@ public:
     static Mesh CreateSphere(Scene& scene, const std::string& name,  const MaterialX::DocumentPtr& material, uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
     static Mesh CreateDisk(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t segments = 64);
     
-    Mesh(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<Face>& faces, const std::vector<MaterialX::DocumentPtr>& materials);
+    Mesh(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections, const std::vector<MaterialX::DocumentPtr>& materials);
     Mesh(Scene& context, std::string name, const std::vector<Vertex>& vertices,
-        const std::vector<uint32_t>& indices, const std::vector<Face>& faces,
+        const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections,
         std::vector<Material*> materials);
     Mesh(Scene& context, std::string name, MeshGeometry&& geometry,
         const std::vector<MaterialX::DocumentPtr>& materials);
@@ -89,16 +107,16 @@ public:
     
     const std::vector<Vertex>& getVertices() const { return vertices; }
     const std::vector<uint32_t>& getIndices() const { return indices; }
-    const std::vector<Face>& getFaces() const { return faces; }
     const std::vector<uint32_t>& getMaterialIds() const {
         return materialIds;
     }
     size_t getMaterialCount() const { return materialIds.size(); }
+    const std::vector<MeshSection>& getSections() const { return sections; }
     const Material& getMaterial(uint32_t slot) const;
     Material* getMaterialPtr(uint32_t slot) const;
     Scene& getScene() const { return scene; }
     // Replaces the vertex data and refits the BLAS in place, which is much
-    // cheaper than replaceGeometry. Topology (indices + faces) and material
+    // cheaper than replaceGeometry. Topology (indices + sections) and material
     // count stay the same, so the caller must pass one vertex per existing
     // vertex. updatePositions/updateVertexData are conveniences over this.
     void setVertices(std::vector<Vertex> value);
@@ -107,14 +125,14 @@ public:
 
     // desiredMaterialSlotCount: grows materialIds/materialRefs (each new slot
     // gets the same native grey fallback material construction uses) when the
-    // new topology's Face.materialIndex values reference more slots than
+    // new topology's section slots reference more slots than
     // this mesh currently has -- e.g. a live-edited mesh gaining an
     // HdGeomSubset. 0 (the default) means "no change", the common case where
     // topology changes but material count does not. Never shrinks: unused
     // trailing slots are harmless, and shrinking could invalidate a
-    // Face.materialIndex the caller forgot to remap.
+    // section slot the caller forgot to remap.
     void replaceGeometry(const std::vector<Vertex>& newVertices,
-        const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces,
+        const std::vector<uint32_t>& newIndices, const std::vector<MeshSection>& newSections,
         uint32_t desiredMaterialSlotCount = 0);
     // Adopts already-managed geometry without allocating or copying it. This
     // is the preferred integration point for loaders and Hydra adapters that
@@ -124,18 +142,24 @@ public:
     void notifyMaterialsChanged();
 
     // Uploads buffers and builds the BLAS only when the geometry or material
-    // slots changed since the last upload; scene publication calls this for
-    // every mesh, so unchanged meshes must cost nothing.
+    // slots changed since the last upload, and rebuilds only the BLAS when a
+    // section's opacity did; scene publication calls this for every mesh, so
+    // unchanged meshes must cost nothing.
     void upload(noorrhi::Device& device);
     void releaseGpu();
     noorrhi::Buffer<std::uint32_t> indexBuffer;
     noorrhi::Buffer<nr::graphics::Vertex> vertexBuffer;
-    noorrhi::Buffer<nr::graphics::Face> faceBuffer;
-    noorrhi::Buffer<std::uint32_t> materialBuffer;
+    noorrhi::Buffer<nr::graphics::SectionRecord> sectionBuffer;
     noorrhi::AccelerationStructure blas;
 
 private:
     void initializeMaterialIds(const std::vector<Material*>& materials);
+    // Throws unless the sections tile the triangles in order and name
+    // existing slots.
+    void validateSections() const;
+    // A section is opaque, and skips any-hit stages, when its material's
+    // opacity is one everywhere.
+    std::vector<bool> sectionOpacity() const;
 
     Scene& scene;
     std::string path;
@@ -143,7 +167,8 @@ private:
     bool gpuDirty = true;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    std::vector<Face> faces;
     std::vector<uint32_t> materialIds;
-
+    std::vector<MeshSection> sections;
+    // The per-section opaque flags the current BLAS was built with.
+    std::vector<bool> blasOpacity;
 };

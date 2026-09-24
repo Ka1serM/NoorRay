@@ -121,10 +121,10 @@ struct Gaussian
 
 class GaussianAsset
 {
-public:
-    static GaussianAsset CreateFromFile(
-        Scene& scene, const std::string& name, const std::string& path);
+    // Sets the source path of the assets it reads.
+    friend class GaussianReader;
 
+public:
     GaussianAsset(Scene& scene, std::string name, std::vector<Gaussian> gaussians);
     GaussianAsset(GaussianAsset&& other) noexcept = default;
     GaussianAsset(const GaussianAsset&) = delete;

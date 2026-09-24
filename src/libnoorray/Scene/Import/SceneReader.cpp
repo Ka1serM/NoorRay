@@ -46,9 +46,9 @@ std::vector<std::string> splitPaths(const std::string& paths)
     return result;
 }
 
-SvmMaterial toMaterial(const nr::sceneio::MaterialFile& file)
+BasicMaterial toMaterial(const nr::sceneio::MaterialFile& file)
 {
-    SvmMaterial material{};
+    BasicMaterial material{};
     material.albedo = toVec3(file.albedo);
     material.roughness = file.roughness;
     material.metallic = file.metallic;
@@ -143,8 +143,8 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
         if (SceneObject* root = scene.getActiveObject())
             root->setLocalTransform(transform);
     } else if (object.type == "obj") {
-        SvmMaterial materialOverride{};
-        const SvmMaterial* materialOverridePtr = nullptr;
+        BasicMaterial materialOverride{};
+        const BasicMaterial* materialOverridePtr = nullptr;
         if (object.material) {
             materialOverride = toMaterial(*object.material);
             materialOverridePtr = &materialOverride;
@@ -154,7 +154,7 @@ void addObject(Scene& scene, const nr::sceneio::ObjectFile& object)
             root->setLocalTransform(transform);
     } else {
         const MaterialX::DocumentPtr materialDocument = object.material
-            ? nr::materialx::documentFromSvmMaterial(toMaterial(*object.material))
+            ? nr::materialx::documentFromBasicMaterial(toMaterial(*object.material))
             : nr::materialx::defaultMaterial();
 
         // Mark the material as needing MaterialX compilation when a path is

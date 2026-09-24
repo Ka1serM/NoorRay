@@ -13,6 +13,7 @@
 #include <tbb/parallel_for.h>
 #include <tbb/task_arena.h>
 #include "Camera/CameraInstance.h"
+#include "IO/TextureReader.h"
 #include "Texture/Texture.h"
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
@@ -31,6 +32,7 @@
 #include "glm/gtx/quaternion.hpp"
 #include "Mesh/Assets/Mesh.h"
 #include "Mesh/Assets/Gaussian.h"
+#include "Scene/Import/GaussianReader.h"
 #include "Mesh/Transform.h"
 #include "Math/CoordinateSystem.h"
 #include "Scene/GaussianInstance.h"
@@ -241,13 +243,13 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     // STEP 1: Import all unique assets (meshes and materials)
 
     // Load Materials
-    std::vector<SvmMaterial> globalMaterials;
+    std::vector<BasicMaterial> globalMaterials;
     // Keyed by (glTF image index, encoding) so two materials that sample the
     // same source image (a common texture-atlas pattern) upload it once
     // instead of decoding and uploading a duplicate copy per material.
     std::map<std::pair<int, int>, Texture*> imageTextureCache;
     for (const auto& mat : model.materials) {
-        SvmMaterial material{};
+        BasicMaterial material{};
         const auto& pbr = mat.pbrMetallicRoughness;
         material.albedo = glm::make_vec3(pbr.baseColorFactor.data());
         material.metallic = static_cast<float>(pbr.metallicFactor);
@@ -298,7 +300,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                 const std::filesystem::path texturePath = gltfDir / image.uri;
                 if (std::filesystem::exists(texturePath)) {
                     Texture* texture = scene.addTexture(
-                        Texture(texturePath.string(), encoding));
+                        TextureReader::read(texturePath.string(), encoding));
                     materialIndex = texture->getSceneIndex();
                     imageTextureCache[cacheKey] = texture;
                 } else {
@@ -496,9 +498,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             }
         }
 
-        output.geometry.faces.reserve(output.geometry.indices.size() / 3);
-        for (size_t face = 0; face < output.geometry.indices.size() / 3; ++face)
-            output.geometry.faces.push_back(Face{0});
+        output.geometry.sections = singleSection(output.geometry.indices);
         const int material = primitive.material < 0 ? 0 : primitive.material;
         output.materialIndex =
             static_cast<size_t>(material) < globalMaterials.size()
@@ -525,9 +525,9 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     // enqueued only after a complete immutable CPU payload exists.
     std::vector<Material*> globalMaterialsInScene;
     globalMaterialsInScene.reserve(globalMaterials.size());
-    for (const SvmMaterial& material : globalMaterials)
+    for (const BasicMaterial& material : globalMaterials)
         globalMaterialsInScene.push_back(
-            scene.addMaterial(nr::materialx::documentFromSvmMaterial(material)));
+            scene.addMaterial(nr::materialx::documentFromBasicMaterial(material)));
 
     std::vector<std::vector<Mesh*>> loadedMeshes(model.meshes.size());
     for (PreparedPrimitive& primitive : prepared) {
@@ -694,7 +694,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
     loadedMeshes.clear();
 }
 
-void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const SvmMaterial* materialOverride)
+void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, const BasicMaterial* materialOverride)
 {
     const std::filesystem::path filePath = resolveAssetPath(filepath);
     if (!std::filesystem::exists(filePath))
@@ -736,7 +736,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
        NR_LOG_ERROR("TinyObjLoader Info/Error: " << err);
 
     // Load Global Materials from the MTL file (if it was found)
-    std::vector<SvmMaterial> globalMaterials;
+    std::vector<BasicMaterial> globalMaterials;
     // The materials below carry scene texture slot indices. Scene owns the
     // corresponding image data for the lifetime of this scene.
     // Keyed by (resolved texture path, encoding) so multiple materials that
@@ -744,7 +744,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     // uploading a duplicate copy per material.
     std::map<std::pair<std::string, int>, Texture*> imageTextureCache;
     for (const auto& mat : mats) {
-        SvmMaterial material{};
+        BasicMaterial material{};
         material.albedo = vec3(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
         material.specular = mat.specular[0];
         material.metallic = mat.metallic;
@@ -775,7 +775,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                 }
                 if (std::filesystem::exists(texturePath)) {
                     Texture* texture = scene.addTexture(
-                        Texture(resolvedTexturePath, encoding));
+                        TextureReader::read(resolvedTexturePath, encoding));
                     index = texture->getSceneIndex();
                     imageTextureCache[cacheKey] = texture;
                 } else
@@ -827,7 +827,8 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
 
         output.geometry.vertices.reserve(shape.mesh.indices.size());
         output.geometry.indices.reserve(shape.mesh.indices.size());
-        output.geometry.faces.reserve(shape.mesh.num_face_vertices.size());
+        std::vector<uint32_t> triangleSlots;
+        triangleSlots.reserve(shape.mesh.num_face_vertices.size());
 
         std::unordered_map<int, int> materialRemap;
         auto localMaterialIndex = [&](const int globalMaterialId) {
@@ -860,7 +861,7 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
             const int sourceMaterial =
                 faceIndex < shape.mesh.material_ids.size()
                 ? shape.mesh.material_ids[faceIndex] : -1;
-            const Face face{localMaterialIndex(sourceMaterial)};
+            const auto slot = static_cast<uint32_t>(localMaterialIndex(sourceMaterial));
 
             uint32_t triangleIndices[3];
             bool validTriangle = true;
@@ -951,11 +952,12 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                 output.geometry.vertices.push_back(vertex);
                 output.geometry.indices.push_back(triangleIndices[corner]);
             }
-            output.geometry.faces.push_back(face);
+            triangleSlots.push_back(slot);
         }
 
         if (output.geometry.vertices.empty())
             return;
+        output.geometry.sections = sortTrianglesBySlot(output.geometry.indices, triangleSlots);
         vec3 minimum = output.geometry.vertices.front().position;
         vec3 maximum = minimum;
         for (const Vertex& vertex : output.geometry.vertices) {
@@ -977,9 +979,9 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
 
     std::vector<Material*> globalMaterialsInScene;
     globalMaterialsInScene.reserve(globalMaterials.size());
-    for (const SvmMaterial& material : globalMaterials)
+    for (const BasicMaterial& material : globalMaterials)
         globalMaterialsInScene.push_back(
-            scene.addMaterial(nr::materialx::documentFromSvmMaterial(material)));
+            scene.addMaterial(nr::materialx::documentFromBasicMaterial(material)));
 
     // Phase 2: publish in OBJ shape order and assemble the hierarchy serially.
     auto parentObject =
@@ -1011,6 +1013,18 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
     scene.setActiveObject(parentHandle);
     if (materialOverride == nullptr)
         scene.registerImportedFileRoot(resolvedFilepath, parentHandle);
+}
+
+void SceneImporter::Load(Scene& scene, const std::string& filepath)
+{
+    if (IsSceneFile(filepath)) {
+        scene.synchronizeBeforeMutation();
+        SceneReader::Read(scene, filepath);
+        return;
+    }
+    scene.clear();
+    scene.synchronizeBeforeMutation();
+    ImportFile(scene, filepath);
 }
 
 std::string SceneImporter::nameFromPath(const std::string& path) {
@@ -1081,7 +1095,7 @@ void SceneImporter::ImportFile(Scene& scene, const std::string& filepath)
         // Standalone images have no material reference to retain them. Keep
         // an explicit scene-library owner so they remain available to the
         // HDRI picker after this importer returns.
-        scene.addTexture(Texture(filepath));
+        scene.addTexture(TextureReader::read(filepath));
     } else {
         throw std::runtime_error("Unsupported import file type: " + filepath);
     }
@@ -1095,7 +1109,7 @@ void SceneImporter::ImportGaussianScene(Scene& scene, const std::string& filepat
 
     const std::string name = nameFromPath(filePath.filename().string());
     GaussianAsset* asset =
-        scene.add(GaussianAsset::CreateFromFile(scene, name, filePath.string()));
+        scene.add(GaussianReader::read(scene, name, filePath.string()));
     auto instance = std::make_unique<GaussianInstance>(scene, name, asset, Transform{});
     instance->setSource("gaussian", filePath.string());
     scene.add(std::move(instance));

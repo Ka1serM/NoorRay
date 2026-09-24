@@ -72,7 +72,7 @@ add_noorray_test(noorrhi_adoption_test unit/noorrhi/NoorRhiAdoptionTest.cpp Noor
 add_dependencies(noorrhi_adoption_test noorray_noorrhi_test_shader)
 target_compile_definitions(noorrhi_adoption_test PRIVATE NOORRHI_TEST_SHADER="${NR_NOORRHI_ADD_SHADER}")
 target_link_libraries(noorrhi_adoption_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,NoorRHI>")
+    libnoorray NoorRayIO)
 
 add_noorray_test(vertex_color_test unit/scene/VertexColorTest.cpp vertex-color)
 target_link_libraries(vertex_color_test PRIVATE glm)
@@ -82,8 +82,7 @@ target_link_libraries(render_settings_test PRIVATE glm)
 
 add_noorray_test(texture_storage_test
     unit/scene/TextureStorageTest.cpp texture)
-target_link_libraries(texture_storage_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO>")
+target_link_libraries(texture_storage_test PRIVATE libnoorray NoorRayIO)
 
 add_noorray_test(imgui_math_input_test
     "unit/ui/ImGuiMathInputTest.cpp;${CMAKE_SOURCE_DIR}/src/app/UI/MathInput.cpp" ui)
@@ -106,13 +105,6 @@ add_noorray_test(slang_default_materialx_nodes_test
 target_compile_definitions(slang_default_materialx_nodes_test PRIVATE
     NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
 target_link_libraries(slang_default_materialx_nodes_test PRIVATE NoorRayMaterialX)
-
-add_noorray_test(svm_materialx_compiler_test
-    "unit/svm/SvmMaterialXCompilerTest.cpp;${CMAKE_SOURCE_DIR}/src/libnoorray/Materials/SVM/SvmMaterialXCompiler.cpp" svm)
-target_compile_definitions(svm_materialx_compiler_test PRIVATE
-    NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
-target_link_libraries(svm_materialx_compiler_test PRIVATE
-    MaterialXCore MaterialXFormat MaterialXGenShader NoorRayMaterialX glm)
 
 # Every node class file is listed: they register themselves at start-up and are
 # not referenced from anywhere, so the test only covers what it links.
@@ -141,19 +133,15 @@ target_include_directories(materialx_graph_layout_test PRIVATE
 add_noorray_test(scene_importer_cache_test unit/scene/SceneImporterCacheTest.cpp scene)
 target_compile_definitions(scene_importer_cache_test PRIVATE
     TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
-target_link_libraries(scene_importer_cache_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO>")
+target_link_libraries(scene_importer_cache_test PRIVATE NoorRayImport)
 
 if(NR_ENABLE_USD)
     add_noorray_test(scene_usd_test unit/scene/SceneUsdTest.cpp scene)
-    target_link_libraries(scene_usd_test PRIVATE
-        "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO>"
-        NoorRayUsdStandalone)
+    target_link_libraries(scene_usd_test PRIVATE NoorRayImport NoorRayMaterialX NoorRayUsdStandalone)
 endif()
 
 add_noorray_test(scene_pbrt_test unit/scene/ScenePbrtTest.cpp scene)
-target_link_libraries(scene_pbrt_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO>")
+target_link_libraries(scene_pbrt_test PRIVATE NoorRayImport)
 
 function(add_noorray_render_test target source)
     if(NOT TARGET NoorRay)
@@ -170,7 +158,7 @@ endfunction()
 
 add_noorray_test(editor_edit_render_test e2e/EditorEditRenderTest.cpp e2e)
 target_link_libraries(editor_edit_render_test PRIVATE
-    "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO,NoorRHI,NoorRayMaterialX>")
+    NoorRayImport NoorRayMaterialX)
 add_noorray_render_test(render_smoke_test e2e/RenderSmokeTest.cpp)
 add_noorray_render_test(white_furnace_test e2e/WhiteFurnaceTest.cpp)
 add_noorray_render_test(convergence_test e2e/ConvergenceTest.cpp)

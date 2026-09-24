@@ -4,7 +4,7 @@
 #include <utility>
 #include <vector>
 
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/RealtimeRaytracer.h"
 #include "Logging/Log.h"
 #include "Camera/CameraInstance.h"
 #include "Camera/RealisticCamera.h"
@@ -30,7 +30,7 @@ void NoorRaySession::initializeHeadlessRenderer(const uint32_t width,
     exportViewportMemory_ = exportColorMemory;
     viewportOutputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     scene_.getRenderSettings().raytracer = RaytracerType::Realtime;
-    raytracer_ = Raytracer::create(*device_, width, height, exportColorMemory);
+    raytracer_ = std::make_unique<RealtimeRaytracer>(*device_, width, height, exportColorMemory);
     prepareViewport();
     headless_ = true;
 }
@@ -42,7 +42,7 @@ NoorRaySession::NoorRaySession(noorrhi::Device& device, const uint32_t width,
     , headless_(false)
 {
     scene_.getRenderSettings().raytracer = RaytracerType::Realtime;
-    raytracer_ = Raytracer::create(device, width, height);
+    raytracer_ = std::make_unique<RealtimeRaytracer>(device, width, height);
     exportViewportMemory_ = false;
     viewportOutputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     prepareViewport();
@@ -237,9 +237,8 @@ void NoorRaySession::rebuildNativeScene()
 {
     if (!raytracer_)
         throw std::runtime_error("native raytracer is not available for this session");
-    raytracer_->uploadScene(scene_);
-    updateNativeCamera();
     rebuildNativeMaterials();
+    updateNativeCamera();
     scene_.clearDirtyFlags();
     appliedSceneChanges_ = scene_.getChangeState();
     scene_.consumeGpuSync();
@@ -426,9 +425,11 @@ void NoorRaySession::rebuildNativeMaterials()
     // Compilation is asynchronous so edits never race a frame.  Publishing
     // the completed table here keeps the renderer's buffers immutable between
     // dispatches while still making scene_ imports immediately renderable.
-    materialRuntime_.compileAndWait(scene_, raytracer_->needsSvmPrograms());
+    materialRuntime_.compileAndWait(scene_);
 
-    raytracer_->uploadMaterials(scene_);
+    // A published program changes its material's hit groups and its sections'
+    // opacity, which the scene upload applies along with the materials.
+    raytracer_->uploadScene(scene_);
     raytracer_->uploadEnvironment(scene_);
 }
 
@@ -437,7 +438,7 @@ bool NoorRaySession::processNativeMaterials()
     if (!raytracer_)
         return false;
     const bool wasIncomplete = materialRuntime_.needsCompilation(scene_);
-    materialRuntime_.processPending(scene_, raytracer_->needsSvmPrograms());
+    materialRuntime_.processPending(scene_);
     if (!wasIncomplete || materialRuntime_.needsCompilation(scene_))
         return false;
 

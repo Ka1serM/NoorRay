@@ -8,15 +8,21 @@
 namespace nr::materialx
 {
 
-// SPIR-V of one generated material's callable shader, entry point "main".
+// SPIR-V of one generated material's hit stages (MaterialHit.slang), each
+// with the entry point named after its member.
 struct MaterialShader
 {
     std::string source;
-    std::vector<std::uint32_t> spirv;
+    // Evaluates the material into the realtime hit payload.
+    std::vector<std::uint32_t> closestHit;
+    // Apply the material's opacity to surface and shadow rays.
+    std::vector<std::uint32_t> anyHit;
+    std::vector<std::uint32_t> shadowAnyHit;
 };
 
 // Compiles generated material modules (SlangMaterialGenerator) against
-// MaterialInterface.slang with the Slang compiler library. Cross-worker
+// MaterialInterface.slang and MaterialHit.slang with the Slang compiler
+// library. Cross-worker
 // shader-shape sharing is owned by MaterialXSceneRuntime. Not thread safe;
 // each worker owns one.
 class SlangMaterialCompiler

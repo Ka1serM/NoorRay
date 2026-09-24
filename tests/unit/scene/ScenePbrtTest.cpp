@@ -23,7 +23,7 @@ TEST_CASE("PBRT scene export is readable by the PBRT importer", "[scene][pbrt]")
     Scene& scene = session.scene();
     scene.getRenderSettings().maxSamples = 17;
 
-    const auto material = nr::materialx::documentFromSvmMaterial(SvmMaterial{});
+    const auto material = nr::materialx::documentFromBasicMaterial(BasicMaterial{});
     const auto asset = scene.add(Mesh::CreateSphere(scene, "ExportSphere", material, 8, 16));
     scene.add(std::make_unique<MeshInstance>(scene, "ExportSphere", asset,
         Transform({1.f, 2.f, -3.f}, {10.f, 20.f, 30.f}, {2.f, 1.f, 0.5f})));

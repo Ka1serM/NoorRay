@@ -138,8 +138,7 @@ private:
     Scene scene_;
     Scene::ChangeState appliedSceneChanges_{};
     bool headless_{true};
-    // Owns the immutable host-side MaterialX -> SVM compilation snapshot
-    // consumed by the native raytracer dispatch.
+    // Compiles the scene's MaterialX materials to the renderer's shaders.
     MaterialXSceneRuntime materialRuntime_;
 
 private:

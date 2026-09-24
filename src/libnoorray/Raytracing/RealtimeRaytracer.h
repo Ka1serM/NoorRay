@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "Raytracer.h"
 #include "Realtime/Accumulator.h"
@@ -17,7 +18,7 @@ namespace nr::graphics { struct RealtimeArgs; }
 
 // Interactive biased RGB renderer. It shares the scene/resource contract with
 // the spectral renderer but owns a separate, cheaper shader pipeline: meshes
-// only, shaded with a fallback material, one path per pixel.
+// only, each section hit through its material's hit group, one path per pixel.
 //
 // A frame is a fixed sequence of stages around the image pass, each of which
 // passes the frame through unchanged in its Off mode:
@@ -40,9 +41,6 @@ public:
         return RaytracerType::Realtime;
     }
 
-    bool supportsMeshLights() const noexcept override { return false; }
-    bool needsSvmPrograms() const noexcept override { return false; }
-
     // Rays are traced at the resolution the upscaler mode derives; the
     // upscaler brings the result back to the logical size. Hosts and the
     // viewport composite need the trace resolution to reason about how sharp
@@ -57,7 +55,8 @@ protected:
     void onImageAllocationChanged() override;
     void onLightsUploaded() override;
     void onRenderSettingsApplied(const RenderSettings& settings) override;
-    void onMaterialShadersChanged(std::span<const noorrhi::Shader> shaders) override;
+    void onMaterialShadersChanged(std::span<const MaterialHitShaders> shaders) override;
+    void onHitRecordsChanged(std::span<const HitRecord> records) override;
 
 private:
     // History restarts whenever any of these changes.
@@ -79,13 +78,14 @@ private:
     // Waits for the device when it does.
     void ensureRenderResolution();
     void resizeRenderResolution();
+    // Links the pass library with every material library into the one
+    // pipeline all ray-tracing passes launch from, with hitGroups as its
+    // hit records.
+    void linkTracePipeline();
     // Builds this frame's context and fills args->view, then records the
     // frame as the previous one.
     FrameContext beginFrame();
 
-    // The realtime miss and hit stages every ray-tracing pass shares; each
-    // pass supplies its own ray generation.
-    noorrhi::RayTracingPipelineDesc traceStages;
     noorrhi::Shader imageRaygen;
     RadianceCache radianceCache;
     Restir restir;
@@ -93,6 +93,17 @@ private:
     Upscaler upscaler;
     Accumulator accumulator;
     RenderTargets targets;
+    // Every pass's ray generation with the miss stages and the default
+    // material's hit group. It never changes, so the driver compiles it once
+    // and caches it on disk.
+    noorrhi::RayTracingLibrary passLibrary;
+    // One library per batch of material hit groups, in material-shader order.
+    // A new batch compiles only its own materials.
+    std::vector<noorrhi::RayTracingLibrary> materialLibraries;
+    std::size_t materialShaderCount{};
+    // The hit group of each of the scene's hit records.
+    std::vector<std::uint32_t> hitGroups;
+    noorrhi::RayTracingPipeline tracePipeline;
     noorrhi::ComputePipeline compositePipeline;
     noorrhi::ComputePipeline outputAovsPipeline;
     std::unique_ptr<nr::graphics::RealtimeArgs> args;

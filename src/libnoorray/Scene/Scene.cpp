@@ -11,8 +11,6 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include "Scene/SceneObject.h"
-#include "Scene/Import/SceneImporter.h"
-#include "Scene/Import/SceneReader.h"
 
 using glm::inverse;
 using glm::mat4;
@@ -45,29 +43,6 @@ void Scene::releaseGpuResources()
     for (Material& material : materials)
         material.releaseGpu();
     environment->releaseGpu();
-}
-
-void Scene::load(const std::string& path)
-{
-    if (SceneImporter::IsSceneFile(path))
-        read(path);
-    else
-    {
-        clear();
-        importFile(path);
-    }
-}
-
-void Scene::importFile(const std::string& path)
-{
-    synchronizeBeforeMutation();
-    SceneImporter::ImportFile(*this, path);
-}
-
-void Scene::read(const std::string& path)
-{
-    synchronizeBeforeMutation();
-    SceneReader::Read(*this, path);
 }
 
 void Scene::notifyGeometryChanged() {
@@ -257,11 +232,9 @@ void Scene::updateMaterialDocument(
     synchronizeBeforeMutation();
     materialxDocuments[index] = std::move(document);
     materialxSourcePaths[index].clear();
-    // The published programs were compiled from the old document.
-    material->program = {};
+    // The published program was compiled from the old document.
     material->shaderProgram = {};
     material->compiled = false;
-    material->mayEmit = 0;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
     notifyMaterialChanged();
@@ -274,10 +247,8 @@ void Scene::invalidateMaterial(Material* material)
     synchronizeBeforeMutation();
     // Dropping the program is what marks the material for recompilation; its
     // GPU allocations are replaced wholesale when the new one is published.
-    material->program = {};
     material->shaderProgram = {};
     material->compiled = false;
-    material->mayEmit = 0;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
     notifyMaterialChanged();
@@ -876,15 +847,13 @@ std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObjectHandle handle
 }
 
 void Scene::setMaterialProgram(const std::size_t materialIndex,
-    nr::svm::CompiledSvmProgram program, MaterialShaderProgram shaderProgram)
+    MaterialShaderProgram shaderProgram)
 {
     synchronizeBeforeMutation();
     Material& material = materials[materialIndex];
     material.releaseGpu();
-    material.program = std::move(program);
     material.shaderProgram = std::move(shaderProgram);
     material.compiled = true;
-    material.mayEmit = material.program.mayEmit ? 1u : 0u;
     setDirtyFlag(Meshes);
     setDirtyFlag(Accumulation);
 }

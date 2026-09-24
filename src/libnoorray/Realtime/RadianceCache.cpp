@@ -48,21 +48,15 @@ noorrhi::Buffer<T> zeroed(noorrhi::Device& device, const std::size_t count)
 }
 }
 
-RadianceCache::RadianceCache(noorrhi::Device& device, noorrhi::RayTracingPipelineDesc stages)
+RadianceCache::RadianceCache(noorrhi::Device& device)
     : device_(device)
+    , updateRaygen_(loadShader(device, updateSpv))
     , resolvePipeline_(device.compute(loadShader(device, resolveSpv)))
     // SHaRC requires every buffer to start zeroed.
     , hashEntries_(zeroed<std::uint64_t>(device, Capacity))
     , accumulation_(zeroed<std::uint32_t>(device, std::size_t(Capacity) * RecordWords))
     , resolved_(zeroed<std::uint32_t>(device, std::size_t(Capacity) * RecordWords))
 {
-    setTraceStages(std::move(stages));
-}
-
-void RadianceCache::setTraceStages(noorrhi::RayTracingPipelineDesc stages)
-{
-    stages.raygen = loadShader(device_, updateSpv);
-    updatePipeline_ = device_.ray_tracing(stages);
 }
 
 nr::graphics::RadianceCacheArgs RadianceCache::args(const FrameContext& frame) const
@@ -88,11 +82,11 @@ nr::graphics::RadianceCacheArgs RadianceCache::args(const FrameContext& frame) c
 }
 
 void RadianceCache::record(const nr::graphics::RealtimeArgs& args,
-    const nr::graphics::RealtimeRoot root) const
+    const nr::graphics::RealtimeRoot root, const noorrhi::RayTracingPipeline& tracePipeline) const
 {
     if (mode_ == RadianceCacheMode::Off)
         return;
-    updatePipeline_.trace({args.radianceCache.updateGridWidth,
+    tracePipeline.trace(updateRaygen_, {args.radianceCache.updateGridWidth,
         args.radianceCache.updateGridHeight, 1}, root);
     device_.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::Compute);
     resolvePipeline_.launch({divideRoundingUp(Capacity, ResolveGroupSize), 1, 1}, root);

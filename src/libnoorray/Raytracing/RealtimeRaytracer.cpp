@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iterator>
+#include <stdexcept>
 
 #include <glm/geometric.hpp>
 
@@ -18,8 +20,11 @@ alignas(uint32_t) constexpr unsigned char raygenSpv[] = {
 alignas(uint32_t) constexpr unsigned char missSpv[] = {
     #embed "RealtimeRaytracer/RealtimeMiss.spv"
 };
-alignas(uint32_t) constexpr unsigned char hitSpv[] = {
-    #embed "RealtimeRaytracer/RealtimeHit.spv"
+alignas(uint32_t) constexpr unsigned char shadowMissSpv[] = {
+    #embed "RealtimeRaytracer/RealtimeShadowMiss.spv"
+};
+alignas(uint32_t) constexpr unsigned char defaultMaterialHitSpv[] = {
+    #embed "RealtimeRaytracer/DefaultMaterialHit.spv"
 };
 alignas(uint32_t) constexpr unsigned char compositeSpv[] = {
     #embed "RealtimeRaytracer/RealtimeComposite.spv"
@@ -35,14 +40,30 @@ constexpr float NearPlane = 0.01f;
 // treats as geometry.
 constexpr float OrthographicFarPlane = 4.0e5f;
 
-noorrhi::RayTracingPipelineDesc realtimeTraceStages(noorrhi::Device& device)
+// Every realtime stage agrees on this; the surface payload is the largest.
+constexpr noorrhi::RayTracingInterface TraceInterface{sizeof(nr::graphics::RealtimeHitPayload)};
+
+// Hit groups of the linked pipeline, counted library by library. The pass
+// library's come first; each material then adds MaterialGroupCount.
+constexpr uint32_t DefaultMaterialGroup = 0u;
+// No shaders: shadow rays pass opaque materials' records without any work,
+// and Gaussian records, which realtime rays never reach, need some group.
+constexpr uint32_t EmptyGroup = 1u;
+constexpr uint32_t FirstMaterialGroup = 2u;
+enum MaterialGroup : uint32_t { TransparentSurface, OpaqueSurface, Shadow, MaterialGroupCount };
+
+noorrhi::RayTracingLibrary buildPassLibrary(noorrhi::Device& device,
+    std::vector<noorrhi::Shader> raygens)
 {
-    // The shared TLAS keeps the spectral SBT layout (two records per mesh
-    // geometry, Gaussians at offset 2). Realtime rays trace meshes only, as
-    // opaque geometry, so every record is the one closest-hit stage and
-    // there are no any-hit stages.
-    const noorrhi::Shader hit = loadShader(device, hitSpv);
-    return {{}, {loadShader(device, missSpv)}, {hit, hit, hit, hit}, {}, {}};
+    return device.ray_tracing_library({std::move(raygens),
+        {loadShader(device, missSpv), loadShader(device, shadowMissSpv)},
+        {loadShader(device, defaultMaterialHitSpv), noorrhi::Shader{}}, {}, {}}, TraceInterface);
+}
+
+long long millisecondsSince(const std::chrono::steady_clock::time_point started)
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
 }
 
 std::array<float, 16> multiplyColumnMajor(const std::array<float, 16>& a,
@@ -111,9 +132,9 @@ std::array<float, 16> viewToClipMatrix(const nr::graphics::Camera& camera)
 RealtimeRaytracer::RealtimeRaytracer(noorrhi::Device& device,
     const uint32_t width, const uint32_t height, const bool exportColorMemory)
     : Raytracer(device, width, height, exportColorMemory)
-    , traceStages(realtimeTraceStages(device))
-    , radianceCache(device, traceStages)
-    , restir(device, traceStages)
+    , imageRaygen(loadShader(device, raygenSpv))
+    , radianceCache(device)
+    , restir(device)
     , denoiser(device)
     , upscaler(device)
     , accumulator(device)
@@ -122,10 +143,13 @@ RealtimeRaytracer::RealtimeRaytracer(noorrhi::Device& device,
     , outputAovsPipeline(device.compute(loadShader(device, outputAovsSpv)))
     , args(std::make_unique<nr::graphics::RealtimeArgs>())
 {
-    noorrhi::RayTracingPipelineDesc imageStages = traceStages;
-    imageRaygen = loadShader(device, raygenSpv);
-    imageStages.raygen = imageRaygen;
-    pipeline = device.ray_tracing(imageStages);
+    const auto started = std::chrono::steady_clock::now();
+    std::vector<noorrhi::Shader> raygens{imageRaygen, radianceCache.raygen()};
+    std::ranges::copy(restir.raygens(), std::back_inserter(raygens));
+    passLibrary = buildPassLibrary(device, std::move(raygens));
+    device.save_pipeline_cache();
+    NR_LOG_INFO("Compiled the ray-tracing pass library in " << millisecondsSince(started) << " ms");
+    linkTracePipeline();
     upscaler.resize({imageWidth(), imageHeight()});
     resizeRenderResolution();
 }
@@ -173,21 +197,53 @@ void RealtimeRaytracer::onRenderSettingsApplied(const RenderSettings& settings)
     upscaler.setMode(settings.upscalerMode);
 }
 
-void RealtimeRaytracer::onMaterialShadersChanged(const std::span<const noorrhi::Shader> shaders)
+void RealtimeRaytracer::onMaterialShadersChanged(const std::span<const MaterialHitShaders> shaders)
 {
-    // Materials are callable shaders at their index in every pipeline's
-    // shader binding table.
+    // The list only grows, so the shaders past the last batch are exactly
+    // the new ones. Each gets its MaterialGroup hit groups, in that order.
     const auto started = std::chrono::steady_clock::now();
-    renderDevice().synchronize();
-    traceStages.callable.assign(shaders.begin(), shaders.end());
-    noorrhi::RayTracingPipelineDesc imageStages = traceStages;
-    imageStages.raygen = imageRaygen;
-    pipeline = renderDevice().ray_tracing(imageStages);
-    radianceCache.setTraceStages(traceStages);
-    restir.setTraceStages(traceStages);
-    NR_LOG_INFO("Rebuilt the ray-tracing pipelines for " << shaders.size()
-        << " material shader(s) in " << std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - started).count() << " ms");
+    noorrhi::RayTracingPipelineDesc desc;
+    for (const MaterialHitShaders& material : shaders.subspan(materialShaderCount)) {
+        desc.closest_hit.insert(desc.closest_hit.end(),
+            {material.closestHit, material.closestHit, noorrhi::Shader{}});
+        desc.any_hit.insert(desc.any_hit.end(),
+            {material.anyHit, noorrhi::Shader{}, material.shadowAnyHit});
+    }
+    materialLibraries.push_back(renderDevice().ray_tracing_library(desc, TraceInterface));
+    NR_LOG_INFO("Compiled " << shaders.size() - materialShaderCount
+        << " material shader(s) in " << millisecondsSince(started) << " ms");
+    materialShaderCount = shaders.size();
+    renderDevice().save_pipeline_cache();
+}
+
+void RealtimeRaytracer::onHitRecordsChanged(const std::span<const HitRecord> records)
+{
+    hitGroups.clear();
+    for (const HitRecord& record : records) {
+        const uint32_t materialGroups = FirstMaterialGroup
+            + record.materialShaders * MaterialGroupCount;
+        const bool compiled = record.kind == HitRecord::Kind::Section
+            && record.materialShaders != ~0u;
+        if (record.rayType == nr::graphics::RealtimeRayTypeSurface)
+            hitGroups.push_back(!compiled ? (record.kind == HitRecord::Kind::Section
+                    ? DefaultMaterialGroup : EmptyGroup)
+                : materialGroups + (record.transparent ? TransparentSurface : OpaqueSurface));
+        else
+            hitGroups.push_back(compiled && record.transparent ? materialGroups + Shadow
+                : EmptyGroup);
+    }
+    const auto started = std::chrono::steady_clock::now();
+    linkTracePipeline();
+    NR_LOG_INFO("Linked the ray-tracing pipeline for " << records.size()
+        << " hit records in " << millisecondsSince(started) << " ms");
+}
+
+void RealtimeRaytracer::linkTracePipeline()
+{
+    std::vector<noorrhi::RayTracingLibrary> libraries{passLibrary};
+    libraries.insert(libraries.end(), materialLibraries.begin(), materialLibraries.end());
+    tracePipeline = renderDevice().ray_tracing(
+        std::span<const noorrhi::RayTracingLibrary>(libraries), hitGroups);
 }
 
 void RealtimeRaytracer::prepareFrameResources()
@@ -296,11 +352,10 @@ void RealtimeRaytracer::renderImpl()
     const nr::graphics::RealtimeRoot root{staged.address()};
 
     restir.presample(frameArgs, root);
-    radianceCache.record(frameArgs, root);
-    pipeline.trace({frame.render.width, frame.render.height, 1}, root);
-    device.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::RayTracing);
-    restir.resample(frameArgs, root, frame.render);
+    radianceCache.record(frameArgs, root, tracePipeline);
+    tracePipeline.trace(imageRaygen, {frame.render.width, frame.render.height, 1}, root);
     device.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::Compute);
+    restir.resample(frameArgs, root, frame.render, tracePipeline);
     denoiser.record(frame, targets);
     device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
     compositePipeline.launch(renderGroups, root);

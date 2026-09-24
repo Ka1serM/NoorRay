@@ -45,7 +45,7 @@ TEST_CASE_METHOD(RenderSmokeTest,
 }
 
 TEST_CASE_METHOD(RenderSmokeTest,
-    "Vulkan path tracer samples emissive mesh triangles through SVM",
+    "Vulkan path tracer renders emissive mesh triangles",
     "[e2e][light][mesh-light]")
 {
     const std::string output = render("mesh_light_sphere.pbrt", 16,

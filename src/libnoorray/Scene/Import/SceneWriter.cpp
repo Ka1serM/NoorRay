@@ -390,14 +390,10 @@ void writePbrtMesh(std::ostream& out, const Scene& scene,
     const size_t materialCount = std::max<size_t>(asset.getMaterialCount(), 1);
     std::vector<std::vector<uint32_t>> indicesByMaterial(materialCount);
     const auto& indices = asset.getIndices();
-    const auto& faces = asset.getFaces();
-    for (size_t triangle = 0; triangle * 3 + 2 < indices.size(); ++triangle) {
-        const size_t indexOffset = triangle * 3;
-        const uint32_t material = triangle < faces.size()
-            ? std::min<uint32_t>(faces[triangle].materialIndex,
-                static_cast<uint32_t>(materialCount - 1)) : 0;
-        auto& target = indicesByMaterial[material];
-        target.insert(target.end(), {indices[indexOffset], indices[indexOffset + 1], indices[indexOffset + 2]});
+    for (const MeshSection& section : asset.getSections()) {
+        const auto first = indices.begin() + std::size_t{section.firstTriangle} * 3;
+        indicesByMaterial[section.slot].insert(indicesByMaterial[section.slot].end(),
+            first, first + std::size_t{section.triangleCount} * 3);
     }
 
     for (size_t material = 0; material < indicesByMaterial.size(); ++material) {

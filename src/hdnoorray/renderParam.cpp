@@ -458,8 +458,7 @@ void HdNoorRayRenderParam::PruneTextureCache()
 }
 
 void HdNoorRayRenderParam::QueueMaterialCompilation(
-    const SdfPath& id, MaterialX::DocumentPtr document,
-    std::function<MaterialCompilationOutput()> compile)
+    const SdfPath& id, MaterialX::DocumentPtr document)
 {
     uint64_t generation;
     {
@@ -475,32 +474,9 @@ void HdNoorRayRenderParam::QueueMaterialCompilation(
         }
     }
     pendingMaterialCompiles_.fetch_add(1, std::memory_order_relaxed);
-    materialCompileTasks_.run(
-        [this, id, generation, document, compile = std::move(compile)]() {
-            MaterialCompilationResult result{
-                id, generation, document, {}, {}};
-            {
-                // Scene imports can replace a material several times while
-                // older jobs are still sitting in TBB's queue. Discard a
-                // superseded job before it acquires a compiler and starts the
-                // MaterialX-to-SVM graph compilation.
-                std::scoped_lock lock(mutex);
-                const auto current = materialCompileGenerations_.find(id);
-                if (current == materialCompileGenerations_.end()
-                    || current->second != generation) {
-                    completedMaterialCompiles_.push(std::move(result));
-                    return;
-                }
-            }
-            try {
-                result.output = compile();
-            } catch (const std::exception& error) {
-                result.error = error.what();
-            } catch (...) {
-                result.error = "unknown MaterialX compilation failure";
-            }
-            completedMaterialCompiles_.push(std::move(result));
-        });
+    materialCompileTasks_.run([this, id, generation, document]() {
+        completedMaterialCompiles_.push(MaterialCompilationResult{id, generation, document});
+    });
 }
 
 bool HdNoorRayRenderParam::ProcessMaterialCompilations()
@@ -527,31 +503,6 @@ bool HdNoorRayRenderParam::ProcessMaterialCompilations()
         if (generation == materialCompileGenerations_.end()
             || generation->second != result.generation)
             continue;
-        if (!result.error.empty()) {
-            TF_WARN("hdNoorRay: MaterialX compile failed for %s: %s",
-                result.id.GetText(), result.error.c_str());
-            // A graph that no longer compiles (for example because an
-            // important node was deleted) must never leave the material broken
-            // or stuck on a stale last-good program: fall back to the default
-            // MaterialX material. The synthetic default is a tiny graph that
-            // cannot fail, so compiling it here is safe.
-            try {
-                MaterialX::DocumentPtr fallbackDocument =
-                    nr::materialx::defaultMaterial();
-                fallbackDocument->setDataLibrary(
-                    nr::materialx::getSharedStandardLibraries());
-                result.document = std::move(fallbackDocument);
-                result.error.clear();
-                PublishMaterial(result.id, result.document);
-                session.scene().invalidateMaterial(materials_[result.id]);
-                materialsChanged = true;
-            } catch (const std::exception& error) {
-                TF_WARN(
-                    "hdNoorRay: default MaterialX fallback also failed for %s: %s",
-                    result.id.GetText(), error.what());
-            }
-            continue;
-        }
         PublishMaterial(result.id, result.document);
         session.scene().invalidateMaterial(materials_[result.id]);
         materialsChanged = true;
@@ -703,7 +654,7 @@ void HdNoorRayRenderParam::PublishFallbackMaterial(
         const auto& sceneDocuments = session.scene().getMaterialXDocuments();
         const bool alreadyCurrent = index < sceneDocuments.size()
             && sceneDocuments[index] == document
-            && material->svmBytecodeLength != 0;
+            && material->compiled;
         if (!alreadyCurrent) {
             session.scene().invalidateMaterial(material);
             QueueSceneMaterialCompilation(published->second);

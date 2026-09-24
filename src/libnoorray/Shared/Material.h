@@ -10,18 +10,9 @@ namespace nr::graphics {
 // offsets into a scene-wide arena.
 struct Material
 {
-    GpuPtr(uint) bytecode;
-    // Resource-descriptor-heap index per texture slot.
-    GpuPtr(uint) textures;
-    // Word count of `bytecode`; bounds the interpreter loop.
-    uint bytecodeLength;
-    uint stackSize;
-    uint shadowOpaque;
-    // Shader-binding-table index of the realtime renderer's callable shader
-    // for this material, compiled from its MaterialX document; ~0u while it
-    // has none.
-    uint shader;
-    // The parameter block that shader reads (MaterialInterface.slang).
+    // The parameter block the realtime renderer's hit shaders of this
+    // material read (MaterialInterface.slang). Which shaders those are is
+    // chosen by the shader binding table, not by this record.
     GpuPtr(uint) shaderParameters;
 };
 

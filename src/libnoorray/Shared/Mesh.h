@@ -24,21 +24,25 @@ struct Vertex
     uint color;
 };
 
-struct Face
+// A mesh section as the hit stages see it. Each section is one BLAS
+// geometry, so a hit's triangle is sections[GeometryIndex()].firstTriangle +
+// PrimitiveIndex().
+struct SectionRecord
 {
-    int materialIndex;
+    uint firstTriangle;
+    // Scene material index.
+    uint material;
 };
 
 struct Mesh
 {
     GpuPtr(Vertex) vertices;
     GpuPtr(uint) indices;
-    GpuPtr(Face) faces;
-    GpuPtr(uint) materialIds;
+    GpuPtr(SectionRecord) sections;
     uint vertexCount;
     uint indexCount;
-    uint faceCount;
-    uint materialCount;
+    uint sectionCount;
+    uint padding;
 };
 
 #ifdef __cplusplus

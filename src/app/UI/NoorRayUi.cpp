@@ -8,6 +8,7 @@
 
 #include "Raytracing/Raytracer.h"
 #include "Logging/Log.h"
+#include "Scene/Import/SceneImporter.h"
 #include "UI/DebugPanel.h"
 #include "UI/DetailsPanel.h"
 #include "UI/EnvironmentPanel.h"
@@ -28,7 +29,7 @@ NoorRayUi::NoorRayUi(std::string scenePath,
     , session(device, window.width(), window.height())
 {
     if (!scenePath.empty())
-        session.scene().load(scenePath);
+        SceneImporter::Load(session.scene(), scenePath);
     if (session.hasRenderer())
         session.rebuildNativeScene();
 

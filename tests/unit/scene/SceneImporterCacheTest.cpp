@@ -138,7 +138,7 @@ TEST_CASE(
     SceneImporter::ImportObjScene(scene, TEST_ASSET_DIR "/dedup_triangle.obj", nullptr);
     const size_t meshCountAfterFirst = scene.getMeshes().size();
 
-    SvmMaterial materialOverride{};
+    BasicMaterial materialOverride{};
     materialOverride.albedo = glm::vec3(1.0f, 0.0f, 0.0f);
     SceneImporter::ImportObjScene(
         scene, TEST_ASSET_DIR "/dedup_triangle.obj", &materialOverride);

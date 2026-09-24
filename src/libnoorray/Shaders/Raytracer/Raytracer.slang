@@ -7,7 +7,7 @@
 #include "AnalyticLights.slang"
 
 // Raygen owns only camera-ray construction, traversal, and output writes.
-// Surface decoding, MaterialX SVM, Gaussian acceptance, and Gaussian shading
+// Surface decoding, Gaussian acceptance, and Gaussian shading
 // live in hit stages so the dispatch shader stays small and predictable.
 [shader("raygeneration")]
 void main()

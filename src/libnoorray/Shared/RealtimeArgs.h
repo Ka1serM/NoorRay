@@ -114,6 +114,7 @@ struct RealtimeRoot
 
 #ifdef __cplusplus
 static_assert(sizeof(Frame) % 8 == 0);
+// MaterialHit.slang reads the frame through RealtimeRoot::args.
 static_assert(offsetof(RealtimeArgs, frame) == 0);
 static_assert(sizeof(RealtimeView) % 16 == 0);
 static_assert(sizeof(RenderTargetHandles) % 16 == 0);

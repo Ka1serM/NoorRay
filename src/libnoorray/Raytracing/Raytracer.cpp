@@ -2,7 +2,6 @@
 
 #include "Materials/MaterialX/SlangMaterialCompiler.h"
 
-#include "RealtimeRaytracer.h"
 
 #include <map>
 #include <unordered_map>
@@ -28,7 +27,6 @@
 #include "Scene/Scene.h"
 #include "Scene/LightInstance.h"
 #include "Scene/MeshInstance.h"
-#include "Materials/Shading/ShadingTables.h"
 #include "Environment/Environment.h"
 #include "Camera/CameraInstance.h"
 #include "Camera/FisheyeCamera.h"
@@ -128,18 +126,6 @@ Raytracer::Raytracer(noorrhi::Device& device,
     whiteTexture = gpuDevice->image<std::byte>(1, 1,
         noorrhi::ImageUsage::Sampled, noorrhi::ImageFormat::Rgba32Float);
     whiteTexture.upload(std::span<const std::byte>(std::as_bytes(std::span(whitePixel))));
-    // Immutable shading data shared by every closure: energy-compensation LUTs
-    // and the CIE/D65 spectral tables.
-    {
-        const std::vector<std::uint16_t> lut = nr::shading::packEnergyLutTables();
-        energyLutBuffer = upload_bytes(*gpuDevice, lut.data(),
-            lut.size() * sizeof(std::uint16_t));
-        data.energyLuts = energyLutBuffer.ptr().address;
-        const std::vector<float> spectral = nr::shading::packSpectralTables();
-        spectralTablesBuffer = upload_bytes(*gpuDevice, spectral.data(),
-            spectral.size() * sizeof(float));
-        data.spectralTables = spectralTablesBuffer.ptr().address;
-    }
     NR_LOG_INFO("graphics API raytracer: updating descriptors");
     updateRoot();
     commit();
@@ -147,16 +133,6 @@ Raytracer::Raytracer(noorrhi::Device& device,
 }
 
 Raytracer::~Raytracer() = default;
-
-std::unique_ptr<Raytracer> Raytracer::create(noorrhi::Device& device,
-    const uint32_t width, const uint32_t height,
-    const bool exportColorMemory)
-{
-    // Realtime RGB is the active renderer for now. Keep the factory so the
-    // spectral implementation can be reintroduced without changing hosts.
-    return std::make_unique<RealtimeRaytracer>(device, width, height,
-        exportColorMemory);
-}
 
 void Raytracer::createImages()
 {
@@ -302,6 +278,7 @@ void Raytracer::uploadScene(Scene& scene)
     data.gaussianShCoefficientCount = gaussianShCoefficientCount_;
     applyRenderSettings(scene.getRenderSettings());
     data.topLevelAS = tlas.handle().value;
+    onHitRecordsChanged(hitRecords());
 }
 
 bool Raytracer::updateScene(const Scene& scene, const bool updateGaussians)
@@ -362,7 +339,9 @@ void Raytracer::uploadLights(const Scene& scene)
     std::vector<nr::graphics::SpotLight> spotRecords;
     std::vector<nr::graphics::RectLight> rectRecords;
     std::vector<nr::graphics::DirectionalLight> directionalRecords;
-    std::vector<nr::graphics::MeshLight> meshRecords;
+    // No material reports emission until the spectral renderer runs MaterialX
+    // shaders, so there are no emissive triangles to sample.
+    const std::vector<nr::graphics::MeshLight> meshRecords;
     pointRecords.reserve(scene.getPointLightCount());
     spotRecords.reserve(scene.getSpotLightCount());
     rectRecords.reserve(scene.getRectLightCount());
@@ -422,55 +401,6 @@ void Raytracer::uploadLights(const Scene& scene)
         record.softAngle = source.softAngle;
         record.selectionWeight = directionalLightSelectionWeight(source);
         directionalRecords.push_back(record);
-    }
-
-    // Emissive SVM programs become triangle light candidates for the spectral
-    // integrator. The realtime RGB path deliberately reaches emissive meshes
-    // through BSDF sampling, avoiding a CPU triangle scan and a second light
-    // sampling path in the interactive shader.
-    const auto meshInstances = scene.getMeshInstances();
-    const auto& materials = scene.getMaterials();
-    for (uint32_t instanceIndex = 0;
-        supportsMeshLights()
-            && instanceIndex < meshInstances.size(); ++instanceIndex)
-    {
-        const MeshInstance& instance = *meshInstances[instanceIndex];
-        const Mesh& mesh = instance.getMesh();
-        const auto& vertices = mesh.getVertices();
-        const auto& indices = mesh.getIndices();
-        const auto& faces = mesh.getFaces();
-        const glm::mat4 transform = instance.getWorldTransform().getMatrix();
-        for (uint32_t primitive = 0; primitive < faces.size()
-             && primitive * 3u + 2u < indices.size(); ++primitive)
-        {
-            const Face face = faces[primitive];
-            if (face.materialIndex < 0
-                || static_cast<size_t>(face.materialIndex) >= mesh.getMaterialCount())
-                continue;
-            const uint32_t materialIndex = mesh.getMaterialIds()[face.materialIndex];
-            if (materialIndex >= materials.size() || materials[materialIndex].mayEmit == 0u)
-                continue;
-            const uint32_t ia = indices[primitive * 3u];
-            const uint32_t ib = indices[primitive * 3u + 1u];
-            const uint32_t ic = indices[primitive * 3u + 2u];
-            if (ia >= vertices.size() || ib >= vertices.size() || ic >= vertices.size())
-                continue;
-            const glm::vec3 a = glm::vec3(transform * glm::vec4(vertices[ia].position, 1.0f));
-            const glm::vec3 b = glm::vec3(transform * glm::vec4(vertices[ib].position, 1.0f));
-            const glm::vec3 c = glm::vec3(transform * glm::vec4(vertices[ic].position, 1.0f));
-            const float area = 0.5f * glm::length(glm::cross(b - a, c - a));
-            if (!(area > 0.0f) || !std::isfinite(area))
-                continue;
-            nr::graphics::MeshLight record{};
-            record.instanceIndex = instanceIndex;
-            record.primitiveIndex = primitive;
-            copyVec3(record.a, a);
-            copyVec3(record.b, b);
-            copyVec3(record.c, c);
-            record.area = area;
-            record.selectionWeight = area;
-            meshRecords.push_back(record);
-        }
     }
 
     float finiteWeight = 0.0f;
@@ -576,17 +506,17 @@ void Raytracer::uploadMaterials(Scene& scene)
     for (Material& material : scene.getMaterials()) {
         if (material)
             continue;
-        std::uint32_t shaderIndex = ~0u;
-        if (const auto& shader = material.shaderProgram.shader) {
-            const auto found = std::ranges::find(materialShaderPrograms_, shader);
-            shaderIndex = static_cast<std::uint32_t>(found - materialShaderPrograms_.begin());
-            if (found == materialShaderPrograms_.end()) {
-                materialShaderPrograms_.push_back(shader);
-                materialShaders_.push_back(gpuDevice->create_shader(
-                    std::as_bytes(std::span(shader->spirv)), "main"));
-            }
+        if (const auto& shader = material.shaderProgram.shader;
+            shader && !std::ranges::contains(materialShaderPrograms_, shader)) {
+            const auto create = [this](const std::vector<std::uint32_t>& spirv,
+                                    const std::string_view entryPoint) {
+                return gpuDevice->create_shader(std::as_bytes(std::span(spirv)), entryPoint);
+            };
+            materialShaderPrograms_.push_back(shader);
+            materialShaders_.push_back({create(shader->closestHit, "closestHit"),
+                create(shader->anyHit, "anyHit"), create(shader->shadowAnyHit, "shadowAnyHit")});
         }
-        material.upload(*gpuDevice, resolveTexture, shaderIndex);
+        material.upload(*gpuDevice, resolveTexture);
     }
     if (materialShaders_.size() != shaderCount)
         onMaterialShadersChanged(materialShaders_);
@@ -615,11 +545,6 @@ void Raytracer::render(const uint32_t frameIndex, const uint32_t sampleIndex)
     // Inside a noorrhi::Frame this batches into the frame's command buffer; with
     // no frame open it is submitted on its own, which is the offline path.
     gpuDevice->measure(dispatchTimestamp, [this] { renderImpl(); });
-}
-
-void Raytracer::renderImpl()
-{
-    pipeline.trace({renderWidth, renderHeight, 1}, data);
 }
 
 double Raytracer::lastDispatchMilliseconds()
@@ -995,8 +920,34 @@ uint32_t Raytracer::buildMesh(const Mesh& asset)
     return static_cast<uint32_t>(sourceMeshes_.size() - 1);
 }
 
+std::vector<HitRecord> Raytracer::hitRecords() const
+{
+    std::vector<HitRecord> records;
+    for (const Mesh* mesh : sourceMeshes_)
+        for (const MeshSection& section : mesh->getSections()) {
+            const MaterialShaderProgram& program = mesh->getMaterial(section.slot).shaderProgram;
+            const auto found = std::ranges::find(materialShaderPrograms_, program.shader);
+            const uint32_t shaders = found == materialShaderPrograms_.end() ? ~0u
+                : static_cast<uint32_t>(found - materialShaderPrograms_.begin());
+            for (uint32_t rayType = 0; rayType < nr::graphics::RaytracingRayTypeCount; ++rayType)
+                records.push_back({HitRecord::Kind::Section, rayType, shaders, program.transparent});
+        }
+    for (uint32_t rayType = 0; rayType < nr::graphics::RaytracingRayTypeCount; ++rayType)
+        records.push_back({HitRecord::Kind::Gaussian, rayType});
+    return records;
+}
+
 void Raytracer::buildTopLevel(const Scene& scene)
 {
+    // Each mesh's instances address its sections' records; the Gaussian
+    // proxies' records follow every mesh's.
+    std::vector<uint32_t> meshRecordOffsets;
+    uint32_t recordCount = 0;
+    for (const Mesh* mesh : sourceMeshes_) {
+        meshRecordOffsets.push_back(recordCount);
+        recordCount += static_cast<uint32_t>(mesh->getSections().size())
+            * nr::graphics::RaytracingRayTypeCount;
+    }
     std::unordered_map<const Mesh*, uint32_t> meshIndices;
     tlasInstances.clear();
     meshInstanceAssetIndices.clear();
@@ -1017,7 +968,7 @@ void Raytracer::buildTopLevel(const Scene& scene)
         }
         tlasInstances.push_back({asset->blas,
             instance->getWorldTransform().getGpuTransform(),
-            meshInstanceIndex++, 0u,
+            meshInstanceIndex++, meshRecordOffsets[found->second],
             static_cast<std::uint8_t>(nr::graphics::RaytracingMaskMesh)});
         meshInstanceAssetIndices.push_back(found->second);
     }
@@ -1029,7 +980,7 @@ void Raytracer::buildTopLevel(const Scene& scene)
     for (uint32_t gaussianId = 0; gaussianId < gaussianTransforms.size(); ++gaussianId)
     {
         tlasInstances.push_back({gaussianProxy.blas, gaussianTransforms[gaussianId],
-            0u, 2u, static_cast<std::uint8_t>(nr::graphics::RaytracingMaskGaussian)});
+            0u, recordCount, static_cast<std::uint8_t>(nr::graphics::RaytracingMaskGaussian)});
     }
     meshInstanceCount_ = meshInstanceIndex;
     gaussianInstanceCount_ = static_cast<uint32_t>(scene.getGaussianInstances().size());

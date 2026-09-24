@@ -11,9 +11,9 @@ import MaterialInterface;
 // Shading for the RGB preview renderer.
 //
 // Surfaces are shaded from the closures their material returns
-// (MaterialInterface.slang): a diffuse and a GGX reflection lobe. SVM
-// programs are not evaluated. Gaussians
-// are not part of the realtime renderer, and all geometry is traced as opaque.
+// (MaterialInterface.slang): a diffuse and a GGX reflection lobe. Gaussians
+// are not part of the realtime renderer; opacity is applied during traversal
+// by the materials' any-hit stages (MaterialHit.slang).
 
 static const float RealtimePi = 3.14159265358979323846;
 static const float RealtimeInvPi = 0.31830988618379067154;

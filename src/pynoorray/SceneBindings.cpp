@@ -9,6 +9,8 @@
 
 #include "Camera/CameraInstance.h"
 #include "Mesh/Assets/Mesh.h"
+#include "Scene/Import/SceneImporter.h"
+#include "Scene/Import/SceneReader.h"
 #include "Scene/Scene.h"
 #include "Scene/SceneObject.h"
 
@@ -18,9 +20,15 @@ using namespace nb::literals;
 void bindScene(nb::module_& module)
 {
     nb::class_<Scene>(module, "Scene")
-        .def("load", &Scene::load, "path"_a)
-        .def("import_file", &Scene::importFile, "path"_a)
-        .def("read", &Scene::read, "path"_a)
+        .def("load", &SceneImporter::Load, "path"_a)
+        .def("import_file", [](Scene& scene, const std::string& path) {
+            scene.synchronizeBeforeMutation();
+            SceneImporter::ImportFile(scene, path);
+        }, "path"_a)
+        .def("read", [](Scene& scene, const std::string& path) {
+            scene.synchronizeBeforeMutation();
+            SceneReader::Read(scene, path);
+        }, "path"_a)
         .def("clear", &Scene::clear)
         .def("add", nb::overload_cast<std::unique_ptr<SceneObject>>(&Scene::add), "object"_a)
         .def("add_camera", [](Scene& scene, std::unique_ptr<Camera> camera,

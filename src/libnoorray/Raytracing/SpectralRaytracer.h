@@ -14,4 +14,17 @@ public:
     {
         return RaytracerType::Spectral;
     }
+
+protected:
+    void renderImpl() override;
+    void onHitRecordsChanged(std::span<const HitRecord> records) override;
+
+private:
+    noorrhi::Shader raygen;
+    noorrhi::RayTracingLibrary library;
+    noorrhi::RayTracingPipeline pipeline;
+    // Read only by the spectral closures: energy-compensation LUTs and the
+    // CIE/D65 and RGB-to-spectrum tables.
+    noorrhi::Buffer<std::uint16_t> energyLuts;
+    noorrhi::Buffer<float> spectralTables;
 };

@@ -34,6 +34,13 @@ set(NR_APP_DIR "${PROJECT_SOURCE_DIR}/src/app")
 # Keep the default editor/renderer build small. USD, Python, tests, and the
 # standalone API examples remain opt-in integrations for developers who need
 # them; they should not enlarge the normal NoorRay dependency graph.
+# NoorRay::Core renders scenes a host builds in memory. The other libraries
+# are optional: a host that does not link one can turn it off, and then none
+# of its dependencies are configured or fetched.
+option(NR_BUILD_IMPORT "Build NoorRay::Import (scene files, glTF, OBJ, PBRT, Gaussian splats)"
+    ${PROJECT_IS_TOP_LEVEL})
+option(NR_BUILD_SPECTRAL "Build NoorRay::Spectral (spectral reference path tracer)"
+    ${PROJECT_IS_TOP_LEVEL})
 option(NR_ENABLE_USD "Build USD scene import/export" OFF)
 # The editor (and the tests of its UI) are what need SDL, Dear ImGui and the
 # file dialogs; the library needs none of them. A host that embeds the
@@ -81,20 +88,19 @@ endif()
 # ---------------------------------------------------------------------------
 # Header-only libraries
 # ---------------------------------------------------------------------------
-nr_header_only(tinygltf     "${PROJECT_SOURCE_DIR}/external/tinygltf")
-nr_header_only(tinyobjloader "${PROJECT_SOURCE_DIR}/external/tinyobjloader")
 nr_header_only(stb          "${PROJECT_SOURCE_DIR}/external/stb")
 if(NR_BUILD_EDITOR_DEPENDENCIES)
     nr_header_only(ImViewGuizmo "${PROJECT_SOURCE_DIR}/external/ImViewGuizmo")
 endif()
-nr_header_only(glaze        "${PROJECT_SOURCE_DIR}/external/glaze/include")
+if(NR_BUILD_IMPORT)
+    nr_header_only(tinygltf     "${PROJECT_SOURCE_DIR}/external/tinygltf")
+    nr_header_only(tinyobjloader "${PROJECT_SOURCE_DIR}/external/tinyobjloader")
+    nr_header_only(glaze        "${PROJECT_SOURCE_DIR}/external/glaze/include")
 
-# ---------------------------------------------------------------------------
-# tinyply
-# ---------------------------------------------------------------------------
-add_library(tinyply STATIC external/tinyply/source/tinyply.cpp)
-set_target_properties(tinyply PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(tinyply PUBLIC "${PROJECT_SOURCE_DIR}/external/tinyply/source")
+    add_library(tinyply STATIC external/tinyply/source/tinyply.cpp)
+    set_target_properties(tinyply PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(tinyply PUBLIC "${PROJECT_SOURCE_DIR}/external/tinyply/source")
+endif()
 
 # ---------------------------------------------------------------------------
 # TinyEXR
@@ -121,26 +127,28 @@ add_subdirectory(external/tbb)
 # GaussForge (gaussian splat readers)
 # ---------------------------------------------------------------------------
 include(FetchContent)
-include(external/GaussForge/cmakes/zlib.cmake)
-if(TARGET zlibstatic)
-    set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
-endif()
-include(external/GaussForge/cmakes/sog.cmake)
-include(external/GaussForge/cmakes/spz.cmake)
+if(NR_BUILD_IMPORT)
+    include(external/GaussForge/cmakes/zlib.cmake)
+    if(TARGET zlibstatic)
+        set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+    include(external/GaussForge/cmakes/sog.cmake)
+    include(external/GaussForge/cmakes/spz.cmake)
 
-add_library(gauss_forge_readers STATIC
-    external/GaussForge/src/core/validate.cpp
-    external/GaussForge/src/io/ply_auto.cpp
-    external/GaussForge/src/io/ply_reader.cpp
-    external/GaussForge/src/io/ply_writer.cpp
-    external/GaussForge/src/io/ply_compressed_reader.cpp
-    external/GaussForge/src/io/splat_reader.cpp
-    external/GaussForge/src/io/ksplat_reader.cpp
-    external/GaussForge/src/io/spz_reader.cpp
-    external/GaussForge/src/io/sog_reader.cpp)
-set_target_properties(gauss_forge_readers PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(gauss_forge_readers PUBLIC "${PROJECT_SOURCE_DIR}/external/GaussForge/include")
-target_link_libraries(gauss_forge_readers PUBLIC spz::spz webp nlohmann_json::nlohmann_json ZLIB::ZLIB)
+    add_library(gauss_forge_readers STATIC
+        external/GaussForge/src/core/validate.cpp
+        external/GaussForge/src/io/ply_auto.cpp
+        external/GaussForge/src/io/ply_reader.cpp
+        external/GaussForge/src/io/ply_writer.cpp
+        external/GaussForge/src/io/ply_compressed_reader.cpp
+        external/GaussForge/src/io/splat_reader.cpp
+        external/GaussForge/src/io/ksplat_reader.cpp
+        external/GaussForge/src/io/spz_reader.cpp
+        external/GaussForge/src/io/sog_reader.cpp)
+    set_target_properties(gauss_forge_readers PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(gauss_forge_readers PUBLIC "${PROJECT_SOURCE_DIR}/external/GaussForge/include")
+    target_link_libraries(gauss_forge_readers PUBLIC spz::spz webp nlohmann_json::nlohmann_json ZLIB::ZLIB)
+endif()
 
 # ---------------------------------------------------------------------------
 # Vulkan + slangc
@@ -190,18 +198,6 @@ if(NR_BUILD_EDITOR_DEPENDENCIES)
     target_compile_definitions(imnodeflow PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
     target_link_libraries(imnodeflow PUBLIC imgui)
 endif()
-
-# ---------------------------------------------------------------------------
-# NoorRayIO (image I/O, stb wrapper)
-# ---------------------------------------------------------------------------
-add_library(NoorRayIO STATIC
-    src/libnoorray/IO/BitmapReader.cpp
-    src/libnoorray/IO/BitmapWriter.cpp
-    src/libnoorray/IO/StbImpl.cpp)
-set_target_properties(NoorRayIO PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_features(NoorRayIO PUBLIC cxx_std_23)
-target_include_directories(NoorRayIO PUBLIC "${NR_CORE_DIR}")
-target_link_libraries(NoorRayIO PUBLIC glm stb tinyexr)
 
 # ---------------------------------------------------------------------------
 # NoorRHI - small Vulkan graphics abstraction
@@ -297,27 +293,21 @@ set_source_files_properties("${NR_FFX_SDK_DIR}/src/backends/vk/ffx_vk.cpp"
     PROPERTIES COMPILE_OPTIONS "-O0")
 
 # ---------------------------------------------------------------------------
-# libnoorray (core engine library)
+# NoorRay::Core - scene, realtime renderer, MaterialX materials
 # ---------------------------------------------------------------------------
 file(GLOB_RECURSE NR_CORE_FILES CONFIGURE_DEPENDS
     "${NR_CORE_DIR}/*.cpp" "${NR_CORE_DIR}/*.h")
+# Everything the optional libraries below own, and the MaterialX sources that
+# NoorRayMaterialX builds.
 set(NR_CORE_X
+    "/IO/" "/Scene/Import/" "/Materials/Shading/" "/Raytracing/SpectralRaytracer\\."
     "/Materials/MaterialX/MaterialXDocument\\.cpp$" "/Materials/MaterialX/SlangMaterial[A-Za-z]*\\.cpp$"
-    "/IO/BitmapReader\\.cpp$" "/IO/BitmapWriter\\.cpp$" "/StbImpl\\.cpp$"
-    "/Materials/SVM/references/"
     "/Realtime/FsrShaderBlobs\\.cpp$")
-if(NOT NR_ENABLE_USD)
-    # The stub beside it implements the same three entry points, so callers in
-    # SceneReader/SceneWriter/SceneImporter need no conditional compilation.
-    list(APPEND NR_CORE_X "/Scene/Import/SceneUsd\\.cpp$")
-else()
-    list(APPEND NR_CORE_X "/Scene/Import/SceneUsdDisabled\\.cpp$")
-endif()
 foreach(p IN LISTS NR_CORE_X)
     list(FILTER NR_CORE_FILES EXCLUDE REGEX "${p}")
 endforeach()
 add_library(libnoorray STATIC ${NR_CORE_FILES})
-add_library(NoorRay::noorray ALIAS libnoorray)
+add_library(NoorRay::Core ALIAS libnoorray)
 add_dependencies(libnoorray NoorRayShaders)
 set_target_properties(libnoorray PROPERTIES
     OUTPUT_NAME noorray
@@ -333,13 +323,59 @@ target_compile_definitions(libnoorray PUBLIC
 # implementation detail; as a static library it still reaches the link line.
 target_link_libraries(libnoorray
     PUBLIC
-        NoorRHI::NoorRHI glm Vulkan::Vulkan MaterialXCore
+        NoorRHI::NoorRHI glm Vulkan::Vulkan MaterialXCore Rtxdi
     PRIVATE
-        NoorRayIO tinygltf tinyobjloader tinyply tinyexr stb gauss_forge_readers
-        GPUOpen::VulkanMemoryAllocator glaze TBB::tbb
-        NoorRayMaterialX MaterialXFormat NRD Rtxdi NoorRayFsr)
-if(NR_ENABLE_USD)
-    target_link_libraries(libnoorray PUBLIC NoorRayUsd)
+        TBB::tbb NoorRayMaterialX MaterialXFormat NRD NoorRayFsr)
+
+# ---------------------------------------------------------------------------
+# NoorRay::IO - image files (stb formats, OpenEXR)
+# ---------------------------------------------------------------------------
+add_library(NoorRayIO STATIC
+    src/libnoorray/IO/BitmapReader.cpp
+    src/libnoorray/IO/BitmapWriter.cpp
+    src/libnoorray/IO/StbImpl.cpp
+    src/libnoorray/IO/TextureReader.cpp)
+add_library(NoorRay::IO ALIAS NoorRayIO)
+set_target_properties(NoorRayIO PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(NoorRayIO PUBLIC libnoorray PRIVATE stb tinyexr)
+
+# ---------------------------------------------------------------------------
+# NoorRay::Import - scene files and the formats they reference
+# ---------------------------------------------------------------------------
+if(NR_BUILD_IMPORT)
+    file(GLOB NR_IMPORT_FILES CONFIGURE_DEPENDS "${NR_CORE_DIR}/Scene/Import/*.cpp")
+    # The stub implements the same entry points as the USD reader and writer,
+    # so their callers need no conditional compilation.
+    if(NR_ENABLE_USD)
+        list(FILTER NR_IMPORT_FILES EXCLUDE REGEX "/SceneUsdDisabled\\.cpp$")
+    else()
+        list(FILTER NR_IMPORT_FILES EXCLUDE REGEX "/SceneUsd\\.cpp$")
+    endif()
+    add_library(NoorRayImport STATIC ${NR_IMPORT_FILES})
+    add_library(NoorRay::Import ALIAS NoorRayImport)
+    set_target_properties(NoorRayImport PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(NoorRayImport
+        PUBLIC libnoorray NoorRayIO
+        PRIVATE tinygltf tinyobjloader tinyply gauss_forge_readers glaze TBB::tbb MaterialXFormat)
+    if(NR_ENABLE_USD)
+        target_link_libraries(NoorRayImport PUBLIC NoorRayUsd)
+    endif()
+elseif(NR_ENABLE_USD)
+    message(FATAL_ERROR "NR_ENABLE_USD needs NR_BUILD_IMPORT")
+endif()
+
+# ---------------------------------------------------------------------------
+# NoorRay::Spectral - spectral reference path tracer
+# ---------------------------------------------------------------------------
+# Its own library because its RGB-to-spectrum tables alone are ~10 MB.
+if(NR_BUILD_SPECTRAL)
+    file(GLOB NR_SPECTRAL_FILES CONFIGURE_DEPENDS "${NR_CORE_DIR}/Materials/Shading/*.cpp")
+    add_library(NoorRaySpectral STATIC
+        "${NR_CORE_DIR}/Raytracing/SpectralRaytracer.cpp" ${NR_SPECTRAL_FILES})
+    add_library(NoorRay::Spectral ALIAS NoorRaySpectral)
+    add_dependencies(NoorRaySpectral NoorRaySpectralShaders)
+    set_target_properties(NoorRaySpectral PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(NoorRaySpectral PUBLIC libnoorray)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -367,24 +403,80 @@ foreach(t MaterialXCore MaterialXFormat MaterialXGenShader MaterialXGenHw Materi
 endforeach()
 set(NR_MATERIALX_STDLIB_DIR "${PROJECT_SOURCE_DIR}/external/materialx/libraries")
 
+# The MaterialX libraries are embedded so a NoorRay binary does not depend on
+# this source tree; they are unpacked to the user cache on first use because
+# MaterialX reads definitions and generator sources only from files. Slang
+# generation needs genslang plus the genglsl sources it includes.
+file(GLOB_RECURSE NR_MATERIALX_LIBRARY_FILES CONFIGURE_DEPENDS
+    RELATIVE "${NR_MATERIALX_STDLIB_DIR}"
+    "${NR_MATERIALX_STDLIB_DIR}/*.mtlx"
+    "${NR_MATERIALX_STDLIB_DIR}/*.glsl"
+    "${NR_MATERIALX_STDLIB_DIR}/*.slang")
+list(FILTER NR_MATERIALX_LIBRARY_FILES EXCLUDE REGEX "/gen(mdl|msl|osl)/")
+set(NR_MATERIALX_LIBRARY_ARRAYS "")
+set(NR_MATERIALX_LIBRARY_ENTRIES "")
+set(NR_MATERIALX_LIBRARY_PATHS "")
+set(_index 0)
+foreach(_file IN LISTS NR_MATERIALX_LIBRARY_FILES)
+    string(APPEND NR_MATERIALX_LIBRARY_ARRAYS
+        "constexpr unsigned char file${_index}[] = {\n#embed \"${NR_MATERIALX_STDLIB_DIR}/${_file}\"\n};\n")
+    string(APPEND NR_MATERIALX_LIBRARY_ENTRIES "    {\"${_file}\", file${_index}},\n")
+    list(APPEND NR_MATERIALX_LIBRARY_PATHS "${NR_MATERIALX_STDLIB_DIR}/${_file}")
+    math(EXPR _index "${_index} + 1")
+endforeach()
+set(NR_MATERIALX_LIBRARY_SOURCE "${PROJECT_BINARY_DIR}/MaterialXLibraryFiles.cpp")
+file(CONFIGURE OUTPUT "${NR_MATERIALX_LIBRARY_SOURCE}" @ONLY CONTENT [=[
+#include "Materials/MaterialX/MaterialXLibraryFiles.h"
+
+#include <array>
+
+namespace nr::materialx
+{
+namespace
+{
+@NR_MATERIALX_LIBRARY_ARRAYS@
+constexpr std::array files = std::to_array<EmbeddedLibraryFile>({
+@NR_MATERIALX_LIBRARY_ENTRIES@});
+} // namespace
+
+const std::span<const EmbeddedLibraryFile> embeddedLibraryFiles = files;
+} // namespace nr::materialx
+]=])
+set_property(SOURCE "${NR_MATERIALX_LIBRARY_SOURCE}"
+    APPEND PROPERTY OBJECT_DEPENDS ${NR_MATERIALX_LIBRARY_PATHS})
+
 add_library(NoorRayMaterialX STATIC
     src/libnoorray/Materials/MaterialX/MaterialXDocument.cpp
     src/libnoorray/Materials/MaterialX/SlangMaterialGenerator.cpp
-    src/libnoorray/Materials/MaterialX/SlangMaterialCompiler.cpp)
+    src/libnoorray/Materials/MaterialX/SlangMaterialCompiler.cpp
+    "${NR_MATERIALX_LIBRARY_SOURCE}")
 target_compile_features(NoorRayMaterialX PUBLIC cxx_std_23)
 target_include_directories(NoorRayMaterialX PUBLIC "${NR_CORE_DIR}")
-# Generated materials are compiled at runtime with the Slang compiler library
-# of the same SDK whose slangc builds the prebuilt shaders.
-find_package(slang CONFIG REQUIRED
-    HINTS $ENV{VULKAN_SDK}/lib/cmake/slang /home/marcel/Programs/VulkanSDK/current/lib/cmake/slang)
+# Generated materials are compiled at runtime with the Slang compiler
+# library, built statically from external/slang at the revision of the SDK
+# slangc that builds the prebuilt shaders. The SDK ships it only as a shared
+# object, which would tie every binary to a Slang .so at runtime.
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/slang/external/lua/lua.h")
+    message(FATAL_ERROR "external/slang is empty. Run: git submodule update --init --recursive external/slang")
+endif()
+set(SLANG_LIB_TYPE STATIC CACHE STRING "" FORCE)
+set(SLANG_EMBED_CORE_MODULE ON CACHE BOOL "" FORCE)
+set(SLANG_EMBED_CORE_MODULE_SOURCE OFF CACHE BOOL "" FORCE)
+set(SLANG_ENABLE_RELEASE_DEBUG_INFO OFF CACHE BOOL "" FORCE)
+foreach(_slang_component GFX SLANGD SLANGC SLANGI SLANGRT SLANG_GLSLANG SLANG_PROXY SLANG_RHI
+        TESTS EXAMPLES REPLAYER DXIL CUDA OPTIX XLIB AFTERMATH)
+    set(SLANG_ENABLE_${_slang_component} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(SLANG_SLANG_LLVM_FLAVOR DISABLE CACHE STRING "" FORCE)
+set(SLANG_EXCLUDE_DAWN ON CACHE BOOL "" FORCE)
+set(SLANG_EXCLUDE_TINT ON CACHE BOOL "" FORCE)
+add_subdirectory(external/slang EXCLUDE_FROM_ALL)
 target_link_libraries(NoorRayMaterialX PUBLIC
     glm MaterialXGenSlang MaterialXGenShader MaterialXFormat MaterialXCore)
-target_link_libraries(NoorRayMaterialX PRIVATE slang::slang)
+target_link_libraries(NoorRayMaterialX PRIVATE slang)
 # MaterialInterface.slang is compiled into every generated material.
 target_compile_options(NoorRayMaterialX PRIVATE
     "--embed-dir=${PROJECT_SOURCE_DIR}/src/libnoorray/Shaders")
-target_compile_definitions(NoorRayMaterialX PRIVATE
-    NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}")
 set_target_properties(NoorRayMaterialX PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
@@ -476,7 +568,6 @@ set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/V
     "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
     "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
     "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
-    "${NR_SHADER_DIR}/Raytracer/MaterialSVM.slang"
     "${NR_SHADER_DIR}/Raytracer/SceneSurface.slang"
     "${NR_SHADER_DIR}/Raytracer/Environment.slang"
     "${NR_SHADER_DIR}/Raytracer/Sampling.slang"
@@ -484,16 +575,10 @@ set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/V
     ${NR_REALTIME_SHADER_INCLUDES}
     "${NR_SHADER_DIR}/Gaussian/Gaussian.slang")
 set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
-    "${NR_SHADER_BUILD_DIR}/Raytracer/Raytracer.spv"
-    "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingMiss.spv"
-    "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingHit.spv"
-    "${NR_SHADER_BUILD_DIR}/Raytracer/EmissionHit.spv"
-    "${NR_SHADER_BUILD_DIR}/Raytracer/OpacityAnyHit.spv"
-    "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianAnyHit.spv"
-    "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianHit.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracer.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeMiss.spv"
-    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeHit.spv"
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeShadowMiss.spv"
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/DefaultMaterialHit.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeSharcUpdate.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/SharcResolve.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeComposite.spv"
@@ -509,8 +594,7 @@ if(NR_SPIRV_VAL_EXECUTABLE)
 endif()
 add_custom_command(OUTPUT ${NR_SHADER_OUT}
     COMMAND "${CMAKE_COMMAND}" -E make_directory
-        "${NR_SHADER_BUILD_DIR}/Viewport" "${NR_SHADER_BUILD_DIR}/Raytracer"
-        "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer"
+        "${NR_SHADER_BUILD_DIR}/Viewport" "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/Viewport.slang"
         -entry main -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
@@ -523,52 +607,10 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
-        -entry main -stage raygeneration -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/Raytracer/Raytracer.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.slang"
-        -entry main -stage miss -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingMiss.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingHit.slang"
-        -entry main -stage closesthit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingHit.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/EmissionHit.slang"
-        -entry main -stage closesthit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/Raytracer/EmissionHit.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
-        -entry main -stage anyhit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/Raytracer/OpacityAnyHit.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
-        -entry main -stage anyhit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianAnyHit.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
-        -entry main -stage closesthit -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
         ${NR_SHARC_SHADER_FLAGS} ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DSHARC_QUERY=1
         -entry main -stage raygeneration -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
+        -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracer.spv"
@@ -578,17 +620,22 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeMiss.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeHit.slang"
-        ${NR_RTXDI_SHADER_FLAGS}
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeShadowMiss.slang"
+        -entry main -stage miss -target spirv
+        -profile spirv_1_5+spvRayTracingKHR
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeShadowMiss.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/DefaultMaterialHit.slang"
         -entry main -stage closesthit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeHit.spv"
+        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/DefaultMaterialHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
         ${NR_SHARC_SHADER_FLAGS} ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DSHARC_UPDATE=1
         -entry main -stage raygeneration -target spirv
-        -profile spirv_1_5+spvRayTracingKHR
+        -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeSharcUpdate.spv"
@@ -629,12 +676,15 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
 # RTXDI passes: RtxdiPasses.slang built once per RTXDI_PASS_* entry point.
 # Each is its own command so they compile in parallel.
 set(NR_RTXDI_SHADER_OUT)
-function(nr_rtxdi_pass pass stage output)
-    set(spv "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/${output}.spv")
-    set(profile spirv_1_5)
+# The passes that test visibility trace shadow rays through the realtime
+# pipeline, so they are ray-generation stages; the others are compute shaders.
+function(nr_rtxdi_pass pass output stage)
     if(stage STREQUAL "raygeneration")
         set(profile spirv_1_5+spvRayTracingKHR)
+    else()
+        set(profile spirv_1_5)
     endif()
+    set(spv "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/${output}.spv")
     set(validate)
     if(NR_SPIRV_VAL_EXECUTABLE)
         set(validate COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.4
@@ -654,23 +704,111 @@ function(nr_rtxdi_pass pass stage output)
         COMMENT "Compiling RTXDI ${output}" VERBATIM)
     set(NR_RTXDI_SHADER_OUT ${NR_RTXDI_SHADER_OUT} "${spv}" PARENT_SCOPE)
 endfunction()
-nr_rtxdi_pass(PRESAMPLE_LIGHTS compute RtxdiPresampleLights)
-nr_rtxdi_pass(PRESAMPLE_REGIR compute RtxdiPresampleReGIR)
-nr_rtxdi_pass(DI_INITIAL raygeneration RtxdiDIInitial)
-nr_rtxdi_pass(DI_TEMPORAL raygeneration RtxdiDITemporal)
-nr_rtxdi_pass(DI_BOILING compute RtxdiDIBoiling)
-nr_rtxdi_pass(DI_SPATIAL raygeneration RtxdiDISpatial)
-nr_rtxdi_pass(DI_SHADE raygeneration RtxdiDIShade)
-nr_rtxdi_pass(GI_TEMPORAL raygeneration RtxdiGITemporal)
-nr_rtxdi_pass(GI_BOILING compute RtxdiGIBoiling)
-nr_rtxdi_pass(GI_SPATIAL raygeneration RtxdiGISpatial)
-nr_rtxdi_pass(GI_SHADE raygeneration RtxdiGIShade)
+nr_rtxdi_pass(PRESAMPLE_LIGHTS RtxdiPresampleLights compute)
+nr_rtxdi_pass(PRESAMPLE_REGIR RtxdiPresampleReGIR compute)
+nr_rtxdi_pass(DI_INITIAL RtxdiDIInitial raygeneration)
+nr_rtxdi_pass(DI_TEMPORAL RtxdiDITemporal raygeneration)
+nr_rtxdi_pass(DI_BOILING RtxdiDIBoiling compute)
+nr_rtxdi_pass(DI_SPATIAL RtxdiDISpatial raygeneration)
+nr_rtxdi_pass(DI_SHADE RtxdiDIShade raygeneration)
+nr_rtxdi_pass(GI_TEMPORAL RtxdiGITemporal raygeneration)
+nr_rtxdi_pass(GI_BOILING RtxdiGIBoiling compute)
+nr_rtxdi_pass(GI_SPATIAL RtxdiGISpatial raygeneration)
+nr_rtxdi_pass(GI_SHADE RtxdiGIShade raygeneration)
 add_custom_target(NoorRayShaders DEPENDS ${NR_SHADER_OUT} ${NR_RTXDI_SHADER_OUT})
+
+# Materials compile their hit stages at runtime from MaterialHit.slang. The
+# material compiler has no file system, so the file and everything it
+# includes are preprocessed into one source it embeds.
+set(NR_MATERIAL_HIT_SOURCE
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/MaterialHit.preprocessed.slang")
+add_custom_command(OUTPUT "${NR_MATERIAL_HIT_SOURCE}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer"
+    COMMAND sh -c "\"$0\" -E \"$1\" > \"$2\""
+        "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/MaterialHit.slang"
+        "${NR_MATERIAL_HIT_SOURCE}"
+    DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
+    COMMENT "Preprocessing MaterialHit.slang" VERBATIM)
+add_custom_target(NoorRayMaterialHitSource DEPENDS "${NR_MATERIAL_HIT_SOURCE}")
+add_dependencies(NoorRayMaterialX NoorRayMaterialHitSource)
+target_compile_options(NoorRayMaterialX PRIVATE "--embed-dir=${NR_SHADER_BUILD_DIR}")
+set_property(SOURCE src/libnoorray/Materials/MaterialX/SlangMaterialCompiler.cpp
+    APPEND PROPERTY OBJECT_DEPENDS "${NR_MATERIAL_HIT_SOURCE}")
+
+# Spectral path tracer shaders, compiled only for NoorRay::Spectral.
+if(NR_BUILD_SPECTRAL)
+    set(NR_SPECTRAL_SHADER_OUT)
+    foreach(_shader Raytracer RaytracingMiss RaytracingHit EmissionHit OpacityAnyHit
+            GaussianAnyHit GaussianHit)
+        list(APPEND NR_SPECTRAL_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Raytracer/${_shader}.spv")
+    endforeach()
+    set(NR_SPECTRAL_SHADER_VALIDATE_COMMANDS)
+    if(NR_SPIRV_VAL_EXECUTABLE)
+        foreach(_spv IN LISTS NR_SPECTRAL_SHADER_OUT)
+            list(APPEND NR_SPECTRAL_SHADER_VALIDATE_COMMANDS
+                COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.4
+                    --scalar-block-layout "${_spv}")
+        endforeach()
+    endif()
+    add_custom_command(OUTPUT ${NR_SPECTRAL_SHADER_OUT}
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_SHADER_BUILD_DIR}/Raytracer"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
+            -entry main -stage raygeneration -target spirv
+            -profile spirv_1_5+spvRayTracingKHR
+            -capability spvDescriptorHeapEXT -emit-spirv-directly
+            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -o "${NR_SHADER_BUILD_DIR}/Raytracer/Raytracer.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.slang"
+            -entry main -stage miss -target spirv
+            -profile spirv_1_5+spvRayTracingKHR
+            -capability spvDescriptorHeapEXT -emit-spirv-directly
+            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingMiss.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingHit.slang"
+            -entry main -stage closesthit -target spirv
+            -profile spirv_1_5+spvRayTracingKHR
+            -capability spvDescriptorHeapEXT -emit-spirv-directly
+            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingHit.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/EmissionHit.slang"
+            -entry main -stage closesthit -target spirv
+            -profile spirv_1_5+spvRayTracingKHR
+            -capability spvDescriptorHeapEXT -emit-spirv-directly
+            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -o "${NR_SHADER_BUILD_DIR}/Raytracer/EmissionHit.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
+            -entry main -stage anyhit -target spirv
+            -profile spirv_1_5+spvRayTracingKHR
+            -capability spvDescriptorHeapEXT -emit-spirv-directly
+            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -o "${NR_SHADER_BUILD_DIR}/Raytracer/OpacityAnyHit.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
+            -entry main -stage anyhit -target spirv
+            -profile spirv_1_5+spvRayTracingKHR
+            -capability spvDescriptorHeapEXT -emit-spirv-directly
+            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianAnyHit.spv"
+        COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
+            -entry main -stage closesthit -target spirv
+            -profile spirv_1_5+spvRayTracingKHR
+            -capability spvDescriptorHeapEXT -emit-spirv-directly
+            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianHit.spv"
+        ${NR_SPECTRAL_SHADER_VALIDATE_COMMANDS}
+        DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
+        COMMENT "Compiling spectral path tracer shaders" VERBATIM)
+    add_custom_target(NoorRaySpectralShaders DEPENDS ${NR_SPECTRAL_SHADER_OUT})
+    target_compile_options(NoorRaySpectral PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:--embed-dir=${NR_SHADER_BUILD_DIR}>")
+endif()
 
 # ---------------------------------------------------------------------------
 # NoorRay (standalone application)
 # ---------------------------------------------------------------------------
 if(NR_BUILD_APPLICATION)
+    if(NOT NR_BUILD_IMPORT)
+        message(FATAL_ERROR "NR_BUILD_APPLICATION needs NR_BUILD_IMPORT")
+    endif()
     file(GLOB_RECURSE NR_APP_FILES CONFIGURE_DEPENDS "${NR_APP_DIR}/*.cpp" "${NR_APP_DIR}/*.h")
     add_executable(NoorRay ${NR_APP_FILES})
     set_target_properties(NoorRay PROPERTIES
@@ -679,15 +817,13 @@ if(NR_BUILD_APPLICATION)
     target_include_directories(NoorRay PRIVATE
         "${NR_APP_DIR}" "${NR_CORE_DIR}" "${PROJECT_SOURCE_DIR}/external/materialx/source")
     target_link_libraries(NoorRay PRIVATE
-        libnoorray portable_file_dialogs glm imgui imnodeflow Vulkan::Vulkan
-        SDL3::SDL3-static tinygltf tinyobjloader tinyexr stb gauss_forge_readers
-        ImViewGuizmo GPUOpen::VulkanMemoryAllocator glaze TBB::tbb NoorRayMaterialX)
+        libnoorray NoorRayIO NoorRayImport portable_file_dialogs glm imgui imnodeflow
+        Vulkan::Vulkan SDL3::SDL3-static ImViewGuizmo TBB::tbb NoorRayMaterialX)
     if(NR_ENABLE_USD)
         target_link_libraries(NoorRay PRIVATE NoorRayUsdStandalone)
     endif()
     target_compile_definitions(NoorRay PRIVATE
         SDL_MAIN_HANDLED VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-        NR_MATERIALX_STDLIB_DIR="${NR_MATERIALX_STDLIB_DIR}"
         # The editor resolves scene-relative asset paths against the source
         # tree's assets; the library itself carries no such path.
         NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
@@ -701,6 +837,9 @@ endif()
 # SDK, but when enabled it links only against libnoorray and the NoorRHI API.
 option(NR_BUILD_HYDRA "Build the hdnoorray Hydra render delegate" OFF)
 if(NR_BUILD_HYDRA)
+    if(NOT NR_BUILD_IMPORT)
+        message(FATAL_ERROR "NR_BUILD_HYDRA needs NR_BUILD_IMPORT")
+    endif()
     add_subdirectory(src/hdnoorray)
 endif()
 
@@ -709,6 +848,9 @@ endif()
 # ---------------------------------------------------------------------------
 option(NR_BUILD_PYTHON "Build Python bindings" OFF)
 if(NR_BUILD_PYTHON)
+    if(NOT NR_BUILD_IMPORT)
+        message(FATAL_ERROR "NR_BUILD_PYTHON needs NR_BUILD_IMPORT")
+    endif()
     # Do not pin the bindings to the build host's Python minor version.  The
     # extension ABI is selected by the interpreter/development package CMake
     # finds (or by a user supplied Python_EXECUTABLE).
@@ -732,8 +874,7 @@ if(NR_BUILD_PYTHON)
     target_include_directories(_pynoorray PRIVATE
         "${PROJECT_SOURCE_DIR}/src/pynoorray"
         "${NR_CORE_DIR}")
-    target_link_libraries(_pynoorray PRIVATE
-        "$<LINK_GROUP:RESCAN,libnoorray,NoorRayIO>")
+    target_link_libraries(_pynoorray PRIVATE libnoorray NoorRayIO NoorRayImport)
     target_compile_definitions(_pynoorray PRIVATE
         VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
     add_custom_command(TARGET _pynoorray POST_BUILD
@@ -751,6 +892,9 @@ endif()
 # Tests
 # ---------------------------------------------------------------------------
 if(NR_BUILD_TESTS)
+    if(NOT NR_BUILD_IMPORT OR NOT NR_BUILD_SPECTRAL)
+        message(FATAL_ERROR "NR_BUILD_TESTS needs NR_BUILD_IMPORT and NR_BUILD_SPECTRAL")
+    endif()
     enable_testing()
     add_subdirectory(tests)
 endif()

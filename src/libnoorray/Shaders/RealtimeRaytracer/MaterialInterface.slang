@@ -2,9 +2,9 @@
 //
 // MaterialX documents are generated into Slang modules against this module
 // (Materials/MaterialX/SlangMaterialGenerator.cpp), which the runtime links
-// into one callable shader per distinct material. The realtime closest hit
-// calls a material's callable with a MaterialCall and shades the closures
-// the material returns with its own GGX model.
+// into one hit group per distinct material (MaterialHit.slang). The material's
+// closest hit returns the closures it evaluates, and the ray-generation stage
+// shades them with its own GGX model.
 //
 // MaterialX's closure types are defined here, not by MaterialX's hardware
 // libraries: a BSDF is not evaluated against lights inside the material but
@@ -294,19 +294,4 @@ interface IMaterial
     // `parameters` is the material's parameter block, packed by the host in
     // the order the generated material reads it.
     static surfaceshader evaluate(MaterialGeometry geometry, uint* parameters);
-}
-
-// The callable data of a material call. The parameter block is passed as a
-// plain address: NVIDIA's driver crashes compiling pipelines whose callable
-// data holds a pointer.
-struct MaterialCall
-{
-    MaterialGeometry geometry;
-    uint64_t parameters;
-    surfaceshader surface;
-}
-
-void callMaterial<M : IMaterial>(inout MaterialCall call)
-{
-    call.surface = M.evaluate(call.geometry, (uint*)call.parameters);
 }

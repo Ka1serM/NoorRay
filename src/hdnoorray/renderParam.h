@@ -23,7 +23,6 @@
 #include <tbb/concurrent_queue.h>
 #include <tbb/task_group.h>
 
-#include "Materials/SVM/SvmCompiler.h"
 
 #include "NoorRaySession.h"
 #include "Texture/Texture.h"
@@ -34,11 +33,6 @@ PXR_NAMESPACE_OPEN_SCOPE
 class HDNOORRAY_API HdNoorRayRenderParam final : public HdRenderParam
 {
 public:
-    struct MaterialCompilationOutput
-    {
-        nr::svm::CompiledSvmProgram program;
-    };
-
     // An immutable snapshot of MaterialX XML sent directly by the Blender
     // addon. Snapshots make lookups cheap while SetRenderSetting can replace
     // the latest document concurrently with Hydra material Sync.
@@ -105,8 +99,7 @@ public:
     // scene slot without going through QueueMaterialCompilation (which owns
     // its own Hydra material prim). Caller must hold `mutex`.
     void QueueSceneMaterialCompilation(Material* slot);
-    void QueueMaterialCompilation(const SdfPath& id, MaterialX::DocumentPtr document,
-        std::function<MaterialCompilationOutput()> compile);
+    void QueueMaterialCompilation(const SdfPath& id, MaterialX::DocumentPtr document);
     // Returns true when a completed background compile changed renderer state.
     // This is the one kind of change that happens outside Hydra's dirty-bit
     // lifecycle, so the render pass folds it into its accumulation reset.
@@ -235,8 +228,6 @@ private:
         SdfPath id;
         uint64_t generation{};
         MaterialX::DocumentPtr document;
-        MaterialCompilationOutput output;
-        std::string error;
     };
 
     ContentIdentity GetTextureContentIdentity(const std::string& filePath);

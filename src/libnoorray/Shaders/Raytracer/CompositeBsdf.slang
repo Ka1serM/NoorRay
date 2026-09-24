@@ -134,7 +134,7 @@ struct NoorRayShaderClosure
 
 // Rotate a shading normal minimally toward the geometric normal so that its
 // reflection stays above the geometric surface. This is the Blender/Cycles
-// grazing-angle correction the SVM composite needs for normal-mapped surfaces.
+// grazing-angle correction a composite BSDF needs for normal-mapped surfaces.
 float3 clampShadingNormal(float3 geometricNormal, float3 shadingNormal, float3 view)
 {
     const float3 reflected = reflect(-view, shadingNormal);

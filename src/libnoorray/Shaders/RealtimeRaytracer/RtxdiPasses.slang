@@ -1,6 +1,10 @@
 // ReSTIR DI and ReSTIR GI passes of the realtime renderer, one entry point
 // per build: the command line defines exactly one RTXDI_PASS_* macro.
 //
+// Passes that test visibility trace shadow rays through the realtime
+// pipeline, so they are ray-generation stages dispatched per pixel; the
+// others are compute shaders.
+//
 // Frame order (RealtimeRaytracer::renderImpl):
 //   PRESAMPLE_LIGHTS  local lights -> RIS tiles, by power (compute)
 //   PRESAMPLE_REGIR   RIS tiles -> ReGIR world-space cells (compute)
@@ -156,9 +160,10 @@ void main(uint3 threadId : SV_DispatchThreadID)
 [shader("raygeneration")]
 void main()
 {
+    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = DispatchRaysIndex().xy;
+    const uint2 pixel = threadId.xy;
     if (pixel.x >= frame.width || pixel.y >= frame.height)
         return;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
@@ -186,9 +191,10 @@ void main()
 [shader("raygeneration")]
 void main()
 {
+    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = DispatchRaysIndex().xy;
+    const uint2 pixel = threadId.xy;
     if (pixel.x >= frame.width || pixel.y >= frame.height)
         return;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
@@ -259,9 +265,10 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 localId : SV_GroupThreadID
 [shader("raygeneration")]
 void main()
 {
+    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = DispatchRaysIndex().xy;
+    const uint2 pixel = threadId.xy;
     if (pixel.x >= frame.width || pixel.y >= frame.height)
         return;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
@@ -289,9 +296,10 @@ void main()
 [shader("raygeneration")]
 void main()
 {
+    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = DispatchRaysIndex().xy;
+    const uint2 pixel = threadId.xy;
     if (pixel.x >= frame.width || pixel.y >= frame.height)
         return;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
@@ -319,9 +327,10 @@ void main()
 [shader("raygeneration")]
 void main()
 {
+    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = DispatchRaysIndex().xy;
+    const uint2 pixel = threadId.xy;
     if (pixel.x >= frame.width || pixel.y >= frame.height)
         return;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
@@ -406,9 +415,10 @@ float realtimeCameraWeight(uint2 pixel)
 [shader("raygeneration")]
 void main()
 {
+    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = DispatchRaysIndex().xy;
+    const uint2 pixel = threadId.xy;
     if (pixel.x >= frame.width || pixel.y >= frame.height)
         return;
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);

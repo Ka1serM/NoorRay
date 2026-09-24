@@ -69,10 +69,6 @@
 [submodule "external/ImNodeFlow"]
 	path = external/ImNodeFlow
 	url = https://github.com/Fattorino/ImNodeFlow.git
-[submodule "external/NoorRHI"]
-	path = external/NoorRHI
-	url = ../NoorRHI
-	branch = main
 [submodule "external/SHARC"]
 	path = external/SHARC
 	url = https://github.com/NVIDIA-RTX/SHARC.git
@@ -85,3 +81,10 @@
 [submodule "external/RTXDI-Library"]
 	path = external/RTXDI-Library
 	url = https://github.com/NVIDIA-RTX/RTXDI-Library.git
+[submodule "external/NoorRHI"]
+	path = external/NoorRHI
+	url = https://github.com/Ka1serM/NoorRHI.git
+	branch = main
+[submodule "external/slang"]
+	path = external/slang
+	url = https://github.com/shader-slang/slang.git

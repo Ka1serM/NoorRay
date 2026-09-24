@@ -1,4 +1,4 @@
-#include "RtxdiBridge.slang"
+#include "RealtimeHitShading.slang"
 #include "Sharc.slang"
 #include "../Raytracer/Sampling.slang"
 #include "../Raytracer/CameraRay.slang"
@@ -22,7 +22,10 @@
 //
 // Light transport is deliberately cheaper than the reference: every lobe
 // smoother than earlier path vertices widened to their roughness, and only
-// mesh instances traced, all as opaque geometry. Analytic lights are sampled
+// mesh instances traced. A ray's hit shaders are its material's
+// (MaterialHit.slang): the closest hit returns the material's closures, which
+// this stage shades (RealtimeHitShading.slang), and the any-hit stages apply
+// the material's opacity to surface and shadow rays alike. Analytic lights are sampled
 // through RTXDI (RtxdiBridge.slang): primary surfaces by ReSTIR DI in the
 // passes of RtxdiPasses.slang, every later vertex by RIS over RTXDI's ReGIR
 // world-space light grid. The environment keeps its own light sample with MIS
@@ -35,14 +38,13 @@
 // sharper reflections trace on so mirrors do not show voxel-sized radiance.
 static const float SharcQueryRoughness = 0.25;
 static const uint SharcUpdateMaxBounces = 4u;
-static const uint RealtimeRayFlags = RAY_FLAG_FORCE_OPAQUE;
 
 float3 offsetRayOrigin(float3 position, float3 normal, float3 direction)
 {
     return position + normal * (dot(normal, direction) >= 0.0 ? 1.0e-4 : -1.0e-4);
 }
 
-// Shadowed contribution of the light samples a hit shader returned, split by
+// Shadowed contribution of the light samples taken at a vertex, split by
 // lobe: the (environment or all-light) sample, then RTXDI's analytic one.
 struct VertexDirectLight
 {
@@ -50,7 +52,7 @@ struct VertexDirectLight
     float3 specular;
 };
 
-VertexDirectLight shadowedDirectLight(RealtimeRayPayload payload)
+VertexDirectLight shadowedDirectLight(RealtimeVertex payload)
 {
     VertexDirectLight result;
     result.diffuse = float3(0.0);
@@ -70,7 +72,7 @@ VertexDirectLight shadowedDirectLight(RealtimeRayPayload payload)
     return result;
 }
 
-RealtimeRayPayload traceRealtimeRay(Frame frame, float3 origin,
+RealtimeVertex traceRealtimeRay(Frame frame, float3 origin,
     float3 direction, uint depth, uint seed, float roughnessFloor,
     bool screenSpaceLights = false)
 {
@@ -79,17 +81,14 @@ RealtimeRayPayload traceRealtimeRay(Frame frame, float3 origin,
     ray.Direction = direction;
     ray.TMin = 0.001;
     ray.TMax = 1.0e30;
-    RealtimeRayPayload payload = {};
-    payload.seed = seed;
-    payload.depth = depth;
-    payload.roughnessFloor = roughnessFloor;
-    payload.screenSpaceLights = screenSpaceLights ? 1u : 0u;
-    TraceRay(RaytracingAccelerationStructure(frame.topLevelAS),
-        RealtimeRayFlags, RaytracingMaskMesh, 0, 2, 0, ray, payload);
-    return payload;
+    RealtimeHitPayload hit = {};
+    TraceRay(RaytracingAccelerationStructure(frame.topLevelAS), RAY_FLAG_NONE,
+        RaytracingMaskMesh, RealtimeRayTypeSurface, RaytracingRayTypeCount,
+        RealtimeMissSurface, ray, hit);
+    return shadeRealtimeHit(hit, direction, depth, seed, roughnessFloor, screenSpaceLights);
 }
 
-SharcHitData makeSharcHit(RealtimeRayPayload payload)
+SharcHitData makeSharcHit(RealtimeVertex payload)
 {
     SharcHitData hit;
     hit.positionWorld = payload.position;
@@ -140,7 +139,7 @@ void main()
     [loop]
     for (uint depth = 0u; depth < bounceCount; ++depth)
     {
-        const RealtimeRayPayload payload = traceRealtimeRay(frame, rayOrigin,
+        const RealtimeVertex payload = traceRealtimeRay(frame, rayOrigin,
             rayDirection, depth, pathRng.state, roughnessFloor);
         pathRng.state = payload.seed;
 
@@ -216,7 +215,7 @@ struct IndirectPath
 
 // Radiance arriving at a primary hit along its sampled continuation, before
 // the primary BSDF weight is applied.
-IndirectPath traceIndirect(Frame frame, RealtimeRayPayload primary, inout Rng pathRng)
+IndirectPath traceIndirect(Frame frame, RealtimeVertex primary, inout Rng pathRng)
 {
     IndirectPath result;
     result.radiance = float3(0.0);
@@ -240,7 +239,7 @@ IndirectPath traceIndirect(Frame frame, RealtimeRayPayload primary, inout Rng pa
     [loop]
     for (uint depth = 1u; depth < bounceCount; ++depth)
     {
-        const RealtimeRayPayload payload = traceRealtimeRay(frame, rayOrigin,
+        const RealtimeVertex payload = traceRealtimeRay(frame, rayOrigin,
             rayDirection, depth, pathRng.state, roughnessFloor);
         pathRng.state = payload.seed;
 
@@ -416,7 +415,7 @@ void main()
     RAB_Surface gbufferSurface = RAB_EmptySurface();
     RTXDI_GIReservoir giSample = RTXDI_EmptyGIReservoir();
 
-    RealtimeRayPayload payload = {};
+    RealtimeVertex payload = {};
     payload.hit = RealtimeMiss;
     payload.t = 1.0e30;
     if (cameraRay.valid && frame.topLevelAS != 0)

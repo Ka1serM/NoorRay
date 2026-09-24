@@ -34,6 +34,10 @@ struct SlangMaterial
     std::vector<std::uint32_t> parameters;
     // Replaced by the textures' descriptor handles when the block is uploaded.
     std::vector<SlangMaterialTexture> textures;
+    // The surface's opacity is not one everywhere with this document's values.
+    // Opacity that depends on textures, geometry or a node the generator
+    // cannot fold counts as transparent.
+    bool transparent{};
 };
 
 // Generates Slang with MaterialX's Slang generator (MaterialXGenSlang) for a

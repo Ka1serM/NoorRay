@@ -10,12 +10,13 @@
 #include <string>
 #include "UI/NoorRayUi.h"
 #include "Logging/Log.h"
-#include "Raytracing/Raytracer.h"
+#include "Raytracing/RealtimeRaytracer.h"
 #include <noorrhi/noorrhi.hpp>
 #include "Materials/MaterialX/MaterialXSceneRuntime.h"
 #include "Camera/CameraInstance.h"
 #include "Scene/Scene.h"
 #include "Scene/Import/AssetPath.h"
+#include "Scene/Import/SceneImporter.h"
 #include "IO/BitmapWriter.h"
 #include "IO/Bitmap.h"
 
@@ -40,7 +41,7 @@ void uploadCompiledMaterials(Raytracer& renderer, Scene& scene,
     MaterialXSceneRuntime materialRuntime;
     const std::string sceneDirectory =
         std::filesystem::path(scenePath).parent_path().string();
-    materialRuntime.compileAndWait(scene, renderer.needsSvmPrograms(), sceneDirectory);
+    materialRuntime.compileAndWait(scene, sceneDirectory);
     renderer.uploadMaterials(scene);
     renderer.uploadEnvironment(scene);
 }
@@ -260,13 +261,13 @@ void runCli(const CliOptions& options)
         noorrhi::Device device;
         // The scene-less smoke mode uses the tiny native triangle scene to
         // validate the AS/query layer before a full imported scene is added.
-        const auto renderer = Raytracer::create(device, width, height,
+        const auto renderer = std::make_unique<RealtimeRaytracer>(device, width, height,
             options.scenePath.empty());
         std::unique_ptr<Scene> nativeScene;
         if (!options.scenePath.empty())
         {
             nativeScene = std::make_unique<Scene>();
-            nativeScene->load(options.scenePath);
+            SceneImporter::Load(*nativeScene, options.scenePath);
             if (options.gaussianShadingMode)
                 nativeScene->getRenderSettings().gaussianShadingMode =
                     *options.gaussianShadingMode;
@@ -296,7 +297,7 @@ void runCli(const CliOptions& options)
     }
     noorrhi::Device device;
     Scene scene;
-    scene.load(options.scenePath);
+    SceneImporter::Load(scene, options.scenePath);
     if (options.gaussianShadingMode)
         scene.getRenderSettings().gaussianShadingMode = *options.gaussianShadingMode;
     if (options.realtimeLighting)
@@ -315,7 +316,7 @@ void runCli(const CliOptions& options)
         ? static_cast<uint32_t>(options.width) : sceneResolution.x;
     const uint32_t height = options.height > 0
         ? static_cast<uint32_t>(options.height) : sceneResolution.y;
-    const auto renderer = Raytracer::create(device, width, height);
+    const auto renderer = std::make_unique<RealtimeRaytracer>(device, width, height);
     renderer->uploadScene(scene);
     uploadCompiledMaterials(*renderer, scene, options.scenePath);
     renderer->updateCamera(scene);

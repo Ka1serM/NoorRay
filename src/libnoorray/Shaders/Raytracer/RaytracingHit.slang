@@ -1,13 +1,16 @@
 #include "ByteBuffer.slang"
 #include "RaytracingAbi.slang"
 #include "SceneSurface.slang"
-#include "MaterialSVM.slang"
+#include "CompositeBsdf.slang"
+#include "RgbToSpectrum.slang"
 #include "AnalyticLights.slang"
 #include "Environment.slang"
 
-// Triangle closest-hit owns the complete surface/material front end. Raygen
-// receives only this compact result payload and remains independent of scene
-// layout and MaterialX bytecode size.
+// Triangle closest-hit owns the complete surface front end. Raygen receives
+// only this compact result payload and remains independent of scene layout.
+// Materials are not evaluated yet: every surface is a neutral diffuse until
+// this renderer runs the MaterialX shaders the realtime renderer compiles.
+static const float3 kNeutralAlbedo = float3(0.8);
 [shader("closesthit")]
 void main(inout RayPayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
@@ -15,7 +18,6 @@ void main(inout RayPayload payload,
     const Frame frame = *root.arguments;
     payload.hit = 1u;
     payload.instance = InstanceID();
-    payload.primitive = PrimitiveIndex();
     payload.barycentrics = attributes.barycentrics;
     payload.t = RayTCurrent();
     payload.cryptomatte = payload.instance;
@@ -38,23 +40,11 @@ void main(inout RayPayload payload,
     ByteBuffer spectralTables = byteBuffer(frame.spectralTables);
     const float3 rayDirection = normalize(WorldRayDirection());
     const RegularSurface surface = loadRegularSurface(frame.scene,
-        payload.instance, payload.primitive, payload.barycentrics);
+        payload.instance, GeometryIndex(), PrimitiveIndex(), payload.barycentrics);
+    payload.primitive = surface.primitiveIndex;
 
-    MaterialSvmContext context;
-    context.position = surface.position;
-    context.geometricNormal = surface.geometricNormal;
-    context.interpolatedNormal = surface.shadingNormal;
-    context.tangent = surface.tangent;
-    context.bitangent = normalize(cross(surface.shadingNormal,
-        surface.tangent)) * surface.tangentSign;
-    context.uv = surface.uv;
-    context.vertexColor = surface.vertexColor;
-    context.viewDirection = -rayDirection;
-    context.time = 0.0;
-
-    RaytracerMaterialSink sink;
-    sink.bsdf = makeShaderData(context.geometricNormal,
-        context.interpolatedNormal, context.viewDirection);
+    NoorRayShaderData bsdf = makeShaderData(surface.geometricNormal,
+        surface.shadingNormal, -rayDirection);
     const SampledWavelengths wavelengths = sampleWavelengthsVisible(
         payload.wavelengthSample);
     const LightTable lights = makeLightTable(frame);
@@ -73,31 +63,16 @@ void main(inout RayPayload payload,
             return;
         }
     }
-    Material* material = frame.materials[surface.materialIndex];
-    DescriptorMaterialSvmTextures textures;
-    textures.textureTable = material->textures;
-    MaterialSvmResult shading = {};
-    const bool valid = material->bytecodeLength != 0u
-        && material->stackSize <= SVM_STACK_SIZE
-        && evaluateMaterialSvm(textures, sink, byteBuffer(material->bytecode), 0u,
-            material->bytecodeLength, context, wavelengths, spectralTables, energyLuts,
-            dot(rayDirection, surface.geometricNormal) > 0.0, shading);
-
-    const float3 baseColor = valid ? shading.albedo : float3(0.8);
-    payload.albedo = max(baseColor * surface.vertexColor.rgb, 0.0);
-    payload.radiance = payload.albedo + (valid
-        ? shading.emission * shading.emissionStrength : float3(0.0));
-    // Opacity is resolved stochastically in OpacityAnyHit, so a hit that
-    // reaches closest hit is fully covered. Publishing the opacity again here
-    // composited it twice and made the transparent-background alpha too low.
-    payload.normal = normalize(valid && (shading.flags & SVM_HAS_SHADING_NORMAL) != 0u
-        ? shading.shadingNormal : surface.shadingNormal);
+    payload.albedo = max(kNeutralAlbedo * surface.vertexColor.rgb, 0.0);
+    payload.radiance = payload.albedo;
+    payload.normal = surface.shadingNormal;
     payload.position = surface.position;
-    if (!valid)
+    DiffuseLobe lobe = makeDiffuseLobe();
+    lobe.albedo = rgbAlbedoToSpectrum(spectralTables, payload.albedo, wavelengths);
+    bsdf.addDiffuse(SampledSpectrum(1.0), lobe, float3(0.0));
+    if (!bsdf.prepare(energyLuts))
         return;
 
-    payload.emissionSpectrum = rgbIlluminantToSpectrum(spectralTables,
-        shading.emission * shading.emissionStrength, wavelengths);
     Rng bsdfRng;
     bsdfRng.state = payload.seed ^ (0x85EBCA6Bu * (payload.depth + 1u));
     if (hasAnalyticLights(frame)
@@ -152,7 +127,7 @@ void main(inout RayPayload payload,
         }
         if (directValid)
         {
-            const SampledSpectrum direct = sink.bsdf.evaluateDirect(energyLuts,
+            const SampledSpectrum direct = bsdf.evaluateDirect(energyLuts,
                 directDirection, directRadianceOverPdf);
             if (spectrumIsFinite(direct) && spectrumMaxComponent(direct) > 0.0)
             {
@@ -163,7 +138,7 @@ void main(inout RayPayload payload,
             }
         }
     }
-    const BsdfSample sample = sink.bsdf.sample(energyLuts, bsdfRng);
+    const BsdfSample sample = bsdf.sample(energyLuts, bsdfRng);
     payload.seed = bsdfRng.state;
     if (sample.directionIsValid()
         && spectrumMaxAbsComponent(sample.weight) > 0.0)

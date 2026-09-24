@@ -22,7 +22,6 @@
 #include "Materials/MaterialX/MaterialXDocument.h"
 #include "Materials/MaterialX/SlangMaterialCompiler.h"
 #include "Materials/MaterialX/SlangMaterialGenerator.h"
-#include "Materials/SVM/SvmCompiler.h"
 #include "Scene/Scene.h"
 
 
@@ -34,22 +33,20 @@ struct MaterialXSceneRuntime::Impl
         std::uint64_t materialRevision{};
         MaterialX::DocumentPtr document;
         std::unordered_map<std::string, std::uint32_t> resolvedTextures;
-        bool svmProgram{};
     };
 
     struct Completion
     {
         std::size_t materialIndex{};
         std::uint64_t materialRevision{};
-        std::optional<nr::svm::CompiledSvmProgram> result;
-        MaterialShaderProgram shaderProgram;
+        std::optional<MaterialShaderProgram> shaderProgram;
         std::string error;
     };
 
     struct Ready
     {
         std::size_t materialIndex{};
-        nr::svm::CompiledSvmProgram program;
+        std::uint64_t materialRevision{};
         MaterialShaderProgram shaderProgram;
     };
 
@@ -189,6 +186,7 @@ MaterialShaderProgram MaterialXSceneRuntime::Impl::compileShaderProgram(
             << std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - generated).count() << " ms");
         result.parameters = std::move(material.parameters);
+        result.transparent = material.transparent;
         for (const nr::materialx::SlangMaterialTexture& texture : material.textures) {
             const auto found = resolvedTextures.find(texture.file);
             result.textures.push_back({texture.word,
@@ -232,10 +230,6 @@ MaterialXSceneRuntime::MaterialXSceneRuntime()
             completion.materialIndex = job.materialIndex;
             completion.materialRevision = job.materialRevision;
             try {
-                completion.result = nr::svm::CompiledSvmProgram{};
-                if (job.svmProgram)
-                    completion.result = nr::svm::SvmCompiler().compile(job.document, {},
-                        job.resolvedTextures);
                 completion.shaderProgram = impl_->compileShaderProgram(generator, compiler,
                     job.document, job.resolvedTextures);
             } catch (const std::exception& error) {
@@ -280,8 +274,7 @@ bool MaterialXSceneRuntime::needsCompilation(const Scene& scene) const
         [](const Material& material) { return !material.compiled; });
 }
 
-void MaterialXSceneRuntime::processPending(Scene& scene, const bool svmPrograms,
-    const std::string& sceneDirectory)
+void MaterialXSceneRuntime::processPending(Scene& scene, const std::string& sceneDirectory)
 {
     auto& materials = scene.getMaterials();
     const auto& paths = scene.getMaterialXSourcePaths();
@@ -292,15 +285,21 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const bool svmPrograms,
         completed.swap(impl_->completed);
     }
 
+    // A material the scene no longer holds must not be published onto whatever
+    // took its index, so a scene edit drops what was compiled for the old one.
+    std::erase_if(impl_->ready, [&scene](const Impl::Ready& ready) {
+        return ready.materialRevision != scene.getMaterialRevision();
+    });
+
     std::vector<std::size_t> fallbackCompiles;
     for (auto& completion : completed) {
         if (completion.materialRevision != scene.getMaterialRevision())
             continue;
-        if (completion.result) {
+        if (completion.shaderProgram) {
             if (completion.materialIndex < materials.size()
                 && !materials[completion.materialIndex].compiled)
-                impl_->ready.push_back({completion.materialIndex,
-                    std::move(*completion.result), std::move(completion.shaderProgram)});
+                impl_->ready.push_back({completion.materialIndex, completion.materialRevision,
+                    std::move(*completion.shaderProgram)});
         } else {
             NR_LOG_WARN("MaterialX background compilation failed: "
                 << completion.error);
@@ -310,7 +309,7 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const bool svmPrograms,
         }
     }
 
-    const auto schedule = [this, svmPrograms](const std::size_t materialIndex,
+    const auto schedule = [this](const std::size_t materialIndex,
                               const std::uint64_t materialRevision,
                               MaterialX::DocumentPtr document,
                               std::unordered_map<std::string, std::uint32_t> resolvedTextures) {
@@ -319,7 +318,7 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const bool svmPrograms,
             if (!impl_->scheduled.insert(materialIndex).second)
                 return;
             impl_->jobs.push_back(Impl::Job{materialIndex, materialRevision,
-                std::move(document), std::move(resolvedTextures), svmPrograms});
+                std::move(document), std::move(resolvedTextures)});
         }
         impl_->condition.notify_one();
     };
@@ -390,16 +389,14 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const bool svmPrograms,
             continue;
         // Publishing uploads this one material's buffers and marks the scene
         // dirty; no other material is re-uploaded.
-        scene.setMaterialProgram(ready.materialIndex, std::move(ready.program),
-            std::move(ready.shaderProgram));
+        scene.setMaterialProgram(ready.materialIndex, std::move(ready.shaderProgram));
     }
     impl_->ready.clear();
 }
 
-void MaterialXSceneRuntime::compileAndWait(Scene& scene, const bool svmPrograms,
-    const std::string& sceneDirectory)
+void MaterialXSceneRuntime::compileAndWait(Scene& scene, const std::string& sceneDirectory)
 {
-    processPending(scene, svmPrograms, sceneDirectory);
+    processPending(scene, sceneDirectory);
     for (;;) {
         std::unique_lock lock(impl_->mutex);
         impl_->condition.wait(lock, [this] {
@@ -407,7 +404,7 @@ void MaterialXSceneRuntime::compileAndWait(Scene& scene, const bool svmPrograms,
                 || (impl_->jobs.empty() && impl_->active == 0);
         });
         lock.unlock();
-        processPending(scene, svmPrograms, sceneDirectory);
+        processPending(scene, sceneDirectory);
         if (!needsCompilation(scene))
             return;
     }

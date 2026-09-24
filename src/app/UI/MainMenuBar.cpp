@@ -147,7 +147,7 @@ void MainMenuBar::openScene(const std::string& filePath)
         return;
 
     try {
-        scene.load(filePath);
+        SceneImporter::Load(scene, filePath);
         std::string extension = std::filesystem::path(filePath).extension().string();
         std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
             return static_cast<char>(std::tolower(value));

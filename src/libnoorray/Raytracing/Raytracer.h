@@ -24,6 +24,29 @@ class Mesh;
 namespace noorrhi { class Device; }
 namespace nr::materialx { struct MaterialShader; }
 
+// A compiled material's hit stages (MaterialHit.slang).
+struct MaterialHitShaders
+{
+    noorrhi::Shader closestHit;
+    noorrhi::Shader anyHit;
+    noorrhi::Shader shadowAnyHit;
+};
+
+// One shader-binding-table hit record of the shared TLAS, in record order: a
+// mesh instance's hit offset addresses RaytracingRayTypeCount records per
+// section of its mesh, and the Gaussian proxies' offset the last ones.
+struct HitRecord
+{
+    enum class Kind { Section, Gaussian };
+    Kind kind{};
+    uint32_t rayType{};
+    // A section's material: the index of its hit shaders in the list
+    // onMaterialShadersChanged() received, ~0u without compiled shaders.
+    uint32_t materialShaders{~0u};
+    // The material's opacity may be below one.
+    bool transparent{};
+};
+
 // graphics API ray tracer and sole render owner. It holds the TLAS, the per-frame
 // record, and the pointer tables that address resources the Scene owns.
 //
@@ -34,17 +57,9 @@ namespace nr::materialx { struct MaterialShader; }
 class Raytracer
 {
 public:
-    // The device is owned by the session, not by the renderer: the viewport
-    // composite, the swapchain and this renderer all share one noorrhi::Device.
-    static std::unique_ptr<Raytracer> create(noorrhi::Device& device,
-        uint32_t width, uint32_t height,
-        bool exportColorMemory = false);
     virtual ~Raytracer();
 
     virtual RaytracerType type() const noexcept = 0;
-    virtual bool supportsMeshLights() const noexcept { return true; }
-    // Whether materials must be compiled to SVM programs for this renderer.
-    virtual bool needsSvmPrograms() const noexcept { return true; }
 
     Raytracer(const Raytracer&) = delete;
     Raytracer& operator=(const Raytracer&) = delete;
@@ -140,14 +155,16 @@ public:
     uint32_t imageHeight() const { return imageHeight_; }
 
 protected:
+    // The device is owned by the session, not by the renderer: the viewport
+    // composite, the swapchain and this renderer all share one noorrhi::Device.
     Raytracer(noorrhi::Device& device, uint32_t width, uint32_t height,
         bool exportColorMemory);
 
-    // Concrete renderers compile and own their shader pipeline. The rest of
-    // the renderer state is intentionally shared so scene publication,
-    // accumulation, AOVs and viewport integration stay renderer-agnostic.
-    noorrhi::RayTracingPipeline pipeline;
-    virtual void renderImpl();
+    // Concrete renderers compile and own their shader pipeline and record
+    // their frame here. The rest of the renderer state is intentionally shared
+    // so scene publication, accumulation, AOVs and viewport integration stay
+    // renderer-agnostic.
+    virtual void renderImpl() = 0;
     virtual void onImageAllocationChanged() {}
     noorrhi::Device& renderDevice() const { return *gpuDevice; }
     uint32_t logicalRenderWidth() const { return renderWidth; }
@@ -157,9 +174,12 @@ protected:
     virtual void onRenderSettingsApplied(const RenderSettings&) {}
     // Called after every light upload, with the records the GPU now holds.
     virtual void onLightsUploaded() {}
-    // Called when material uploads added callable shaders. The list only
-    // grows, so a material's index into it stays valid.
-    virtual void onMaterialShadersChanged(std::span<const noorrhi::Shader>) {}
+    // Called when material uploads added hit shaders. The list only grows,
+    // so a material's index into it stays valid.
+    virtual void onMaterialShadersChanged(std::span<const MaterialHitShaders>) {}
+    // Called after every scene upload with the hit records the new TLAS
+    // addresses; a renderer's pipeline needs one hit group per record.
+    virtual void onHitRecordsChanged(std::span<const HitRecord>) = 0;
     const std::vector<nr::graphics::PointLight>& pointLightRecords() const { return pointLightData_; }
     const std::vector<nr::graphics::SpotLight>& spotLightRecords() const { return spotLightData_; }
     const std::vector<nr::graphics::RectLight>& rectLightRecords() const { return rectLightData_; }
@@ -196,10 +216,10 @@ private:
     // One device pointer per scene material, pointing at that material's own
     // nr::graphics::Material record.
     noorrhi::Buffer<std::uint64_t> materials;
-    // Callable shaders of the materials, in shader-binding-table order, and
+    // Hit shaders of the materials, in the order renderers index them, and
     // the compiled programs they were created from.
     std::vector<std::shared_ptr<const nr::materialx::MaterialShader>> materialShaderPrograms_;
-    std::vector<noorrhi::Shader> materialShaders_;
+    std::vector<MaterialHitShaders> materialShaders_;
     // The TLAS and the per-mesh/per-instance record tables. These used to be a
     // separate GpuScene object, but after resources became self-owning all it
     // held was a TLAS plus pointer tables into Scene's deques.
@@ -249,6 +269,8 @@ private:
     uint32_t buildMesh(const ::Mesh& asset);
     void buildGaussians(const Scene& scene);
     void buildTopLevel(const Scene& scene);
+    // The records buildTopLevel()'s hit offsets address.
+    std::vector<HitRecord> hitRecords() const;
     void buildSceneData(const Scene& scene);
     // Updates fixed-topology editor mutations without replacing descriptors,
     // geometry BLASes, or the TLAS allocation. Returns false when topology or
@@ -269,8 +291,6 @@ private:
     std::vector<nr::graphics::DirectionalLight> directionalLightData_;
     std::vector<nr::graphics::MeshLight> meshLightData_;
     bool lightBuffersValid_{};
-    noorrhi::Buffer<std::byte> energyLutBuffer;
-    noorrhi::Buffer<std::byte> spectralTablesBuffer;
     // Sampled by any material whose texture failed to load at import time.
     noorrhi::Image<std::byte> whiteTexture;
 };

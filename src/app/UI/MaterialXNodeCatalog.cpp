@@ -45,7 +45,7 @@ std::vector<std::string> splitTerms(const std::string& query)
 MaterialXNodeCatalog::MaterialXNodeCatalog()
 {
     try {
-        libraries_ = nr::materialx::loadStandardLibraries(NR_MATERIALX_STDLIB_DIR);
+        libraries_ = nr::materialx::loadStandardLibraries();
     }
     catch (const std::exception& error) {
         loadError_ = error.what();

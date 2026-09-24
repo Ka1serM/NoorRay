@@ -1,9 +1,7 @@
 #pragma once
 
-// MaterialX document utilities shared by the SVM front end.
-//
-// SVM walks MaterialX graphs directly and does not use a MaterialX shader
-// generator. These utilities remain pure document operations.
+// MaterialX document utilities shared by the importers and the shader
+// generator. These are pure document operations.
 
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +13,7 @@
 
 #include <MaterialXCore/Document.h>
 
-#include "Materials/SVM/SvmMaterial.h"
+#include "Materials/BasicMaterial.h"
 
 namespace nr::materialx
 {
@@ -32,21 +30,21 @@ MaterialX::DocumentPtr getSharedStandardLibraries();
 // what a graph is fallen back to when it no longer compiles.
 MaterialX::DocumentPtr defaultMaterial();
 
-// Lowers one simple SVM material record -- the compact record an importer fills in --
+// Lowers one BasicMaterial -- the compact record an importer fills in --
 // into a canonical MaterialX surface graph (a built-in disney_principled
 // wrapped in a surfacematerial). Importers convert their
 // materials through this function
 // instead of keeping the authoring struct around: the resulting document is
 // what gets stored with the material, so every material in the Scene is a
-// real MaterialX document and compiles through the same MaterialX -> SVM
+// real MaterialX document and compiles through the same MaterialX shader
 // pipeline as authored .mtlx graphs.
-MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material);
+MaterialX::DocumentPtr documentFromBasicMaterial(const BasicMaterial& material);
 
 // Variant used by importers whose material record references a scene texture
 // slot. The resolver returns that scene texture's registry name so the
 // resulting MaterialX graph can retain the authored image connection.
 using AuthoringTexturePathResolver = std::function<std::string(int)>;
-MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material,
+MaterialX::DocumentPtr documentFromBasicMaterial(const BasicMaterial& material,
     const AuthoringTexturePathResolver& texturePathResolver);
 
 // Resolves an <image> node's (already filesystem-resolved) file path to
@@ -60,12 +58,12 @@ MaterialX::DocumentPtr documentFromSvmMaterial(const SvmMaterial& material,
 using TextureResolver = std::function<std::optional<std::uint32_t>(
     const std::string& resolvedFilePath)>;
 
-// Loads MaterialX's standard library documents (stdlib, pbrlib, bxdf, ...)
-// from materialXStdlibDir into a document meant to be attached to user
-// documents with Document::setDataLibrary(), or copied with importLibrary(),
-// before compile(). Shared by every ingestion path (standalone .mtlx, Hydra)
-// so they resolve nodedefs identically.
-MaterialX::DocumentPtr loadStandardLibraries(const std::string& materialXStdlibDir);
+// Loads MaterialX's standard library documents (stdlib, pbrlib, bxdf, ...),
+// which are embedded in the binary, into a document meant to be attached to
+// user documents with Document::setDataLibrary(), or copied with
+// importLibrary(), before compile(). Shared by every ingestion path
+// (standalone .mtlx, Hydra) so they resolve nodedefs identically.
+MaterialX::DocumentPtr loadStandardLibraries();
 
 enum class MaterialXImageColorSpace
 {

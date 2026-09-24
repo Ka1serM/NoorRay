@@ -54,8 +54,7 @@ struct MaterialFile {
     Vec3 emission{};
     float emission_strength{};
     // Path to a MaterialX document (.mtlx). When set, the material is
-    // compiled to shared SVM bytecode instead of using the plain material
-    // fields.
+    // compiled from it instead of from the plain material fields.
     std::string materialx_path;
 };
 

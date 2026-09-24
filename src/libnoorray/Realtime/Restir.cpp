@@ -61,14 +61,20 @@ constexpr uint32_t SecondaryLocalLightSamples = 8u;
 constexpr float ReGIRCellsAcrossLights = 16.0f;
 }
 
-Restir::Restir(noorrhi::Device& device, noorrhi::RayTracingPipelineDesc stages)
+Restir::Restir(noorrhi::Device& device)
     : device_(device)
     , presampleLightsPipeline_(device.compute(loadShader(device, presampleLightsSpv)))
     , presampleReGIRPipeline_(device.compute(loadShader(device, presampleReGIRSpv)))
+    , diInitialRaygen_(loadShader(device, diInitialSpv))
+    , diTemporalRaygen_(loadShader(device, diTemporalSpv))
     , diBoilingPipeline_(device.compute(loadShader(device, diBoilingSpv)))
+    , diSpatialRaygen_(loadShader(device, diSpatialSpv))
+    , diShadeRaygen_(loadShader(device, diShadeSpv))
+    , giTemporalRaygen_(loadShader(device, giTemporalSpv))
     , giBoilingPipeline_(device.compute(loadShader(device, giBoilingSpv)))
+    , giSpatialRaygen_(loadShader(device, giSpatialSpv))
+    , giShadeRaygen_(loadShader(device, giShadeSpv))
 {
-    setTraceStages(std::move(stages));
 
     // RTXDI packs its offsets as RG8_SNORM texels; the shaders read floats.
     std::vector<std::uint8_t> packedOffsets(NeighborOffsetCount * 2u);
@@ -84,20 +90,7 @@ Restir::Restir(noorrhi::Device& device, noorrhi::RayTracingPipelineDesc stages)
     lightAlias_.upload(std::span<const std::uint32_t>(std::vector<std::uint32_t>(4u)));
 }
 
-void Restir::setTraceStages(noorrhi::RayTracingPipelineDesc stages)
-{
-    const auto rayTracing = [&](const auto& raygen) {
-        stages.raygen = loadShader(device_, raygen);
-        return device_.ray_tracing(stages);
-    };
-    diInitialPipeline_ = rayTracing(diInitialSpv);
-    diTemporalPipeline_ = rayTracing(diTemporalSpv);
-    diSpatialPipeline_ = rayTracing(diSpatialSpv);
-    diShadePipeline_ = rayTracing(diShadeSpv);
-    giTemporalPipeline_ = rayTracing(giTemporalSpv);
-    giSpatialPipeline_ = rayTracing(giSpatialSpv);
-    giShadePipeline_ = rayTracing(giShadeSpv);
-}
+
 
 Restir::~Restir() = default;
 
@@ -371,18 +364,24 @@ void Restir::presample(const nr::graphics::RealtimeArgs& args,
     device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::RayTracing);
 }
 
+std::vector<noorrhi::Shader> Restir::raygens() const
+{
+    return {diInitialRaygen_, diTemporalRaygen_, diSpatialRaygen_, diShadeRaygen_,
+        giTemporalRaygen_, giSpatialRaygen_, giShadeRaygen_};
+}
+
 void Restir::resample(const nr::graphics::RealtimeArgs& args,
-    const nr::graphics::RealtimeRoot root, const Extent render) const
+    const nr::graphics::RealtimeRoot root, const Extent render,
+    const noorrhi::RayTracingPipeline& tracePipeline) const
 {
     if (args.lighting.enabled == 0)
         return;
-    const noorrhi::DispatchSize pixels{render.width, render.height, 1};
     const noorrhi::DispatchSize tiles{divideRoundingUp(render.width, BoilingGroupSize),
         divideRoundingUp(render.height, BoilingGroupSize), 1};
     // Every pass reads what the previous one wrote: the image pass's G-buffer
     // and GI sample, then each resampling stage's reservoirs.
-    const auto trace = [&](const noorrhi::RayTracingPipeline& pipeline) {
-        pipeline.trace(pixels, root);
+    const auto trace = [&](const noorrhi::Shader& raygen) {
+        tracePipeline.trace(raygen, {render.width, render.height, 1}, root);
         device_.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::RayTracing);
     };
     const auto boil = [&](const noorrhi::ComputePipeline& pipeline, const bool enabled) {
@@ -392,15 +391,18 @@ void Restir::resample(const nr::graphics::RealtimeArgs& args,
         pipeline.launch(tiles, root);
         device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::RayTracing);
     };
-    trace(diInitialPipeline_);
-    trace(diTemporalPipeline_);
+    // The image pass's G-buffer was written by an earlier trace.
+    device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::RayTracing);
+    trace(diInitialRaygen_);
+    trace(diTemporalRaygen_);
     boil(diBoilingPipeline_, args.lighting.restirDI.boilingFilterParams.enableBoilingFilter != 0);
-    trace(diSpatialPipeline_);
-    trace(diShadePipeline_);
-    if (args.lighting.mode != nr::graphics::RealtimeLightingReSTIRGI)
-        return;
-    trace(giTemporalPipeline_);
-    boil(giBoilingPipeline_, args.lighting.restirGI.boilingFilterParams.enableBoilingFilter != 0);
-    trace(giSpatialPipeline_);
-    trace(giShadePipeline_);
+    trace(diSpatialRaygen_);
+    trace(diShadeRaygen_);
+    if (args.lighting.mode == nr::graphics::RealtimeLightingReSTIRGI) {
+        trace(giTemporalRaygen_);
+        boil(giBoilingPipeline_, args.lighting.restirGI.boilingFilterParams.enableBoilingFilter != 0);
+        trace(giSpatialRaygen_);
+        trace(giShadeRaygen_);
+    }
+    device_.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::Compute);
 }

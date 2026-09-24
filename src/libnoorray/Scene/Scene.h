@@ -144,9 +144,6 @@ public:
     // Returns true if a GPU sync is needed before the next render frame.
     // The caller (render thread) should sync its stream when this is true.
     bool consumeGpuSync() { return gpuSyncPending_.exchange(false); }
-    void load(const std::string& path);
-    void importFile(const std::string& path);
-    void read(const std::string& path);
 
     // Object lifetime
     void clear();
@@ -156,10 +153,10 @@ public:
 
     Mesh* add(Mesh mesh, bool reuseExisting = true);
     Material* add(Material material);
-    // Adds a native material. Importers that only carry the simple SVM
-    // material record lower it to a canonical MaterialX document first
-    // (nr::materialx::documentFromSvmMaterial) and pass the resulting document
-    // here, so every material compiles through the same MaterialX -> SVM
+    // Adds a native material. Importers that only carry the simple
+    // BasicMaterial record lower it to a canonical MaterialX document first
+    // (nr::materialx::documentFromBasicMaterial) and pass the resulting document
+    // here, so every material compiles through the same MaterialX shader
     // pipeline as authored graphs. A null document is allowed: it means an
     // un-authored slot whose document is lowered on demand from the default
     // material.
@@ -216,8 +213,7 @@ public:
     std::deque<Material>& getMaterials() { return materials; }
     // Publishes a freshly compiled program for one material and uploads that
     // material's own GPU allocations. No other material is touched.
-    void setMaterialProgram(std::size_t materialIndex,
-        nr::svm::CompiledSvmProgram program, MaterialShaderProgram shaderProgram);
+    void setMaterialProgram(std::size_t materialIndex, MaterialShaderProgram shaderProgram);
     uint32_t getMaterialIndex(const Material* material) const;
     const Material& getMaterial(const Material* material) const { return *material; }
     Material& getMaterial(Material* material) { return *material; }

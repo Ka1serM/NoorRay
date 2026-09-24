@@ -11,6 +11,8 @@
 #include <stdexcept>
 #include <numbers>
 #include <span>
+#include <algorithm>
+#include <numeric>
 
 #include "Materials/MaterialX/MaterialXDocument.h"
 #include "glm/gtc/type_ptr.inl"
@@ -24,14 +26,12 @@ using glm::vec3;
 
 namespace {
 MeshGeometry copyGeometry(const std::vector<Vertex>& vertices,
-    const std::vector<uint32_t>& indices, const std::vector<Face>& faces)
+    const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections)
 {
     MeshGeometry geometry;
-    geometry.vertices =
-        std::vector<Vertex>(vertices.begin(), vertices.end());
-    geometry.indices =
-        std::vector<uint32_t>(indices.begin(), indices.end());
-    geometry.faces = std::vector<Face>(faces.begin(), faces.end());
+    geometry.vertices = vertices;
+    geometry.indices = indices;
+    geometry.sections = sections;
     return geometry;
 }
 
@@ -41,10 +41,40 @@ MaterialX::DocumentPtr greyMaterial()
 }
 }
 
+std::vector<MeshSection> sortTrianglesBySlot(std::vector<uint32_t>& indices,
+    const std::span<const uint32_t> triangleSlots)
+{
+    const std::size_t triangleCount = indices.size() / 3;
+    if (triangleSlots.size() != triangleCount)
+        throw std::invalid_argument(std::to_string(triangleSlots.size())
+            + " material slots for " + std::to_string(triangleCount) + " triangles");
+    std::vector<uint32_t> order(triangleCount);
+    std::ranges::iota(order, 0u);
+    std::ranges::stable_sort(order, {}, [&](const uint32_t triangle) {
+        return triangleSlots[triangle];
+    });
+    std::vector<uint32_t> sorted(indices.size());
+    std::vector<MeshSection> sections;
+    for (uint32_t target = 0; target < triangleCount; ++target) {
+        const uint32_t source = order[target];
+        std::copy_n(indices.begin() + std::size_t{source} * 3, 3,
+            sorted.begin() + std::size_t{target} * 3);
+        if (sections.empty() || sections.back().slot != triangleSlots[source])
+            sections.push_back({triangleSlots[source], target, 0u});
+        ++sections.back().triangleCount;
+    }
+    indices = std::move(sorted);
+    return sections;
+}
+
+std::vector<MeshSection> singleSection(const std::vector<uint32_t>& indices)
+{
+    return {{0u, 0u, static_cast<uint32_t>(indices.size() / 3)}};
+}
+
 Mesh Mesh::CreateCube(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    std::vector<Face> faces;
     std::vector<MaterialX::DocumentPtr> materials;
 
     float h = 0.5f;
@@ -98,18 +128,15 @@ Mesh Mesh::CreateCube(Scene& scene, const std::string& name, const MaterialX::Do
             vertexStart + 0, vertexStart + 2, vertexStart + 3
         });
 
-        faces.push_back({0});
-        faces.push_back({0});
         vertexStart += 4;
     }
 
-    return Mesh(scene, name, vertices, indices, faces, materials);
+    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
 }
 
 Mesh Mesh::CreatePlane(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material) {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
-    std::vector<Face> faces;
     std::vector<MaterialX::DocumentPtr> materials;
 
     float halfSize = 0.5f;
@@ -136,11 +163,8 @@ Mesh Mesh::CreatePlane(Scene& scene, const std::string& name, const MaterialX::D
 
     materials.push_back(material);
 
-    for (size_t i = 0; i < indices.size(); i += 3) {
-        faces.push_back({0});
-    }
 
-    return Mesh(scene, name, vertices, indices, faces, materials);
+    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
 }
 
 Mesh Mesh::CreateSphere(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t latSeg, uint32_t lonSeg) {
@@ -150,7 +174,6 @@ Mesh Mesh::CreateSphere(Scene& scene, const std::string& name, const MaterialX::
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    std::vector<Face> faces;
     std::vector<MaterialX::DocumentPtr> materials;
 
     constexpr float radius = 0.5f;
@@ -210,12 +233,7 @@ Mesh Mesh::CreateSphere(Scene& scene, const std::string& name, const MaterialX::
 
     materials.push_back(material);
 
-    // Create a Face object for each generated triangle
-    for (size_t i = 0; i < indices.size(); i += 3) {
-        faces.push_back({0});
-    }
-
-    return Mesh(scene, name, vertices, indices, faces, materials);
+    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
 }
 
 Mesh Mesh::CreateDisk(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t segments) {
@@ -224,7 +242,6 @@ Mesh Mesh::CreateDisk(Scene& scene, const std::string& name, const MaterialX::Do
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
-    std::vector<Face> faces;
     std::vector<MaterialX::DocumentPtr> materials;
 
     float radius = 0.5f;
@@ -257,27 +274,26 @@ Mesh Mesh::CreateDisk(Scene& scene, const std::string& name, const MaterialX::Do
 
     for (uint32_t i = 1; i <= segments; ++i) {
         indices.insert(indices.end(), {0, i, i + 1});
-        faces.push_back({0});
     }
 
     materials.push_back(material);
 
-    return Mesh(scene, name, vertices, indices, faces, materials);
+    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
 }
 
 Mesh::Mesh(Scene& scene, std::string name,
     const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
-    const std::vector<Face>& faces, const std::vector<MaterialX::DocumentPtr>& materials)
+    const std::vector<MeshSection>& sections, const std::vector<MaterialX::DocumentPtr>& materials)
     : Mesh(scene, std::move(name),
-        copyGeometry(vertices, indices, faces), materials)
+        copyGeometry(vertices, indices, sections), materials)
 {
 }
 
 Mesh::Mesh(Scene& scene, std::string name,
     const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
-    const std::vector<Face>& faces, std::vector<Material*> materials)
+    const std::vector<MeshSection>& sections, std::vector<Material*> materials)
     : Mesh(scene, std::move(name),
-        copyGeometry(vertices, indices, faces), std::move(materials))
+        copyGeometry(vertices, indices, sections), std::move(materials))
 {
 }
 
@@ -286,13 +302,14 @@ Mesh::Mesh(Scene& scene, std::string name, MeshGeometry&& geometry,
     : scene(scene), path(std::move(name)),
       vertices(std::move(geometry.vertices)),
       indices(std::move(geometry.indices)),
-      faces(std::move(geometry.faces))
+      sections(std::move(geometry.sections))
 {
     std::vector<Material*> materialRefs;
     materialRefs.reserve(materials.size());
     for (const MaterialX::DocumentPtr& material : materials)
         materialRefs.push_back(scene.addMaterial(material));
     initializeMaterialIds(materialRefs);
+    validateSections();
 }
 
 Mesh::Mesh(Scene& scene, std::string name, MeshGeometry&& geometry,
@@ -300,9 +317,10 @@ Mesh::Mesh(Scene& scene, std::string name, MeshGeometry&& geometry,
     : scene(scene), path(std::move(name)),
       vertices(std::move(geometry.vertices)),
       indices(std::move(geometry.indices)),
-      faces(std::move(geometry.faces))
+      sections(std::move(geometry.sections))
 {
     initializeMaterialIds(materials);
+    validateSections();
 }
 
 void Mesh::initializeMaterialIds(const std::vector<Material*>& materials)
@@ -321,11 +339,11 @@ Mesh::Mesh(Mesh&& other) noexcept
       scene(other.scene), path(std::move(other.path)), index(other.index),
       gpuDirty(other.gpuDirty),
       vertices(std::move(other.vertices)), indices(std::move(other.indices)),
-      faces(std::move(other.faces)), materialIds(std::move(other.materialIds)),
+      materialIds(std::move(other.materialIds)),
+      sections(std::move(other.sections)), blasOpacity(std::move(other.blasOpacity)),
       indexBuffer(std::move(other.indexBuffer)),
       vertexBuffer(std::move(other.vertexBuffer)),
-      faceBuffer(std::move(other.faceBuffer)),
-      materialBuffer(std::move(other.materialBuffer)),
+      sectionBuffer(std::move(other.sectionBuffer)),
       blas(std::move(other.blas))
 {
 }
@@ -372,10 +390,10 @@ void Mesh::updateVertexData(const std::vector<Vertex>& newVertices)
 }
 
 void Mesh::replaceGeometry(const std::vector<Vertex>& newVertices,
-    const std::vector<uint32_t>& newIndices, const std::vector<Face>& newFaces,
+    const std::vector<uint32_t>& newIndices, const std::vector<MeshSection>& newSections,
     const uint32_t desiredMaterialSlotCount)
 {
-    replaceGeometry(copyGeometry(newVertices, newIndices, newFaces), desiredMaterialSlotCount);
+    replaceGeometry(copyGeometry(newVertices, newIndices, newSections), desiredMaterialSlotCount);
 }
 
 void Mesh::replaceGeometry(MeshGeometry&& geometry, const uint32_t desiredMaterialSlotCount)
@@ -383,7 +401,7 @@ void Mesh::replaceGeometry(MeshGeometry&& geometry, const uint32_t desiredMateri
     scene.synchronizeBeforeMutation();
     vertices = std::move(geometry.vertices);
     indices = std::move(geometry.indices);
-    faces = std::move(geometry.faces);
+    sections = std::move(geometry.sections);
     gpuDirty = true;
     if (desiredMaterialSlotCount > materialIds.size())
     {
@@ -397,6 +415,7 @@ void Mesh::replaceGeometry(MeshGeometry&& geometry, const uint32_t desiredMateri
             materialIds.push_back(scene.getMaterialIndex(material));
         }
     }
+    validateSections();
     scene.setDirtyFlag(Meshes);
     scene.setDirtyFlag(TLAS);
     scene.setDirtyFlag(Accumulation);
@@ -424,53 +443,80 @@ void Mesh::notifyMaterialsChanged()
     scene.setDirtyFlag(Accumulation);
 }
 
+void Mesh::validateSections() const
+{
+    uint32_t next = 0;
+    for (const MeshSection& section : sections) {
+        if (section.firstTriangle != next || section.triangleCount == 0
+            || section.slot >= materialIds.size())
+            throw std::invalid_argument("Mesh " + path + " has a section at triangle "
+                + std::to_string(section.firstTriangle) + " that does not continue at "
+                + std::to_string(next) + ", is empty, or names a missing material slot");
+        next += section.triangleCount;
+    }
+    if (next != indices.size() / 3)
+        throw std::invalid_argument("Mesh " + path + " has sections covering "
+            + std::to_string(next) + " of " + std::to_string(indices.size() / 3) + " triangles");
+}
+
+std::vector<bool> Mesh::sectionOpacity() const
+{
+    std::vector<bool> result;
+    result.reserve(sections.size());
+    for (const MeshSection& section : sections)
+        result.push_back(!getMaterial(section.slot).shaderProgram.transparent);
+    return result;
+}
+
 void Mesh::upload(noorrhi::Device& device)
 {
-    if (!gpuDirty || vertices.empty() || indices.empty())
+    if (vertices.empty() || indices.empty())
         return;
-    gpuDirty = false;
+    std::vector<bool> opacity = sectionOpacity();
+    if (!gpuDirty && opacity == blasOpacity)
+        return;
 
-    if (!vertexBuffer || vertexBuffer.size() != vertices.size())
-        vertexBuffer = device.buffer<nr::graphics::Vertex>(vertices.size());
-    if (!indexBuffer || indexBuffer.size() != indices.size())
-        indexBuffer = device.buffer<std::uint32_t>(indices.size());
-    if (faces.empty())
-        faceBuffer = {};
-    else if (!faceBuffer || faceBuffer.size() != faces.size())
-        faceBuffer = device.buffer<nr::graphics::Face>(faces.size());
-    if (materialIds.empty())
-        materialBuffer = {};
-    else if (!materialBuffer || materialBuffer.size() != materialIds.size())
-        materialBuffer = device.buffer<std::uint32_t>(materialIds.size());
+    if (gpuDirty) {
+        if (!vertexBuffer || vertexBuffer.size() != vertices.size())
+            vertexBuffer = device.buffer<nr::graphics::Vertex>(vertices.size());
+        if (!indexBuffer || indexBuffer.size() != indices.size())
+            indexBuffer = device.buffer<std::uint32_t>(indices.size());
+        if (!sectionBuffer || sectionBuffer.size() != sections.size())
+            sectionBuffer = device.buffer<nr::graphics::SectionRecord>(sections.size());
 
-    vertexBuffer.upload(std::span<const nr::graphics::Vertex>(vertices));
-    indexBuffer.upload(std::span<const std::uint32_t>(indices));
-    if (!faces.empty()) {
-        static_assert(sizeof(Face) == sizeof(nr::graphics::Face));
-        faceBuffer.upload(std::span<const nr::graphics::Face>(
-            reinterpret_cast<const nr::graphics::Face*>(faces.data()), faces.size()));
+        vertexBuffer.upload(std::span<const nr::graphics::Vertex>(vertices));
+        indexBuffer.upload(std::span<const std::uint32_t>(indices));
+        std::vector<nr::graphics::SectionRecord> records;
+        records.reserve(sections.size());
+        for (const MeshSection& section : sections)
+            records.push_back({section.firstTriangle, materialIds[section.slot]});
+        sectionBuffer.upload(std::span<const nr::graphics::SectionRecord>(records));
     }
-    if (!materialIds.empty())
-        materialBuffer.upload(std::span<const std::uint32_t>(materialIds));
+    gpuDirty = false;
 
     // Positions are the first member of Vertex, so the BLAS reads them
     // straight out of the interleaved vertex buffer.
-    const noorrhi::TriangleGeometry geometry{
-        noorrhi::GpuPtr<noorrhi::float3>{vertexBuffer.ptr().address}, indexBuffer.ptr(),
-        static_cast<uint32_t>(indices.size() / 3), sizeof(nr::graphics::Vertex), false};
-    blas = device.build_blas(std::span<const noorrhi::TriangleGeometry>(&geometry, 1));
+    std::vector<noorrhi::TriangleGeometry> geometries;
+    geometries.reserve(sections.size());
+    for (std::size_t i = 0; i < sections.size(); ++i)
+        geometries.push_back({
+            noorrhi::GpuPtr<noorrhi::float3>{vertexBuffer.ptr().address},
+            noorrhi::GpuPtr<std::uint32_t>{indexBuffer.ptr().address
+                + std::uint64_t{sections[i].firstTriangle} * 3u * sizeof(std::uint32_t)},
+            sections[i].triangleCount, sizeof(nr::graphics::Vertex), opacity[i]});
+    blas = device.build_blas(geometries);
+    blasOpacity = std::move(opacity);
 
     if (!*this)
         allocate(device);
     data = nr::graphics::Mesh{
         vertexBuffer.ptr().address,
         indexBuffer.ptr().address,
-        faceBuffer ? faceBuffer.ptr().address : 0,
-        materialBuffer ? materialBuffer.ptr().address : 0,
+        sectionBuffer.ptr().address,
         static_cast<uint32_t>(vertices.size()),
         static_cast<uint32_t>(indices.size()),
-        static_cast<uint32_t>(faces.size()),
-        static_cast<uint32_t>(materialIds.size()),
+        static_cast<uint32_t>(sections.size()),
+        0u,
     };
     commit();
 }
@@ -480,8 +526,8 @@ void Mesh::releaseGpu()
     gpuDirty = true;
     release();
     blas = {};
-    materialBuffer = {};
-    faceBuffer = {};
+    blasOpacity.clear();
+    sectionBuffer = {};
     vertexBuffer = {};
     indexBuffer = {};
 }

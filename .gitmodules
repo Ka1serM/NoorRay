@@ -74,6 +74,7 @@
 [submodule "external/RTXDI-Library"]
 	path = external/RTXDI-Library
 	url = https://github.com/Ka1serM/RTXDI-Library.git
+	branch = noorray-slang-compat
 [submodule "external/NoorRHI"]
 	path = external/NoorRHI
 	url = https://github.com/Ka1serM/NoorRHI.git

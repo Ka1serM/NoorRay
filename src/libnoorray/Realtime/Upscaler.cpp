@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -19,11 +21,45 @@
 
 namespace
 {
+std::mutex resourceCreateMutex;
+std::unordered_map<FfxInterface*, FfxCreateResourceFunc> resourceCreateCallbacks;
+
 void check(const FfxErrorCode result, const char* what)
 {
     if (result != FFX_OK)
         throw std::runtime_error(std::string("FSR: ") + what + " failed ("
             + std::to_string(result) + ")");
+}
+
+FfxErrorCode createResourceWithRgba8LumaHistory(
+    FfxInterface* backendInterface,
+    const FfxCreateResourceDescription* description,
+    const FfxUInt32 effectContextId,
+    FfxResourceInternal* outResource)
+{
+    FfxCreateResourceFunc createResource = nullptr;
+    {
+        const std::lock_guard lock(resourceCreateMutex);
+        const auto callback = resourceCreateCallbacks.find(backendInterface);
+        if (callback != resourceCreateCallbacks.end())
+            createResource = callback->second;
+    }
+    if (!createResource || !description)
+        return FFX_ERROR_INVALID_POINTER;
+
+    const std::wstring_view name = description->name ? description->name : L"";
+    if (name == L"FSR3UPSCALER_LumaHistory1"
+        || name == L"FSR3UPSCALER_LumaHistory2")
+    {
+        // Stock FidelityFX GLSL declares this storage image as rgba8. Match
+        // its allocation to avoid the Vulkan storage image format mismatch
+        // and reduce luma-history storage and bandwidth to 8 bits per channel.
+        FfxCreateResourceDescription rgba8Description = *description;
+        rgba8Description.resourceDescription.format = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+        return createResource(backendInterface, &rgba8Description, effectContextId, outResource);
+    }
+
+    return createResource(backendInterface, description, effectContextId, outResource);
 }
 
 // The device's persistent pipeline cache. The backend creates its pipelines
@@ -109,6 +145,11 @@ Upscaler::Upscaler(noorrhi::Device& device)
     check(ffxGetInterfaceVK(&state.backend, ffxGetDeviceVK(&state.deviceContext),
         state.scratch.data(), state.scratch.size(), BackendContextCount),
         "ffxGetInterfaceVK");
+    {
+        const std::lock_guard lock(resourceCreateMutex);
+        resourceCreateCallbacks.emplace(&state.backend, state.backend.fpCreateResource);
+    }
+    state.backend.fpCreateResource = createResourceWithRgba8LumaHistory;
 }
 
 Upscaler::~Upscaler()
@@ -119,6 +160,8 @@ Upscaler::~Upscaler()
     state_->destroyContext();
     if (state_->sharedContextCreated)
         state_->backend.fpDestroyBackendContext(&state_->backend, state_->sharedEffectContext);
+    const std::lock_guard lock(resourceCreateMutex);
+    resourceCreateCallbacks.erase(&state_->backend);
 }
 
 void Upscaler::resize(const Extent maxRender, const Extent maxOutput)

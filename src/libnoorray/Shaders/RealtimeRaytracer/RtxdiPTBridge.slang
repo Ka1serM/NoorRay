@@ -18,17 +18,6 @@ float3 RAB_GetReflectedBsdfRadianceForSurface(float3 samplePosition,
         * radiance : float3(0.0);
 }
 
-// A light sample's radiance as `surface` reflects it toward its viewer, with
-// the light's lobe scales.
-float3 RAB_GetLightSampleReflectedRadianceForSurface(RAB_LightSample lightSample,
-    RAB_Surface surface)
-{
-    const float3 delta = lightSample.position - surface.worldPos;
-    const float distance = length(delta);
-    return distance > 1.0e-5 ? realtimeLightSampleReflectance(surface, delta / distance,
-        lightSample) * lightSample.radiance : float3(0.0);
-}
-
 float3 RAB_GetPTSampleTargetPdfForSurface(float3 samplePosition,
     float3 radiance, RAB_Surface surface)
 {

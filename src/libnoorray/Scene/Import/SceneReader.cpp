@@ -268,7 +268,6 @@ void SceneReader::Read(Scene& scene, const std::string& filepath)
 
     if (file.render_settings) {
         scene.getRenderSettings().maxSamples = file.render_settings->max_samples;
-        scene.getRenderSettings().aovEnabled = file.render_settings->aov_enabled;
         scene.getRenderSettings().indirectLightClamp = std::max(
             file.render_settings->indirect_light_clamp, 0.0f);
         scene.getRenderSettings().gaussianShadingMode =

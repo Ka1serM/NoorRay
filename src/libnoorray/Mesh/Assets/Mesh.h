@@ -1,47 +1,50 @@
-﻿#pragma once
+#pragma once
 
-#include <string>
-#include <vector>
+#include <cstdint>
 #include <memory>
 #include <span>
-#include <noorrhi/noorrhi.hpp>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "Materials/Material.h"
-#include "Materials/MaterialX/MaterialXFwd.h"
+#include <noorrhi/noorrhi.hpp>
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
-#include <glm/vec4.hpp>
 
-#include "Mesh/VertexColor.h"
 #include "Shared/Mesh.h"
 
 class Scene;
 
-// The GPU layout is the only layout: `Mesh::vertices` is uploaded verbatim.
-using Vertex = nr::graphics::Vertex;
-
-// Vertex colour is a linear multiplier on albedo, so geometry without authored
-// colours must be explicitly white -- a zero-initialised Vertex renders black.
-inline constexpr uint32_t DefaultVertexColor = nr::vertex_color::White;
-
-// A vertex with every field zeroed except the colour, which defaults to white.
-inline Vertex defaultVertex()
+// One vertex's tangent basis as Unreal stores it (FPackedRGBA16N): TangentX,
+// then TangentZ, the normal, whose w is the bitangent sign. The bitangent is
+// cross(normal, tangent) * sign.
+struct TangentFrame
 {
-    Vertex vertex{};
-    vertex.color = DefaultVertexColor;
-    return vertex;
-}
+    TangentFrame() = default;
+    TangentFrame(glm::vec3 tangent, glm::vec3 normal, float bitangentSign);
+
+    glm::vec3 tangent() const;
+    glm::vec3 normal() const;
+    float bitangentSign() const;
+
+    int16_t tangentX[4]{};
+    int16_t tangentZ[4]{};
+};
+static_assert(sizeof(TangentFrame) == 16);
 
 // A contiguous run of triangles drawn with one material slot, as Unreal's
 // mesh sections are. A mesh's sections tile its triangles in order; several
 // may use the same slot. Each is one BLAS geometry, and its shader-binding-
-// table records select the hit groups of that slot's material.
+// table records select the hit groups of the material an instance puts in
+// that slot.
 struct MeshSection
 {
     uint32_t slot{};
     uint32_t firstTriangle{};
     uint32_t triangleCount{};
+    // Shadow rays pass the section when false, as Unreal's section flag does.
+    bool castsShadow{true};
 };
 
 // For sources that assign a material slot per triangle: stably reorders the
@@ -52,45 +55,56 @@ std::vector<MeshSection> sortTrianglesBySlot(std::vector<uint32_t>& indices,
 // The one section of a mesh drawn with a single material.
 std::vector<MeshSection> singleSection(const std::vector<uint32_t>& indices);
 
-// Move-owned final geometry storage. Importers can fill these managed buffers
-// directly on worker threads, then hand them to Mesh without a second
-// std::vector -> managed-vector allocation and element copy.
-struct MeshGeometry
+// Vertex streams a producer builds, in the layout of nr::graphics::Mesh.
+struct MeshStreams
 {
-    MeshGeometry() = default;
-    MeshGeometry(const MeshGeometry&) = delete;
-    MeshGeometry& operator=(const MeshGeometry&) = delete;
-    MeshGeometry(MeshGeometry&&) noexcept = default;
-    MeshGeometry& operator=(MeshGeometry&&) noexcept = default;
-
-    std::vector<Vertex> vertices;
+    std::vector<glm::vec3> positions;
+    std::vector<TangentFrame> tangents;
+    // uvCount channels per vertex.
+    std::vector<glm::vec2> uvs;
+    uint32_t uvCount = 1;
+    // Empty, or one FColor per vertex (nr::vertex_color).
+    std::vector<uint32_t> colors;
     std::vector<uint32_t> indices;
     std::vector<MeshSection> sections;
 };
 
-// Each mesh owns its shader record, reached through the inherited `data`
-// member. The Raytracer publishes a table of pointers to these records rather
-// than copying the structs into one array, so a mesh that re-uploads does not
+// The streams a mesh draws, in the layout of nr::graphics::Mesh. They are
+// borrowed and `owner` keeps them alive, so a memory-mapped file uploads
+// without an intermediate copy.
+struct MeshGeometry
+{
+    MeshGeometry() = default;
+    // Owns the streams and computes their bounds.
+    explicit MeshGeometry(MeshStreams streams);
+
+    std::span<const glm::vec3> positions;
+    std::span<const TangentFrame> tangents;
+    std::span<const glm::vec2> uvs;
+    uint32_t uvCount = 1;
+    std::span<const uint32_t> colors;
+    std::span<const uint32_t> indices;
+    std::vector<MeshSection> sections;
+    glm::vec3 boundsMin{};
+    glm::vec3 boundsMax{};
+    std::shared_ptr<const void> owner;
+};
+
+// Geometry only: the materials belong to the instances that draw it. Each
+// mesh owns its shader record, reached through the inherited `data` member.
+// The Raytracer publishes a table of pointers to these records rather than
+// copying the structs into one array, so a mesh that re-uploads does not
 // force the whole table to be rebuilt - the same arrangement Material uses.
 class Mesh : public noorrhi::Shared<nr::graphics::Mesh>
 {
 public:
-    // The material argument is a MaterialX document (the conversion from an
-    // importer's simple authoring record happens in the caller). A null
-    // document means the default MaterialX material.
-    static Mesh CreateCube(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material);
-    static Mesh CreatePlane(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material);
-    static Mesh CreateSphere(Scene& scene, const std::string& name,  const MaterialX::DocumentPtr& material, uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
-    static Mesh CreateDisk(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t segments = 64);
-    
-    Mesh(Scene& context, std::string  name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections, const std::vector<MaterialX::DocumentPtr>& materials);
-    Mesh(Scene& context, std::string name, const std::vector<Vertex>& vertices,
-        const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections,
-        std::vector<Material*> materials);
-    Mesh(Scene& context, std::string name, MeshGeometry&& geometry,
-        const std::vector<MaterialX::DocumentPtr>& materials);
-    Mesh(Scene& context, std::string name, MeshGeometry&& geometry,
-        std::vector<Material*> materials);
+    static Mesh CreateCube(Scene& scene, const std::string& name);
+    static Mesh CreatePlane(Scene& scene, const std::string& name);
+    static Mesh CreateSphere(Scene& scene, const std::string& name,
+        uint32_t latitudeSegments = 64, uint32_t longitudeSegments = 64);
+    static Mesh CreateDisk(Scene& scene, const std::string& name, uint32_t segments = 64);
+
+    Mesh(Scene& scene, std::string name, MeshGeometry geometry);
     Mesh(Mesh&& other) noexcept;
     Mesh(const Mesh&) = delete;
     Mesh& operator=(const Mesh&) = delete;
@@ -99,76 +113,45 @@ public:
 
     const std::string& getName() const { return path; }
     std::string getType() const { return "Mesh Asset"; }
-
-    // Getters & Setters-
     const std::string& getPath() const { return path; }
-    uint32_t getMeshIndex() const;
-    void setMeshIndex(uint32_t newIndex);
-    
-    const std::vector<Vertex>& getVertices() const { return vertices; }
-    const std::vector<uint32_t>& getIndices() const { return indices; }
-    const std::vector<uint32_t>& getMaterialIds() const {
-        return materialIds;
-    }
-    size_t getMaterialCount() const { return materialIds.size(); }
-    const std::vector<MeshSection>& getSections() const { return sections; }
-    const Material& getMaterial(uint32_t slot) const;
-    Material* getMaterialPtr(uint32_t slot) const;
+    uint32_t getMeshIndex() const { return index; }
+    void setMeshIndex(uint32_t newIndex) { index = newIndex; }
     Scene& getScene() const { return scene; }
-    // Replaces the vertex data and refits the BLAS in place, which is much
-    // cheaper than replaceGeometry. Topology (indices + sections) and material
-    // count stay the same, so the caller must pass one vertex per existing
-    // vertex. updatePositions/updateVertexData are conveniences over this.
-    void setVertices(std::vector<Vertex> value);
-    void updatePositions(const std::vector<glm::vec3>& positions);
-    void updateVertexData(const std::vector<Vertex>& newVertices);
 
-    // desiredMaterialSlotCount: grows materialIds/materialRefs (each new slot
-    // gets the same native grey fallback material construction uses) when the
-    // new topology's section slots reference more slots than
-    // this mesh currently has -- e.g. a live-edited mesh gaining an
-    // HdGeomSubset. 0 (the default) means "no change", the common case where
-    // topology changes but material count does not. Never shrinks: unused
-    // trailing slots are harmless, and shrinking could invalidate a
-    // section slot the caller forgot to remap.
-    void replaceGeometry(const std::vector<Vertex>& newVertices,
-        const std::vector<uint32_t>& newIndices, const std::vector<MeshSection>& newSections,
-        uint32_t desiredMaterialSlotCount = 0);
-    // Adopts already-managed geometry without allocating or copying it. This
-    // is the preferred integration point for loaders and Hydra adapters that
-    // can prepare final buffers before serial Scene publication.
-    void replaceGeometry(MeshGeometry&& geometry, uint32_t desiredMaterialSlotCount = 0);
-    void setMaterial(uint32_t materialSlot, Material* material);
-    void notifyMaterialsChanged();
+    const MeshGeometry& getGeometry() const { return geometry; }
+    const std::vector<MeshSection>& getSections() const { return geometry.sections; }
+    uint32_t getVertexCount() const { return static_cast<uint32_t>(geometry.positions.size()); }
+    // How many materials an instance must supply: one past the highest slot
+    // a section draws with.
+    uint32_t getSlotCount() const { return slotCount; }
 
-    // Uploads buffers and builds the BLAS only when the geometry or material
-    // slots changed since the last upload, and rebuilds only the BLAS when a
-    // section's opacity did; scene publication calls this for every mesh, so
-    // unchanged meshes must cost nothing.
+    void replaceGeometry(MeshGeometry value);
+
+    // Uploads the streams when the geometry changed since the last upload;
+    // scene publication calls this for every changed mesh.
     void upload(noorrhi::Device& device);
+    // The BLAS whose sections have the given opacity (opaque sections skip
+    // any-hit stages), built on first use and kept until the geometry
+    // changes. Instances whose materials agree on opacity share it.
+    const noorrhi::AccelerationStructure& blas(noorrhi::Device& device, const std::vector<bool>& opacity);
     void releaseGpu();
-    noorrhi::Buffer<std::uint32_t> indexBuffer;
-    noorrhi::Buffer<nr::graphics::Vertex> vertexBuffer;
-    noorrhi::Buffer<nr::graphics::SectionRecord> sectionBuffer;
-    noorrhi::AccelerationStructure blas;
 
 private:
-    void initializeMaterialIds(const std::vector<Material*>& materials);
-    // Throws unless the sections tile the triangles in order and name
-    // existing slots.
-    void validateSections() const;
-    // A section is opaque, and skips any-hit stages, when its material's
-    // opacity is one everywhere.
-    std::vector<bool> sectionOpacity() const;
+    // Throws unless the streams agree on the vertex count and the sections
+    // tile the triangles in order; counts the material slots.
+    void validate();
 
     Scene& scene;
     std::string path;
     uint32_t index = ~0u;
     bool gpuDirty = true;
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<uint32_t> materialIds;
-    std::vector<MeshSection> sections;
-    // The per-section opaque flags the current BLAS was built with.
-    std::vector<bool> blasOpacity;
+    MeshGeometry geometry;
+    uint32_t slotCount = 0;
+    noorrhi::Buffer<glm::vec3> positionBuffer;
+    noorrhi::Buffer<TangentFrame> tangentBuffer;
+    noorrhi::Buffer<glm::vec2> uvBuffer;
+    noorrhi::Buffer<uint32_t> colorBuffer;
+    noorrhi::Buffer<uint32_t> indexBuffer;
+    noorrhi::Buffer<nr::graphics::SectionRecord> sectionBuffer;
+    std::vector<std::pair<std::vector<bool>, noorrhi::AccelerationStructure>> blases;
 };

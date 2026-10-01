@@ -3,7 +3,7 @@
 import MaterialInterface;
 
 #include "../Raytracer/ByteBuffer.slang"
-#include "../Raytracer/RaytracingAbi.slang"
+#include "HitPayload.slang"
 #include "../Raytracer/Ggx.slang"
 #include "../Raytracer/AnalyticLights.slang"
 #include "../Raytracer/Environment.slang"
@@ -17,9 +17,6 @@ import MaterialInterface;
 
 static const float RealtimePi = 3.14159265358979323846;
 static const float RealtimeInvPi = 0.31830988618379067154;
-
-static const uint RealtimeMiss = 0u;
-static const uint RealtimeSurfaceHit = 1u;
 
 // GGX lobes are never sharper than this, so every scattering event is
 // covered by light sampling.
@@ -60,27 +57,6 @@ float4 transformToClip(float matrix[16], float3 position)
         dot(p, float4(matrix[1], matrix[5], matrix[9], matrix[13])),
         dot(p, float4(matrix[2], matrix[6], matrix[10], matrix[14])),
         dot(p, float4(matrix[3], matrix[7], matrix[11], matrix[15])));
-}
-
-float realtimeFiniteLightWeight(Frame frame)
-{
-    return hasAnalyticLights(frame) ? max(frame.lightFiniteWeight, 0.0) : 0.0;
-}
-
-// Probability that light sampling picks the environment rather than one of
-// the finite lights. Hit shaders and the miss path must agree on it. When
-// RTXDI samples the analytic lights separately (`analyticLightsSeparate`),
-// the environment gets a light sample of its own at every vertex.
-float realtimeEnvironmentSelection(Frame frame, bool analyticLightsSeparate)
-{
-    if (frame.environment == nullptr)
-        return 0.0;
-    if (analyticLightsSeparate)
-        return 1.0;
-    Environment* environments = frame.environment;
-    const float environmentWeight = max(environments[0].importanceWeight, 0.0);
-    const float totalWeight = realtimeFiniteLightWeight(frame) + environmentWeight;
-    return totalWeight > 0.0 ? environmentWeight / totalWeight : 0.0;
 }
 
 float realtimeSchlickWeight(float cosine)
@@ -225,14 +201,18 @@ float realtimePrimaryDiffuseProbability(float diffuseProbability)
     return clamp(diffuseProbability, 0.25, 0.75);
 }
 
-// `geometricNormal` must face the viewer. `shadingNormal` stands in for the
-// closure's normal when its lobes carry none.
-RealtimeBsdf makeRealtimeBsdf(BSDF closure, float3 shadingNormal, float3 geometricNormal,
-    float3 view, float roughnessFloor)
+float realtimeBsdfRoughness(float roughness)
+{
+    return clamp(roughness, RealtimeMinimumRoughness, 1.0);
+}
+
+// `geometricNormal` must face the viewer.
+RealtimeBsdf makeRealtimeBsdf(float3 shadingNormal, float3 geometricNormal, float3 view,
+    RealtimeClosure closure)
 {
     RealtimeBsdf bsdf;
     // Keep the shading normal in the viewer's hemisphere.
-    float3 normal = closure.normal(shadingNormal);
+    float3 normal = shadingNormal;
     if (dot(normal, geometricNormal) < 0.0)
         normal = -normal;
     if (dot(normal, view) <= 1.0e-4)
@@ -241,8 +221,7 @@ RealtimeBsdf makeRealtimeBsdf(BSDF closure, float3 shadingNormal, float3 geometr
     bsdf.geometricNormal = geometricNormal;
     bsdf.view = view;
     bsdf.normalView = dot(normal, view);
-    bsdf.roughness = clamp(max(closure.roughness(), roughnessFloor),
-        RealtimeMinimumRoughness, 1.0);
+    bsdf.roughness = realtimeBsdfRoughness(closure.roughness);
     bsdf.diffuse = closure.diffuse;
     bsdf.specularF0 = closure.specularF0;
     bsdf.specularF90 = closure.specularF90;
@@ -253,67 +232,14 @@ RealtimeBsdf makeRealtimeBsdf(BSDF closure, float3 shadingNormal, float3 geometr
 
 struct RealtimeLightSample
 {
+    // Incoming radiance, unoccluded, over the sample's pdf.
+    float3 radiance;
     float3 direction;
     float distance;
-    // Unoccluded contribution per lobe: BSDF, cosine, radiance, pdf and MIS
-    // weight.
-    float3 diffuse;
-    float3 specular;
+    bool environment;
     bool valid;
+    // The light's scale of the diffuse and specular lobes.
+    float diffuseScale;
+    float specularScale;
+    bool castShadows;
 };
-
-// One light sample, chosen between finite lights and the environment with
-// the same weights the reference renderer uses, or of the environment alone
-// when RTXDI samples the analytic lights (`analyticLightsSeparate`). Mesh
-// lights are never uploaded for the preview, so emissive geometry is found by
-// BSDF sampling.
-RealtimeLightSample sampleRealtimeLight(Frame frame, RealtimeBsdf bsdf,
-    float3 position, bool analyticLightsSeparate, inout Rng rng)
-{
-    RealtimeLightSample result;
-    result.direction = float3(0.0);
-    result.distance = 0.0;
-    result.diffuse = float3(0.0);
-    result.specular = float3(0.0);
-    result.valid = false;
-
-    const float environmentProbability = realtimeEnvironmentSelection(frame,
-        analyticLightsSeparate);
-    const float finiteWeight = analyticLightsSeparate ? 0.0
-        : realtimeFiniteLightWeight(frame);
-    const bool chooseFinite = finiteWeight > 0.0
-        && (environmentProbability <= 0.0 || rng.nextFloat() >= environmentProbability);
-    float3 radianceScale;
-    if (chooseFinite)
-    {
-        const AnalyticLightSampleRgb light = sampleAnalyticLightRgb(
-            makeLightTable(frame), position, rng);
-        if (!light.valid || light.mesh)
-            return result;
-        result.direction = light.direction;
-        result.distance = light.distance;
-        radianceScale = light.radianceOverSelectionPdf
-            / max(1.0 - environmentProbability, 1.0e-20);
-    }
-    else if (environmentProbability > 0.0)
-    {
-        Environment* environments = frame.environment;
-        const Environment environment = environments[0];
-        const EnvironmentSample sample = sampleEnvironmentDirection(environment, rng);
-        const float lightPdf = environmentProbability * sample.pdf;
-        if (!(lightPdf > 0.0))
-            return result;
-        result.direction = sample.direction;
-        result.distance = 1.0e16;
-        radianceScale = environmentRadianceRgb(environment, sample.direction, false)
-            / lightPdf * powerHeuristic(lightPdf, bsdf.pdf(sample.direction));
-    }
-    else
-        return result;
-
-    result.diffuse = bsdf.evaluateDiffuse(result.direction) * radianceScale;
-    result.specular = bsdf.evaluateSpecular(result.direction) * radianceScale;
-    const float3 total = result.diffuse + result.specular;
-    result.valid = realtimeIsFinite(total) && realtimeMaxComponent(total) > 0.0;
-    return result;
-}

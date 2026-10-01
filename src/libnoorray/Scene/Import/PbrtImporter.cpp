@@ -615,7 +615,7 @@ void SceneImporter::ImportPbrtScene(Scene& scene, const std::string& filepath)
             camera = std::make_unique<RealisticCamera>();
         else
             throw std::runtime_error("PBRT camera '" + cameraType + "' is not supported by NoorRay");
-        camera->setFocalLengthMm(camera->focalLengthMmForFovDegrees(cameraFov));
+        camera->setFocalLengthMm(Camera::focalLengthMmForFovDegrees(cameraFov, camera->getSensor().filmWidth()));
         camera->setFocusDistanceCm(focalDistance * 100.f);
         if (auto* thinLens = dynamic_cast<ThinLensCamera*>(camera.get()))
             thinLens->setApertureDiameterMm(lensRadius * 2000.f);

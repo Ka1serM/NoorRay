@@ -15,8 +15,15 @@ struct Extent
 // realtime renderer builds it once per frame; stages only read it.
 struct FrameContext
 {
-    // Rays are traced at `render`; the output images hold `output`.
+    // Primary visibility is traced at `render` and lighting at `lighting`
+    // (render divided by lightingScale); the output images hold `output`.
+    // Each is a rectangle of images that may be allocated larger.
     Extent render;
+    Extent lighting;
+    // The previous frame's lighting rectangle, which the temporal stages
+    // reproject from; `lighting` after a history reset.
+    Extent previousLighting;
+    std::uint32_t lightingScale{1};
     Extent output;
     // Unjittered, column-major, in NRD's conventions. After a history reset
     // the previous matrices equal the current ones.
@@ -30,6 +37,8 @@ struct FrameContext
     std::array<float, 2> previousJitter{};
     float nearPlane{};
     float verticalFieldOfView{};
+    // Wall time since the previous frame; a nominal 60 Hz frame for the first.
+    float frameTimeMilliseconds{};
     // The first frame of a new history: every temporal stage restarts.
     bool resetHistory{};
 };

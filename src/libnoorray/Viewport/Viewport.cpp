@@ -6,27 +6,14 @@
 #include <span>
 
 #include "Logging/Log.h"
+#include "Realtime/ShaderLoading.h"
 #include "Scene/Scene.h"
 #include "Scene/LightInstance.h"
 
 namespace
 {
-alignas(uint32_t) constexpr unsigned char noorRayViewportSpv[] = {
-    #embed "Viewport/Viewport.spv"
-};
-constexpr std::size_t noorRayViewportSpvLength = sizeof(noorRayViewportSpv);
-
-alignas(uint32_t) constexpr unsigned char noorRayViewportBillboardsSpv[] = {
-    #embed "Viewport/ViewportBillboards.spv"
-};
-constexpr std::size_t noorRayViewportBillboardsSpvLength = sizeof(noorRayViewportBillboardsSpv);
 
 constexpr uint32_t ViewportGroupSize = 16;
-
-std::span<const std::byte> shader_bytes(const unsigned char* data, const std::size_t size)
-{
-    return {reinterpret_cast<const std::byte*>(data), size};
-}
 
 }
 
@@ -40,15 +27,12 @@ Viewport::Viewport(noorrhi::Device& gpu_device, const uint32_t width, const uint
 , exportOutputMemory_(exportOutputMemory), inputs(inputs)
 {
     createOutputImage(imageWidth, imageHeight, outputImageFormat);
-    shader = gpuDevice.create_shader(
-        shader_bytes(noorRayViewportSpv, noorRayViewportSpvLength));
+    shader = loadShader(gpuDevice, "Viewport/Viewport.spv");
     pipeline = gpuDevice.compute(shader);
     createBillboardPipeline();
     {
-        const auto bytes = shader_bytes(noorRayViewportBillboardsSpv,
-            noorRayViewportBillboardsSpvLength);
-        lightIdClearShader = gpuDevice.create_shader(bytes, "lightIdClear");
-        lightIdStampShader = gpuDevice.create_shader(bytes, "lightIdStamp");
+        lightIdClearShader = loadShader(gpuDevice, "Viewport/ViewportBillboards.spv", "lightIdClear");
+        lightIdStampShader = loadShader(gpuDevice, "Viewport/ViewportBillboards.spv", "lightIdStamp");
         lightIdClearPipeline = gpuDevice.compute(lightIdClearShader);
         lightIdStampPipeline = gpuDevice.compute(lightIdStampShader);
     }
@@ -83,10 +67,8 @@ void Viewport::createOutputImage(const uint32_t width, const uint32_t height,
 
 void Viewport::createBillboardPipeline()
 {
-    const auto bytes = shader_bytes(noorRayViewportBillboardsSpv,
-        noorRayViewportBillboardsSpvLength);
-    billboardVertexShader = gpuDevice.create_shader(bytes, "vertMain");
-    billboardFragmentShader = gpuDevice.create_shader(bytes, "fragMain");
+    billboardVertexShader = loadShader(gpuDevice, "Viewport/ViewportBillboards.spv", "vertMain");
+    billboardFragmentShader = loadShader(gpuDevice, "Viewport/ViewportBillboards.spv", "fragMain");
     noorrhi::GraphicsState state{};
     state.cull = noorrhi::CullMode::None;
     state.depth_test = false;
@@ -173,13 +155,10 @@ void Viewport::rebuildBillboards(const Scene& scene)
 {
     billboardData.clear();
     billboardHandles.clear();
-    for (const auto& obj : scene.getSceneObjects())
+    for (const LightInstance* light : scene.getLightObjects())
     {
-        if (const auto* light = dynamic_cast<const LightInstance*>(obj.get()))
-        {
-            billboardData.push_back(makeBillboard(*light));
-            billboardHandles.push_back(light->getHandle());
-        }
+        billboardData.push_back(makeBillboard(*light));
+        billboardHandles.push_back(light->getHandle());
     }
     billboardCount = static_cast<uint32_t>(billboardData.size());
     reserveBillboards(std::max(1u, billboardCount));
@@ -267,10 +246,17 @@ void Viewport::dispatch(
     const bool showBillboards,
     const SceneObjectHandle selectedObject)
 {
-    // Before the first resize, or with AOVs switched off, some inputs do not
-    // exist yet; skip until a later call supplies the full complement.
+    // Before the first resize the inputs do not exist yet; skip until a later
+    // call supplies them.
     if (!inputs || !outputImage)
         return;
+    // A view of an image the renderer does not write takes the shader's
+    // invalid-view case, which draws black.
+    const noorrhi::TextureHandle viewed[] = {inputs.color, inputs.albedo, inputs.normal,
+        inputs.crypto, inputs.position};
+    const bool unavailable = bufferVisualization >= 0
+        && bufferVisualization < static_cast<int>(std::size(viewed)) && !viewed[bufferVisualization];
+    const int shownVisualization = unavailable ? -1 : bufferVisualization;
 
     // The distance field is screen-space, so it restarts with everything that
     // moves what it measures: the renderer's accumulation (camera or scene),
@@ -287,7 +273,7 @@ void Viewport::dispatch(
         inputs.normal.value,
         inputs.position.value,
         inputs.overdraw.address,
-        selectedCryptomatteId, exposure, bufferVisualization, tonemappingEnabled ? 1 : 0,
+        selectedCryptomatteId, exposure, shownVisualization, tonemappingEnabled ? 1 : 0,
         static_cast<uint32_t>(std::max(gaussianOverdrawMax, 1)),
         logicalWidth, logicalHeight,
         // Both are the logical size until a renderer reports otherwise, which

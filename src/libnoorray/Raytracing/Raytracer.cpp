@@ -3,14 +3,15 @@
 #include "Materials/MaterialX/SlangMaterialCompiler.h"
 
 
-#include <map>
+#include <numeric>
+#include <utility>
 #include <unordered_map>
 
-#include "Scene/GaussianInstance.h"
 
 #include <noorrhi/interop.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cmath>
 #include <array>
@@ -37,15 +38,41 @@ namespace
 {
 constexpr float LightPi = 3.14159265358979323846f;
 
+// Image allocations are whole multiples of this many pixels per side.
+constexpr uint32_t AllocationStep = 64u;
+// A settled size keeps an allocation up to this many times the area it would
+// allocate itself, and shrinks it only once it has held this long.
+constexpr uint64_t MaxAllocatedAreaFactor = 2u;
+constexpr auto ShrinkDelay = std::chrono::seconds(1);
+
+// The allocation for a logical size: 150% of it per side, so a viewport
+// resized within half again its size never reallocates.
+uint32_t allocationExtent(const uint32_t logical)
+{
+    const uint32_t extent = logical + logical / 2u;
+    return (extent + AllocationStep - 1u) / AllocationStep * AllocationStep;
+}
+
 float lightSelectionLuminance(const glm::vec3 color)
 {
     return fmaxf(glm::dot(color, glm::vec3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
 }
 
+// The intensity of an inverse square light that delivers about as much. An
+// exponent falloff light gives its intensity unattenuated at the centre and
+// fades to zero at its radius, like an inverse square light of intensity
+// intensity * d^2 at half the radius.
+float falloffEquivalentIntensity(const LightFalloff& falloff, const float intensity)
+{
+    if (falloff.inverseSquared != 0u || falloff.invRadius <= 0.0f)
+        return intensity;
+    return intensity * 0.25f / (falloff.invRadius * falloff.invRadius);
+}
+
 float pointLightSelectionWeight(const PointLight& light)
 {
-    return lightSelectionLuminance(light.color) * fmaxf(light.intensity, 0.0f)
-        * (4.0f * LightPi);
+    return lightSelectionLuminance(light.color)
+        * fmaxf(falloffEquivalentIntensity(light.falloff, light.intensity), 0.0f) * (4.0f * LightPi);
 }
 
 float spotLightSelectionWeight(const SpotLight& light)
@@ -53,8 +80,8 @@ float spotLightSelectionWeight(const SpotLight& light)
     const float cone = 2.0f * LightPi * (1.0f - cosf(
         fmaxf(light.innerConeAngle, light.outerConeAngle)
             * LightPi / 180.0f));
-    return lightSelectionLuminance(light.color) * fmaxf(light.intensity, 0.0f)
-        * cone;
+    return lightSelectionLuminance(light.color)
+        * fmaxf(falloffEquivalentIntensity(light.falloff, light.intensity), 0.0f) * cone;
 }
 
 float rectLightSelectionWeight(const RectLight& light)
@@ -67,6 +94,52 @@ float rectLightSelectionWeight(const RectLight& light)
 float directionalLightSelectionWeight(const DirectionalLight& light)
 {
     return lightSelectionLuminance(light.color) * fmaxf(light.intensity, 0.0f);
+}
+
+// USpotLightComponent's solid angle for its Lumens conversion.
+float spotSolidAngle(const SpotLight& light)
+{
+    const float inner = std::clamp(light.innerConeAngle, 0.0f, 89.0f) * LightPi / 180.0f;
+    const float outer = std::clamp(light.outerConeAngle * LightPi / 180.0f, inner + 0.001f,
+        89.0f * LightPi / 180.0f + 0.001f);
+    return 2.0f * LightPi * (1.0f - std::cos(outer));
+}
+
+// Unreal's local light brightness (UPointLightComponent and
+// USpotLightComponent::ComputeLightBrightness) in candela. Unreal works in
+// centimetres. NoorRay now uses centimetres too, so photometric intensities
+// carry Unreal's 100 * 100 inverse-square scale. Exponent falloff lights ignore their units: their falloff
+// replaces the inverse square law, and their intensity is used as it is.
+float localLightIntensity(const LightFalloff& falloff, const uint32_t units, const float intensity,
+    const float radius, const float length, const float solidAngle)
+{
+    if (falloff.inverseSquared == 0u)
+        return intensity;
+    switch (units) {
+    case LightUnitsCandelas: return intensity * (100.0f * 100.0f);
+    case LightUnitsUnitless: return intensity * 16.0f;
+    case LightUnitsLumens: return intensity * (100.0f * 100.0f) / solidAngle;
+    case LightUnitsEV: return std::exp2(intensity) * (100.0f * 100.0f);
+    case LightUnitsNits: return intensity * 4.0f * LightPi * radius * (radius + 0.5f * length);
+    }
+    throw std::invalid_argument("unknown light units " + std::to_string(units));
+}
+
+// URectLightComponent::ComputeLightBrightness in nits: FRectLightSceneProxy
+// emits the brightness over half the rect's area.
+float rectLightIntensity(const RectLight& light)
+{
+    const float halfArea = 0.5f * light.width * light.height;
+    if (halfArea <= 0.0f)
+        return 0.0f;
+    switch (light.units) {
+    case LightUnitsUnitless: return light.intensity * 16.0f / halfArea;
+    case LightUnitsCandelas: return light.intensity * (100.0f * 100.0f) / halfArea;
+    case LightUnitsLumens: return light.intensity * (100.0f * 100.0f) / LightPi / halfArea;
+    case LightUnitsEV: return std::exp2(light.intensity) * (100.0f * 100.0f) / halfArea;
+    case LightUnitsNits: return 2.0f * light.intensity;
+    }
+    throw std::invalid_argument("unknown light units " + std::to_string(light.units));
 }
 
 // Keep texture uploads bounded by the descriptor-heap budget.  The first
@@ -90,27 +163,87 @@ noorrhi::Buffer<std::byte> upload_value(noorrhi::Device& device, const T& value)
     return upload_bytes(device, &value, sizeof(value));
 }
 
+
+// Keeps `buffer` at least `count` long, doubling so a growing table is
+// replaced O(log n) times. Returns whether it was replaced, which drops its
+// contents.
+template<class T>
+bool reserveTable(noorrhi::Device& device, noorrhi::Buffer<T>& buffer, const std::size_t count)
+{
+    if (buffer && buffer.size() >= count)
+        return false;
+    buffer = device.buffer<T>(std::max<std::size_t>({count, buffer ? buffer.size() * 2 : 0, 64}));
+    return true;
+}
+
+// Uploads the entries of `data` at the sorted, unique `indices`, one upload
+// per run of neighbours. Past a few dozen runs a single covering upload is
+// cheaper than that many submissions.
+template<class T>
+void uploadEntries(noorrhi::Buffer<T>& buffer, const std::vector<T>& data,
+    const std::vector<uint32_t>& indices)
+{
+    constexpr std::size_t MaxRuns = 32;
+    std::vector<std::pair<uint32_t, uint32_t>> runs;
+    for (const uint32_t index : indices) {
+        if (!runs.empty() && index == runs.back().second + 1)
+            runs.back().second = index;
+        else
+            runs.emplace_back(index, index);
+    }
+    if (runs.size() > MaxRuns)
+        runs = {{runs.front().first, runs.back().second}};
+    for (const auto [first, last] : runs)
+        buffer.upload(std::span<const T>(data.data() + first, last - first + 1), first);
+}
+
+template<class T>
+void uploadTable(noorrhi::Buffer<T>& buffer, const std::vector<T>& data, const std::size_t first = 0)
+{
+    if (first < data.size())
+        buffer.upload(std::span<const T>(data.data() + first, data.size() - first), first);
+}
+
+// A TLAS record for an object-to-world transform. `flags` are NoorRHI's
+// InstanceFlag* bits.
+noorrhi::InstanceRecord instanceRecord(const glm::mat4& objectToWorld, const uint32_t customIndex,
+    const uint8_t mask, const uint32_t flags, const uint32_t hitRecordOffset,
+    const noorrhi::AccelerationStructure& blas)
+{
+    noorrhi::InstanceRecord record{};
+    // The record is row-major; GLM is column-major.
+    for (uint32_t row = 0; row < 3; ++row)
+        for (uint32_t column = 0; column < 4; ++column)
+            record.transform[row * 4u + column] = objectToWorld[column][row];
+    record.custom_index_and_mask = customIndex | (static_cast<uint32_t>(mask) << 24);
+    record.shader_binding_table_offset_and_flags = hitRecordOffset | (flags << 24);
+    record.blas_address = blas ? blas.handle().value : 0;
+    return record;
+}
+
 }
 
 Raytracer::Raytracer(noorrhi::Device& device,
-    const uint32_t width, const uint32_t height, const bool exportColorMemory)
+    const uint32_t width, const uint32_t height, const bool exportColorMemory,
+    const FullOutputAovs fullOutputAovs)
     : renderWidth(std::max(width, 1u))
     , renderHeight(std::max(height, 1u))
-    , imageWidth_(renderWidth)
-    , imageHeight_(renderHeight)
+    , imageWidth_(allocationExtent(renderWidth))
+    , imageHeight_(allocationExtent(renderHeight))
     , gpuDevice(&device)
     , exportColorMemory(exportColorMemory)
+    , fullOutputAovs_(fullOutputAovs)
 {
     dispatchTimestamp = gpuDevice->timestamp();
-    NR_LOG_INFO("graphics API raytracer: using NoorRHI API (rayQuery="
-        << gpuDevice->features().ray_query << ", rayTracing="
+    NR_LOG_INFO("graphics API raytracer: using " << gpuDevice->info().name
+        << " (rayQuery=" << gpuDevice->features().ray_query << ", rayTracing="
         << gpuDevice->features().ray_tracing << ")");
     NR_LOG_INFO("graphics API raytracer: creating output images");
     createImages();
     NR_LOG_INFO("graphics API raytracer: creating upload buffers");
     lens = noorrhi::Shared<nr::graphics::Lens>(*gpuDevice);
 
-    // An empty pointer table until the first uploadMaterials().
+    // An empty pointer table until the first material is published.
     const std::uint64_t noMaterial = 0;
     materials = gpuDevice->buffer<std::uint64_t>(1);
     materials.upload(std::span<const std::uint64_t>(&noMaterial, 1));
@@ -144,21 +277,22 @@ void Raytracer::createImages()
         ? storage | noorrhi::ImageUsage::ExternalMemory : storage;
     colorImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, color_usage,
         noorrhi::ImageFormat::Rgba32Float);
-    albedoImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
-        noorrhi::ImageFormat::Rgba32Float);
-    normalImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
-        noorrhi::ImageFormat::Rgba32Float);
-    positionImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
-        noorrhi::ImageFormat::Rgba32Float);
     cryptomatteImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
         noorrhi::ImageFormat::R32Uint);
+    if (fullOutputAovs_ == FullOutputAovs::Written) {
+        albedoImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
+            noorrhi::ImageFormat::Rgba32Float);
+        normalImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
+            noorrhi::ImageFormat::Rgba32Float);
+        positionImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
+            noorrhi::ImageFormat::Rgba32Float);
+    }
     // Per-pixel buffers are indexed with the logical width as the stride, so
-    // any logical size up to the image allocation fits inside them.
+    // any logical size up to the image allocation fits inside them. Sample 0
+    // restarts the accumulation without reading it, so it needs no clear.
     const std::size_t pixelCount = static_cast<std::size_t>(imageWidth_) * imageHeight_;
     gaussianOverdrawBuffer = gpuDevice->buffer<std::uint32_t>(pixelCount);
     accumulationBuffer = gpuDevice->buffer<noorrhi::float4>(pixelCount);
-    std::vector<noorrhi::float4> clear(pixelCount, noorrhi::float4{});
-    accumulationBuffer.upload(std::span<const noorrhi::float4>(clear));
 }
 
 void Raytracer::updateRoot()
@@ -179,17 +313,6 @@ void Raytracer::updateRoot()
     data.gaussianOverdraw = address(gaussianOverdrawBuffer);
     data.lens = lens.ptr().address;
     data.scene = sceneBuffers();
-    data.gaussianRecords = address(gaussianRecords_);
-    data.gaussianOpacities = address(gaussianOpacities_);
-    data.gaussianShCoefficients = address(gaussianShCoefficients_);
-    data.gaussianInstanceOffsets = address(gaussianInstanceOffsets_);
-    data.gaussianCount = gaussianCount_;
-    // Only the scene-derived coefficient count lives in the low bits; the
-    // shading-mode flag above it and the cutoff distance come from
-    // RenderSettings and must survive a resize.
-    data.gaussianShCoefficientCount =
-        (data.gaussianShCoefficientCount & ~0xFFu)
-        | (gaussianShCoefficientCount_ & 0xFFu);
     data.materials = address(materials);
     data.accumulation = address(accumulationBuffer);
     data.width = renderWidth;
@@ -211,18 +334,31 @@ void Raytracer::resize(const uint32_t width, const uint32_t height)
         return;
     renderWidth = width;
     renderHeight = height;
-    const bool reserved = reservedWidth_ != 0 && reservedHeight_ != 0;
-    const bool fits = reserved
-        ? width <= imageWidth_ && height <= imageHeight_
-        : width == imageWidth_ && height == imageHeight_;
-    if (fits)
+    resized_ = std::chrono::steady_clock::now();
+    updateRoot();
+}
+
+bool Raytracer::prepareFrameResources()
+{
+    if (renderWidth > imageWidth_ || renderHeight > imageHeight_)
     {
-        // Only the traced rectangle changes. Work already recorded against
-        // these images stays valid, so there is nothing to wait for.
-        updateRoot();
-        return;
+        const auto grown = [](const uint32_t allocated, const uint32_t logical) {
+            return logical <= allocated ? allocated : allocationExtent(logical);
+        };
+        reallocate(std::max(grown(imageWidth_, renderWidth), reservedWidth_),
+            std::max(grown(imageHeight_, renderHeight), reservedHeight_));
+        return true;
     }
-    reallocate(std::max(width, reservedWidth_), std::max(height, reservedHeight_));
+    // A settled size gives back an allocation it leaves mostly unused, such
+    // as the one a maximized viewport left behind.
+    const uint32_t width = std::max(allocationExtent(renderWidth), reservedWidth_);
+    const uint32_t height = std::max(allocationExtent(renderHeight), reservedHeight_);
+    if (static_cast<uint64_t>(imageWidth_) * imageHeight_
+            <= MaxAllocatedAreaFactor * static_cast<uint64_t>(width) * height
+        || std::chrono::steady_clock::now() - resized_ < ShrinkDelay)
+        return false;
+    reallocate(width, height);
+    return true;
 }
 
 void Raytracer::reserve(const uint32_t width, const uint32_t height)
@@ -257,49 +393,69 @@ void Raytracer::commit()
 void Raytracer::uploadScene(Scene& scene)
 {
     gpuDevice->synchronize();
-    // Rebuild the material pointer table here, not just when a compilation
-    // finishes: adding an object adds a material, and the hit shaders index
-    // this table by the surface's material index. A table still sized to the
-    // previous material count would be read out of bounds and its garbage
-    // dereferenced as a device pointer. uploadMaterials() uploads lights too.
-    uploadMaterials(scene);
-    buildScene(scene);
-    const auto address = [](const auto& buffer) -> std::uint64_t {
-        return buffer ? buffer.ptr().address : 0;
-    };
-    data.scene = sceneBuffers();
-    data.gaussianRecords = address(gaussianRecords_);
-    data.gaussianOpacities = address(gaussianOpacities_);
-    data.gaussianShCoefficients = address(gaussianShCoefficients_);
-    data.gaussianInstanceOffsets = address(gaussianInstanceOffsets_);
-    data.gaussianCount = gaussianCount_;
-    data.gaussianProxyTriangleCount = gaussianProxyTriangleCount_;
-    data.gaussianInstanceBase = meshInstanceCount_;
-    data.gaussianShCoefficientCount = gaussianShCoefficientCount_;
+    // Everything is republished, so whatever the change lists hold is moot.
+    scene.takeChangedMeshInstanceSlots();
+    scene.takeChangedMeshes();
+    scene.takeChangedMaterials();
+    publishedClearEpoch_ = scene.getClearEpoch();
+    uploadedTextureCount_ = 0;
+    sourceMeshes_.clear();
+    sourceMeshIndices_.clear();
+    meshRecordData_.clear();
+    bindings_.clear();
+    bindingIndices_.clear();
+    materialBindings_.clear();
+    meshBindings_.clear();
+    hitRecords_.clear();
+    hitRecordsChanged_ = true;
+    bindingsMoved_ = false;
+    materialPointerData_.clear();
+    instanceData_.clear();
+    tlasRecordData_.clear();
+    slotRecordOffsets_.clear();
+    slotColors_.clear();
+    slotCustomData_.clear();
+    meshRecords_ = {};
+    instances_ = {};
+    tlasRecords_ = {};
+    tlas = {};
+    tlasInstanceCount_ = 0;
+
+    uploadTextures(scene);
+    std::vector<uint32_t> allMaterials(scene.getMaterials().size());
+    std::iota(allMaterials.begin(), allMaterials.end(), 0u);
+    publishMaterials(scene, allMaterials);
+    for (Mesh& mesh : scene.getMeshes())
+        mesh.upload(*gpuDevice);
+    std::vector<uint32_t> allSlots(scene.getMeshInstanceSlots().size());
+    std::iota(allSlots.begin(), allSlots.end(), 0u);
+    publishInstances(scene, std::move(allSlots), true);
+    uploadLights(scene);
     applyRenderSettings(scene.getRenderSettings());
-    data.topLevelAS = tlas.handle().value;
-    onHitRecordsChanged(hitRecords());
 }
 
-bool Raytracer::updateScene(const Scene& scene, const bool updateGaussians)
+void Raytracer::publishScene(Scene& scene)
 {
-    if (!tlas)
-        return false;
-    if (!updateMutableData(scene, updateGaussians))
-        return false;
-    data.gaussianShCoefficientCount = gaussianShCoefficientCount_;
+    if (scene.getClearEpoch() != publishedClearEpoch_) {
+        uploadScene(scene);
+        return;
+    }
+    uploadTextures(scene);
+    publishMaterials(scene, scene.takeChangedMaterials());
+    for (Mesh* mesh : scene.takeChangedMeshes())
+        publishMesh(scene, *mesh);
+    publishInstances(scene, scene.takeChangedMeshInstanceSlots(), false);
     applyRenderSettings(scene.getRenderSettings());
-    return true;
 }
 
 void Raytracer::applyRenderSettings(const RenderSettings& settings)
 {
-    data.gaussianShCoefficientCount =
-        (data.gaussianShCoefficientCount & ~0x80000000u)
+    // The SH coefficients splats are shaded with, and above them the flag
+    // for the direct-colour shading mode.
+    data.gaussianShCoefficientCount = sphericalHarmonicsCoefficientCount(
+            settings.gaussianRenderSphericalHarmonics)
         | (settings.gaussianShadingMode == GaussianShadingMode::DirectColor
             ? 0x80000000u : 0u);
-    const float cutoff = settings.gaussianCutoffSigma;
-    data.gaussianCutoffDistanceSq = cutoff * cutoff;
     data.maxBounces = static_cast<std::uint32_t>(std::max(
         settings.maxBounces, 1));
     data.indirectLightClamp = settings.indirectLightClamp;
@@ -307,7 +463,6 @@ void Raytracer::applyRenderSettings(const RenderSettings& settings)
     data.gaussianOverdrawEnabled = rendersProxyOverdraw(settings) ? 1u : 0u;
     data.gaussianOverdrawMax = static_cast<std::uint32_t>(std::max(
         settings.gaussianProxyOverdrawMax, 1));
-    data.aovEnabled = settings.aovEnabled ? 1u : 0u;
     onRenderSettingsApplied(settings);
 }
 
@@ -347,59 +502,36 @@ void Raytracer::uploadLights(const Scene& scene)
     rectRecords.reserve(scene.getRectLightCount());
     directionalRecords.reserve(scene.getDirectionalLightCount());
 
-    auto copyVec3 = [](float3& dst, const glm::vec3& src) {
-        dst = src;
-    };
-
     for (uint32_t i = 0; i < scene.getPointLightCount(); ++i)
     {
-        const PointLight& source = scene.getPointLights()[i];
-        PointLight record = source;
-        copyVec3(record.position, source.position);
-        copyVec3(record.color, source.color);
-        record.intensity = source.intensity;
-        record.selectionWeight = pointLightSelectionWeight(source);
+        PointLight record = scene.getPointLights()[i];
+        record.intensity = localLightIntensity(record.falloff, record.units, record.intensity,
+            record.softRadius, record.sourceLength, 4.0f * LightPi);
+        record.selectionWeight = pointLightSelectionWeight(record);
         pointRecords.push_back(record);
     }
     for (uint32_t i = 0; i < scene.getSpotLightCount(); ++i)
     {
-        const SpotLight& source = scene.getSpotLights()[i];
-        SpotLight record = source;
-        copyVec3(record.position, source.position);
-        copyVec3(record.direction, source.direction);
-        copyVec3(record.color, source.color);
-        record.intensity = source.intensity;
-        record.innerConeAngle = source.innerConeAngle;
-        record.outerConeAngle = source.outerConeAngle;
-        record.selectionWeight = spotLightSelectionWeight(source);
+        SpotLight record = scene.getSpotLights()[i];
+        record.intensity = localLightIntensity(record.falloff, record.units, record.intensity,
+            record.softRadius, record.sourceLength, spotSolidAngle(record));
+        record.selectionWeight = spotLightSelectionWeight(record);
         spotRecords.push_back(record);
     }
     for (uint32_t i = 0; i < scene.getRectLightCount(); ++i)
     {
-        const RectLight& source = scene.getRectLights()[i];
-        RectLight record = source;
-        copyVec3(record.position, source.position);
-        copyVec3(record.direction, source.direction);
-        copyVec3(record.color, source.color);
-        copyVec3(record.tangent, source.tangent);
-        record.intensity = source.intensity;
-        record.width = source.width;
-        record.height = source.height;
-        record.twoSided = source.twoSided != 0 ? 1u : 0u;
-        record.barnDoorAngle = source.barnDoorAngle;
-        record.barnDoorLength = source.barnDoorLength;
-        record.selectionWeight = rectLightSelectionWeight(source);
+        RectLight record = scene.getRectLights()[i];
+        record.intensity = rectLightIntensity(record);
+        record.twoSided = record.twoSided != 0 ? 1u : 0u;
+        record.selectionWeight = rectLightSelectionWeight(record);
         rectRecords.push_back(record);
     }
     for (uint32_t i = 0; i < scene.getDirectionalLightCount(); ++i)
     {
-        const DirectionalLight& source = scene.getDirectionalLights()[i];
-        DirectionalLight record = source;
-        copyVec3(record.direction, source.direction);
-        copyVec3(record.color, source.color);
-        record.intensity = source.intensity;
-        record.softAngle = source.softAngle;
-        record.selectionWeight = directionalLightSelectionWeight(source);
+        // Unreal directional light intensity is in lux. Keep its ELightUnits
+        // value intact in the record, as for every other light type.
+        DirectionalLight record = scene.getDirectionalLights()[i];
+        record.selectionWeight = directionalLightSelectionWeight(record);
         directionalRecords.push_back(record);
     }
 
@@ -465,8 +597,11 @@ void Raytracer::uploadLights(const Scene& scene)
 
 void Raytracer::uploadTextures(Scene& scene)
 {
-    for (Texture& texture : scene.getTextures())
+    // Textures are only ever appended, so the ones past the cursor are new.
+    auto& textures = scene.getTextures();
+    for (; uploadedTextureCount_ < textures.size(); ++uploadedTextureCount_)
     {
+        Texture& texture = textures[uploadedTextureCount_];
         if (texture)
             continue;
         try {
@@ -484,18 +619,21 @@ void Raytracer::uploadEnvironment(Scene& scene)
     // texture changes. Per-frame scalar edits only republish its small record.
     ::Environment& environment = scene.getEnvironment();
     uploadTextures(scene);
-    if (!environment.hdriImage && environment.getTextureIndex() >= 0
-        && static_cast<std::size_t>(environment.getTextureIndex()) < scene.getTextures().size())
-        environment.uploadImages(*gpuDevice,
-            &scene.getTextures()[environment.getTextureIndex()]);
-    else
+    const int index = environment.getTextureIndex();
+    const bool hasTexture = index >= 0 && static_cast<std::size_t>(index) < scene.getTextures().size();
+    const std::pair<uint64_t, int> source{scene.getClearEpoch(), hasTexture ? index : -1};
+    if (source != environmentImageSource_) {
+        environment.uploadImages(*gpuDevice, hasTexture ? &scene.getTextures()[index] : nullptr);
+        environmentImageSource_ = source;
+    } else {
         environment.uploadRecord(*gpuDevice);
+    }
     data.environment = environment.ptr().address;
 }
 
-void Raytracer::uploadMaterials(Scene& scene)
+void Raytracer::publishMaterials(Scene& scene, const std::vector<uint32_t>& changed)
 {
-    uploadTextures(scene);
+    auto& sceneMaterials = scene.getMaterials();
     const auto resolveTexture = [this, &scene](const std::uint32_t index) -> std::uint32_t {
         if (index < scene.getTextures().size()
             && scene.getTextures()[index])
@@ -503,40 +641,343 @@ void Raytracer::uploadMaterials(Scene& scene)
         return whiteTexture.sampled_handle().value;
     };
     const std::size_t shaderCount = materialShaders_.size();
-    for (Material& material : scene.getMaterials()) {
-        if (material)
-            continue;
+    materialPointerData_.resize(sceneMaterials.size(), 0);
+    for (const uint32_t index : changed) {
+        Material& material = sceneMaterials[index];
         if (const auto& shader = material.shaderProgram.shader;
-            shader && !std::ranges::contains(materialShaderPrograms_, shader)) {
+            shader && !materialShaderIndices_.contains(shader.get())) {
             const auto create = [this](const std::vector<std::uint32_t>& spirv,
                                     const std::string_view entryPoint) {
                 return gpuDevice->create_shader(std::as_bytes(std::span(spirv)), entryPoint);
             };
+            materialShaderIndices_.emplace(shader.get(), static_cast<uint32_t>(materialShaders_.size()));
             materialShaderPrograms_.push_back(shader);
             materialShaders_.push_back({create(shader->closestHit, "closestHit"),
                 create(shader->anyHit, "anyHit"), create(shader->shadowAnyHit, "shadowAnyHit")});
         }
-        material.upload(*gpuDevice, resolveTexture);
+        if (!material)
+            material.upload(*gpuDevice, resolveTexture);
+        materialPointerData_[index] = material.ptr().address;
+        // The hit groups and opacity of the sections drawn with it follow
+        // the program.
+        if (index < materialBindings_.size())
+            for (const uint32_t binding : materialBindings_[index]) {
+                bindingsMoved_ |= updateBindingOpacity(scene, binding);
+                writeBindingHitRecords(scene, binding);
+            }
     }
     if (materialShaders_.size() != shaderCount)
         onMaterialShadersChanged(materialShaders_);
 
-    std::vector<std::uint64_t> pointers;
-    pointers.reserve(std::max<std::size_t>(scene.getMaterials().size(), 1u));
-    for (const Material& material : scene.getMaterials())
-        pointers.push_back(material ? material.ptr().address : 0);
-    if (pointers.empty())
-        pointers.push_back(0);
-    materials = gpuDevice->buffer<std::uint64_t>(pointers.size());
-    materials.upload(std::span<const std::uint64_t>(pointers));
-
+    std::vector<uint32_t> written = changed;
+    std::ranges::sort(written);
+    written.erase(std::unique(written.begin(), written.end()), written.end());
+    if (reserveTable(*gpuDevice, materials, materialPointerData_.size()))
+        uploadTable(materials, materialPointerData_);
+    else
+        uploadEntries(materials, materialPointerData_, written);
     data.materials = materials.ptr().address;
-    data.accumulation = accumulationBuffer.ptr().address;
-    uploadLights(scene);
+}
+
+void Raytracer::publishMesh(const Scene& scene, Mesh& mesh)
+{
+    mesh.upload(*gpuDevice);
+    const auto found = meshBindings_.find(&mesh);
+    if (found == meshBindings_.end())
+        return;
+    const std::size_t recordCount = mesh.getSections().size() * nr::graphics::RaytracingRayTypeCount;
+    bool resized = false;
+    for (const uint32_t binding : found->second) {
+        const std::size_t end = binding + 1 < bindings_.size()
+            ? bindings_[binding + 1].hitRecordOffset : hitRecords_.size();
+        resized |= end - bindings_[binding].hitRecordOffset != recordCount;
+        // The geometry is new, so every BLAS built from it is gone.
+        bindings_[binding].blas = {};
+        updateBindingOpacity(scene, binding);
+    }
+    if (resized)
+        layoutHitRecords(scene);
+    else
+        for (const uint32_t binding : found->second)
+            writeBindingHitRecords(scene, binding);
+    bindingsMoved_ = true;
+}
+
+uint32_t Raytracer::sourceMesh(Mesh& mesh)
+{
+    const auto [found, inserted] = sourceMeshIndices_.try_emplace(&mesh,
+        static_cast<uint32_t>(sourceMeshes_.size()));
+    if (!inserted)
+        return found->second;
+    mesh.upload(*gpuDevice);
+    sourceMeshes_.push_back(&mesh);
+    meshRecordData_.push_back(mesh ? mesh.ptr().address : 0);
+    return found->second;
+}
+
+uint32_t Raytracer::binding(const Scene& scene, const MeshInstance& instance)
+{
+    Mesh& mesh = *instance.getMeshPtr();
+    std::vector<uint32_t> materials;
+    materials.reserve(instance.getMaterials().size());
+    for (const Material* material : instance.getMaterials()) {
+        const uint32_t index = scene.getMaterialIndex(material);
+        if (index == ~0u)
+            throw std::invalid_argument("Mesh instance " + instance.getName()
+                + " draws with a material outside its scene");
+        materials.push_back(index);
+    }
+    const auto [found, inserted] = bindingIndices_.try_emplace({&mesh, materials},
+        static_cast<uint32_t>(bindings_.size()));
+    if (!inserted)
+        return found->second;
+    const uint32_t index = found->second;
+    sourceMesh(mesh);
+    MaterialBinding& binding = bindings_.emplace_back();
+    binding.mesh = &mesh;
+    binding.materials = std::move(materials);
+    binding.materialTable = gpuDevice->buffer<uint32_t>(std::max<std::size_t>(binding.materials.size(), 1));
+    binding.materialTable.upload(std::span<const uint32_t>(binding.materials));
+    binding.hitRecordOffset = static_cast<uint32_t>(hitRecords_.size());
+    hitRecords_.resize(hitRecords_.size()
+        + mesh.getSections().size() * nr::graphics::RaytracingRayTypeCount);
+    materialBindings_.resize(std::max(materialBindings_.size(), scene.getMaterials().size()));
+    for (const uint32_t material : binding.materials)
+        if (materialBindings_[material].empty() || materialBindings_[material].back() != index)
+            materialBindings_[material].push_back(index);
+    meshBindings_[&mesh].push_back(index);
+    updateBindingOpacity(scene, index);
+    writeBindingHitRecords(scene, index);
+    return index;
+}
+
+bool Raytracer::updateBindingOpacity(const Scene& scene, const uint32_t index)
+{
+    MaterialBinding& binding = bindings_[index];
+    const auto& sections = binding.mesh->getSections();
+    if (binding.materials.size() < binding.mesh->getSlotCount())
+        throw std::invalid_argument("Mesh " + binding.mesh->getPath() + " draws "
+            + std::to_string(binding.mesh->getSlotCount()) + " material slots, but an instance supplies "
+            + std::to_string(binding.materials.size()));
+    const auto& materials = scene.getMaterials();
+    const bool castsShadow = bindingCastsShadow(scene, binding);
+    std::vector<bool> opacity;
+    opacity.reserve(sections.size());
+    bool doubleSided = false;
+    for (const MeshSection& section : sections) {
+        const Material& material = materials[binding.materials[section.slot]];
+        // Sections that cast no shadow among ones that do reach their shadow
+        // any-hit stage, which ignores them.
+        opacity.push_back(!material.shaderProgram.transparent
+            && (sectionCastsShadow(scene, binding, section) || !castsShadow));
+        doubleSided |= (material.getData().flags & nr::graphics::MaterialFlagOneSided) == 0;
+    }
+    // Gaussian splat proxies take their own mask, which only the renderers
+    // that draw splats trace against.
+    const bool splat = !sections.empty()
+        && materials[binding.materials[sections.front().slot]].kind == MaterialKind::GaussianSplat;
+    const auto mask = static_cast<uint8_t>(splat ? nr::graphics::RaytracingMaskGaussian
+        : castsShadow ? nr::graphics::RaytracingMaskMesh
+        : nr::graphics::RaytracingMaskMesh & ~nr::graphics::RaytracingMaskShadow);
+    binding.doubleSided = doubleSided;
+    if (binding.blas && opacity == binding.opacity && mask == binding.mask)
+        return false;
+    binding.opacity = std::move(opacity);
+    binding.mask = mask;
+    binding.blas = binding.mesh->blas(*gpuDevice, binding.opacity);
+    return true;
+}
+
+bool Raytracer::sectionCastsShadow(const Scene& scene, const MaterialBinding& binding,
+    const MeshSection& section)
+{
+    return section.castsShadow && (scene.getMaterials()[binding.materials[section.slot]].getData().flags
+        & nr::graphics::MaterialFlagNoShadows) == 0;
+}
+
+bool Raytracer::bindingCastsShadow(const Scene& scene, const MaterialBinding& binding)
+{
+    return std::ranges::any_of(binding.mesh->getSections(), [&](const MeshSection& section) {
+        return sectionCastsShadow(scene, binding, section);
+    });
+}
+
+void Raytracer::writeBindingHitRecords(const Scene& scene, const uint32_t index)
+{
+    const MaterialBinding& binding = bindings_[index];
+    const bool castsShadow = bindingCastsShadow(scene, binding);
+    uint32_t record = binding.hitRecordOffset;
+    for (const MeshSection& section : binding.mesh->getSections()) {
+        const Material& material = scene.getMaterials()[binding.materials[section.slot]];
+        const MaterialShaderProgram& program = material.shaderProgram;
+        const auto found = program.shader
+            ? materialShaderIndices_.find(program.shader.get()) : materialShaderIndices_.end();
+        const uint32_t shaders = found == materialShaderIndices_.end() ? ~0u : found->second;
+        const HitRecord::Kind kind = material.kind == MaterialKind::GaussianSplat
+            ? HitRecord::Kind::Gaussian : HitRecord::Kind::Section;
+        const bool shadowFiltered = castsShadow && !sectionCastsShadow(scene, binding, section);
+        for (uint32_t rayType = 0; rayType < nr::graphics::RaytracingRayTypeCount; ++rayType, ++record) {
+            const HitRecord value{kind, rayType, shaders, program.transparent, shadowFiltered};
+            if (hitRecords_[record] == value)
+                continue;
+            hitRecords_[record] = value;
+            hitRecordsChanged_ = true;
+        }
+    }
+}
+
+void Raytracer::layoutHitRecords(const Scene& scene)
+{
+    hitRecords_.clear();
+    for (uint32_t index = 0; index < bindings_.size(); ++index) {
+        bindings_[index].hitRecordOffset = static_cast<uint32_t>(hitRecords_.size());
+        hitRecords_.resize(hitRecords_.size()
+            + bindings_[index].mesh->getSections().size() * nr::graphics::RaytracingRayTypeCount);
+        writeBindingHitRecords(scene, index);
+    }
+    hitRecordsChanged_ = true;
+    bindingsMoved_ = true;
+}
+
+template <class T>
+std::uint64_t Raytracer::uploadSlotStream(SlotStream<T>& entry, const std::span<const T> data,
+    const std::shared_ptr<const void>& owner)
+{
+    if (data.empty()) {
+        entry = {};
+        return 0;
+    }
+    if (!entry.buffer || entry.data != data.data() || entry.buffer.size() != data.size()) {
+        entry.owner = owner;
+        entry.data = data.data();
+        entry.buffer = gpuDevice->buffer<T>(data.size());
+        entry.buffer.upload(data);
+    }
+    return entry.buffer.ptr().address;
+}
+
+std::uint64_t Raytracer::slotColors(const uint32_t slot, const MeshInstance& instance)
+{
+    const std::span<const uint32_t> colors = instance.getColors();
+    if (!colors.empty() && colors.size() != instance.getMesh().getVertexCount())
+        throw std::invalid_argument("Mesh instance " + instance.getName() + " has "
+            + std::to_string(colors.size()) + " colors for "
+            + std::to_string(instance.getMesh().getVertexCount()) + " vertices");
+    return uploadSlotStream(slotColors_[slot], colors, instance.getColorOwner());
+}
+
+void Raytracer::publishInstances(const Scene& scene, std::vector<uint32_t> changedSlots,
+    bool rewriteAll)
+{
+    const auto& slots = scene.getMeshInstanceSlots();
+    const auto count = static_cast<uint32_t>(slots.size());
+    const std::size_t sourceMeshesBefore = sourceMeshes_.size();
+    const std::size_t bindingsBefore = bindings_.size();
+    rewriteAll |= std::exchange(bindingsMoved_, false);
+    if (rewriteAll) {
+        changedSlots.resize(count);
+        std::iota(changedSlots.begin(), changedSlots.end(), 0u);
+    }
+    std::ranges::sort(changedSlots);
+
+    // A slot whose placement count changed moves the records of every later
+    // slot; so do slots that were added or removed.
+    const auto previousCount = static_cast<uint32_t>(
+        slotRecordOffsets_.empty() ? 0 : slotRecordOffsets_.size() - 1);
+    uint32_t firstMoved = std::min(previousCount, count);
+    for (const uint32_t slot : changedSlots)
+        if (slot < firstMoved && slotRecordOffsets_[slot + 1] - slotRecordOffsets_[slot]
+                != slots[slot]->getPlacementCount())
+            firstMoved = slot;
+    slotRecordOffsets_.resize(count + 1);
+    for (uint32_t slot = firstMoved; slot < count; ++slot)
+        slotRecordOffsets_[slot + 1] = slotRecordOffsets_[slot] + slots[slot]->getPlacementCount();
+    const uint32_t recordCount = slotRecordOffsets_[count];
+    std::erase_if(changedSlots, [firstMoved](const uint32_t slot) { return slot >= firstMoved; });
+    for (uint32_t slot = firstMoved; slot < count; ++slot)
+        changedSlots.push_back(slot);
+
+    instanceData_.resize(count);
+    slotColors_.resize(count);
+    slotCustomData_.resize(count);
+    tlasRecordData_.resize(recordCount);
+    std::vector<uint32_t> changedRecords;
+    for (const uint32_t slot : changedSlots) {
+        const MeshInstance& instance = *slots[slot];
+        const MaterialBinding& drawn = bindings_[binding(scene, instance)];
+        const std::span<const float> customData = instance.getCustomData();
+        instanceData_[slot] = {sourceMeshIndices_.at(drawn.mesh), instance.getMaterialEntry(),
+            drawn.materialTable.ptr().address, slotColors(slot, instance),
+            uploadSlotStream(slotCustomData_[slot], customData, instance.getCustomDataOwner()),
+            instance.getLightingChannels(), static_cast<uint32_t>(customData.size())};
+        const MeshInstance::RayTracingFlags rayTracing = instance.getRayTracingFlags();
+        uint8_t mask = drawn.mask;
+        if (mask != nr::graphics::RaytracingMaskGaussian) {
+            if (!rayTracing.camera)
+                mask &= ~nr::graphics::RaytracingMaskCamera;
+            if (!rayTracing.shadow)
+                mask &= ~nr::graphics::RaytracingMaskShadow;
+            if (!rayTracing.indirect)
+                mask &= ~nr::graphics::RaytracingMaskIndirect;
+        }
+        // Counterclockwise triangles face forward, as they do in Unreal and
+        // glTF, unless the instance reverses its culling.
+        const uint32_t flags = (drawn.doubleSided ? noorrhi::InstanceFlagTriangleFacingCullDisable : 0u)
+            | (rayTracing.reverseCulling ? 0u : noorrhi::InstanceFlagTriangleFrontCounterClockwise);
+        const glm::mat4 world = instance.getWorldTransform().getMatrix();
+        const std::vector<glm::mat4>& placements = instance.getPlacements();
+        for (uint32_t placement = 0; placement < instance.getPlacementCount(); ++placement) {
+            const uint32_t record = slotRecordOffsets_[slot] + placement;
+            tlasRecordData_[record] = instanceRecord(placements.empty() ? world : world * placements[placement],
+                slot, mask, flags, drawn.hitRecordOffset, drawn.blas);
+            changedRecords.push_back(record);
+        }
+    }
+
+    if (reserveTable(*gpuDevice, meshRecords_, meshRecordData_.size()))
+        uploadTable(meshRecords_, meshRecordData_);
+    else
+        uploadTable(meshRecords_, meshRecordData_, sourceMeshesBefore);
+    if (reserveTable(*gpuDevice, instances_, count))
+        uploadTable(instances_, instanceData_);
+    else
+        uploadEntries(instances_, instanceData_, changedSlots);
+    if (reserveTable(*gpuDevice, tlasRecords_, recordCount))
+        uploadTable(tlasRecords_, tlasRecordData_);
+    else
+        uploadEntries(tlasRecords_, tlasRecordData_, changedRecords);
+
+    if (recordCount == 0) {
+        // Publishing an empty scene must retire the previous GPU snapshot.
+        // The ray-generation shader treats a null TLAS as an environment miss.
+        tlas = {};
+    } else if (!tlas || recordCount != tlasInstanceCount_ || rewriteAll
+               || bindings_.size() != bindingsBefore) {
+        std::vector<noorrhi::AccelerationStructure> referenced;
+        referenced.reserve(bindings_.size());
+        for (const MaterialBinding& drawn : bindings_)
+            if (drawn.blas)
+                referenced.push_back(drawn.blas);
+        tlas = gpuDevice->build_tlas(tlasRecords_.ptr(), recordCount, referenced);
+    } else if (!changedRecords.empty()) {
+        gpuDevice->update_tlas(tlas, tlasRecords_.ptr(), recordCount);
+    }
+    tlasInstanceCount_ = recordCount;
+
+    data.scene = sceneBuffers();
+    data.topLevelAS = tlas.handle().value;
+    if (std::exchange(hitRecordsChanged_, false))
+        onHitRecordsChanged(hitRecords_);
 }
 
 void Raytracer::render(const uint32_t frameIndex, const uint32_t sampleIndex)
 {
+    // Hosts that skip prepareFrameResources() (the offline path) have no
+    // frame open, so waiting for the device here is harmless.
+    if (renderWidth > imageWidth_ || renderHeight > imageHeight_)
+        prepareFrameResources();
+    static const auto clockStart = std::chrono::steady_clock::now();
+    data.gameTime = std::chrono::duration<float>(std::chrono::steady_clock::now() - clockStart).count();
     data.frameIndex = frameIndex;
     data.sampleIndex = sampleIndex;
     data.width = renderWidth;
@@ -632,273 +1073,6 @@ noorrhi::float4 Raytracer::readPositionAt(const uint32_t x, const uint32_t y)
     return position;
 }
 
-namespace
-{
-
-struct ProxyMesh { std::vector<glm::vec3> vertices; std::vector<uint32_t> indices; };
-
-float proxyInradius(const ProxyMesh& mesh)
-{
-    float result = std::numeric_limits<float>::max();
-    for (size_t face = 0; face < mesh.indices.size(); face += 3u)
-    {
-        const glm::vec3 a = mesh.vertices[mesh.indices[face]];
-        const glm::vec3 b = mesh.vertices[mesh.indices[face + 1u]];
-        const glm::vec3 c = mesh.vertices[mesh.indices[face + 2u]];
-        const glm::vec3 normal = glm::normalize(glm::cross(b - a, c - a));
-        result = std::min(result, std::abs(glm::dot(normal, a)));
-    }
-    if (!(result > 0.0f) || !std::isfinite(result))
-        throw std::runtime_error("Gaussian proxy has an invalid inradius");
-    return result;
-}
-
-ProxyMesh gaussianProxyMesh(const GaussianProxyType type)
-{
-    if (type == GaussianProxyType::Octahedron) {
-        return {{{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}},
-            {0,2,4, 0,5,2, 0,3,5, 0,4,3, 1,4,2, 1,2,5, 1,5,3, 1,3,4}};
-    }
-    const float phi = 0.5f * (1.0f + std::sqrt(5.0f));
-    ProxyMesh mesh{{{-1,phi,0},{1,phi,0},{-1,-phi,0},{1,-phi,0},
-        {0,-1,phi},{0,1,phi},{0,-1,-phi},{0,1,-phi},
-        {phi,0,-1},{phi,0,1},{-phi,0,-1},{-phi,0,1}},
-        {0,11,5, 0,5,1, 0,1,7, 0,7,10, 0,10,11,
-         1,5,9, 5,11,4, 11,10,2, 10,7,6, 7,1,8,
-         3,9,4, 3,4,2, 3,2,6, 3,6,8, 3,8,9,
-         4,9,5, 2,4,11, 6,2,10, 8,6,7, 9,8,1}};
-    for (glm::vec3& vertex : mesh.vertices)
-        vertex = glm::normalize(vertex);
-    const uint32_t subdivisions = type == GaussianProxyType::IcosphereLevel2
-        ? 2u : type == GaussianProxyType::Icosphere ? 1u : 0u;
-    for (uint32_t level = 0; level < subdivisions; ++level) {
-        std::map<std::pair<uint32_t, uint32_t>, uint32_t> midpoints;
-        auto midpoint = [&](uint32_t a, uint32_t b) {
-            if (a > b) std::swap(a, b);
-            const auto key = std::pair{a, b};
-            if (const auto found = midpoints.find(key); found != midpoints.end())
-                return found->second;
-            const uint32_t index = static_cast<uint32_t>(mesh.vertices.size());
-            mesh.vertices.push_back(glm::normalize(mesh.vertices[a] + mesh.vertices[b]));
-            midpoints.emplace(key, index);
-            return index;
-        };
-        std::vector<uint32_t> refined;
-        refined.reserve(mesh.indices.size() * 4u);
-        for (size_t face = 0; face < mesh.indices.size(); face += 3u) {
-            const uint32_t a = mesh.indices[face], b = mesh.indices[face + 1u],
-                c = mesh.indices[face + 2u];
-            const uint32_t ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
-            refined.insert(refined.end(), {a,ab,ca, b,bc,ab, c,ca,bc, ab,bc,ca});
-        }
-        mesh.indices = std::move(refined);
-    }
-    return mesh;
-}
-
-}
-
-
-void Raytracer::buildScene(Scene& scene)
-{
-    sourceMeshes_.clear();
-    gaussianAssets_.clear();
-    gaussianAssetCounts_.clear();
-    gaussianTransforms.clear();
-    tlasInstances.clear();
-    for (Mesh& mesh : scene.getMeshes())
-        mesh.upload(*gpuDevice);
-    std::unordered_map<const Mesh*, uint32_t> meshIndices;
-    for (const auto& instance : scene.getMeshInstances())
-    {
-        if (!instance || !instance->hasMesh())
-            continue;
-        const Mesh* asset = &instance->getMesh();
-        if (!meshIndices.contains(asset))
-        {
-            const uint32_t index = static_cast<uint32_t>(sourceMeshes_.size());
-            meshIndices.emplace(asset, index);
-            buildMesh(*asset);
-        }
-    }
-    buildGaussians(scene);
-    buildTopLevel(scene);
-    buildSceneData(scene);
-}
-
-void Raytracer::buildGaussians(const Scene& scene)
-{
-    std::vector<Gaussian> records;
-    std::vector<float> opacities;
-    std::vector<half> shCoefficients;
-    std::vector<uint32_t> instanceOffsets;
-    const uint32_t coefficientCount = sphericalHarmonicsCoefficientCount(
-        scene.getRenderSettings().gaussianRenderSphericalHarmonics);
-    gaussianShCoefficientCount_ = coefficientCount;
-
-    for (const auto& instance : scene.getGaussianInstances())
-    {
-        if (!instance || !instance->hasGaussianAsset())
-            continue;
-        instanceOffsets.push_back(static_cast<uint32_t>(records.size()));
-        const auto& source = instance->getGaussianAsset().getGaussians();
-        gaussianAssets_.push_back(&instance->getGaussianAsset());
-        gaussianAssetCounts_.push_back(source.size());
-        const glm::mat4 world = instance->getWorldTransform().getMatrix();
-        const glm::mat3 linear(world);
-        const size_t recordBegin = records.size();
-        records.insert(records.end(), source.begin(), source.end());
-        // GaussianAsset stores R*S and its center in object space.  The
-        // acceleration path historically applied the instance transform via
-        // the proxy TLAS transform; graphics API's compact Gaussian arrays are
-        // intentionally flat, so bake the same affine transform into each
-        // immutable record at upload time.  This preserves anisotropy while
-        // avoiding a second per-Gaussian instance buffer in the shader.
-        for (size_t recordIndex = recordBegin; recordIndex < records.size(); ++recordIndex)
-        {
-            Gaussian& gaussian = records[recordIndex];
-            for (uint32_t column = 0; column < 3; ++column)
-                gaussian.transform[column] = linear * gaussian.transform[column];
-            gaussian.transform[3] = glm::vec3(
-                world * glm::vec4(gaussian.transform[3], 1.0f));
-        }
-        for (const Gaussian& gaussian : source)
-        {
-            opacities.push_back(gaussian.opacity);
-            const uint32_t available = std::min(
-                gaussian.sphericalHarmonics.count, coefficientCount);
-            const size_t oldSize = shCoefficients.size();
-            shCoefficients.resize(oldSize + coefficientCount * 3u, half{0});
-            for (uint32_t coefficient = 0; coefficient < available; ++coefficient)
-            {
-                std::memcpy(shCoefficients.data() + oldSize + coefficient * 3u,
-                    gaussian.sphericalHarmonics.values.data() + coefficient * 3u,
-                    sizeof(half) * 3u);
-            }
-        }
-
-        // Use one shared tiny proxy BLAS for every Gaussian instance
-        // for every Gaussian. Expanding every transformed proxy into unique
-        // vertices turns a 1.6M-splat level-2 scene into 533M triangles.
-        gaussianTransforms.reserve(gaussianTransforms.size() + source.size());
-        for (std::size_t local = 0; local < source.size(); ++local)
-        {
-            const Gaussian& gaussian = records[recordBegin + local];
-            noorrhi::float4x4 transform{};
-            for (uint32_t row = 0; row < 3; ++row)
-            {
-                for (uint32_t column = 0; column < 3; ++column)
-                    transform.values[row][column] = gaussian.transform[column][row];
-                transform.values[row][3] = gaussian.transform[3][row];
-            }
-            transform.values[3][3] = 1.0f;
-            gaussianTransforms.push_back(transform);
-        }
-    }
-    gaussianCount_ = static_cast<uint32_t>(records.size());
-    if (records.empty())
-    {
-        gaussianShCoefficientCount_ = 0;
-        return;
-    }
-
-    const ProxyMesh unitProxy = gaussianProxyMesh(
-        scene.getRenderSettings().gaussianProxyType);
-    gaussianProxyType_ = static_cast<uint32_t>(scene.getRenderSettings().gaussianProxyType);
-    gaussianCutoffSigma_ = scene.getRenderSettings().gaussianCutoffSigma;
-    const float proxyScale = scene.getRenderSettings().gaussianCutoffSigma
-        / proxyInradius(unitProxy);
-    gaussianProxyTriangleCount_ = static_cast<uint32_t>(unitProxy.indices.size() / 3u);
-    std::vector<noorrhi::float3> positions;
-    positions.reserve(unitProxy.vertices.size());
-    for (const glm::vec3 vertex : unitProxy.vertices)
-        positions.push_back({vertex.x * proxyScale, vertex.y * proxyScale,
-            vertex.z * proxyScale});
-    gaussianProxy.positions = (*gpuDevice).buffer<noorrhi::float3>(positions.size());
-    gaussianProxy.indices = (*gpuDevice).buffer<std::uint32_t>(unitProxy.indices.size());
-    gaussianProxy.positions.upload(std::span<const noorrhi::float3>(positions));
-    gaussianProxy.indices.upload(std::span<const std::uint32_t>(unitProxy.indices));
-    const noorrhi::TriangleGeometry proxyGeometry{gaussianProxy.positions.ptr(),
-        gaussianProxy.indices.ptr(), gaussianProxyTriangleCount_, false};
-    gaussianProxy.blas = (*gpuDevice).build_blas(
-        std::span<const noorrhi::TriangleGeometry>(&proxyGeometry, 1));
-
-    const auto publish = [this]<class T>(noorrhi::Buffer<T>& buffer, const std::vector<T>& values) {
-        if (values.empty()) { buffer = {}; return; }
-        buffer = gpuDevice->buffer<T>(values.size());
-        buffer.upload(std::span<const T>(values));
-    };
-    gaussianRecordData_ = std::move(records);
-    gaussianOpacityData_ = std::move(opacities);
-    gaussianShCoefficientData_ = std::move(shCoefficients);
-    publish(gaussianRecords_, gaussianRecordData_);
-    publish(gaussianOpacities_, gaussianOpacityData_);
-    publish(gaussianShCoefficients_, gaussianShCoefficientData_);
-    publish(gaussianInstanceOffsets_, instanceOffsets);
-}
-
-void Raytracer::buildSceneData(const Scene& scene)
-{
-    std::vector<const Mesh*> assets;
-    std::unordered_map<const Mesh*, uint32_t> meshIndices;
-    for (const auto& instance : scene.getMeshInstances())
-    {
-        if (!instance || !instance->hasMesh())
-            continue;
-        const Mesh* asset = &instance->getMesh();
-        if (!meshIndices.contains(asset))
-        {
-            meshIndices.emplace(asset, static_cast<uint32_t>(assets.size()));
-            assets.push_back(asset);
-        }
-    }
-
-    std::vector<std::uint64_t> meshRecords;
-    meshRecords.reserve(assets.size());
-    for (const Mesh* asset : assets)
-    {
-        if (!asset->vertexBuffer || !asset->indexBuffer || !asset->blas)
-            throw std::runtime_error("Mesh GPU data was not initialized: " + asset->getName());
-        meshRecords.push_back(asset->ptr().address);
-    }
-    std::vector<nr::graphics::Instance> instanceRecords;
-    for (const auto& instance : scene.getMeshInstances())
-    {
-        if (!instance || !instance->hasMesh())
-            continue;
-        nr::graphics::Instance record{};
-        const glm::mat4 transform = instance->getWorldTransform().getMatrix();
-        // Slang is compiled row-major. Store the conventional row-major
-        // affine matrix while GLM remains column-major on the host.
-        for (uint32_t row = 0; row < 3; ++row)
-            for (uint32_t column = 0; column < 4; ++column)
-                record.objectToWorld[row * 4u + column] = transform[column][row];
-        record.meshIndex = meshIndices.at(&instance->getMesh());
-        instanceRecords.push_back(record);
-    }
-
-    instanceData_ = std::move(instanceRecords);
-    meshRecordData_ = std::move(meshRecords);
-    uploadMeshRecords();
-    uploadInstances();
-}
-
-void Raytracer::uploadMeshRecords()
-{
-    if (meshRecordData_.empty()) { meshRecords_ = {}; return; }
-    if (!meshRecords_ || meshRecords_.size() != meshRecordData_.size())
-        meshRecords_ = gpuDevice->buffer<std::uint64_t>(meshRecordData_.size());
-    meshRecords_.upload(std::span<const std::uint64_t>(meshRecordData_));
-}
-
-void Raytracer::uploadInstances()
-{
-    if (instanceData_.empty()) { instances_ = {}; return; }
-    if (!instances_ || instances_.size() != instanceData_.size())
-        instances_ = gpuDevice->buffer<nr::graphics::Instance>(instanceData_.size());
-    instances_.upload(std::span<const nr::graphics::Instance>(instanceData_));
-}
-
 nr::graphics::Scene Raytracer::sceneBuffers() const
 {
     const auto address = []<class T>(const noorrhi::Buffer<T>& buffer) {
@@ -910,188 +1084,4 @@ nr::graphics::Scene Raytracer::sceneBuffers() const
         static_cast<uint32_t>(meshRecordData_.size()),
         static_cast<uint32_t>(instanceData_.size()),
     };
-}
-
-uint32_t Raytracer::buildMesh(const Mesh& asset)
-{
-    if (!asset.blas)
-        throw std::runtime_error("Mesh GPU data was not initialized: " + asset.getName());
-    sourceMeshes_.push_back(&asset);
-    return static_cast<uint32_t>(sourceMeshes_.size() - 1);
-}
-
-std::vector<HitRecord> Raytracer::hitRecords() const
-{
-    std::vector<HitRecord> records;
-    for (const Mesh* mesh : sourceMeshes_)
-        for (const MeshSection& section : mesh->getSections()) {
-            const MaterialShaderProgram& program = mesh->getMaterial(section.slot).shaderProgram;
-            const auto found = std::ranges::find(materialShaderPrograms_, program.shader);
-            const uint32_t shaders = found == materialShaderPrograms_.end() ? ~0u
-                : static_cast<uint32_t>(found - materialShaderPrograms_.begin());
-            for (uint32_t rayType = 0; rayType < nr::graphics::RaytracingRayTypeCount; ++rayType)
-                records.push_back({HitRecord::Kind::Section, rayType, shaders, program.transparent});
-        }
-    for (uint32_t rayType = 0; rayType < nr::graphics::RaytracingRayTypeCount; ++rayType)
-        records.push_back({HitRecord::Kind::Gaussian, rayType});
-    return records;
-}
-
-void Raytracer::buildTopLevel(const Scene& scene)
-{
-    // Each mesh's instances address its sections' records; the Gaussian
-    // proxies' records follow every mesh's.
-    std::vector<uint32_t> meshRecordOffsets;
-    uint32_t recordCount = 0;
-    for (const Mesh* mesh : sourceMeshes_) {
-        meshRecordOffsets.push_back(recordCount);
-        recordCount += static_cast<uint32_t>(mesh->getSections().size())
-            * nr::graphics::RaytracingRayTypeCount;
-    }
-    std::unordered_map<const Mesh*, uint32_t> meshIndices;
-    tlasInstances.clear();
-    meshInstanceAssetIndices.clear();
-    uint32_t meshInstanceIndex = 0;
-    for (const auto& instance : scene.getMeshInstances())
-    {
-        if (!instance || !instance->hasMesh())
-            continue;
-        const Mesh* asset = &instance->getMesh();
-        auto found = meshIndices.find(asset);
-        if (found == meshIndices.end())
-        {
-            // The build order is the same as the first pass. Reconstructing
-            // this map from the scene keeps the records compact without
-            // exposing mutable renderer state through Scene.
-            const uint32_t index = static_cast<uint32_t>(meshIndices.size());
-            found = meshIndices.emplace(asset, index).first;
-        }
-        tlasInstances.push_back({asset->blas,
-            instance->getWorldTransform().getGpuTransform(),
-            meshInstanceIndex++, meshRecordOffsets[found->second],
-            static_cast<std::uint8_t>(nr::graphics::RaytracingMaskMesh)});
-        meshInstanceAssetIndices.push_back(found->second);
-    }
-    // instanceCustomIndex is 24 bits, so it cannot address more than 16.7M
-    // splats. The hit shaders instead recover the ID from the traversal-derived
-    // InstanceIndex(), which is not stored in the instance record and therefore
-    // carries no bit-width limit. This mirrors the OptiX backend, which read
-    // optixGetInstanceIndex() and left OptixInstance::instanceId at zero.
-    for (uint32_t gaussianId = 0; gaussianId < gaussianTransforms.size(); ++gaussianId)
-    {
-        tlasInstances.push_back({gaussianProxy.blas, gaussianTransforms[gaussianId],
-            0u, recordCount, static_cast<std::uint8_t>(nr::graphics::RaytracingMaskGaussian)});
-    }
-    meshInstanceCount_ = meshInstanceIndex;
-    gaussianInstanceCount_ = static_cast<uint32_t>(scene.getGaussianInstances().size());
-    instanceCount_ = static_cast<uint32_t>(tlasInstances.size());
-    if (tlasInstances.empty()) {
-        // Publishing an empty scene must retire the previous GPU snapshot.
-        // The ray-generation shader treats a null TLAS as an environment miss.
-        tlas = {};
-        return;
-    }
-    tlas = (*gpuDevice).build_tlas(std::span<const noorrhi::Instance>(tlasInstances));
-}
-
-bool Raytracer::updateMutableData(const Scene& scene, const bool updateGaussians)
-{
-    // Validate every topology identity before touching any live host/GPU data.
-    uint32_t meshCount = 0;
-    for (const auto& instance : scene.getMeshInstances()) {
-        if (!instance || !instance->hasMesh()) continue;
-        if (meshCount >= meshInstanceAssetIndices.size()
-            || &instance->getMesh() != sourceMeshes_[meshInstanceAssetIndices[meshCount]])
-            return false;
-        ++meshCount;
-    }
-    const auto& gaussianInstances = scene.getGaussianInstances();
-    if (meshCount != meshInstanceCount_ || gaussianInstances.size() != gaussianAssets_.size())
-        return false;
-    for (std::size_t i = 0; i < gaussianInstances.size(); ++i) {
-        const auto& instance = gaussianInstances[i];
-        if (!instance || !instance->hasGaussianAsset()
-            || &instance->getGaussianAsset() != gaussianAssets_[i]
-            || instance->getGaussianAsset().getGaussians().size() != gaussianAssetCounts_[i])
-            return false;
-    }
-    const auto coefficientCount = sphericalHarmonicsCoefficientCount(
-        scene.getRenderSettings().gaussianRenderSphericalHarmonics);
-    if (gaussianCount_ && (coefficientCount != gaussianShCoefficientCount_
-        || static_cast<uint32_t>(scene.getRenderSettings().gaussianProxyType) != gaussianProxyType_
-        || scene.getRenderSettings().gaussianCutoffSigma != gaussianCutoffSigma_))
-        return false;
-
-    const auto assign = []<class T>(std::vector<T>& owner, std::size_t index, const T& value) {
-        if (std::memcmp(&owner[index], &value, sizeof(T)) == 0) return false;
-        owner[index] = value;
-        return true;
-    };
-    bool refit = false;
-    for (std::size_t index = 0; index < sourceMeshes_.size(); ++index) {
-        assign(meshRecordData_, index, sourceMeshes_[index]->ptr().address);
-    }
-    uint32_t meshIndex = 0;
-    for (const auto& instance : scene.getMeshInstances()) {
-        if (!instance || !instance->hasMesh()) continue;
-        nr::graphics::Instance record{};
-        const glm::mat4 transform = instance->getWorldTransform().getMatrix();
-        for (uint32_t row = 0; row < 3; ++row)
-            for (uint32_t column = 0; column < 4; ++column)
-                record.objectToWorld[row * 4u + column] = transform[column][row];
-        record.meshIndex = meshInstanceAssetIndices[meshIndex];
-        if (assign(instanceData_, meshIndex, record)) {
-            tlasInstances[meshIndex].transform = instance->getWorldTransform().getGpuTransform();
-            refit = true;
-        }
-        tlasInstances[meshIndex].blas = instance->getMesh().blas;
-        refit = true;
-        ++meshIndex;
-    }
-
-    if (updateGaussians) {
-        std::size_t index = 0;
-        for (const auto& instance : gaussianInstances) {
-            const auto& source = instance->getGaussianAsset().getGaussians();
-            const glm::mat4 world = instance->getWorldTransform().getMatrix();
-            const glm::mat3 linear(world);
-            for (const Gaussian& original : source) {
-                Gaussian record = original;
-                for (uint32_t column = 0; column < 3; ++column)
-                    record.transform[column] = linear * original.transform[column];
-                record.transform[3] = glm::vec3(world * glm::vec4(original.transform[3], 1.0f));
-                assign(gaussianRecordData_, index, record);
-                assign(gaussianOpacityData_, index, original.opacity);
-                const auto available = std::min(original.sphericalHarmonics.count, coefficientCount);
-                for (uint32_t coefficient = 0; coefficient < coefficientCount * 3u; ++coefficient) {
-                    const half value = coefficient < available * 3u
-                        ? original.sphericalHarmonics.values[coefficient] : half{0};
-                    assign(gaussianShCoefficientData_, index * coefficientCount * 3u + coefficient, value);
-                }
-                noorrhi::float4x4 transform{};
-                for (uint32_t row = 0; row < 3; ++row) {
-                    for (uint32_t column = 0; column < 3; ++column)
-                        transform.values[row][column] = record.transform[column][row];
-                    transform.values[row][3] = record.transform[3][row];
-                }
-                transform.values[3][3] = 1.0f;
-                auto& previous = tlasInstances[meshInstanceCount_ + index].transform;
-                if (std::memcmp(&previous, &transform, sizeof(transform)) != 0) {
-                    previous = transform;
-                    refit = true;
-                }
-                ++index;
-            }
-        }
-    }
-    uploadInstances();
-    uploadMeshRecords();
-    if (!gaussianRecordData_.empty()) {
-        gaussianRecords_.upload(std::span<const Gaussian>(gaussianRecordData_));
-        gaussianOpacities_.upload(std::span<const float>(gaussianOpacityData_));
-        gaussianShCoefficients_.upload(std::span<const half>(gaussianShCoefficientData_));
-    }
-    if (tlas && refit)
-        (*gpuDevice).update_tlas(tlas, std::span<const noorrhi::Instance>(tlasInstances));
-    return true;
 }

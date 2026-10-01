@@ -18,6 +18,10 @@ public:
     float getSoftRadius() const override { return 0.0f; }
     void setSoftRadius(float) override {}
     void setRectSize(float width, float height);
+    void setBarnDoor(float angleDegrees, float length);
+    void setUnits(uint32_t units) override { data.units = units; updateSceneRecord(); }
+    void setControls(const LightControls& controls) override { data.controls = controls; updateSceneRecord(); }
+    void setFalloff(const LightFalloff& falloff) { data.falloff = falloff; updateSceneRecord(); }
 
 protected:
     void updateTransformData(const Transform& world) override;

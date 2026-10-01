@@ -78,8 +78,8 @@ public:
     void updateData();
     void prepareForRender();
     Camera cloneBaseState() const;
-    float focalLengthMmForFovDegrees(float fovDegrees) const;
-    float fovDegreesForFocalLengthMm(float focalLengthMm) const;
+    static float focalLengthMmForFovDegrees(float fovDegrees, float filmWidthMm);
+    static float fovDegreesForFocalLengthMm(float focalLengthMm, float filmWidthMm);
 
 };
 

@@ -1,17 +1,20 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include <noorrhi/noorrhi.hpp>
 
-// Creates a shader from SPIR-V embedded with #embed into a byte array.
-template<std::size_t Size>
-noorrhi::Shader loadShader(noorrhi::Device& device, const unsigned char (&bytes)[Size])
+#include "Realtime/EmbeddedShaders.h"
+
+inline noorrhi::Shader loadShader(noorrhi::Device& device, const std::string& path,
+    const std::string_view entryPoint = "main")
 {
-    return device.create_shader(std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(bytes), Size), "main");
+    const std::vector<std::uint32_t> words = embeddedSpirv(path);
+    return device.create_shader(std::as_bytes(std::span(words)), entryPoint);
 }
 
 constexpr uint32_t divideRoundingUp(const uint32_t value, const uint32_t divisor)

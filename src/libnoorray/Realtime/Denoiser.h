@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -18,10 +19,24 @@ struct CommonSettings;
 struct Instance;
 }
 
-// NVIDIA's REBLUR or RELAX diffuse + specular denoiser (external/NRD). It
-// reads the diffuse, specular, normal-roughness, view Z and motion targets and
-// writes its own outputs, which the composite reads. Off, the composite reads
-// the diffuse and specular targets directly.
+// What the denoiser runs, and the lighting rectangles up to `extent` its
+// images hold.
+struct DenoiserLayout
+{
+    Extent extent;
+    DenoiserMode mode{DenoiserMode::Off};
+    bool sphericalHarmonics{};
+    // The translucent layer set has its own denoiser.
+    bool layers{};
+
+    bool operator==(const DenoiserLayout&) const = default;
+};
+
+// NVIDIA's REBLUR or RELAX diffuse + specular denoiser (external/NRD), in its
+// radiance or its spherical-harmonics (SH) form. It reads the diffuse,
+// specular, normal-roughness, view Z and motion targets (plus the SH1 targets
+// in SH form) and writes its own outputs, which the composite reads. Off, the
+// composite reads the diffuse and specular targets directly.
 //
 // NRD describes compute pipelines built from its own SPIR-V, which binds
 // resources through classic descriptor sets rather than NoorRHI's descriptor
@@ -38,30 +53,47 @@ public:
     Denoiser(const Denoiser&) = delete;
     Denoiser& operator=(const Denoiser&) = delete;
 
-    void setMode(DenoiserMode mode) { mode_ = mode; }
-    DenoiserMode mode() const { return mode_; }
+    // Creates NRD with only the denoisers the layout runs, with their pools
+    // and outputs; off, it holds no GPU memory at all. The GPU must be idle:
+    // the previous configuration's resources are destroyed.
+    void configure(const DenoiserLayout& layout);
+    DenoiserMode mode() const { return layout_.mode; }
+    // Whether the SH form runs. Always false while the denoiser is off.
+    bool sphericalHarmonics() const
+    {
+        return layout_.sphericalHarmonics && layout_.mode != DenoiserMode::Off;
+    }
 
-    // Allocates NRD's texture pools and the outputs at the render resolution.
-    // The GPU must be idle: resources of the previous size are destroyed.
-    void resize(Extent render);
     // What the composite reads and how the image pass packs its signals.
     nr::graphics::DenoiserArgs args(const RenderTargets& targets) const;
-    // Denoises the diffuse and specular targets into the outputs.
+    // Denoises the diffuse and specular lighting targets into the outputs.
     void record(const FrameContext& frame, const RenderTargets& targets);
 
 private:
     struct Texture;
     struct Resources;
 
+    // The denoisers of the configured layout: the main one, then the layer's.
+    std::vector<std::uint32_t> identifiers() const;
     void createPipelines();
+    void createPools();
     void destroyPools();
+    // Releases everything configure() created.
+    void destroyInstance();
     void transitionPoolsToGeneral(std::uintptr_t commandBuffer);
     std::uint64_t descriptorSet(std::uint16_t pipelineIndex,
         const std::vector<std::uint64_t>& views);
     void dispatch(const nrd::CommonSettings& settings, const RenderTargets& targets);
+    // Sizes the histories to a fixed time at the current frame rate.
+    void updateHistoryLength(float frameTimeMilliseconds);
 
     noorrhi::Device& device_;
-    DenoiserMode mode_{RenderSettings{}.denoiserMode};
+    DenoiserLayout layout_;
+    // Exponentially smoothed, so the history length does not follow every
+    // frame-time spike.
+    float smoothedFrameTimeMilliseconds_{};
+    // REBLUR's and RELAX's history lengths as last set.
+    std::array<std::uint32_t, 2> historyFrames_{};
     nrd::Instance* instance_{};
     std::unique_ptr<Resources> resources_;
     std::vector<Texture> pool_;
@@ -71,7 +103,10 @@ private:
     std::vector<std::uint64_t> descriptorPools_;
     noorrhi::Image<std::byte> diffuseOutput_;
     noorrhi::Image<std::byte> specularOutput_;
-    Extent extent_;
+    noorrhi::Image<std::byte> diffuseSh1Output_;
+    noorrhi::Image<std::byte> specularSh1Output_;
+    noorrhi::Image<std::byte> layerDiffuseOutput_;
+    noorrhi::Image<std::byte> layerSpecularOutput_;
     std::uint32_t frameIndex_{};
     std::uint64_t constantOffset_{};
     std::uint64_t previousConstantOffset_{};

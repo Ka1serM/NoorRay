@@ -40,15 +40,18 @@ constexpr float ViewportBillboardPickScale = 0.8f;
 struct ViewportInputs
 {
     noorrhi::TextureHandle color{};
+    // Only their own buffer views read these, which show black while the
+    // renderer does not write them (a zero handle).
     noorrhi::TextureHandle albedo{};
     noorrhi::TextureHandle normal{};
     noorrhi::TextureHandle crypto{};
     noorrhi::TextureHandle position{};
     noorrhi::GpuPtr<std::uint32_t> overdraw{};
 
+    // What every view needs.
     explicit operator bool() const noexcept
     {
-        return color && albedo && normal && crypto && position && overdraw.address;
+        return color && crypto && overdraw.address;
     }
 };
 

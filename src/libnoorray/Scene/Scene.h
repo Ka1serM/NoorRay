@@ -12,8 +12,8 @@
 #include "Materials/MaterialX/MaterialXFwd.h"
 #include "Scene/Handle.h"
 #include "Shared/RenderSettings.h"
+#include "Materials/Material.h"
 #include "Mesh/Assets/Mesh.h"
-#include "Mesh/Assets/Gaussian.h"
 #include "Shared/Light.h"
 #include "Texture/Texture.h"
 #include "Shared/Math.h"
@@ -28,7 +28,6 @@
 
 class SceneObject;
 class MeshInstance;
-class GaussianInstance;
 class CameraInstance;
 class LightInstance;
 enum DirtyFlag : uint8_t {
@@ -39,18 +38,32 @@ enum DirtyFlag : uint8_t {
     EnvironmentCdf = 1 << 4,
     Lights       = 1 << 5,
     CameraState  = 1 << 6,
-    GaussianData = 1 << 7,
+    Materials    = 1 << 7,
+};
+
+// Receives a scene's changes as they are made, on the thread making them.
+class SceneListener {
+public:
+    virtual ~SceneListener() = default;
+    virtual void onHierarchyChanged() {}
+    virtual void onActiveObjectChanged() {}
+    virtual void onActiveCameraChanged() {}
+    virtual void onTexturesChanged() {}
+    // The object's own transform changed; a parent's move does not count.
+    virtual void onObjectTransformChanged(SceneObjectHandle object) {}
 };
 
 class Scene {
     friend class LightInstance;
+    friend class SceneObject;
+    friend class MeshInstance;
+    friend class Mesh;
 
     std::deque<Texture> textures;
     uint64_t textureRevision_{1};
     uint64_t materialRevision_{1};
     std::deque<Material> materials;
     std::deque<Mesh> meshes;
-    std::deque<GaussianAsset> gaussianAssets;
 
     // Per-material MaterialX source file paths. Parallel to the materials
     // vector: entry i is the .mtlx path for materials[i]. Empty means the
@@ -74,14 +87,6 @@ class Scene {
     std::vector<RectLight> rectLights;
     std::vector<DirectionalLight> directionalLights;
 
-    // Render-ready Gaussian attributes shared with the graphics API renderer.
-    std::vector<float> gaussianOpacities;
-    // Coefficient-major RGB binary16 values. Opacity remains float because it
-    // directly controls stochastic acceptance and benefits less from packing.
-    std::vector<half> gaussianShCoeffs;
-    std::vector<uint32_t> gaussianInstanceOffsets;
-    uint32_t gaussianShCoefficientCount{MaxSphericalHarmonicsCoefficientCount};
-
     // Objects live in a dense array so iteration and the TLAS build stay cache
     // friendly. Each slot records where its object currently sits, which is
     // what gives SceneObjectHandle a stable, generation-checked identity.
@@ -93,11 +98,31 @@ class Scene {
     std::vector<std::shared_ptr<SceneObject>> sceneObjects;
     std::vector<ObjectSlot> objectSlots;
     std::vector<uint32_t> freeObjectSlots;
-    std::vector<std::shared_ptr<GaussianInstance>> gaussianInstances;
-    uint32_t gaussianCount{};
 
     std::unordered_map<std::string, Mesh*> meshesByPath_;
     std::unordered_map<std::string, Texture*> texturesByKey_;
+
+    // Mesh instances that have geometry, densely, in the order the renderer
+    // numbers them for the TLAS and Cryptomatte. Removal moves the last slot
+    // into the hole, so adding, moving and removing each cost O(1).
+    std::vector<MeshInstance*> meshInstanceSlots_;
+    // What changed since the renderer publishing this scene last took it,
+    // each entry listed once.
+    std::vector<uint32_t> changedMeshInstanceSlots_;
+    std::vector<bool> meshInstanceSlotListed_;
+    std::vector<Mesh*> changedMeshes_;
+    std::vector<bool> meshListed_;
+    std::vector<uint32_t> changedMaterials_;
+    std::vector<bool> materialListed_;
+    // Materials the MaterialX runtime has yet to compile, each listed once.
+    std::vector<uint32_t> materialsToCompile_;
+    std::vector<bool> materialCompileListed_;
+    // Light objects by light type, parallel to the typed light records.
+    std::array<std::vector<LightInstance*>, 4> lightObjects_;
+    // Every root, and objects that were roots since getRootObjects() last ran;
+    // that call drops the stale entries, so each object is dropped once.
+    mutable std::vector<SceneObjectHandle> rootCandidates_;
+    uint64_t clearEpoch_{};
 
     std::shared_ptr<CameraInstance> viewportCamera;
     std::weak_ptr<CameraInstance> activeCamera;
@@ -109,6 +134,8 @@ class Scene {
     SceneObjectHandle activeObject;
     uint8_t dirtyFlags = 0;
     std::array<uint64_t, 8> changeRevisions_{};
+
+    std::vector<SceneListener*> listeners_;
 
     std::weak_ptr<SceneObject> copiedObject;
     std::atomic<bool> gpuSyncPending_{false};
@@ -126,14 +153,28 @@ class Scene {
     SceneObjectHandle allocateObjectSlot(uint32_t denseIndex);
     void releaseObjectSlot(SceneObjectHandle handle);
     uint32_t registerObject(std::unique_ptr<SceneObject> sceneObject);
-    void rebuildGaussianInstanceCache();
     bool remove(SceneObject* objToRemove);
     void reparent(SceneObject* objectToMove, SceneObject* newParent);
     void notifyGeometryChanged();
     void notifyMaterialChanged() { ++materialRevision_; }
+    void addMeshInstanceSlot(MeshInstance& instance);
+    void removeMeshInstanceSlot(MeshInstance& instance);
+    void markMeshInstanceChanged(uint32_t slot);
+    void markMeshChanged(Mesh& mesh);
+    void markMaterialChanged(uint32_t materialIndex);
+    void markMaterialForCompile(uint32_t materialIndex);
+    void addRootCandidate(SceneObject& object) const;
+    void notifyHierarchyChanged();
+    void notifyTexturesChanged();
+    void notifyObjectTransformChanged(const SceneObject& object);
+    void assignActiveObject(SceneObjectHandle handle);
 public:
     Scene();
     ~Scene();
+
+    // The listener must stay alive until it is removed.
+    void addListener(SceneListener& listener) { listeners_.push_back(&listener); }
+    void removeListener(SceneListener& listener) { std::erase(listeners_, &listener); }
 
     // Marks that CPU-side scene edits must be published before the next GPU
     // snapshot. The session coalesces many UI edits into one wait at the
@@ -147,7 +188,8 @@ public:
 
     // Object lifetime
     void clear();
-    SceneObjectHandle add(std::unique_ptr<SceneObject> sceneObject);
+    // With a parent, the object's transform is relative to that parent.
+    SceneObjectHandle add(std::unique_ptr<SceneObject> sceneObject, SceneObjectHandle parent = {});
     bool removeObject(SceneObjectHandle handle);
     bool replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> newObject);
 
@@ -159,15 +201,14 @@ public:
     // here, so every material compiles through the same MaterialX shader
     // pipeline as authored graphs. A null document is allowed: it means an
     // un-authored slot whose document is lowered on demand from the default
-    // material.
-    Material* addMaterial(MaterialX::DocumentPtr material);
+    // material. `flags` are MaterialFlag* bits (Shared/Material.h).
+    Material* addMaterial(MaterialX::DocumentPtr material, uint32_t flags = 0);
     // Replaces the document of an existing material slot in place, leaving the
     // slot's compiled program untouched. Used by live-editing paths (Hydra)
     // that republish a document while a replacement compiles in the background.
     // A null document clears the slot's authored graph (the default MaterialX
     // material is lowered on demand).
     void updateMaterialDocument(Material* material, MaterialX::DocumentPtr document);
-    GaussianAsset* add(GaussianAsset gaussianAsset);
     Texture* addTexture(Texture texture);
     void invalidateMaterial(Material* material);
     void reserveForImport(
@@ -180,7 +221,7 @@ public:
     void copyObject(SceneObjectHandle handle);
     void paste();
     // Deep-copies source and its children, sharing (not duplicating) every
-    // mesh/material/texture/Gaussian resource the originals reference -- the
+    // mesh/material/texture resource the originals reference -- the
     // clones are new SceneObjects/MeshInstances, not new GPU uploads. Used by
     // paste() and by SceneImporter's file-level import cache to instance a
     // previously imported file without re-parsing or re-uploading it.
@@ -193,12 +234,27 @@ public:
     const std::vector<std::shared_ptr<SceneObject>>& getSceneObjects() const { return sceneObjects; }
     uint64_t getHierarchyRevision() const { return hierarchyRevision; }
     std::vector<std::shared_ptr<SceneObject>> getRootObjects() const;
-    std::vector<std::shared_ptr<MeshInstance>> getMeshInstances() const;
-    uint32_t getActiveCryptomatteId(uint32_t selectedGaussianIndex) const;
+    // The mesh instances with geometry, by the slot the renderer draws them
+    // in; a slot is also the instance's Cryptomatte id.
+    const std::vector<MeshInstance*>& getMeshInstanceSlots() const { return meshInstanceSlots_; }
+    // What the renderer must republish since its last call: instance slots
+    // that were added, refilled, transformed or given other materials, meshes
+    // whose geometry changed, and materials that were added or recompiled. One
+    // renderer publishes a scene, so taking them empties the lists.
+    std::vector<uint32_t> takeChangedMeshInstanceSlots();
+    std::vector<Mesh*> takeChangedMeshes();
+    std::vector<uint32_t> takeChangedMaterials();
+    // Materials added or invalidated since the last call, for the one
+    // material compiler of this scene.
+    std::vector<uint32_t> takeMaterialsToCompile();
+    // Advances whenever clear() empties the scene, which invalidates every
+    // index a consumer holds.
+    uint64_t getClearEpoch() const { return clearEpoch_; }
+    std::vector<const LightInstance*> getLightObjects() const;
+    uint32_t getActiveCryptomatteId() const;
     // Inverse of getActiveCryptomatteId: the object a rendered id belongs to,
-    // or nullptr for the background and stale ids. Sets gaussianIndex to the
-    // flattened splat index when the id is a Gaussian, ~0u otherwise.
-    SceneObject* findCryptomatteObject(uint32_t id, uint32_t& gaussianIndex) const;
+    // or nullptr for the background and stale ids.
+    SceneObject* findCryptomatteObject(uint32_t id) const;
     Texture* findTexture(const std::string& key) const;
     Mesh* findMesh(const std::string& path) const;
     // Returns the root of a previously imported file's hierarchy (see
@@ -217,17 +273,6 @@ public:
     uint32_t getMaterialIndex(const Material* material) const;
     const Material& getMaterial(const Material* material) const { return *material; }
     Material& getMaterial(Material* material) { return *material; }
-    const std::deque<GaussianAsset>& getGaussianAssets() const { return gaussianAssets; }
-    std::deque<GaussianAsset>& getGaussianAssets() { return gaussianAssets; }
-    const std::vector<std::shared_ptr<GaussianInstance>>& getGaussianInstances() const {
-        return gaussianInstances;
-    }
-    uint32_t getGaussianCount() const { return gaussianCount; }
-    void buildGaussianRenderData();
-    const float* getGaussianOpacities() const { return gaussianOpacities.data(); }
-    const half* getGaussianShCoeffs() const { return gaussianShCoeffs.data(); }
-    const uint32_t* getGaussianInstanceOffsets() const { return gaussianInstanceOffsets.data(); }
-    uint32_t getGaussianShCoefficientCount() const { return gaussianShCoefficientCount; }
     const std::deque<Texture>& getTextures() const { return textures; }
     std::deque<Texture>& getTextures() { return textures; }
     Texture* getTexture(uint32_t index) {
@@ -247,7 +292,7 @@ public:
     // Selects a live scene object. An invalid/empty handle clears selection;
     // a stale handle is rejected so UI models cannot publish dangling state.
     bool setActiveObject(SceneObjectHandle handle);
-    void clearActiveObject() { activeObject = {}; }
+    void clearActiveObject() { assignActiveObject({}); }
     SceneObjectHandle getActiveObjectHandle() const { return activeObject; }
     SceneObject* getActiveObject() const { return findObjectPtr(activeObject).get(); }
     std::shared_ptr<SceneObject> getActiveObjectPtr() const { return findObjectPtr(activeObject); }
@@ -312,7 +357,7 @@ public:
     void clearDirtyFlag(DirtyFlag flag) { dirtyFlags &= ~flag; }
     bool isDirty(DirtyFlag flag) const { return (dirtyFlags & flag) != 0; }
     bool isAnyDirty() const { return dirtyFlags & (TLAS | Meshes | Textures
-        | EnvironmentCdf | Lights | CameraState | GaussianData); }
+        | EnvironmentCdf | Lights | CameraState | Materials); }
     void clearDirtyFlags() { dirtyFlags = 0; }
     void clearAccumulationDirtyFlag() { dirtyFlags &= ~Accumulation; }
 

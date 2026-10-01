@@ -1,8 +1,8 @@
 #pragma once
 
-// Builds the FidelityFX SDK (external/FidelityFX-SDK) on Linux. The SDK's
-// host code is written against MSVC: it relies on a few *_s string
-// functions and on standard headers that MSVC includes transitively. This
+// Builds the FidelityFX SDK (external/FidelityFX-SDK). Its host code uses
+// standard headers it never includes, and, written against MSVC, a few *_s
+// string functions that other compilers lack. This
 // header is force-included into the SDK sources and included first by any
 // NoorRay file that uses SDK headers, so both sides see identical types.
 
@@ -19,6 +19,7 @@
 #include <locale>
 #include <string>
 
+#if !defined(_MSC_VER)
 #ifndef _countof
 template<class T, std::size_t N>
 constexpr std::size_t ffxPlatformCountOf(const T (&)[N]) noexcept { return N; }
@@ -91,3 +92,4 @@ inline int sprintf_s(char* destination, const std::size_t size, const char* form
 #include <FidelityFX/host/ffx_util.h>
 #undef FFX_SDK_DEFAULT_CONTEXT_SIZE
 #define FFX_SDK_DEFAULT_CONTEXT_SIZE (1024 * 256)
+#endif

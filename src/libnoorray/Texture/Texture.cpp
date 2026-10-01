@@ -126,17 +126,19 @@ Texture::Texture(std::string textureName, std::vector<uint8_t>&& data,
 {
 }
 
-Texture::Texture(std::string textureName, std::vector<uint8_t>&& data,
-    const int textureWidth, const int textureHeight,
-    const noorrhi::ImageFormat textureFormat)
+Texture::Texture(std::string textureName, const std::span<const std::byte> data,
+    std::shared_ptr<const void> owner, const int textureWidth, const int textureHeight,
+    const noorrhi::ImageFormat textureFormat, const int textureMipLevels)
     : name(std::move(textureName))
     , width(textureWidth)
     , height(textureHeight)
+    , mipLevels(textureMipLevels)
     , gpuFormat(textureFormat)
-    , bytePixels(std::make_shared<const std::vector<uint8_t>>(std::move(data)))
+    , gpuTexels(data)
+    , gpuTexelOwner(std::move(owner))
 {
     path = name;
-    if (width <= 0 || height <= 0)
+    if (width <= 0 || height <= 0 || mipLevels <= 0)
         throw std::runtime_error("Texture has invalid dimensions: " + name);
 }
 
@@ -227,8 +229,8 @@ void Texture::upload(noorrhi::Device& device)
         throw std::runtime_error("texture has invalid dimensions: " + name);
     if (gpuFormat) {
         image = device.image<std::byte>(width, height, noorrhi::ImageUsage::Sampled,
-            *gpuFormat);
-        image.upload(std::as_bytes(std::span(*bytePixels)));
+            *gpuFormat, static_cast<std::uint32_t>(mipLevels));
+        image.upload(gpuTexels);
         return;
     }
     // getPixels() exposes linear RGBA floats for all host encodings; uploading

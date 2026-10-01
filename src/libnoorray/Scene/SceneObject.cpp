@@ -48,31 +48,31 @@ void SceneObject::removeChild(const SceneObject* child) {
 void SceneObject::setPosition(const vec3& position) {
     if (scene) scene->synchronizeBeforeMutation();
     transform.setPosition(position);
-    onTransformUpdated();
+    transformChanged();
 }
 
 void SceneObject::setRotation(const quat& rotation) {
     if (scene) scene->synchronizeBeforeMutation();
     transform.setRotation(rotation);
-    onTransformUpdated();
+    transformChanged();
 }
 
 void SceneObject::setRotationEuler(const vec3& rotation) {
     if (scene) scene->synchronizeBeforeMutation();
     transform.setRotationEuler(rotation);
-    onTransformUpdated();
+    transformChanged();
 }
 
 void SceneObject::setScale(const vec3& scale) {
     if (scene) scene->synchronizeBeforeMutation();
     transform.setScale(scale);
-    onTransformUpdated();
+    transformChanged();
 }
 
 void SceneObject::setLocalTransform(const Transform& transf) {
     if (scene) scene->synchronizeBeforeMutation();
     transform = transf;
-    onTransformUpdated();
+    transformChanged();
 }
 
 void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
@@ -84,7 +84,7 @@ void SceneObject::setWorldTransformFromMatrix(const mat4& worldMatrix) {
     } else
         transform.setFromMatrix(worldMatrix);
 
-    onTransformUpdated();
+    transformChanged();
 }
 
 
@@ -100,6 +100,11 @@ Transform SceneObject::getWorldTransform() const {
     Transform worldTransform;
     worldTransform.setFromMatrix(worldMatrix);
     return worldTransform;
+}
+
+void SceneObject::transformChanged() {
+    onTransformUpdated();
+    if (scene) scene->notifyObjectTransformChanged(*this);
 }
 
 void SceneObject::onTransformUpdated() {

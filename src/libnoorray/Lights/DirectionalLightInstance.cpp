@@ -1,8 +1,5 @@
 #include "Lights/DirectionalLightInstance.h"
 
-#include <glm/geometric.hpp>
-#include <glm/gtc/quaternion.hpp>
-
 DirectionalLightInstance::DirectionalLightInstance(
     Scene& scene, const std::string& name, const Transform& transform)
     : LightInstance(scene, name, transform, TypeDirectional)
@@ -12,8 +9,7 @@ DirectionalLightInstance::DirectionalLightInstance(
 
 void DirectionalLightInstance::updateTransformData(const Transform& world)
 {
-    data.direction = glm::normalize(
-        world.getRotation() * glm::vec3(0.0f, -1.0f, 0.0f));
+    data.direction = worldDirection(world, glm::vec3(1.0f, 0.0f, 0.0f));
 }
 
 void DirectionalLightInstance::setColor(const glm::vec3& color)

@@ -1,44 +1,65 @@
-#include "Logging/Log.h"
 #include "Mesh.h"
-#include <cstring>
-#include <type_traits>
-#include <utility>
-#include "Scene/Scene.h"
-#include <vector>
-#include <string>
-#include <memory>
-#include <cmath>
-#include <stdexcept>
-#include <numbers>
-#include <span>
+
 #include <algorithm>
+#include <cmath>
+#include <numbers>
 #include <numeric>
+#include <stdexcept>
+#include <string>
+#include <utility>
 
-#include "Materials/MaterialX/MaterialXDocument.h"
-#include "glm/gtc/type_ptr.inl"
+#include <glm/common.hpp>
+#include <glm/geometric.hpp>
 
-#include <MaterialXCore/Document.h>
-#include <MaterialXCore/Types.h>
+#include "Scene/Scene.h"
 
 using glm::normalize;
 using glm::vec2;
 using glm::vec3;
 
 namespace {
-MeshGeometry copyGeometry(const std::vector<Vertex>& vertices,
-    const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections)
+
+int16_t snorm16(const float value)
 {
-    MeshGeometry geometry;
-    geometry.vertices = vertices;
-    geometry.indices = indices;
-    geometry.sections = sections;
-    return geometry;
+    return static_cast<int16_t>(std::lround(std::clamp(value, -1.0f, 1.0f) * 32767.0f));
 }
 
-MaterialX::DocumentPtr greyMaterial()
+float unsnorm16(const int16_t value)
 {
-    return nr::materialx::defaultMaterial();
+    return std::max(static_cast<float>(value) / 32767.0f, -1.0f);
 }
+
+// One vertex of a generated shape, which has a single UV channel.
+void addVertex(MeshStreams& streams, const vec3 position, const vec3 normal,
+    const vec3 tangent, const vec2 uv)
+{
+    streams.positions.push_back(position);
+    streams.tangents.emplace_back(tangent, normal, 1.0f);
+    streams.uvs.push_back(uv);
+}
+
+}
+
+TangentFrame::TangentFrame(const vec3 tangent, const vec3 normal, const float bitangentSign)
+    : tangentX{snorm16(tangent.x), snorm16(tangent.y), snorm16(tangent.z), 0},
+      tangentZ{snorm16(normal.x), snorm16(normal.y), snorm16(normal.z),
+          bitangentSign < 0.0f ? int16_t{-32767} : int16_t{32767}}
+{
+}
+
+vec3 TangentFrame::tangent() const
+{
+    return {unsnorm16(tangentX[0]), unsnorm16(tangentX[1]), unsnorm16(tangentX[2])};
+}
+
+vec3 TangentFrame::normal() const
+{
+    return {unsnorm16(tangentZ[0]), unsnorm16(tangentZ[1]), unsnorm16(tangentZ[2])};
+}
+
+float TangentFrame::bitangentSign() const
+{
+    return tangentZ[3] < 0 ? -1.0f : 1.0f;
 }
 
 std::vector<MeshSection> sortTrianglesBySlot(std::vector<uint32_t>& indices,
@@ -72,462 +93,275 @@ std::vector<MeshSection> singleSection(const std::vector<uint32_t>& indices)
     return {{0u, 0u, static_cast<uint32_t>(indices.size() / 3)}};
 }
 
-Mesh Mesh::CreateCube(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material) {
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<MaterialX::DocumentPtr> materials;
+MeshGeometry::MeshGeometry(MeshStreams streams)
+    : uvCount(streams.uvCount), sections(std::move(streams.sections))
+{
+    if (!streams.positions.empty()) {
+        boundsMin = boundsMax = streams.positions.front();
+        for (const vec3& position : streams.positions) {
+            boundsMin = glm::min(boundsMin, position);
+            boundsMax = glm::max(boundsMax, position);
+        }
+    }
+    const auto owned = std::make_shared<const MeshStreams>(std::move(streams));
+    positions = owned->positions;
+    tangents = owned->tangents;
+    uvs = owned->uvs;
+    colors = owned->colors;
+    indices = owned->indices;
+    owner = owned;
+}
 
-    float h = 0.5f;
-    materials.push_back(material);
-
+Mesh Mesh::CreateCube(Scene& scene, const std::string& name)
+{
+    MeshStreams streams;
+    constexpr float h = 0.5f;
     const vec3 faceNormals[6] = {
         { 0,  0,  1}, { 0,  0, -1},
         { 1,  0,  0}, {-1,  0,  0},
         { 0,  1,  0}, { 0, -1,  0}
     };
-
     const vec3 tangents[6] = {
         {1, 0, 0}, {-1, 0, 0},
         {0, 0, -1}, {0, 0, 1},
         {1, 0, 0}, {1, 0, 0}
     };
-
     const vec3 bitangents[6] = {
         {0, 1, 0}, {0, 1, 0},
         {0, 1, 0}, {0, 1, 0},
         {0, 0, -1}, {0, 0, 1}
     };
-
-    uint32_t vertexStart = 0;
-
-    for (int faceIdx = 0; faceIdx < 6; ++faceIdx) {
-        vec3 normal = faceNormals[faceIdx];
-        vec3 tangent = normalize(tangents[faceIdx]);
-        vec3 bitangent = normalize(bitangents[faceIdx]);
-
-        vec3 corners[4] = {
+    for (uint32_t face = 0; face < 6; ++face) {
+        const vec3 normal = faceNormals[face];
+        const vec3 tangent = tangents[face];
+        const vec3 bitangent = bitangents[face];
+        const vec3 corners[4] = {
             normal * h + (-tangent - bitangent) * h,
             normal * h + ( tangent - bitangent) * h,
             normal * h + ( tangent + bitangent) * h,
             normal * h + (-tangent + bitangent) * h
         };
-
-        vec2 uvs[4] = {{0,0}, {1,0}, {1,1}, {0,1}};
-
-        for (int i = 0; i < 4; ++i) {
-            vertices.push_back(Vertex{
-                corners[i],
-                normal,
-                tangent,
-                1.0f, uvs[i], DefaultVertexColor
-            });
-        }
-
-        indices.insert(indices.end(), {
-            vertexStart + 0, vertexStart + 1, vertexStart + 2,
-            vertexStart + 0, vertexStart + 2, vertexStart + 3
-        });
-
-        vertexStart += 4;
+        const vec2 uvs[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+        const uint32_t first = face * 4;
+        for (int i = 0; i < 4; ++i)
+            addVertex(streams, corners[i], normal, tangent, uvs[i]);
+        streams.indices.insert(streams.indices.end(),
+            {first, first + 1, first + 2, first, first + 2, first + 3});
     }
-
-    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
+    streams.sections = singleSection(streams.indices);
+    return Mesh(scene, name, MeshGeometry(std::move(streams)));
 }
 
-Mesh Mesh::CreatePlane(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material) {
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
-    std::vector<MaterialX::DocumentPtr> materials;
-
-    float halfSize = 0.5f;
-    vec3 normal = {0.0f, 1.0f, 0.0f};
-    vec3 tangent = {1.0f, 0.0f, 0.0f};
-
-    vec3 positions[4] = {
-        {-halfSize, 0.0f, -halfSize},
-        { halfSize, 0.0f, -halfSize},
-        { halfSize, 0.0f,  halfSize},
-        {-halfSize, 0.0f,  halfSize}
+Mesh Mesh::CreatePlane(Scene& scene, const std::string& name)
+{
+    MeshStreams streams;
+    constexpr float halfSize = 0.5f;
+    const vec3 positions[4] = {
+        {-halfSize, -halfSize, 0.0f},
+        { halfSize, -halfSize, 0.0f},
+        { halfSize,  halfSize, 0.0f},
+        {-halfSize,  halfSize, 0.0f}
     };
-
-    vec2 uvs[4] = {{0,0}, {1,0}, {1,1}, {0,1}};
-
-    for (int i = 0; i < 4; ++i) {
-        vertices.push_back(Vertex{
-            positions[i],
-            normal,
-            tangent,
-            1.0f, uvs[i], DefaultVertexColor
-        });
-    }
-
-    materials.push_back(material);
-
-
-    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
+    const vec2 uvs[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    for (int i = 0; i < 4; ++i)
+        addVertex(streams, positions[i], {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, uvs[i]);
+    streams.indices = {0, 1, 2, 2, 3, 0};
+    streams.sections = singleSection(streams.indices);
+    return Mesh(scene, name, MeshGeometry(std::move(streams)));
 }
 
-Mesh Mesh::CreateSphere(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t latSeg, uint32_t lonSeg) {
-    // Ensure the sphere has enough segments to be properly formed.
+Mesh Mesh::CreateSphere(Scene& scene, const std::string& name, const uint32_t latSeg,
+    const uint32_t lonSeg)
+{
     if (latSeg < 2 || lonSeg < 3)
         throw std::runtime_error("Sphere segments too low. Use at least 2 latitude and 3 longitude segments.");
 
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<MaterialX::DocumentPtr> materials;
-
+    MeshStreams streams;
     constexpr float radius = 0.5f;
-
-    // Generate vertices in a grid pattern based on spherical coordinates.
-    // The grid is (lonSeg + 1) vertices wide and (latSeg + 1) vertices tall.
     for (uint32_t lat = 0; lat <= latSeg; ++lat) {
-        float theta = std::numbers::pi_v<float> * lat / latSeg; // Polar angle from 0 to pi
-        float sinTheta = std::sin(theta);
-        float cosTheta = std::cos(theta);
-
+        const float theta = std::numbers::pi_v<float> * lat / latSeg;
         for (uint32_t lon = 0; lon <= lonSeg; ++lon) {
-            float phi = 2.0f * std::numbers::pi_v<float> * lon / lonSeg; // Azimuthal angle from 0 to 2*pi
-            float sinPhi = std::sin(phi);
-            float cosPhi = std::cos(phi);
-
-            // Calculate vertex attributes
-            vec3 normal = {cosPhi * sinTheta, cosTheta, sinPhi * sinTheta};
-            vec3 pos = normal * radius;
-            vec2 uv = {static_cast<float>(lon) / lonSeg, static_cast<float>(lat) / latSeg};
-
-            vec3 tangent;
-            // At the poles, the derivative of position with respect to the azimuthal angle 'phi'
-            // is zero, making the tangent undefined. All vertices on the top/bottom rows share
-            // a single position but would get different tangents, causing lighting artifacts.
-            // We assign a fixed, consistent tangent to all vertices at each pole.
-            if (lat == 0) { // North Pole
-                tangent = vec3{1.0f, 0.0f, 0.0f};
-            } else if (lat == latSeg) { // South Pole
-                tangent = vec3{-1.0f, 0.0f, 0.0f};
-            } else {
-                // For all other vertices, the tangent runs along lines of latitude.
-                tangent = normalize(vec3{-sinPhi, 0.0f, cosPhi});
-            }
-
-            vertices.push_back(Vertex{
-                pos,
-                normal,
-                tangent,
-                1.0f, uv, DefaultVertexColor
-            });
+            const float phi = 2.0f * std::numbers::pi_v<float> * lon / lonSeg;
+            const vec3 normal = {std::cos(phi) * std::sin(theta),
+                std::sin(phi) * std::sin(theta), std::cos(theta)};
+            // At the poles every vertex of a row shares one position, where
+            // the tangent along the latitude is undefined; each pole takes a
+            // fixed one so its vertices agree.
+            const vec3 tangent = lat == 0 ? vec3{1.0f, 0.0f, 0.0f}
+                : lat == latSeg ? vec3{-1.0f, 0.0f, 0.0f}
+                : normalize(vec3{-std::sin(phi), std::cos(phi), 0.0f});
+            addVertex(streams, normal * radius, normal, tangent,
+                {static_cast<float>(lon) / lonSeg, static_cast<float>(lat) / latSeg});
         }
     }
-
-    // Generate indices to form triangles for each quad in the grid
     for (uint32_t lat = 0; lat < latSeg; ++lat) {
         for (uint32_t lon = 0; lon < lonSeg; ++lon) {
-            uint32_t i0 = lat * (lonSeg + 1) + lon;      // Top-left
-            uint32_t i1 = (lat + 1) * (lonSeg + 1) + lon; // Bottom-left
-            uint32_t i2 = i0 + 1;                         // Top-right
-            uint32_t i3 = i1 + 1;                         // Bottom-right
-
-            // Create two triangles for the quad. The winding order is CCW (Counter-Clockwise).
-            indices.insert(indices.end(), {i0, i2, i1, i2, i3, i1});
+            const uint32_t i0 = lat * (lonSeg + 1) + lon;
+            const uint32_t i1 = (lat + 1) * (lonSeg + 1) + lon;
+            const uint32_t i2 = i0 + 1;
+            const uint32_t i3 = i1 + 1;
+            streams.indices.insert(streams.indices.end(), {i0, i2, i1, i2, i3, i1});
         }
     }
-
-    materials.push_back(material);
-
-    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
+    streams.sections = singleSection(streams.indices);
+    return Mesh(scene, name, MeshGeometry(std::move(streams)));
 }
 
-Mesh Mesh::CreateDisk(Scene& scene, const std::string& name, const MaterialX::DocumentPtr& material, uint32_t segments) {
+Mesh Mesh::CreateDisk(Scene& scene, const std::string& name, const uint32_t segments)
+{
     if (segments < 3)
         throw std::runtime_error("Disk requires at least 3 segments");
 
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    std::vector<MaterialX::DocumentPtr> materials;
-
-    float radius = 0.5f;
-    vec3 normal = {0.0f, 1.0f, 0.0f};
-
-    vertices.push_back(Vertex{
-        {0.0f, 0.0f, 0.0f},
-        normal,
-        {1.0f, 0.0f, 0.0f},
-        1.0f, {0.5f, 0.5f}, DefaultVertexColor
-    }); // center vertex with tangent along +X
-
+    MeshStreams streams;
+    constexpr float radius = 0.5f;
+    const vec3 normal = {0.0f, 0.0f, 1.0f};
+    addVertex(streams, {0.0f, 0.0f, 0.0f}, normal, {1.0f, 0.0f, 0.0f}, {0.5f, 0.5f});
     for (uint32_t i = 0; i <= segments; ++i) {
-        float angle = static_cast<float>(i) / segments * 2.0f * std::numbers::pi_v<float>;
-        float x = std::cos(angle) * radius;
-        float z = std::sin(angle) * radius;
-
-        vec3 pos = {x, 0.0f, z};
-        vec3 tangent = {-std::sin(angle), 0.0f, std::cos(angle)};
-
-        vec2 uv = {0.5f + x, 0.5f + z};
-
-        vertices.push_back(Vertex{
-            pos,
-            normal,
-            tangent,
-            1.0f, uv, DefaultVertexColor
-        });
+        const float angle = static_cast<float>(i) / segments * 2.0f * std::numbers::pi_v<float>;
+        const float x = std::cos(angle) * radius;
+        const float y = std::sin(angle) * radius;
+        addVertex(streams, {x, y, 0.0f}, normal, {-std::sin(angle), std::cos(angle), 0.0f},
+            {0.5f + x, 0.5f + y});
     }
-
-    for (uint32_t i = 1; i <= segments; ++i) {
-        indices.insert(indices.end(), {0, i, i + 1});
-    }
-
-    materials.push_back(material);
-
-    return Mesh(scene, name, vertices, indices, singleSection(indices), materials);
+    for (uint32_t i = 1; i <= segments; ++i)
+        streams.indices.insert(streams.indices.end(), {0, i, i + 1});
+    streams.sections = singleSection(streams.indices);
+    return Mesh(scene, name, MeshGeometry(std::move(streams)));
 }
 
-Mesh::Mesh(Scene& scene, std::string name,
-    const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
-    const std::vector<MeshSection>& sections, const std::vector<MaterialX::DocumentPtr>& materials)
-    : Mesh(scene, std::move(name),
-        copyGeometry(vertices, indices, sections), materials)
+Mesh::Mesh(Scene& scene, std::string name, MeshGeometry value)
+    : scene(scene), path(std::move(name)), geometry(std::move(value))
 {
-}
-
-Mesh::Mesh(Scene& scene, std::string name,
-    const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
-    const std::vector<MeshSection>& sections, std::vector<Material*> materials)
-    : Mesh(scene, std::move(name),
-        copyGeometry(vertices, indices, sections), std::move(materials))
-{
-}
-
-Mesh::Mesh(Scene& scene, std::string name, MeshGeometry&& geometry,
-    const std::vector<MaterialX::DocumentPtr>& materials)
-    : scene(scene), path(std::move(name)),
-      vertices(std::move(geometry.vertices)),
-      indices(std::move(geometry.indices)),
-      sections(std::move(geometry.sections))
-{
-    std::vector<Material*> materialRefs;
-    materialRefs.reserve(materials.size());
-    for (const MaterialX::DocumentPtr& material : materials)
-        materialRefs.push_back(scene.addMaterial(material));
-    initializeMaterialIds(materialRefs);
-    validateSections();
-}
-
-Mesh::Mesh(Scene& scene, std::string name, MeshGeometry&& geometry,
-    std::vector<Material*> materials)
-    : scene(scene), path(std::move(name)),
-      vertices(std::move(geometry.vertices)),
-      indices(std::move(geometry.indices)),
-      sections(std::move(geometry.sections))
-{
-    initializeMaterialIds(materials);
-    validateSections();
-}
-
-void Mesh::initializeMaterialIds(const std::vector<Material*>& materials)
-{
-    materialIds.reserve(materials.size());
-    for (Material* material : materials) {
-        if (material == nullptr)
-            throw std::invalid_argument(
-                "Mesh cannot reference a null material");
-        materialIds.push_back(scene.getMaterialIndex(material));
-    }
+    validate();
 }
 
 Mesh::Mesh(Mesh&& other) noexcept
     : noorrhi::Shared<nr::graphics::Mesh>(std::move(other)),
       scene(other.scene), path(std::move(other.path)), index(other.index),
-      gpuDirty(other.gpuDirty),
-      vertices(std::move(other.vertices)), indices(std::move(other.indices)),
-      materialIds(std::move(other.materialIds)),
-      sections(std::move(other.sections)), blasOpacity(std::move(other.blasOpacity)),
+      gpuDirty(other.gpuDirty), geometry(std::move(other.geometry)),
+      slotCount(other.slotCount),
+      positionBuffer(std::move(other.positionBuffer)),
+      tangentBuffer(std::move(other.tangentBuffer)),
+      uvBuffer(std::move(other.uvBuffer)),
+      colorBuffer(std::move(other.colorBuffer)),
       indexBuffer(std::move(other.indexBuffer)),
-      vertexBuffer(std::move(other.vertexBuffer)),
       sectionBuffer(std::move(other.sectionBuffer)),
-      blas(std::move(other.blas))
+      blases(std::move(other.blases))
 {
 }
 
-uint32_t Mesh::getMeshIndex() const {
-    return index;
-}
-
-void Mesh::setMeshIndex(uint32_t newIndex) {
-    index = newIndex;
-}
-
-Material* Mesh::getMaterialPtr(const uint32_t slot) const
-{
-    return &scene.getMaterials()[materialIds[slot]];
-}
-
-void Mesh::setVertices(std::vector<Vertex> value)
+void Mesh::replaceGeometry(MeshGeometry value)
 {
     scene.synchronizeBeforeMutation();
-    vertices = std::move(value);
+    geometry = std::move(value);
+    validate();
     gpuDirty = true;
-    scene.setDirtyFlag(TLAS);
+    scene.markMeshChanged(*this);
     scene.setDirtyFlag(Accumulation);
 }
 
-void Mesh::updatePositions(const std::vector<glm::vec3>& positions)
+void Mesh::validate()
 {
-    if (positions.size() != vertices.size())
-        return;
-
-    std::vector<Vertex> updated = vertices;
-    for (size_t i = 0; i < positions.size(); ++i)
-        updated[i].position = positions[i];
-    setVertices(std::move(updated));
-}
-
-void Mesh::updateVertexData(const std::vector<Vertex>& newVertices)
-{
-    if (newVertices.size() != vertices.size())
-        return;
-
-    setVertices(newVertices);
-}
-
-void Mesh::replaceGeometry(const std::vector<Vertex>& newVertices,
-    const std::vector<uint32_t>& newIndices, const std::vector<MeshSection>& newSections,
-    const uint32_t desiredMaterialSlotCount)
-{
-    replaceGeometry(copyGeometry(newVertices, newIndices, newSections), desiredMaterialSlotCount);
-}
-
-void Mesh::replaceGeometry(MeshGeometry&& geometry, const uint32_t desiredMaterialSlotCount)
-{
-    scene.synchronizeBeforeMutation();
-    vertices = std::move(geometry.vertices);
-    indices = std::move(geometry.indices);
-    sections = std::move(geometry.sections);
-    gpuDirty = true;
-    if (desiredMaterialSlotCount > materialIds.size())
-    {
-        // Same native grey fallback the first-construction path uses --
-        // BindMaterial (hdnoorray/renderParam.cpp) replaces it once the new
-        // slot's real material Sprim has synced and published.
-        const MaterialX::DocumentPtr fallbackDocument = greyMaterial();
-        while (materialIds.size() < desiredMaterialSlotCount)
-        {
-            Material* material = scene.addMaterial(fallbackDocument);
-            materialIds.push_back(scene.getMaterialIndex(material));
-        }
-    }
-    validateSections();
-    scene.setDirtyFlag(Meshes);
-    scene.setDirtyFlag(TLAS);
-    scene.setDirtyFlag(Accumulation);
-}
-
-void Mesh::setMaterial(
-    const uint32_t materialSlot, Material* material)
-{
-    if (materialSlot >= materialIds.size() || material == nullptr)
-        return;
-    scene.synchronizeBeforeMutation();
-    materialIds[materialSlot] = scene.getMaterialIndex(material);
-    notifyMaterialsChanged();
-}
-
-const Material& Mesh::getMaterial(const uint32_t slot) const
-{
-    return scene.getMaterials()[materialIds[slot]];
-}
-
-void Mesh::notifyMaterialsChanged()
-{
-    gpuDirty = true;
-    scene.setDirtyFlag(Meshes);
-    scene.setDirtyFlag(Accumulation);
-}
-
-void Mesh::validateSections() const
-{
+    const std::size_t vertexCount = geometry.positions.size();
+    if (geometry.tangents.size() != vertexCount || geometry.uvCount < 1u
+        || geometry.uvs.size() != vertexCount * geometry.uvCount
+        || (!geometry.colors.empty() && geometry.colors.size() != vertexCount))
+        throw std::invalid_argument("Mesh " + path + " has streams of different vertex counts");
     uint32_t next = 0;
-    for (const MeshSection& section : sections) {
-        if (section.firstTriangle != next || section.triangleCount == 0
-            || section.slot >= materialIds.size())
+    slotCount = 0;
+    for (const MeshSection& section : geometry.sections) {
+        slotCount = std::max(slotCount, section.slot + 1);
+        if (section.firstTriangle != next || section.triangleCount == 0)
             throw std::invalid_argument("Mesh " + path + " has a section at triangle "
                 + std::to_string(section.firstTriangle) + " that does not continue at "
-                + std::to_string(next) + ", is empty, or names a missing material slot");
+                + std::to_string(next) + " or is empty");
         next += section.triangleCount;
     }
-    if (next != indices.size() / 3)
+    if (next != geometry.indices.size() / 3)
         throw std::invalid_argument("Mesh " + path + " has sections covering "
-            + std::to_string(next) + " of " + std::to_string(indices.size() / 3) + " triangles");
+            + std::to_string(next) + " of " + std::to_string(geometry.indices.size() / 3) + " triangles");
 }
 
-std::vector<bool> Mesh::sectionOpacity() const
+namespace {
+template<class T>
+void uploadStream(noorrhi::Device& device, noorrhi::Buffer<T>& buffer, const std::span<const T> data)
 {
-    std::vector<bool> result;
-    result.reserve(sections.size());
-    for (const MeshSection& section : sections)
-        result.push_back(!getMaterial(section.slot).shaderProgram.transparent);
-    return result;
+    if (data.empty()) {
+        buffer = {};
+        return;
+    }
+    if (!buffer || buffer.size() != data.size())
+        buffer = device.buffer<T>(data.size());
+    buffer.upload(data);
+}
+
+std::uint64_t address(const auto& buffer)
+{
+    return buffer ? buffer.ptr().address : 0u;
+}
 }
 
 void Mesh::upload(noorrhi::Device& device)
 {
-    if (vertices.empty() || indices.empty())
+    if (!gpuDirty || geometry.positions.empty() || geometry.indices.empty())
         return;
-    std::vector<bool> opacity = sectionOpacity();
-    if (!gpuDirty && opacity == blasOpacity)
-        return;
-
-    if (gpuDirty) {
-        if (!vertexBuffer || vertexBuffer.size() != vertices.size())
-            vertexBuffer = device.buffer<nr::graphics::Vertex>(vertices.size());
-        if (!indexBuffer || indexBuffer.size() != indices.size())
-            indexBuffer = device.buffer<std::uint32_t>(indices.size());
-        if (!sectionBuffer || sectionBuffer.size() != sections.size())
-            sectionBuffer = device.buffer<nr::graphics::SectionRecord>(sections.size());
-
-        vertexBuffer.upload(std::span<const nr::graphics::Vertex>(vertices));
-        indexBuffer.upload(std::span<const std::uint32_t>(indices));
-        std::vector<nr::graphics::SectionRecord> records;
-        records.reserve(sections.size());
-        for (const MeshSection& section : sections)
-            records.push_back({section.firstTriangle, materialIds[section.slot]});
-        sectionBuffer.upload(std::span<const nr::graphics::SectionRecord>(records));
-    }
+    uploadStream(device, positionBuffer, geometry.positions);
+    uploadStream(device, tangentBuffer, geometry.tangents);
+    uploadStream(device, uvBuffer, geometry.uvs);
+    uploadStream(device, colorBuffer, geometry.colors);
+    uploadStream(device, indexBuffer, geometry.indices);
+    std::vector<nr::graphics::SectionRecord> records;
+    records.reserve(geometry.sections.size());
+    for (const MeshSection& section : geometry.sections)
+        records.push_back({section.firstTriangle, section.slot, section.castsShadow ? 1u : 0u});
+    uploadStream(device, sectionBuffer, std::span<const nr::graphics::SectionRecord>(records));
+    blases.clear();
     gpuDirty = false;
-
-    // Positions are the first member of Vertex, so the BLAS reads them
-    // straight out of the interleaved vertex buffer.
-    std::vector<noorrhi::TriangleGeometry> geometries;
-    geometries.reserve(sections.size());
-    for (std::size_t i = 0; i < sections.size(); ++i)
-        geometries.push_back({
-            noorrhi::GpuPtr<noorrhi::float3>{vertexBuffer.ptr().address},
-            noorrhi::GpuPtr<std::uint32_t>{indexBuffer.ptr().address
-                + std::uint64_t{sections[i].firstTriangle} * 3u * sizeof(std::uint32_t)},
-            sections[i].triangleCount, sizeof(nr::graphics::Vertex), opacity[i]});
-    blas = device.build_blas(geometries);
-    blasOpacity = std::move(opacity);
 
     if (!*this)
         allocate(device);
     data = nr::graphics::Mesh{
-        vertexBuffer.ptr().address,
-        indexBuffer.ptr().address,
-        sectionBuffer.ptr().address,
-        static_cast<uint32_t>(vertices.size()),
-        static_cast<uint32_t>(indices.size()),
-        static_cast<uint32_t>(sections.size()),
-        0u,
+        address(positionBuffer),
+        address(tangentBuffer),
+        address(uvBuffer),
+        address(colorBuffer),
+        address(indexBuffer),
+        address(sectionBuffer),
+        static_cast<uint32_t>(geometry.positions.size()),
+        static_cast<uint32_t>(geometry.indices.size()),
+        static_cast<uint32_t>(geometry.sections.size()),
+        geometry.uvCount,
+        {geometry.boundsMin.x, geometry.boundsMin.y, geometry.boundsMin.z},
+        {geometry.boundsMax.x, geometry.boundsMax.y, geometry.boundsMax.z},
     };
     commit();
+}
+
+const noorrhi::AccelerationStructure& Mesh::blas(noorrhi::Device& device, const std::vector<bool>& opacity)
+{
+    for (const auto& [key, structure] : blases)
+        if (key == opacity)
+            return structure;
+    std::vector<noorrhi::TriangleGeometry> geometries;
+    geometries.reserve(geometry.sections.size());
+    for (std::size_t i = 0; i < geometry.sections.size(); ++i)
+        geometries.push_back({
+            noorrhi::GpuPtr<noorrhi::float3>{positionBuffer.ptr().address},
+            noorrhi::GpuPtr<std::uint32_t>{indexBuffer.ptr().address
+                + std::uint64_t{geometry.sections[i].firstTriangle} * 3u * sizeof(std::uint32_t)},
+            geometry.sections[i].triangleCount, sizeof(glm::vec3), opacity[i]});
+    return blases.emplace_back(opacity, device.build_blas(geometries)).second;
 }
 
 void Mesh::releaseGpu()
 {
     gpuDirty = true;
     release();
-    blas = {};
-    blasOpacity.clear();
-    sectionBuffer = {};
-    vertexBuffer = {};
+    blases.clear();
+    positionBuffer = {};
+    tangentBuffer = {};
+    uvBuffer = {};
+    colorBuffer = {};
     indexBuffer = {};
+    sectionBuffer = {};
 }

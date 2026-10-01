@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <bit>
+#include <charconv>
 #include <functional>
 #include <optional>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 #include <MaterialXCore/Document.h>
@@ -230,9 +232,42 @@ void packParameter(const mx::ShaderPort& port, SlangMaterial& material)
     }
 }
 
+// A screen-space derivative from the ray differentials, read through
+// geompropvalue as <property>_ddx or <property>_ddy.
+std::optional<std::string> derivativeSource(const mx::ShaderPort& port)
+{
+    constexpr std::string_view geomprop = "$inGeomprop_";
+    std::string name = port.getName();
+    if (name.starts_with(geomprop))
+        name.erase(0, geomprop.size());
+    const bool x = name.ends_with("_ddx");
+    if (!x && !name.ends_with("_ddy"))
+        return std::nullopt;
+    const std::string property = name.substr(0, name.size() - 4);
+    const std::string axis = x ? "Dx" : "Dy";
+    if (property == "position" || property == "normal" || property == "tangent"
+        || property == "bitangent")
+        return "geometry." + property + axis;
+    if (property == "color")
+        return port.getType() == mx::Type::COLOR4 ? "geometry.color" + axis
+                                                  : "geometry.color" + axis + ".rgb";
+    constexpr std::string_view texcoord = "texcoord_";
+    if (!property.starts_with(texcoord))
+        return std::nullopt;
+    const std::string_view digits(property.data() + texcoord.size(), property.size() - texcoord.size());
+    unsigned channel = 0;
+    const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), channel);
+    if (error != std::errc{} || end != digits.data() + digits.size())
+        return std::nullopt;
+    return "materialUvDerivative(geometry, " + std::to_string(channel) + "u, "
+        + (x ? "0u" : "1u") + ")";
+}
+
 // The MaterialGeometry member a vertex-data variable is read from.
 std::string vertexDataSource(const mx::ShaderPort& port)
 {
+    if (const std::optional<std::string> derivative = derivativeSource(port))
+        return *derivative;
     const std::string& name = port.getName();
     if (name == mx::HW::T_POSITION_WORLD)
         return "geometry.position";
@@ -242,16 +277,107 @@ std::string vertexDataSource(const mx::ShaderPort& port)
         return "geometry.tangent";
     if (name == mx::HW::T_BITANGENT_WORLD)
         return "geometry.bitangent";
-    if (name == mx::HW::T_TEXCOORD + "_0")
-        return port.getType() == mx::Type::VECTOR3 ? "float3(geometry.uv, 0.0)" : "geometry.uv";
+    const std::string texcoordPrefix = mx::HW::T_TEXCOORD + "_";
+    if (name.starts_with(texcoordPrefix)) {
+        const std::string_view digits(name.data() + texcoordPrefix.size(),
+            name.size() - texcoordPrefix.size());
+        unsigned channel = 0;
+        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), channel);
+        if (error == std::errc{} && end == digits.data() + digits.size()) {
+            const std::string uv = channel == 0 ? "geometry.uv"
+                : "materialUv(geometry, " + std::to_string(channel) + "u)";
+            return port.getType() == mx::Type::VECTOR3 ? "float3(" + uv + ", 0.0)" : uv;
+        }
+    }
     // `color` is the ordinary MaterialX geompropvalue spelling.  Accept the
     // common aliases too; only this backend translates them to its vertex ABI.
     if (name == mx::HW::T_COLOR + "_0" || name == "color" || name == "Cd"
         || name == "vertex_color" || name == "$inGeomprop_color"
         || name == "$inGeomprop_Cd" || name == "$inGeomprop_vertex_color")
         return port.getType() == mx::Type::COLOR4 ? "geometry.color" : "geometry.color.rgb";
+    // The view camera in world space, read through geompropvalue.
+    if (name == "camera_position" || name == "$inGeomprop_camera_position")
+        return "materialCameraPosition()";
+    if (name == "camera_forward" || name == "$inGeomprop_camera_forward")
+        return "materialCameraForward()";
+    if (name == "camera_right" || name == "$inGeomprop_camera_right")
+        return "materialCameraRight()";
+    if (name == "camera_up" || name == "$inGeomprop_camera_up")
+        return "materialCameraUp()";
+    if (name == "camera_film_scale" || name == "$inGeomprop_camera_film_scale")
+        return "materialCameraFilmScale()";
+    if (name == "view_size" || name == "$inGeomprop_view_size")
+        return "materialViewSize()";
+    // The hit instance's custom data, four floats per property.
+    for (const std::string_view prefix : {"custom_primitive_data_", "$inGeomprop_custom_primitive_data_"}) {
+        if (!name.starts_with(prefix))
+            continue;
+        const std::string_view digits(name.data() + prefix.size(), name.size() - prefix.size());
+        unsigned index = 0;
+        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), index);
+        if (error == std::errc{} && end == digits.data() + digits.size())
+            return "materialCustomPrimitiveData(" + std::to_string(index) + "u)";
+    }
+    // The opaque scene behind the hit, read through geompropvalue.
+    if (name == "scene_depth" || name == "$inGeomprop_scene_depth")
+        return "materialSceneDepth()";
+    // The hit instance's index in the scene.
+    if (name == "primitive_id" || name == "$inGeomprop_primitive_id")
+        return "float(InstanceID())";
+    // Object-space mesh bounds, read through geompropvalue.
+    if (name == "objectboundsmin" || name == "$inGeomprop_objectboundsmin")
+        return "geometry.boundsMin";
+    if (name == "objectboundsmax" || name == "$inGeomprop_objectboundsmax")
+        return "geometry.boundsMax";
     throw std::runtime_error("MaterialX geometry input " + name
         + " is not available to the realtime renderer");
+}
+
+// MaterialX's private uniforms the renderer answers per hit: the game time and
+// frame, the viewer, and the instance, view and projection transforms, as
+// matrices MaterialX multiplies row vectors by (MaterialHit.slang).
+std::optional<std::string> engineUniformSource(const std::string& variable)
+{
+    static const std::unordered_map<std::string, std::string> sources = [] {
+        const std::string world = "materialMatrix(ObjectToWorld4x3())";
+        const std::string worldInverse = "materialMatrix(WorldToObject4x3())";
+        const std::string view = "materialViewMatrix()";
+        const std::string viewInverse = "materialViewInverseMatrix()";
+        const std::string projection = "materialProjectionMatrix()";
+        const std::string projectionInverse = "materialProjectionInverseMatrix()";
+        const auto transposed = [](const std::string& matrix) { return "transpose(" + matrix + ")"; };
+        const auto product = [](const std::string& a, const std::string& b) { return "mul(" + a + ", " + b + ")"; };
+        std::unordered_map<std::string, std::string> result;
+        const auto add = [&](const std::string& name, const std::string& token, const std::string& source) {
+            result.emplace(name, source);
+            result.emplace(token, source);
+        };
+        add(mx::HW::TIME, mx::HW::T_TIME, "materialFrame()->gameTime");
+        add(mx::HW::FRAME, mx::HW::T_FRAME, "float(materialFrame()->frameIndex)");
+        // The viewer of <viewdirection> is where the hitting ray came from.
+        add(mx::HW::VIEW_POSITION, mx::HW::T_VIEW_POSITION, "WorldRayOrigin()");
+        add(mx::HW::VIEW_DIRECTION, mx::HW::T_VIEW_DIRECTION, "materialCameraForward()");
+        add(mx::HW::WORLD_MATRIX, mx::HW::T_WORLD_MATRIX, world);
+        add(mx::HW::WORLD_INVERSE_MATRIX, mx::HW::T_WORLD_INVERSE_MATRIX, worldInverse);
+        add(mx::HW::WORLD_TRANSPOSE_MATRIX, mx::HW::T_WORLD_TRANSPOSE_MATRIX, transposed(world));
+        add(mx::HW::WORLD_INVERSE_TRANSPOSE_MATRIX, mx::HW::T_WORLD_INVERSE_TRANSPOSE_MATRIX, transposed(worldInverse));
+        add(mx::HW::VIEW_MATRIX, mx::HW::T_VIEW_MATRIX, view);
+        add(mx::HW::VIEW_INVERSE_MATRIX, mx::HW::T_VIEW_INVERSE_MATRIX, viewInverse);
+        add(mx::HW::VIEW_TRANSPOSE_MATRIX, mx::HW::T_VIEW_TRANSPOSE_MATRIX, transposed(view));
+        add(mx::HW::VIEW_INVERSE_TRANSPOSE_MATRIX, mx::HW::T_VIEW_INVERSE_TRANSPOSE_MATRIX, transposed(viewInverse));
+        add(mx::HW::PROJ_MATRIX, mx::HW::T_PROJ_MATRIX, projection);
+        add(mx::HW::PROJ_INVERSE_MATRIX, mx::HW::T_PROJ_INVERSE_MATRIX, projectionInverse);
+        add(mx::HW::PROJ_TRANSPOSE_MATRIX, mx::HW::T_PROJ_TRANSPOSE_MATRIX, transposed(projection));
+        add(mx::HW::PROJ_INVERSE_TRANSPOSE_MATRIX, mx::HW::T_PROJ_INVERSE_TRANSPOSE_MATRIX, transposed(projectionInverse));
+        add(mx::HW::WORLD_VIEW_MATRIX, mx::HW::T_WORLD_VIEW_MATRIX, product(world, view));
+        add(mx::HW::VIEW_PROJECTION_MATRIX, mx::HW::T_VIEW_PROJECTION_MATRIX, product(view, projection));
+        add(mx::HW::WORLD_VIEW_PROJECTION_MATRIX, mx::HW::T_WORLD_VIEW_PROJECTION_MATRIX,
+            product(product(world, view), projection));
+        return result;
+    }();
+    if (const auto found = sources.find(variable); found != sources.end())
+        return found->second;
+    return std::nullopt;
 }
 
 // A constant-folded value, one float per component; empty when the value
@@ -575,6 +701,11 @@ protected:
             emitLine(loadParameter(*publicUniforms[i], offset), stage);
             offset += parameterWords(publicUniforms[i]->getType());
         }
+        for (const auto& [blockName, block] : stage.getUniformBlocks()) {
+            for (std::size_t i = 0; i < block->size(); ++i)
+                if (const auto source = engineUniformSource((*block)[i]->getVariable()))
+                    emitLine((*block)[i]->getVariable() + " = " + *source, stage);
+        }
         for (std::size_t i = 0; i < vertexData.size(); ++i)
             emitLine(getVertexDataPrefix(vertexData) + vertexData[i]->getVariable() + " = "
                 + vertexDataSource(*vertexData[i]), stage);
@@ -597,9 +728,9 @@ protected:
         emitStage("closesthit", "closestHit", "RealtimeHitPayload",
             "materialClosestHit<GeneratedMaterial>(payload, attributes.barycentrics)");
         emitStage("anyhit", "anyHit", "RealtimeHitPayload",
-            "materialAnyHit<GeneratedMaterial>(attributes.barycentrics)");
+            "materialAnyHit<GeneratedMaterial>(payload, attributes.barycentrics)");
         emitStage("anyhit", "shadowAnyHit", "RealtimeShadowPayload",
-            "materialAnyHit<GeneratedMaterial>(attributes.barycentrics)");
+            "materialShadowAnyHit<GeneratedMaterial>(payload, attributes.barycentrics)");
     }
 };
 

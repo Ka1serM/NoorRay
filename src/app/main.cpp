@@ -42,7 +42,7 @@ void uploadCompiledMaterials(Raytracer& renderer, Scene& scene,
     const std::string sceneDirectory =
         std::filesystem::path(scenePath).parent_path().string();
     materialRuntime.compileAndWait(scene, sceneDirectory);
-    renderer.uploadMaterials(scene);
+    renderer.publishScene(scene, false);
     renderer.uploadEnvironment(scene);
 }
 
@@ -60,10 +60,7 @@ struct CliOptions
     int windowHeight{};
     std::optional<GaussianShadingMode> gaussianShadingMode;
     std::optional<GaussianProxyType> gaussianProxyType;
-    std::optional<RealtimeLightingMode> realtimeLighting;
-    std::optional<RadianceCacheMode> radianceCacheMode;
     std::optional<DenoiserMode> denoiserMode;
-    bool aovEnabled{};
     bool statsEnabled{};
     bool cliMode{};
     bool vulkanRaytracerSmoke{};
@@ -72,8 +69,6 @@ struct CliOptions
 
 void applyStageOptions(RenderSettings& settings, const CliOptions& options)
 {
-    if (options.radianceCacheMode)
-        settings.radianceCacheMode = *options.radianceCacheMode;
     if (options.denoiserMode)
         settings.denoiserMode = *options.denoiserMode;
     if (options.upscalerMode)
@@ -97,11 +92,6 @@ void printUsage()
         << "  --max-bounces <int>  Maximum path depth (default: from scene)\n"
         << "  --fsr-mode <native|quality|balanced|performance|ultra-performance>\n"
         << "                       Realtime FSR mode, which sets the trace resolution\n"
-        << "  --lighting <di|gi|single>\n"
-        << "                       Realtime light sampling: ReSTIR DI, ReSTIR GI (which also\n"
-        << "                       resamples direct light with ReSTIR DI), or\n"
-        << "                       one light sample per vertex without RTXDI\n"
-        << "  --no-sharc           Trace indirect paths without the SHaRC radiance cache\n"
         << "  --nrd-mode <reblur|relax>\n"
         << "                       Realtime NRD denoiser\n"
         << "  --no-nrd             Composite the noisy radiance without NRD\n"
@@ -110,7 +100,6 @@ void printUsage()
         << "                       Override the scene's Gaussian shading mode\n"
         << "  --gaussian-proxy <icosphere|octahedron|icosahedron|icosphere2>\n"
         << "                       Override the Gaussian tracing proxy geometry\n"
-        << "  --aov                Render surface AOVs (for profiling or diagnostics)\n"
         << "  --stats              Print a per-kernel GPU timing breakdown after rendering\n"
         << "  --vulkan-raytracer-smoke  Run one native Vulkan raytracer dispatch and save it\n";
 }
@@ -183,24 +172,10 @@ CliOptions parseOptions(const int argc, char* argv[])
             else
                 throw std::invalid_argument("--nrd-mode must be 'reblur' or 'relax'");
         }
-        else if (arg == "--no-sharc")
-            options.radianceCacheMode = RadianceCacheMode::Off;
         else if (arg == "--no-nrd")
             options.denoiserMode = DenoiserMode::Off;
         else if (arg == "--no-fsr")
             options.upscalerMode = UpscalerMode::Off;
-        else if (arg == "--lighting")
-        {
-            const std::string mode = requireValue(argc, argv, i);
-            if (mode == "di")
-                options.realtimeLighting = RealtimeLightingMode::ReSTIRDI;
-            else if (mode == "gi")
-                options.realtimeLighting = RealtimeLightingMode::ReSTIRGI;
-            else if (mode == "single")
-                options.realtimeLighting = RealtimeLightingMode::SingleSample;
-            else
-                throw std::invalid_argument("--lighting must be 'di', 'gi' or 'single'");
-        }
         else if (arg == "--gaussian-shading")
         {
             const std::string mode = requireValue(argc, argv, i);
@@ -229,8 +204,6 @@ CliOptions parseOptions(const int argc, char* argv[])
         }
         else if (arg == "--stats")
             options.statsEnabled = true;
-        else if (arg == "--aov")
-            options.aovEnabled = true;
         else if (arg.starts_with("--"))
             throw std::invalid_argument("Unknown flag: " + arg);
         else
@@ -271,8 +244,6 @@ void runCli(const CliOptions& options)
             if (options.gaussianShadingMode)
                 nativeScene->getRenderSettings().gaussianShadingMode =
                     *options.gaussianShadingMode;
-            if (options.realtimeLighting)
-                nativeScene->getRenderSettings().realtimeLighting = *options.realtimeLighting;
             applyStageOptions(nativeScene->getRenderSettings(), options);
             if (options.gaussianProxyType)
                 nativeScene->getRenderSettings().gaussianProxyType =
@@ -300,8 +271,6 @@ void runCli(const CliOptions& options)
     SceneImporter::Load(scene, options.scenePath);
     if (options.gaussianShadingMode)
         scene.getRenderSettings().gaussianShadingMode = *options.gaussianShadingMode;
-    if (options.realtimeLighting)
-        scene.getRenderSettings().realtimeLighting = *options.realtimeLighting;
     applyStageOptions(scene.getRenderSettings(), options);
     if (options.gaussianProxyType)
         scene.getRenderSettings().gaussianProxyType = *options.gaussianProxyType;

@@ -1,6 +1,4 @@
-#include "ByteBuffer.slang"
-#include "RaytracingAbi.slang"
-#include "../Gaussian/Gaussian.slang"
+#include "GaussianSplat.slang"
 
 // Gaussian proxy geometry is non-opaque. Any-hit normally performs stochastic
 // opacity/ellipsoid acceptance and rejects candidates before closest-hit,
@@ -21,39 +19,28 @@ void main(inout RayPayload payload)
         IgnoreHit();
         return;
     }
-    if (frame.gaussianRecords == nullptr || frame.gaussianCount == 0u)
+    if (InstanceID() == payload.splatInstance)
     {
         IgnoreHit();
         return;
     }
-    ByteBuffer records = byteBuffer(frame.gaussianRecords);
-    const uint gaussianId = InstanceIndex() - frame.gaussianInstanceBase;
-    if (gaussianId == payload.gaussianId)
-    {
-        IgnoreHit();
-        return;
-    }
-    if (gaussianId >= frame.gaussianCount)
-    {
-        IgnoreHit();
-        return;
-    }
+    const GaussianSplat splat = loadGaussianSplat(frame, InstanceID());
     GaussianHashSampler sampler;
     sampler.seed = payload.seed;
-    // The shared proxy BLAS is instanced by each Gaussian's R*S transform.
-    // Density is defined in that normalized object space; using world rays
-    // made acceptance depend on the scene's distance from the world origin.
-    const GaussianHit accepted = sampleGaussian(sampler, records, gaussianId,
+    // The proxy is instanced by the splat's R*S transform. Density is defined
+    // in that normalized object space; using world rays made acceptance depend
+    // on the scene's distance from the world origin.
+    const GaussianHit accepted = sampleGaussian(sampler, splat.records, splat.id,
         ObjectRayOrigin(), ObjectRayDirection(), RayTMin(), RayTCurrent(),
-        frame.gaussianCutoffDistanceSq, gaussianId + 17u);
+        gaussianCutoffDistanceSq(splat.records), InstanceID() + 17u);
     if (!accepted.valid)
     {
         IgnoreHit();
         return;
     }
     payload.hit = 2u;
-    payload.gaussianId = gaussianId;
-    payload.gaussianOpacity = gaussianFloat(records, gaussianId,
+    payload.splatInstance = InstanceID();
+    payload.gaussianOpacity = gaussianFloat(splat.records, splat.id,
         GaussianOpacityOffset);
     payload.t = accepted.t;
 }

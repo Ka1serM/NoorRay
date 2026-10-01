@@ -2,24 +2,19 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 #include <slang-com-ptr.h>
 #include <slang.h>
+#include <spirv-tools/libspirv.hpp>
+
+#include "Realtime/EmbeddedShaders.h"
 
 namespace nr::materialx
 {
 
 namespace
 {
-constexpr char MaterialInterfaceSource[] = {
-    #embed "RealtimeRaytracer/MaterialInterface.slang"
-    , '\0'
-};
-// MaterialHit.slang with its includes expanded at build time.
-constexpr char MaterialHitSource[] = {
-    #embed "RealtimeRaytracer/MaterialHit.preprocessed.slang"
-    , '\0'
-};
 
 struct HitStage
 {
@@ -61,6 +56,22 @@ slang::CompilerOptionEntry capability(slang::IGlobalSession& global, const char*
     entry.value.intValue0 = global.findCapability(name);
     return entry;
 }
+
+// Matches the spirv-val flags that check the prebuilt shaders.
+void validate(const std::vector<std::uint32_t>& spirv, const char* entryPoint)
+{
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_4);
+    std::string messages;
+    tools.SetMessageConsumer([&messages](spv_message_level_t, const char*,
+        const spv_position_t& position, const char* message) {
+        messages += "\n  word " + std::to_string(position.index) + ": " + message;
+    });
+    spvtools::ValidatorOptions options;
+    options.SetScalarBlockLayout(true);
+    if (!tools.Validate(spirv.data(), spirv.size(), options))
+        throw std::runtime_error(std::string("Generated material ") + entryPoint
+            + " is invalid SPIR-V:" + messages);
+}
 } // namespace
 
 struct SlangMaterialCompiler::Impl
@@ -81,6 +92,7 @@ SlangMaterialCompiler::SlangMaterialCompiler()
         flag(slang::CompilerOptionName::EmitSpirvDirectly),
         flag(slang::CompilerOptionName::MatrixLayoutRow),
         flag(slang::CompilerOptionName::VulkanUseEntryPointName),
+        flag(slang::CompilerOptionName::ForceCLayout),
         capability(*impl_->global, "spvDescriptorHeapEXT"),
         capability(*impl_->global, "spvRayTracingKHR"),
     };
@@ -97,10 +109,12 @@ SlangMaterialCompiler::SlangMaterialCompiler()
 
     Slang::ComPtr<slang::IBlob> diagnostics;
     slang::IModule* module = impl_->session->loadModuleFromSourceString("MaterialInterface",
-        "MaterialInterface.slang", MaterialInterfaceSource, diagnostics.writeRef());
+        "MaterialInterface.slang", embeddedShaderSource("RealtimeRaytracer/MaterialInterface.slang"), diagnostics.writeRef());
     check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "MaterialInterface.slang does not compile");
     module = impl_->session->loadModuleFromSourceString("MaterialHit",
-        "MaterialHit.slang", MaterialHitSource, diagnostics.writeRef());
+        "MaterialHit.slang",
+        // MaterialHit.slang with its includes expanded at build time.
+        embeddedShaderSource("RealtimeRaytracer/MaterialHit.preprocessed.slang"), diagnostics.writeRef());
     check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "MaterialHit.slang does not compile");
 }
 
@@ -114,26 +128,35 @@ std::shared_ptr<const MaterialShader> SlangMaterialCompiler::compile(const std::
         (name + ".slang").c_str(), source.c_str(), diagnostics.writeRef());
     check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "Generated material does not compile");
 
+    // One composite of all hit stages links and lowers the module once.
+    std::vector<Slang::ComPtr<slang::IEntryPoint>> entryPoints(std::size(HitStages));
+    std::vector<slang::IComponentType*> parts{module};
+    for (std::size_t index = 0; index < std::size(HitStages); ++index) {
+        const HitStage& stage = HitStages[index];
+        check(module->findAndCheckEntryPoint(stage.entryPoint, stage.stage,
+            entryPoints[index].writeRef(), diagnostics.writeRef()), diagnostics,
+            std::string("Generated material has no ") + stage.entryPoint + " entry point");
+        parts.push_back(entryPoints[index].get());
+    }
+    Slang::ComPtr<slang::IComponentType> composite;
+    check(impl_->session->createCompositeComponentType(parts.data(),
+        static_cast<SlangInt>(parts.size()), composite.writeRef(), diagnostics.writeRef()),
+        diagnostics, "Generated material does not compose");
+    Slang::ComPtr<slang::IComponentType> linked;
+    check(composite->link(linked.writeRef(), diagnostics.writeRef()), diagnostics,
+        "Generated material does not link");
+
     auto shader = std::make_shared<MaterialShader>();
     shader->source = source;
-    for (const HitStage& stage : HitStages) {
-        Slang::ComPtr<slang::IEntryPoint> entryPoint;
-        check(module->findAndCheckEntryPoint(stage.entryPoint, stage.stage,
-            entryPoint.writeRef(), diagnostics.writeRef()), diagnostics,
-            std::string("Generated material has no ") + stage.entryPoint + " entry point");
-        slang::IComponentType* parts[] = {module, entryPoint.get()};
-        Slang::ComPtr<slang::IComponentType> composite;
-        check(impl_->session->createCompositeComponentType(parts, 2, composite.writeRef(),
-            diagnostics.writeRef()), diagnostics, "Generated material does not compose");
-        Slang::ComPtr<slang::IComponentType> linked;
-        check(composite->link(linked.writeRef(), diagnostics.writeRef()), diagnostics,
-            "Generated material does not link");
+    for (std::size_t index = 0; index < std::size(HitStages); ++index) {
+        const HitStage& stage = HitStages[index];
         Slang::ComPtr<slang::IBlob> code;
-        check(linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef()),
-            diagnostics, "Generated material produced no SPIR-V");
+        check(linked->getEntryPointCode(static_cast<SlangInt>(index), 0, code.writeRef(),
+            diagnostics.writeRef()), diagnostics, "Generated material produced no SPIR-V");
         std::vector<std::uint32_t>& spirv = (*shader).*stage.spirv;
         spirv.resize(code->getBufferSize() / sizeof(std::uint32_t));
         std::memcpy(spirv.data(), code->getBufferPointer(), spirv.size() * sizeof(std::uint32_t));
+        validate(spirv, stage.entryPoint);
     }
     return shader;
 }

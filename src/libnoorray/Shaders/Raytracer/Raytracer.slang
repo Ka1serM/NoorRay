@@ -38,7 +38,7 @@ void main()
     Rng pathRng;
     pathRng.state = pcgHash(primarySampler.scramble
         ^ (frame.sampleIndex * 0x9E3779B9u));
-    const float2 pixelSample = proxyOverdraw || frame.aovEnabled != 0u || frame.sampleIndex == 0u
+    const float2 pixelSample = proxyOverdraw || frame.sampleIndex == 0u
         ? float2(0.5) : primarySampler.next2D(0u);
     const float2 uv = (float2(dispatchId.xy) + pixelSample)
         / float2(frame.width, frame.height);
@@ -74,11 +74,11 @@ void main()
         RayDesc ray;
         ray.Origin = rayOrigin;
         ray.Direction = rayDirection;
-        ray.TMin = 0.001;
+        ray.TMin = 0.1;
         ray.TMax = 1.0e30;
 
         RayPayload payload = {};
-        payload.gaussianId = 0xFFFFFFFFu;
+        payload.splatInstance = 0xFFFFFFFFu;
         payload.seed = pathRng.state;
         payload.wavelengthSample = wavelengthSample;
         payload.depth = depth;
@@ -198,19 +198,19 @@ void main()
             const float shadowOffsetSign = dot(payload.normal,
                 payload.shadowDirection) >= 0.0 ? 1.0 : -1.0;
             shadowRay.Origin = payload.position + payload.normal
-                * (shadowOffsetSign * 1.0e-4);
+                * (shadowOffsetSign * 1.0e-2);
             shadowRay.Direction = normalize(payload.shadowDirection);
-            shadowRay.TMin = 0.001;
+            shadowRay.TMin = 0.1;
             shadowRay.TMax = payload.shadowDistance < 1.0e15
                 ? max(payload.shadowDistance + (payload.shadowValid == 2u
-                    ? 2.0e-4 : -2.0e-4), shadowRay.TMin)
+                    ? 2.0e-2 : -2.0e-2), shadowRay.TMin)
                 : 1.0e30;
             RayPayload shadowPayload = {};
             shadowPayload.hit = payload.shadowValid == 2u ? 0u : 1u;
             shadowPayload.instance = payload.shadowInstance;
             shadowPayload.primitive = payload.shadowPrimitive;
-            shadowPayload.gaussianId = payload.hit == 3u
-                ? payload.gaussianId : 0xFFFFFFFFu;
+            shadowPayload.splatInstance = payload.hit == 3u
+                ? payload.splatInstance : 0xFFFFFFFFu;
             shadowPayload.seed = pathRng.state;
             shadowPayload.wavelengthSample = wavelengthSample;
             shadowPayload.depth = depth;
@@ -249,7 +249,7 @@ void main()
         rayDirection = normalize(payload.nextDirection);
         const float offsetSign = dot(payload.normal, rayDirection) >= 0.0
             ? 1.0 : -1.0;
-        rayOrigin = payload.position + payload.normal * (offsetSign * 1.0e-4);
+        rayOrigin = payload.position + payload.normal * (offsetSign * 1.0e-2);
     }
 
     const float3 beauty = max(xyzToLinearSRGB(spectrumToXYZ(

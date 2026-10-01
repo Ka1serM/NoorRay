@@ -1,69 +1,35 @@
 #pragma once
 
-#include <cmath>
+#include <algorithm>
 #include <cstdint>
 
 #include <glm/vec4.hpp>
 
-
+// Vertex colors are Unreal's FColor, read as linear UNORM8 as Unreal's
+// vertex factory does: B | G << 8 | R << 16 | A << 24.
 namespace nr::vertex_color
 {
 
 inline constexpr uint32_t White = 0xffffffffu;
 
-inline float clampUnit(const float value)
+inline uint32_t quantize(const float value)
 {
-    return fminf(fmaxf(value, 0.0f), 1.0f);
+    return static_cast<uint32_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
 
-// RGB bytes are sRGB-encoded; alpha is ordinary linear UNORM8.
-inline float linearToSrgb(const float value)
+inline uint32_t pack(const glm::vec4 value)
 {
-    const float linear = clampUnit(value);
-    return linear <= 0.0031308f
-        ? linear * 12.92f
-        : 1.055f * powf(linear, 1.0f / 2.4f) - 0.055f;
+    return quantize(value.b) | (quantize(value.g) << 8u)
+        | (quantize(value.r) << 16u) | (quantize(value.a) << 24u);
 }
 
-inline float srgbToLinear(const float value)
-{
-    const float srgb = clampUnit(value);
-    return srgb <= 0.04045f
-        ? srgb / 12.92f
-        : powf((srgb + 0.055f) / 1.055f, 2.4f);
-}
-
-inline uint8_t quantize(const float value)
-{
-    return static_cast<uint8_t>(clampUnit(value) * 255.0f + 0.5f);
-}
-
-// Packed channel layout: R | G<<8 | B<<16 | A<<24.
-inline uint32_t packSrgb(const glm::vec4 value)
-{
-    return static_cast<uint32_t>(quantize(value.r))
-        | (static_cast<uint32_t>(quantize(value.g)) << 8u)
-        | (static_cast<uint32_t>(quantize(value.b)) << 16u)
-        | (static_cast<uint32_t>(quantize(value.a)) << 24u);
-}
-
-inline uint32_t packLinear(const glm::vec4 value)
-{
-    return packSrgb(glm::vec4(
-        linearToSrgb(value.r),
-        linearToSrgb(value.g),
-        linearToSrgb(value.b),
-        clampUnit(value.a)));
-}
-
-inline glm::vec4 unpackLinear(const uint32_t packed)
+inline glm::vec4 unpack(const uint32_t packed)
 {
     constexpr float ByteToUnit = 1.0f / 255.0f;
-    const float r = static_cast<float>(packed & 0xffu) * ByteToUnit;
-    const float g = static_cast<float>((packed >> 8u) & 0xffu) * ByteToUnit;
-    const float b = static_cast<float>((packed >> 16u) & 0xffu) * ByteToUnit;
-    const float a = static_cast<float>((packed >> 24u) & 0xffu) * ByteToUnit;
-    return glm::vec4(srgbToLinear(r), srgbToLinear(g), srgbToLinear(b), a);
+    return glm::vec4(static_cast<float>((packed >> 16u) & 0xffu),
+        static_cast<float>((packed >> 8u) & 0xffu),
+        static_cast<float>(packed & 0xffu),
+        static_cast<float>(packed >> 24u)) * ByteToUnit;
 }
 
 }

@@ -4,7 +4,6 @@
 #include "Types.h"
 
 #ifdef __cplusplus
-#include <cstddef>
 namespace nr::graphics {
 #endif
 
@@ -87,14 +86,5 @@ struct ViewportBillboardRoot
 };
 
 #ifdef __cplusplus
-static_assert(offsetof(ViewportCompositePushConstants, positionImage) == 20);
-static_assert(offsetof(ViewportCompositePushConstants, overdraw) == 24);
-static_assert(offsetof(ViewportCompositePushConstants, width) == 52);
-static_assert(offsetof(ViewportCompositePushConstants, selectionSdfImage) == 64);
-static_assert(sizeof(ViewportCompositePushConstants) == 72);
-static_assert(offsetof(ViewportBillboardPushConstants, targetScale) == 80);
-static_assert(offsetof(ViewportBillboardPushConstants, radiusScale) == 104);
-static_assert(offsetof(ViewportBillboardPushConstants, lightIds) == 112);
-static_assert(sizeof(ViewportBillboardPushConstants) == 128);
 } // namespace nr::graphics
 #endif

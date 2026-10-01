@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass
 import math
+import re
 from typing import Callable, Optional
 from xml.sax.saxutils import escape as _xml_escape
 
@@ -241,7 +242,31 @@ class _Document:
             "material",
             (("surfaceshader", _SURFACE, surface),),
         )
-        del material
+        # Export handlers may create intermediate nodes while resolving
+        # sockets, then choose a different path (or a literal) for the final
+        # input. Emit only the dependency closure of the material root so
+        # those abandoned helpers never become disconnected MaterialX nodes.
+        nodes_by_name = {
+            match.group(1): node
+            for node in self._nodes
+            if (match := re.search(r'\bname="(n\d+)"', node))
+        }
+        reachable = set()
+        pending = [material.node]
+        while pending:
+            name = pending.pop()
+            if name in reachable:
+                continue
+            node = nodes_by_name.get(name)
+            if node is None:
+                continue
+            reachable.add(name)
+            pending.extend(re.findall(r'\bnodename="(n\d+)"', node))
+        serialized_nodes = "".join(
+            node for node in self._nodes
+            if (match := re.search(r'\bname="(n\d+)"', node))
+            and match.group(1) in reachable
+        )
         nonce = (
             f"<!--noorray-image-revision:{self.transport_nonce}-->"
             if self.transport_nonce
@@ -251,7 +276,7 @@ class _Document:
             '<?xml version="1.0"?><materialx version="1.39">'
             + nonce
             + _NOORRAY_SELLMEIER_NODEDEF
-            + "".join(self._nodes)
+            + serialized_nodes
             + "</materialx>"
         )
 

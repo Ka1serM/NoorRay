@@ -4,9 +4,6 @@ if(NOT CMAKE_CXX_COMPILER)
     message(FATAL_ERROR "Set CMAKE_CXX_COMPILER")
 endif()
 project(NoorRay VERSION 0.1.0 LANGUAGES C CXX)
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "NoorRay requires Linux")
-endif()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,6 +57,10 @@ if(NR_ENABLE_USD)
         "Blender USD SDK root (auto-vendored by default)")
     include(cmake/NoorRayUSD.cmake)
 endif()
+
+# Shaders, MaterialX's libraries and editor assets are compiled into the
+# libraries as CMakeRC resources, so no binary depends on this source tree.
+include(external/CMakeRC/CMakeRC.cmake)
 
 function(nr_header_only target dir)
     add_library(${target} INTERFACE)
@@ -231,6 +232,16 @@ set(NRD_SUPPORTS_QUAD_INTRINSICS OFF CACHE BOOL "" FORCE)
 set(NRD_NORMAL_ENCODING "2" CACHE STRING "" FORCE)
 set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "" FORCE)
 set(NRD_SHADERS_PATH "${PROJECT_BINARY_DIR}/nrd_shaders" CACHE STRING "" FORCE)
+# NRD downloads ShaderMake and MathLib unless their targets exist. ShaderMake is
+# built in this project rather than as its own external tool build, and compiles
+# NRD's SPIR-V with the Vulkan SDK's dxc instead of downloading one; on Linux it
+# would only search PATH for it. FXC is only for DXBC, which NRD does not embed.
+find_program(SHADERMAKE_DXC_VK_PATH dxc HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+set(SHADERMAKE_TOOL OFF CACHE BOOL "" FORCE)
+set(SHADERMAKE_FIND_DXC OFF CACHE BOOL "" FORCE)
+set(SHADERMAKE_FIND_FXC OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/ShaderMake EXCLUDE_FROM_ALL)
+add_subdirectory(external/MathLib EXCLUDE_FROM_ALL)
 add_subdirectory(external/NRD)
 set_target_properties(NRD PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -258,13 +269,14 @@ set(NR_FFX_SDK_DIR "${PROJECT_SOURCE_DIR}/external/FidelityFX-SDK/sdk")
 if(NOT EXISTS "${NR_FFX_SDK_DIR}/src/backends/vk/ffx_vk.cpp")
     message(FATAL_ERROR "external/FidelityFX-SDK is missing or not at v1.1.4. Run: git submodule update --init external/FidelityFX-SDK")
 endif()
-add_library(NoorRayFsr STATIC
+set(NR_FFX_SDK_SOURCES
     "${NR_FFX_SDK_DIR}/src/backends/vk/ffx_vk.cpp"
     "${NR_FFX_SDK_DIR}/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp"
     "${NR_FFX_SDK_DIR}/src/shared/ffx_assert.cpp"
     "${NR_FFX_SDK_DIR}/src/shared/ffx_message.cpp"
     "${NR_FFX_SDK_DIR}/src/shared/ffx_object_management.cpp"
-    "${NR_FFX_SDK_DIR}/src/shared/ffx_breadcrumbs_list.cpp"
+    "${NR_FFX_SDK_DIR}/src/shared/ffx_breadcrumbs_list.cpp")
+add_library(NoorRayFsr STATIC ${NR_FFX_SDK_SOURCES}
     "${NR_FFX_SDK_DIR}/tools/ffx_shader_compiler/libs/SPIRV-Reflect/spirv_reflect.c"
     "${NR_CORE_DIR}/Realtime/FsrShaderBlobs.cpp")
 set_target_properties(NoorRayFsr PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -277,20 +289,27 @@ target_include_directories(NoorRayFsr SYSTEM PRIVATE
     "${NR_FFX_SDK_DIR}/src/components/fsr3upscaler"
     "${NR_FFX_SDK_DIR}/tools/ffx_shader_compiler/libs/SPIRV-Reflect")
 target_include_directories(NoorRayFsr PRIVATE "${NR_CORE_DIR}")
-target_compile_definitions(NoorRayFsr PUBLIC FFX_GCC FFX_FSR3UPSCALER)
+target_compile_definitions(NoorRayFsr PUBLIC FFX_FSR3UPSCALER $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:FFX_GCC>)
 # The SDK is third-party code written for MSVC: keep its warnings out of the
-# build. #embed is a C23 extension in C++ for Clang.
-target_compile_options(NoorRayFsr PRIVATE
-    "$<$<COMPILE_LANGUAGE:CXX>:-include;${NR_CORE_DIR}/Realtime/FfxPlatform.h>"
-    "$<$<COMPILE_LANGUAGE:CXX>:-w>"
-    "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:Clang>>:-Wno-c23-extensions>")
+# build. FfxPlatform.h, force-included into its C++ sources, supplies the
+# standard headers it uses without including and, for other compilers, the
+# MSVC functions. A source property rather than a target option: Visual
+# Studio generators would apply a language-conditional option to the C file.
+target_compile_options(NoorRayFsr PRIVATE $<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>)
+if(MSVC)
+    set_property(SOURCE ${NR_FFX_SDK_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+        "/FI${NR_CORE_DIR}/Realtime/FfxPlatform.h")
+else()
+    set_property(SOURCE ${NR_FFX_SDK_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+        -include "${NR_CORE_DIR}/Realtime/FfxPlatform.h")
+endif()
 target_link_libraries(NoorRayFsr PUBLIC Vulkan::Vulkan)
 # The Vulkan backend places its bookkeeping structures in one scratch arena at
 # 4-byte offsets. Optimized GCC code writes those structures with aligned SSE
 # moves, which fault there. The backend only schedules and records FSR's
 # dispatches, so it is built without optimization; everything else is not.
-set_source_files_properties("${NR_FFX_SDK_DIR}/src/backends/vk/ffx_vk.cpp"
-    PROPERTIES COMPILE_OPTIONS "-O0")
+set_property(SOURCE "${NR_FFX_SDK_DIR}/src/backends/vk/ffx_vk.cpp" APPEND PROPERTY COMPILE_OPTIONS
+    $<IF:$<CXX_COMPILER_ID:MSVC>,/Od,-O0>)
 
 # ---------------------------------------------------------------------------
 # NoorRay::Core - scene, realtime renderer, MaterialX materials
@@ -308,13 +327,9 @@ foreach(p IN LISTS NR_CORE_X)
 endforeach()
 add_library(libnoorray STATIC ${NR_CORE_FILES})
 add_library(NoorRay::Core ALIAS libnoorray)
-add_dependencies(libnoorray NoorRayShaders)
 set_target_properties(libnoorray PROPERTIES
     OUTPUT_NAME noorray
     POSITION_INDEPENDENT_CODE ON)
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(libnoorray PRIVATE -Wno-c23-extensions)
-endif()
 target_compile_features(libnoorray PUBLIC cxx_std_23)
 target_include_directories(libnoorray PUBLIC "${NR_CORE_DIR}")
 target_compile_definitions(libnoorray PUBLIC
@@ -325,7 +340,7 @@ target_link_libraries(libnoorray
     PUBLIC
         NoorRHI::NoorRHI glm Vulkan::Vulkan MaterialXCore Rtxdi
     PRIVATE
-        TBB::tbb NoorRayMaterialX MaterialXFormat NRD NoorRayFsr)
+        TBB::tbb NoorRayMaterialX MaterialXFormat NRD NoorRayFsr NoorRayShaderResources)
 
 # ---------------------------------------------------------------------------
 # NoorRay::IO - image files (stb formats, OpenEXR)
@@ -373,9 +388,8 @@ if(NR_BUILD_SPECTRAL)
     add_library(NoorRaySpectral STATIC
         "${NR_CORE_DIR}/Raytracing/SpectralRaytracer.cpp" ${NR_SPECTRAL_FILES})
     add_library(NoorRay::Spectral ALIAS NoorRaySpectral)
-    add_dependencies(NoorRaySpectral NoorRaySpectralShaders)
     set_target_properties(NoorRaySpectral PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_link_libraries(NoorRaySpectral PUBLIC libnoorray)
+    target_link_libraries(NoorRaySpectral PUBLIC libnoorray PRIVATE NoorRayShaderResources)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -408,48 +422,18 @@ set(NR_MATERIALX_STDLIB_DIR "${PROJECT_SOURCE_DIR}/external/materialx/libraries"
 # MaterialX reads definitions and generator sources only from files. Slang
 # generation needs genslang plus the genglsl sources it includes.
 file(GLOB_RECURSE NR_MATERIALX_LIBRARY_FILES CONFIGURE_DEPENDS
-    RELATIVE "${NR_MATERIALX_STDLIB_DIR}"
     "${NR_MATERIALX_STDLIB_DIR}/*.mtlx"
     "${NR_MATERIALX_STDLIB_DIR}/*.glsl"
     "${NR_MATERIALX_STDLIB_DIR}/*.slang")
 list(FILTER NR_MATERIALX_LIBRARY_FILES EXCLUDE REGEX "/gen(mdl|msl|osl)/")
-set(NR_MATERIALX_LIBRARY_ARRAYS "")
-set(NR_MATERIALX_LIBRARY_ENTRIES "")
-set(NR_MATERIALX_LIBRARY_PATHS "")
-set(_index 0)
-foreach(_file IN LISTS NR_MATERIALX_LIBRARY_FILES)
-    string(APPEND NR_MATERIALX_LIBRARY_ARRAYS
-        "constexpr unsigned char file${_index}[] = {\n#embed \"${NR_MATERIALX_STDLIB_DIR}/${_file}\"\n};\n")
-    string(APPEND NR_MATERIALX_LIBRARY_ENTRIES "    {\"${_file}\", file${_index}},\n")
-    list(APPEND NR_MATERIALX_LIBRARY_PATHS "${NR_MATERIALX_STDLIB_DIR}/${_file}")
-    math(EXPR _index "${_index} + 1")
-endforeach()
-set(NR_MATERIALX_LIBRARY_SOURCE "${PROJECT_BINARY_DIR}/MaterialXLibraryFiles.cpp")
-file(CONFIGURE OUTPUT "${NR_MATERIALX_LIBRARY_SOURCE}" @ONLY CONTENT [=[
-#include "Materials/MaterialX/MaterialXLibraryFiles.h"
-
-#include <array>
-
-namespace nr::materialx
-{
-namespace
-{
-@NR_MATERIALX_LIBRARY_ARRAYS@
-constexpr std::array files = std::to_array<EmbeddedLibraryFile>({
-@NR_MATERIALX_LIBRARY_ENTRIES@});
-} // namespace
-
-const std::span<const EmbeddedLibraryFile> embeddedLibraryFiles = files;
-} // namespace nr::materialx
-]=])
-set_property(SOURCE "${NR_MATERIALX_LIBRARY_SOURCE}"
-    APPEND PROPERTY OBJECT_DEPENDS ${NR_MATERIALX_LIBRARY_PATHS})
+cmrc_add_resource_library(NoorRayMaterialXLibrary NAMESPACE noorray_materialx
+    WHENCE "${NR_MATERIALX_STDLIB_DIR}" ${NR_MATERIALX_LIBRARY_FILES})
+set_target_properties(NoorRayMaterialXLibrary PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(NoorRayMaterialX STATIC
     src/libnoorray/Materials/MaterialX/MaterialXDocument.cpp
     src/libnoorray/Materials/MaterialX/SlangMaterialGenerator.cpp
-    src/libnoorray/Materials/MaterialX/SlangMaterialCompiler.cpp
-    "${NR_MATERIALX_LIBRARY_SOURCE}")
+    src/libnoorray/Materials/MaterialX/SlangMaterialCompiler.cpp)
 target_compile_features(NoorRayMaterialX PUBLIC cxx_std_23)
 target_include_directories(NoorRayMaterialX PUBLIC "${NR_CORE_DIR}")
 # Generated materials are compiled at runtime with the Slang compiler
@@ -471,12 +455,20 @@ set(SLANG_SLANG_LLVM_FLAVOR DISABLE CACHE STRING "" FORCE)
 set(SLANG_EXCLUDE_DAWN ON CACHE BOOL "" FORCE)
 set(SLANG_EXCLUDE_TINT ON CACHE BOOL "" FORCE)
 add_subdirectory(external/slang EXCLUDE_FROM_ALL)
+# Slang puts these back into ALL although its directory is excluded; neither the
+# slang command line nor its C++ parser is needed.
+set_target_properties(slang-dispatcher slang-cpp-parser PROPERTIES EXCLUDE_FROM_ALL ON)
 target_link_libraries(NoorRayMaterialX PUBLIC
     glm MaterialXGenSlang MaterialXGenShader MaterialXFormat MaterialXCore)
-target_link_libraries(NoorRayMaterialX PRIVATE slang)
-# MaterialInterface.slang is compiled into every generated material.
-target_compile_options(NoorRayMaterialX PRIVATE
-    "--embed-dir=${PROJECT_SOURCE_DIR}/src/libnoorray/Shaders")
+target_link_libraries(NoorRayMaterialX PRIVATE slang NoorRayMaterialXLibrary NoorRayShaderResources)
+# Generated materials are validated before they reach the driver, whose SPIR-V
+# compiler can crash on invalid modules. SPIRV-Tools is the copy Slang vendors;
+# its headers come from the SPIRV-Headers Slang already added.
+set(SPIRV_SKIP_EXECUTABLES ON CACHE BOOL "" FORCE)
+set(SPIRV_SKIP_TESTS ON CACHE BOOL "" FORCE)
+set(SPIRV_WERROR OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/slang/external/spirv-tools EXCLUDE_FROM_ALL)
+target_link_libraries(NoorRayMaterialX PRIVATE SPIRV-Tools-static)
 set_target_properties(NoorRayMaterialX PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
@@ -484,22 +476,12 @@ set_target_properties(NoorRayMaterialX PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # ---------------------------------------------------------------------------
 set(NR_SHADER_DIR "${NR_CORE_DIR}/Shaders")
 # Compiled SPIR-V is a build product: it lives in the binary tree and reaches
-# the library through #embed, which searches this directory.
+# the libraries as NoorRayShaderResources, by its path relative to this directory.
 set(NR_SHADER_BUILD_DIR "${PROJECT_BINARY_DIR}/shaders")
-target_compile_options(libnoorray PRIVATE
-    "$<$<COMPILE_LANGUAGE:CXX>:--embed-dir=${NR_SHADER_BUILD_DIR}>")
 file(GLOB NR_RAYTRACER_SHADER_INCLUDES CONFIGURE_DEPENDS
     "${NR_SHADER_DIR}/Raytracer/*.slang")
 file(GLOB NR_REALTIME_SHADER_INCLUDES CONFIGURE_DEPENDS
     "${NR_SHADER_DIR}/RealtimeRaytracer/*.slang")
-# NVIDIA SHaRC radiance cache: HLSL headers included by the realtime shaders.
-# SharcCommon.h leaves out-parameters unset on its early-return paths (41018).
-set(NR_SHARC_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/external/SHARC/include")
-if(NOT EXISTS "${NR_SHARC_INCLUDE_DIR}/SharcCommon.h")
-    message(FATAL_ERROR "external/SHARC is empty. Run: git submodule update --init external/SHARC")
-endif()
-file(GLOB NR_SHARC_HEADERS CONFIGURE_DEPENDS "${NR_SHARC_INCLUDE_DIR}/*.h")
-set(NR_SHARC_SHADER_FLAGS -I "${NR_SHARC_INCLUDE_DIR}" -Wno-41018)
 # NRD front-end helpers (NRD.hlsli) packing the denoiser inputs. Its
 # NRDConfig.hlsli is generated when external/NRD is configured below.
 set(NR_NRD_SHADER_FLAGS -I "${PROJECT_SOURCE_DIR}/external/NRD/Shaders")
@@ -509,6 +491,8 @@ set(NR_RTXDI_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/external/RTXDI-Library/Include")
 file(GLOB_RECURSE NR_RTXDI_HEADERS CONFIGURE_DEPENDS
     "${NR_RTXDI_INCLUDE_DIR}/Rtxdi/*.h" "${NR_RTXDI_INCLUDE_DIR}/Rtxdi/*.hlsli")
 set(NR_RTXDI_SHADER_FLAGS -I "${NR_RTXDI_INCLUDE_DIR}")
+# Everything that includes RTXDI's path tracer (Rtxdi/PT) needs these.
+set(NR_RTXDI_PT_SHADER_FLAGS -DRTXDI_SLANG=1 -DRTXDI_PATHTRACER_USE_REORDERING=0)
 
 # FSR 3.1 GLSL passes: one permutation, matching FsrUpscaler's context flags
 # and the check in FsrShaderBlobs.cpp. The accumulate pass is also built with
@@ -554,9 +538,7 @@ foreach(nr_fsr_pass prepare_inputs luma_pyramid shading_change_pyramid shading_c
 endforeach()
 nr_fsr_shader(accumulate 1 "ffx_fsr3upscaler_accumulate_pass_sharpen")
 add_custom_target(NoorRayFsrShaders DEPENDS ${NR_FSR_SHADER_OUT})
-add_dependencies(NoorRayFsr NoorRayFsrShaders)
-target_compile_options(NoorRayFsr PRIVATE
-    "$<$<COMPILE_LANGUAGE:CXX>:--embed-dir=${NR_SHADER_BUILD_DIR}>")
+target_link_libraries(NoorRayFsr PRIVATE NoorRayShaderResources)
 file(GLOB NR_SHARED_SHADER_ABI CONFIGURE_DEPENDS
     "${NR_CORE_DIR}/Shared/*.h")
 set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
@@ -568,6 +550,7 @@ set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/V
     "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
     "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
     "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
+    "${NR_SHADER_DIR}/Raytracer/GaussianSplat.slang"
     "${NR_SHADER_DIR}/Raytracer/SceneSurface.slang"
     "${NR_SHADER_DIR}/Raytracer/Environment.slang"
     "${NR_SHADER_DIR}/Raytracer/Sampling.slang"
@@ -576,13 +559,16 @@ set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/V
     "${NR_SHADER_DIR}/Gaussian/Gaussian.slang")
 set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracer.spv"
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracerLayered.spv"
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeGBuffer.spv"
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeGBufferLayered.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeMiss.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeShadowMiss.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/DefaultMaterialHit.spv"
-    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeSharcUpdate.spv"
-    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/SharcResolve.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeComposite.spv"
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeCompositeLayered.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeOutputAovs.spv"
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimePick.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv")
 set(NR_SHADER_VALIDATE_COMMANDS)
 if(NR_SPIRV_VAL_EXECUTABLE)
@@ -598,77 +584,98 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/Viewport.slang"
         -entry main -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
         -entry vertMain -stage vertex -entry fragMain -stage fragment
         -entry lightIdClear -stage compute -entry lightIdStamp -stage compute
         -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
-        ${NR_SHARC_SHADER_FLAGS} ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DSHARC_QUERY=1
+        ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage raygeneration -target spirv
         -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracer.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
+        ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_LAYERS=1
+        -entry main -stage raygeneration -target spirv
+        -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracerLayered.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
+        ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_GBUFFER=1
+        -entry main -stage raygeneration -target spirv
+        -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeGBuffer.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
+        ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_GBUFFER=1 -DREALTIME_LAYERS=1
+        -entry main -stage raygeneration -target spirv
+        -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeGBufferLayered.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeMiss.slang"
         -entry main -stage miss -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeMiss.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeShadowMiss.slang"
         -entry main -stage miss -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeShadowMiss.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/DefaultMaterialHit.slang"
         -entry main -stage closesthit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/DefaultMaterialHit.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
-        ${NR_SHARC_SHADER_FLAGS} ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DSHARC_UPDATE=1
-        -entry main -stage raygeneration -target spirv
-        -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeSharcUpdate.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/SharcResolve.slang"
-        ${NR_SHARC_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS}
-        -entry main -stage compute -target spirv
-        -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/SharcResolve.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeComposite.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage compute -target spirv
         -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeComposite.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeComposite.slang"
+        ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_LAYERED=1
+        -entry main -stage compute -target spirv
+        -profile spirv_1_5
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeCompositeLayered.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeOutputAovs.slang"
         ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage compute -target spirv
         -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeOutputAovs.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeOutputAovs.slang"
+        ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_PICK=1
+        -entry main -stage compute -target spirv
+        -profile spirv_1_5
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimePick.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/Accumulate.slang"
         ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage compute -target spirv
         -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv"
     ${NR_SHADER_VALIDATE_COMMANDS}
-    DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI} ${NR_SHARC_HEADERS}
+    DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
         ${NR_RTXDI_HEADERS}
         "${PROJECT_SOURCE_DIR}/external/NRD/Shaders/NRD.hlsli"
     COMMENT "Compiling viewport shaders" VERBATIM)
@@ -676,13 +683,25 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
 # RTXDI passes: RtxdiPasses.slang built once per RTXDI_PASS_* entry point.
 # Each is its own command so they compile in parallel.
 set(NR_RTXDI_SHADER_OUT)
-# The passes that test visibility trace shadow rays through the realtime
-# pipeline, so they are ray-generation stages; the others are compute shaders.
+# The passes that replay paths or trace final visibility are ray-generation
+# stages of the realtime pipeline; the others are compute shaders, which test
+# RTXDI's conservative visibility with inline ray queries.
 function(nr_rtxdi_pass pass output stage)
+    set(pt_flags)
+    set(pt_depends)
+    if(pass MATCHES "^PT_" OR pass STREQUAL "INITIAL")
+        set(pt_flags ${NR_RTXDI_PT_SHADER_FLAGS})
+        if(NOT pass STREQUAL "PT_BOILING")
+            set(pt_depends "${NR_SHADER_DIR}/RealtimeRaytracer/RtxdiPTPathTraceBody.inc")
+        endif()
+    endif()
     if(stage STREQUAL "raygeneration")
-        set(profile spirv_1_5+spvRayTracingKHR)
+        set(profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR)
     else()
-        set(profile spirv_1_5)
+        set(profile spirv_1_5+spvRayQueryKHR)
+    endif()
+    if(pass MATCHES "^(DI|PT)_BOILING$")
+        string(APPEND profile "+spvGroupNonUniform+spvGroupNonUniformBallot+spvGroupNonUniformArithmetic")
     endif()
     set(spv "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/${output}.spv")
     set(validate)
@@ -693,28 +712,29 @@ function(nr_rtxdi_pass pass output stage)
     add_custom_command(OUTPUT "${spv}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RtxdiPasses.slang"
-            ${NR_RTXDI_SHADER_FLAGS} ${NR_NRD_SHADER_FLAGS} -DRTXDI_PASS_${pass}=1
+            ${pt_flags} ${NR_RTXDI_SHADER_FLAGS} ${NR_NRD_SHADER_FLAGS}
+            -DRTXDI_PASS_${pass}=1
             -entry main -stage ${stage} -target spirv -profile ${profile}
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${spv}"
         ${validate}
-        DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI} ${NR_RTXDI_HEADERS}
+        DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI} ${NR_RTXDI_HEADERS} ${pt_depends}
             "${PROJECT_SOURCE_DIR}/external/NRD/Shaders/NRD.hlsli"
         COMMENT "Compiling RTXDI ${output}" VERBATIM)
     set(NR_RTXDI_SHADER_OUT ${NR_RTXDI_SHADER_OUT} "${spv}" PARENT_SCOPE)
 endfunction()
 nr_rtxdi_pass(PRESAMPLE_LIGHTS RtxdiPresampleLights compute)
 nr_rtxdi_pass(PRESAMPLE_REGIR RtxdiPresampleReGIR compute)
-nr_rtxdi_pass(DI_INITIAL RtxdiDIInitial raygeneration)
-nr_rtxdi_pass(DI_TEMPORAL RtxdiDITemporal raygeneration)
+nr_rtxdi_pass(PRESAMPLE_ENVIRONMENT RtxdiPresampleEnvironment compute)
+nr_rtxdi_pass(INITIAL RtxdiInitial raygeneration)
+nr_rtxdi_pass(DI_TEMPORAL RtxdiDITemporal compute)
 nr_rtxdi_pass(DI_BOILING RtxdiDIBoiling compute)
-nr_rtxdi_pass(DI_SPATIAL RtxdiDISpatial raygeneration)
-nr_rtxdi_pass(DI_SHADE RtxdiDIShade raygeneration)
-nr_rtxdi_pass(GI_TEMPORAL RtxdiGITemporal raygeneration)
-nr_rtxdi_pass(GI_BOILING RtxdiGIBoiling compute)
-nr_rtxdi_pass(GI_SPATIAL RtxdiGISpatial raygeneration)
-nr_rtxdi_pass(GI_SHADE RtxdiGIShade raygeneration)
+nr_rtxdi_pass(DI_SPATIAL RtxdiDISpatial compute)
+nr_rtxdi_pass(PT_TEMPORAL RtxdiPTTemporal raygeneration)
+nr_rtxdi_pass(PT_BOILING RtxdiPTBoiling compute)
+nr_rtxdi_pass(PT_SPATIAL RtxdiPTSpatial raygeneration)
+nr_rtxdi_pass(SHADE RtxdiShade raygeneration)
 add_custom_target(NoorRayShaders DEPENDS ${NR_SHADER_OUT} ${NR_RTXDI_SHADER_OUT})
 
 # Materials compile their hit stages at runtime from MaterialHit.slang. The
@@ -724,16 +744,12 @@ set(NR_MATERIAL_HIT_SOURCE
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/MaterialHit.preprocessed.slang")
 add_custom_command(OUTPUT "${NR_MATERIAL_HIT_SOURCE}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer"
-    COMMAND sh -c "\"$0\" -E \"$1\" > \"$2\""
-        "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/MaterialHit.slang"
-        "${NR_MATERIAL_HIT_SOURCE}"
-    DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
+    COMMAND "${CMAKE_COMMAND}" -DSLANGC=${NR_SLANGC_EXECUTABLE}
+        -DINPUT=${NR_SHADER_DIR}/RealtimeRaytracer/MaterialHit.slang
+        -DOUTPUT=${NR_MATERIAL_HIT_SOURCE}
+        -P "${PROJECT_SOURCE_DIR}/cmake/PreprocessSlang.cmake"
+    DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI} "${PROJECT_SOURCE_DIR}/cmake/PreprocessSlang.cmake"
     COMMENT "Preprocessing MaterialHit.slang" VERBATIM)
-add_custom_target(NoorRayMaterialHitSource DEPENDS "${NR_MATERIAL_HIT_SOURCE}")
-add_dependencies(NoorRayMaterialX NoorRayMaterialHitSource)
-target_compile_options(NoorRayMaterialX PRIVATE "--embed-dir=${NR_SHADER_BUILD_DIR}")
-set_property(SOURCE src/libnoorray/Materials/MaterialX/SlangMaterialCompiler.cpp
-    APPEND PROPERTY OBJECT_DEPENDS "${NR_MATERIAL_HIT_SOURCE}")
 
 # Spectral path tracer shaders, compiled only for NoorRay::Spectral.
 if(NR_BUILD_SPECTRAL)
@@ -756,50 +772,64 @@ if(NR_BUILD_SPECTRAL)
             -entry main -stage raygeneration -target spirv
             -profile spirv_1_5+spvRayTracingKHR
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/Raytracer.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.slang"
             -entry main -stage miss -target spirv
             -profile spirv_1_5+spvRayTracingKHR
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingMiss.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingHit.slang"
             -entry main -stage closesthit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/EmissionHit.slang"
             -entry main -stage closesthit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/EmissionHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
             -entry main -stage anyhit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/OpacityAnyHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
             -entry main -stage anyhit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianAnyHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
             -entry main -stage closesthit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
             -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -Wno-30081
+            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianHit.spv"
         ${NR_SPECTRAL_SHADER_VALIDATE_COMMANDS}
         DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
         COMMENT "Compiling spectral path tracer shaders" VERBATIM)
     add_custom_target(NoorRaySpectralShaders DEPENDS ${NR_SPECTRAL_SHADER_OUT})
-    target_compile_options(NoorRaySpectral PRIVATE
-        "$<$<COMPILE_LANGUAGE:CXX>:--embed-dir=${NR_SHADER_BUILD_DIR}>")
+endif()
+
+# Every compiled shader, and the Slang sources the material compiler builds on,
+# as the CMakeRC namespace noorray_shaders (Realtime/ShaderLoading.h).
+cmrc_add_resource_library(NoorRayShaderResources NAMESPACE noorray_shaders
+    WHENCE "${NR_SHADER_BUILD_DIR}"
+    ${NR_SHADER_OUT} ${NR_RTXDI_SHADER_OUT} ${NR_FSR_SHADER_OUT} ${NR_SPECTRAL_SHADER_OUT}
+    "${NR_MATERIAL_HIT_SOURCE}")
+cmrc_add_resources(NoorRayShaderResources WHENCE "${NR_SHADER_DIR}"
+    "${NR_SHADER_DIR}/RealtimeRaytracer/MaterialInterface.slang")
+set_target_properties(NoorRayShaderResources PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# The shader commands belong to these targets; depending on them keeps a
+# Makefile build from running a command twice.
+add_dependencies(NoorRayShaderResources NoorRayShaders NoorRayFsrShaders)
+if(NR_BUILD_SPECTRAL)
+    add_dependencies(NoorRayShaderResources NoorRaySpectralShaders)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -813,7 +843,6 @@ if(NR_BUILD_APPLICATION)
     add_executable(NoorRay ${NR_APP_FILES})
     set_target_properties(NoorRay PROPERTIES
         PREFIX "")
-    add_dependencies(NoorRay NoorRayShaders)
     target_include_directories(NoorRay PRIVATE
         "${NR_APP_DIR}" "${NR_CORE_DIR}" "${PROJECT_SOURCE_DIR}/external/materialx/source")
     target_link_libraries(NoorRay PRIVATE
@@ -827,9 +856,10 @@ if(NR_BUILD_APPLICATION)
         # The editor resolves scene-relative asset paths against the source
         # tree's assets; the library itself carries no such path.
         NOORRAY_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets")
-    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_compile_options(NoorRay PRIVATE -Wno-c23-extensions)
-    endif()
+    cmrc_add_resource_library(NoorRayAppAssets NAMESPACE noorray_app
+        WHENCE "${PROJECT_SOURCE_DIR}/assets"
+        "${PROJECT_SOURCE_DIR}/assets/fonts/Inter.ttf" "${PROJECT_SOURCE_DIR}/assets/imgui.ini")
+    target_link_libraries(NoorRay PRIVATE NoorRayAppAssets)
 endif()
 
 # The Hydra delegate is an optional host plugin.  It is intentionally kept

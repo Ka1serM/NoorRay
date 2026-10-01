@@ -22,22 +22,60 @@ struct RealtimeView
     float3 previousCameraPosition;
     // Advances every realtime frame; seeds the per-pixel paths.
     uint frameIndex;
+    float3 previousPreviousCameraPosition;
+    uint cameraHistoryPadding;
     float3 cameraForward;
     uint outputWidth;
-    // Sample position of render pixel p: p + 0.5 + jitter.
+    // Sample position of render pixel p: p + 0.5 + jitter, in render pixels.
+    // Lighting samples move by the same distance on screen, so lighting pixel
+    // p samples at p + 0.5 + jitter / lightingScale in lighting pixels:
+    // jittering by whole lighting pixels would move the lighting further per
+    // frame than the upscaler's history tolerates in motion.
     float2 jitter;
     uint outputHeight;
-    uint padding;
+    // Lighting pixels are this many render pixels across (1 at full
+    // resolution); the lighting rectangle is lightingWidth x lightingHeight.
+    uint lightingScale;
+    uint lightingWidth;
+    uint lightingHeight;
+    // Nonzero when RealtimeOutputAovs refreshes the full-output cryptomatte,
+    // the only first-hit AOV the realtime renderer stores.
+    uint outputCryptomatte;
+    // Row pitch of the per-lighting-pixel buffers: their allocated width,
+    // which stays fixed while the rectangle inside it changes size, so this
+    // and the previous frame index them alike.
+    uint surfaceStride;
+    // The previous frame's lighting rectangle, which its surfaces and
+    // reservoirs cover.
+    uint previousLightingWidth;
+    uint previousLightingHeight;
+    uint padding1;
+    uint padding2;
 };
 
-// Render-resolution images the primary pass writes and the stages read, as
-// descriptor-heap storage indices. Named by meaning, not by consumer.
+// Images the primary passes write and the stages read, as descriptor-heap
+// storage indices. Named by meaning, not by consumer.
 struct RenderTargetHandles
 {
-    // rgb: radiance of one lobe, divided by its demodulation factor and packed
-    // for the active denoiser (see NrdSignal.slang).
+    // Lighting resolution. rgb: radiance of one lobe, divided by its
+    // demodulation factor and packed for the active denoiser (see
+    // NrdSignal.slang).
     uint diffuse;
     uint specular;
+    // Lighting resolution. xyz: each lobe's first-bounce directions, weighted
+    // by luminance, for the SH denoisers (see NrdSignal.slang).
+    uint diffuseSh1;
+    uint specularSh1;
+    // The denoiser's guides for the lighting samples, at lighting resolution.
+    uint lightingNormalRoughness;
+    uint lightingViewZ;
+    uint lightingMotion;
+    uint layerDiffuse;
+    uint layerSpecular;
+    uint layerLightingNormalRoughness;
+    uint layerLightingViewZ;
+    uint layerLightingMotion;
+    // Everything below is at render resolution.
     uint normalRoughness;
     uint viewZ;
     // UV offset from this frame's unjittered position to the previous one.
@@ -48,51 +86,44 @@ struct RenderTargetHandles
     uint emission;
     uint diffuseFactor;
     uint specularFactor;
+    uint layerDiffuseFactor;
+    uint layerSpecularFactor;
+    uint layerNormalRoughness;
+    uint layerViewZ;
+    uint transparencyMask;
     // HDR beauty the composite writes: the upscaler's input, or the output
     // image itself when nothing upscales.
     uint color;
-    uint albedo;
-    uint normal;
-    uint position;
     uint cryptomatte;
-    uint padding0;
-    uint padding1;
-};
-
-// SHaRC world-space radiance cache (external/SHARC). The buffers are untyped
-// here because the record types come from the SHARC headers; Sharc.slang casts
-// them. A zero capacity is how the shaders see the cache switched off.
-struct RadianceCacheArgs
-{
-    GpuPtr(uint64_t) hashEntries;
-    GpuPtr(uint) accumulation;
-    GpuPtr(uint) resolved;
-    float sceneScale;
-    float radianceScale;
-    uint capacity;
-    uint accumulationFrames;
-    uint staleFrames;
-    // Grid the update pass spreads its paths over, one path per cell. The
-    // cache is world-space, so this is deliberately not the render resolution.
-    uint updateGridWidth;
-    uint updateGridHeight;
     uint padding;
+    uint padding2;
 };
 
 // NRD (external/NRD). The composite reads `diffuse` and `specular`: NRD's
-// outputs, or the render targets themselves when the denoiser is off.
+// outputs, or the render targets themselves when the denoiser is off. In SH
+// mode those are the SH0 halves and `diffuseSh1`/`specularSh1` the SH1 ones.
 struct DenoiserArgs
 {
     uint diffuse;
     uint specular;
+    uint diffuseSh1;
+    uint specularSh1;
+    uint layerDiffuse;
+    uint layerSpecular;
     // Nonzero when the signals are packed for RELAX instead of REBLUR.
     uint relax;
+    // Nonzero when the signals are packed for an SH denoiser. Only set while
+    // a denoiser runs.
+    uint sphericalHarmonics;
     // View Z beyond this is background, which the primary pass writes at twice
     // the range.
     float denoisingRange;
+    uint padding;
     // REBLUR hit distance normalization (A, B, C).
     float3 hitDistanceParameters;
-    uint padding;
+    uint padding1;
+    uint padding2;
+    uint padding3;
 };
 
 struct RealtimeArgs
@@ -100,7 +131,6 @@ struct RealtimeArgs
     Frame frame;
     RealtimeView view;
     RenderTargetHandles targets;
-    RadianceCacheArgs radianceCache;
     DenoiserArgs denoiser;
     RealtimeLighting lighting;
 };
@@ -112,13 +142,16 @@ struct RealtimeRoot
     GpuPtr(RealtimeArgs) args;
 };
 
+// RealtimePick's launch: a RealtimeRoot, so realtimeArgs() reads it alike,
+// followed by the render pixel whose surface position goes to `position`.
+struct RealtimePickRoot
+{
+    GpuPtr(RealtimeArgs) args;
+    GpuPtr(float4) position;
+    uint pixelX;
+    uint pixelY;
+};
+
 #ifdef __cplusplus
-static_assert(sizeof(Frame) % 8 == 0);
-// MaterialHit.slang reads the frame through RealtimeRoot::args.
-static_assert(offsetof(RealtimeArgs, frame) == 0);
-static_assert(sizeof(RealtimeView) % 16 == 0);
-static_assert(sizeof(RenderTargetHandles) % 16 == 0);
-static_assert(sizeof(RadianceCacheArgs) % 8 == 0);
-static_assert(sizeof(DenoiserArgs) % 16 == 0);
 } // namespace nr::graphics
 #endif

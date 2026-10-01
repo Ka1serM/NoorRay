@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -14,6 +15,12 @@ namespace
 {
 constexpr nrd::Identifier ReblurIdentifier = 0;
 constexpr nrd::Identifier RelaxIdentifier = 1;
+constexpr nrd::Identifier ReblurShIdentifier = 2;
+constexpr nrd::Identifier RelaxShIdentifier = 3;
+constexpr nrd::Identifier ReblurLayerIdentifier = 4;
+constexpr nrd::Identifier RelaxLayerIdentifier = 5;
+// Weight of each frame's time in the smoothed frame time.
+constexpr float FrameTimeSmoothing = 0.1f;
 // View Z beyond this is background; the image pass writes twice this value.
 constexpr float DenoisingRange = 100000.0f;
 // Constant-buffer ring capacity in frames of dispatches. Entries are reused
@@ -38,6 +45,41 @@ void check(const nrd::Result result, const char* what)
     if (result != nrd::Result::SUCCESS)
         throw std::runtime_error(std::string("NRD: ") + what + " failed ("
             + std::to_string(static_cast<int>(result)) + ")");
+}
+
+// Histories span each denoiser's recommended accumulation time at `fps`.
+std::uint32_t historyFrames(const float accumulationTime, const float fps,
+    const std::uint32_t maximum)
+{
+    return std::clamp(nrd::GetMaxAccumulatedFrameNum(accumulationTime, fps), 1u, maximum);
+}
+
+// The ReSTIR PT path's first-bounce hit distance goes to one lobe per pixel,
+// picked by the lobes' share of the BSDF, so the other lobe's is
+// reconstructed from neighbours. ReSTIR DI provides a clean direct-light hit
+// distance for diffuse; the small minHitDistanceWeight gives that guide the
+// authority to reject samples across a hard local-light shadow boundary
+// instead of softening it.
+nrd::ReblurSettings reblurSettings(const float fps)
+{
+    nrd::ReblurSettings settings{};
+    settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
+    settings.minHitDistanceWeight = 0.01f;
+    settings.maxAccumulatedFrameNum = historyFrames(nrd::REBLUR_DEFAULT_ACCUMULATION_TIME, fps,
+        nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
+    return settings;
+}
+
+nrd::RelaxSettings relaxSettings(const float fps)
+{
+    nrd::RelaxSettings settings{};
+    settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
+    settings.minHitDistanceWeight = 0.01f;
+    settings.enableAntiFirefly = true;
+    settings.diffuseMaxAccumulatedFrameNum = settings.specularMaxAccumulatedFrameNum =
+        historyFrames(nrd::RELAX_DEFAULT_ACCUMULATION_TIME, fps,
+            nrd::RELAX_MAX_HISTORY_FRAME_NUM);
+    return settings;
 }
 
 VkFormat vulkanFormat(const nrd::Format format)
@@ -104,6 +146,7 @@ struct Denoiser::Resources
 {
     VkDevice device{VK_NULL_HANDLE};
     VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};
+    VkPipelineCache pipelineCache{VK_NULL_HANDLE};
     std::vector<VkSampler> samplers;
     // Indexed by descriptor set number: NRD's resources space and its
     // constant-buffer-and-samplers space.
@@ -139,73 +182,111 @@ Denoiser::Denoiser(noorrhi::Device& device)
     : device_(device)
     , resources_(std::make_unique<Resources>())
 {
-    // Both denoisers share one instance, so its pools and pipelines cover
-    // either and switching between them needs no reallocation.
-    const nrd::DenoiserDesc denoisers[] = {
-        {ReblurIdentifier, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR},
-        {RelaxIdentifier, nrd::Denoiser::RELAX_DIFFUSE_SPECULAR}};
-    nrd::InstanceCreationDesc creation{};
-    creation.denoisers = denoisers;
-    creation.denoisersNum = 2;
-    check(nrd::CreateInstance(creation, instance_), "CreateInstance");
-
-    // One lobe is traced per pixel, so the other signal's hit distance is
-    // reconstructed from neighbours.
-    nrd::ReblurSettings reblur{};
-    reblur.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
-    check(nrd::SetDenoiserSettings(*instance_, ReblurIdentifier, &reblur),
-        "SetDenoiserSettings");
-    nrd::RelaxSettings relax{};
-    relax.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
-    // ReSTIR DI provides a clean direct-light distance.  Give that guide more
-    // authority than the generic default, so RELAX rejects samples across a
-    // hard point-light visibility transition instead of softening it.  Keep
-    // the full five A-trous iterations and temporal history for noise-free
-    // output; the tighter guide is what preserves the edge.
-    relax.minHitDistanceWeight = 0.01f;
-    relax.enableAntiFirefly = true;
-    check(nrd::SetDenoiserSettings(*instance_, RelaxIdentifier, &relax),
-        "SetDenoiserSettings");
-
     const noorrhi::interop::DeviceHandles handles = noorrhi::interop::device_handles(device_);
     resources_->device = reinterpret_cast<VkDevice>(handles.device);
     resources_->physicalDevice = reinterpret_cast<VkPhysicalDevice>(handles.physical_device);
+    resources_->pipelineCache = reinterpret_cast<VkPipelineCache>(handles.pipeline_cache);
     vkGetPhysicalDeviceMemoryProperties(resources_->physicalDevice,
         &resources_->memoryProperties);
-    createPipelines();
 }
 
 Denoiser::~Denoiser()
 {
-    Resources& r = *resources_;
-    if (r.device != VK_NULL_HANDLE) {
-        // Recorded dispatches may still reference everything below.
-        device_.synchronize();
-        destroyPools();
-        vkDestroyDescriptorPool(r.device, r.constantsPool, nullptr);
-        if (r.constantMapping)
-            vkUnmapMemory(r.device, r.constantMemory);
-        vkDestroyBuffer(r.device, r.constantBuffer, nullptr);
-        vkFreeMemory(r.device, r.constantMemory, nullptr);
-        for (VkPipeline pipeline : r.pipelines)
-            vkDestroyPipeline(r.device, pipeline, nullptr);
-        vkDestroyPipelineLayout(r.device, r.pipelineLayout, nullptr);
-        for (VkDescriptorSetLayout layout : r.setLayouts)
-            vkDestroyDescriptorSetLayout(r.device, layout, nullptr);
-        for (VkSampler sampler : r.samplers)
-            vkDestroySampler(r.device, sampler, nullptr);
+    if (!instance_)
+        return;
+    // Recorded dispatches may still reference everything configure() made.
+    device_.synchronize();
+    destroyInstance();
+}
+
+std::vector<std::uint32_t> Denoiser::identifiers() const
+{
+    const bool relax = layout_.mode == DenoiserMode::Relax;
+    std::vector<std::uint32_t> result{layout_.sphericalHarmonics
+        ? (relax ? RelaxShIdentifier : ReblurShIdentifier)
+        : (relax ? RelaxIdentifier : ReblurIdentifier)};
+    if (layout_.layers)
+        result.push_back(relax ? RelaxLayerIdentifier : ReblurLayerIdentifier);
+    return result;
+}
+
+void Denoiser::configure(const DenoiserLayout& layout)
+{
+    destroyInstance();
+    layout_ = layout;
+    if (layout_.mode == DenoiserMode::Off)
+        return;
+    // Only the denoisers this layout runs: every one in an instance keeps
+    // its own history pools, whether it runs or not.
+    std::vector<nrd::DenoiserDesc> denoisers;
+    for (const std::uint32_t identifier : identifiers()) {
+        const bool sh = identifier == ReblurShIdentifier || identifier == RelaxShIdentifier;
+        const bool relax = identifier == RelaxIdentifier || identifier == RelaxShIdentifier
+            || identifier == RelaxLayerIdentifier;
+        denoisers.push_back({identifier, relax
+            ? (sh ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR_SH : nrd::Denoiser::RELAX_DIFFUSE_SPECULAR)
+            : (sh ? nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_SH : nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR)});
     }
-    if (instance_)
-        nrd::DestroyInstance(*instance_);
+    nrd::InstanceCreationDesc creation{};
+    creation.denoisers = denoisers.data();
+    creation.denoisersNum = static_cast<std::uint32_t>(denoisers.size());
+    check(nrd::CreateInstance(creation, instance_), "CreateInstance");
+    // A new instance starts from NRD's default settings.
+    historyFrames_ = {};
+    updateHistoryLength(smoothedFrameTimeMilliseconds_ == 0.0f
+        ? 1000.0f / 60.0f : smoothedFrameTimeMilliseconds_);
+    createPipelines();
+    createPools();
+}
+
+void Denoiser::destroyInstance()
+{
+    if (!instance_)
+        return;
+    Resources& r = *resources_;
+    destroyPools();
+    vkDestroyDescriptorPool(r.device, r.constantsPool, nullptr);
+    if (r.constantMapping)
+        vkUnmapMemory(r.device, r.constantMemory);
+    vkDestroyBuffer(r.device, r.constantBuffer, nullptr);
+    vkFreeMemory(r.device, r.constantMemory, nullptr);
+    for (VkPipeline pipeline : r.pipelines)
+        vkDestroyPipeline(r.device, pipeline, nullptr);
+    vkDestroyPipelineLayout(r.device, r.pipelineLayout, nullptr);
+    for (VkDescriptorSetLayout layout : r.setLayouts)
+        vkDestroyDescriptorSetLayout(r.device, layout, nullptr);
+    for (VkSampler sampler : r.samplers)
+        vkDestroySampler(r.device, sampler, nullptr);
+    Resources device;
+    device.device = r.device;
+    device.physicalDevice = r.physicalDevice;
+    device.pipelineCache = r.pipelineCache;
+    device.memoryProperties = r.memoryProperties;
+    r = std::move(device);
+    nrd::DestroyInstance(*instance_);
+    instance_ = nullptr;
+    diffuseOutput_ = {};
+    specularOutput_ = {};
+    diffuseSh1Output_ = {};
+    specularSh1Output_ = {};
+    layerDiffuseOutput_ = {};
+    layerSpecularOutput_ = {};
 }
 
 nr::graphics::DenoiserArgs Denoiser::args(const RenderTargets& targets) const
 {
     nr::graphics::DenoiserArgs args{};
-    const bool off = mode_ == DenoiserMode::Off;
+    const bool off = layout_.mode == DenoiserMode::Off;
     args.diffuse = off ? targets.handles().diffuse : diffuseOutput_.storage_handle().value;
     args.specular = off ? targets.handles().specular : specularOutput_.storage_handle().value;
-    args.relax = mode_ == DenoiserMode::Relax ? 1u : 0u;
+    args.diffuseSh1 = diffuseSh1Output_.storage_handle().value;
+    args.specularSh1 = specularSh1Output_.storage_handle().value;
+    args.layerDiffuse = off ? targets.handles().layerDiffuse
+        : layerDiffuseOutput_.storage_handle().value;
+    args.layerSpecular = off ? targets.handles().layerSpecular
+        : layerSpecularOutput_.storage_handle().value;
+    args.relax = layout_.mode == DenoiserMode::Relax ? 1u : 0u;
+    args.sphericalHarmonics = sphericalHarmonics() ? 1u : 0u;
     args.denoisingRange = DenoisingRange;
     const nrd::ReblurHitDistanceParameters hitDistance{};
     args.hitDistanceParameters = {hitDistance.A, hitDistance.B, hitDistance.C};
@@ -214,7 +295,7 @@ nr::graphics::DenoiserArgs Denoiser::args(const RenderTargets& targets) const
 
 void Denoiser::record(const FrameContext& frame, const RenderTargets& targets)
 {
-    if (mode_ == DenoiserMode::Off)
+    if (layout_.mode == DenoiserMode::Off)
         return;
     nrd::CommonSettings settings{};
     std::memcpy(settings.worldToViewMatrix, frame.worldToView.data(), sizeof(float) * 16);
@@ -229,22 +310,53 @@ void Denoiser::record(const FrameContext& frame, const RenderTargets& targets)
     settings.motionVectorScale[0] = 1.0f;
     settings.motionVectorScale[1] = 1.0f;
     settings.motionVectorScale[2] = 0.0f;
-    // NRD's convention is sampleUv = pixelUv + cameraJitter, in pixels.
-    settings.cameraJitter[0] = frame.jitter[0];
-    settings.cameraJitter[1] = frame.jitter[1];
-    settings.cameraJitterPrev[0] = frame.previousJitter[0];
-    settings.cameraJitterPrev[1] = frame.previousJitter[1];
-    const auto width = static_cast<std::uint16_t>(frame.render.width);
-    const auto height = static_cast<std::uint16_t>(frame.render.height);
-    settings.resourceSize[0] = settings.resourceSizePrev[0] = width;
-    settings.resourceSize[1] = settings.resourceSizePrev[1] = height;
-    settings.rectSize[0] = settings.rectSizePrev[0] = width;
-    settings.rectSize[1] = settings.rectSizePrev[1] = height;
+    // NRD's convention is sampleUv = pixelUv + cameraJitter, in pixels, and
+    // it denoises lighting pixels: the render jitter over the lighting scale.
+    // A scale change restarts history, so both frames share the scale.
+    const float lightingScale = static_cast<float>(frame.lightingScale);
+    settings.cameraJitter[0] = frame.jitter[0] / lightingScale;
+    settings.cameraJitter[1] = frame.jitter[1] / lightingScale;
+    settings.cameraJitterPrev[0] = frame.previousJitter[0] / lightingScale;
+    settings.cameraJitterPrev[1] = frame.previousJitter[1] / lightingScale;
+    // NRD's dynamic resolution: the images keep their allocation while the
+    // lighting rectangle follows the viewport, and history carries across a
+    // change of rectangle.
+    settings.resourceSize[0] = settings.resourceSizePrev[0] =
+        static_cast<std::uint16_t>(layout_.extent.width);
+    settings.resourceSize[1] = settings.resourceSizePrev[1] =
+        static_cast<std::uint16_t>(layout_.extent.height);
+    settings.rectSize[0] = static_cast<std::uint16_t>(frame.lighting.width);
+    settings.rectSize[1] = static_cast<std::uint16_t>(frame.lighting.height);
+    settings.rectSizePrev[0] = static_cast<std::uint16_t>(frame.previousLighting.width);
+    settings.rectSizePrev[1] = static_cast<std::uint16_t>(frame.previousLighting.height);
     settings.denoisingRange = DenoisingRange;
     settings.frameIndex = frameIndex_++;
     settings.accumulationMode = frame.resetHistory
         ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
+    updateHistoryLength(frame.frameTimeMilliseconds);
     dispatch(settings, targets);
+}
+
+void Denoiser::updateHistoryLength(const float frameTimeMilliseconds)
+{
+    smoothedFrameTimeMilliseconds_ = smoothedFrameTimeMilliseconds_ == 0.0f
+        ? frameTimeMilliseconds
+        : smoothedFrameTimeMilliseconds_
+            + FrameTimeSmoothing * (frameTimeMilliseconds - smoothedFrameTimeMilliseconds_);
+    const float fps = 1000.0f / std::max(smoothedFrameTimeMilliseconds_, 0.1f);
+    const nrd::ReblurSettings reblur = reblurSettings(fps);
+    const nrd::RelaxSettings relax = relaxSettings(fps);
+    // NRD re-derives its constants on every settings change; only pass on
+    // one that changes a history length.
+    const std::array<std::uint32_t, 2> frames{reblur.maxAccumulatedFrameNum,
+        relax.diffuseMaxAccumulatedFrameNum};
+    if (frames == historyFrames_)
+        return;
+    historyFrames_ = frames;
+    const bool relaxMode = layout_.mode == DenoiserMode::Relax;
+    for (const std::uint32_t identifier : identifiers())
+        check(nrd::SetDenoiserSettings(*instance_, identifier,
+            relaxMode ? static_cast<const void*>(&relax) : &reblur), "SetDenoiserSettings");
 }
 
 void Denoiser::createPipelines()
@@ -335,7 +447,7 @@ void Denoiser::createPipelines()
         pipelineInfo.stage.pName = desc.shaderEntryPoint;
         pipelineInfo.layout = r.pipelineLayout;
         VkPipeline pipeline{};
-        const VkResult result = vkCreateComputePipelines(r.device, VK_NULL_HANDLE, 1,
+        const VkResult result = vkCreateComputePipelines(r.device, r.pipelineCache, 1,
             &pipelineInfo, nullptr, &pipeline);
         vkDestroyShaderModule(r.device, module, nullptr);
         check(result, "vkCreateComputePipelines");
@@ -422,13 +534,11 @@ void Denoiser::destroyPools()
     pool_.clear();
 }
 
-void Denoiser::resize(const Extent render)
+void Denoiser::createPools()
 {
     Resources& r = *resources_;
-    destroyPools();
-    extent_ = render;
-    const std::uint32_t width = render.width;
-    const std::uint32_t height = render.height;
+    const std::uint32_t width = layout_.extent.width;
+    const std::uint32_t height = layout_.extent.height;
     const auto output = [&] {
         return device_.image<std::byte>(width, height,
             noorrhi::ImageUsage::Storage | noorrhi::ImageUsage::Sampled,
@@ -436,6 +546,14 @@ void Denoiser::resize(const Extent render)
     };
     diffuseOutput_ = output();
     specularOutput_ = output();
+    if (layout_.sphericalHarmonics) {
+        diffuseSh1Output_ = output();
+        specularSh1Output_ = output();
+    }
+    if (layout_.layers) {
+        layerDiffuseOutput_ = output();
+        layerSpecularOutput_ = output();
+    }
 
     const nrd::InstanceDesc& desc = *nrd::GetInstanceDesc(*instance_);
     const std::uint32_t textureCount = desc.permanentPoolSize + desc.transientPoolSize;
@@ -570,28 +688,38 @@ std::uint64_t Denoiser::descriptorSet(const std::uint16_t pipelineIndex,
 
 void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets& targets)
 {
-    const nrd::Identifier identifier = mode_ == DenoiserMode::Relax
-        ? RelaxIdentifier : ReblurIdentifier;
+    const std::vector<std::uint32_t> running = identifiers();
+    const nrd::Identifier layerIdentifier = layout_.mode == DenoiserMode::Relax
+        ? RelaxLayerIdentifier : ReblurLayerIdentifier;
     Resources& r = *resources_;
     check(nrd::SetCommonSettings(*instance_, settings), "SetCommonSettings");
     const nrd::DispatchDesc* dispatches = nullptr;
     std::uint32_t dispatchCount = 0;
-    check(nrd::GetComputeDispatches(*instance_, &identifier, 1, dispatches, dispatchCount),
+    check(nrd::GetComputeDispatches(*instance_, running.data(),
+            static_cast<std::uint32_t>(running.size()), dispatches, dispatchCount),
         "GetComputeDispatches");
 
     const nrd::InstanceDesc& desc = *nrd::GetInstanceDesc(*instance_);
     const auto view = [&](const noorrhi::ImageHandle image) {
         return static_cast<std::uint64_t>(noorrhi::interop::image_view(device_, image));
     };
-    const auto inputView = [&](const nrd::ResourceType type) -> std::uint64_t {
+    const auto inputView = [&](const nrd::ResourceType type, const bool layer) -> std::uint64_t {
         switch (type) {
-        case nrd::ResourceType::IN_MV: return view(targets.motion());
-        case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return view(targets.normalRoughness());
-        case nrd::ResourceType::IN_VIEWZ: return view(targets.viewZ());
-        case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return view(targets.diffuse());
-        case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST: return view(targets.specular());
-        case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return view(diffuseOutput_.handle());
-        case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return view(specularOutput_.handle());
+        case nrd::ResourceType::IN_MV: return view(layer ? targets.layerLightingMotion() : targets.lightingMotion());
+        case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return view(layer ? targets.layerLightingNormalRoughness() : targets.lightingNormalRoughness());
+        case nrd::ResourceType::IN_VIEWZ: return view(layer ? targets.layerLightingViewZ() : targets.lightingViewZ());
+        case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return view(layer ? targets.layerDiffuse() : targets.diffuse());
+        case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST: return view(layer ? targets.layerSpecular() : targets.specular());
+        case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return view(layer ? layerDiffuseOutput_.handle() : diffuseOutput_.handle());
+        case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return view(layer ? layerSpecularOutput_.handle() : specularOutput_.handle());
+        case nrd::ResourceType::IN_DIFF_SH0: return view(targets.diffuse());
+        case nrd::ResourceType::IN_DIFF_SH1: return view(targets.diffuseSh1());
+        case nrd::ResourceType::IN_SPEC_SH0: return view(targets.specular());
+        case nrd::ResourceType::IN_SPEC_SH1: return view(targets.specularSh1());
+        case nrd::ResourceType::OUT_DIFF_SH0: return view(diffuseOutput_.handle());
+        case nrd::ResourceType::OUT_DIFF_SH1: return view(diffuseSh1Output_.handle());
+        case nrd::ResourceType::OUT_SPEC_SH0: return view(specularOutput_.handle());
+        case nrd::ResourceType::OUT_SPEC_SH1: return view(specularSh1Output_.handle());
         default:
             throw std::runtime_error(std::string("NRD: unsupported resource ")
                 + nrd::GetResourceTypeString(type));
@@ -611,6 +739,7 @@ void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets
     std::vector<std::uint64_t> views;
     for (std::uint32_t i = 0; i < dispatchCount; ++i) {
         const nrd::DispatchDesc& dispatch = dispatches[i];
+        const bool layer = dispatch.identifier == layerIdentifier;
         views.clear();
         for (std::uint32_t j = 0; j < dispatch.resourcesNum; ++j) {
             const nrd::ResourceDesc& resource = dispatch.resources[j];
@@ -621,7 +750,7 @@ void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets
                 handle = reinterpret_cast<std::uint64_t>(
                     pool_.at(desc.permanentPoolSize + resource.indexInPool).view);
             else
-                handle = inputView(resource.type);
+                handle = inputView(resource.type, layer);
             views.push_back(handle);
             views.push_back(resource.descriptorType == nrd::DescriptorType::STORAGE_TEXTURE);
         }
@@ -650,26 +779,22 @@ void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets
             transitionPoolsToGeneral(commandBuffer);
 
         // NRD dispatches form a strict producer/consumer chain through its
-        // transient and permanent images.  A pipeline bind or a subsequent
-        // dispatch does not make earlier shader writes visible in Vulkan.
-        // RELAX is especially sensitive because its longer A-trous chain can
-        // otherwise read partially written tiles, typically exposed as black
-        // blocks at a screen edge.  The first barrier also makes the renderer
-        // and ReSTIR writes visible to NRD; the barrier after the final
-        // dispatch makes NRD's outputs visible to the composite pass.
-        const auto shaderMemoryBarrier = [&](const VkPipelineStageFlags sourceStages) {
-            VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            vkCmdPipelineBarrier(command, sourceStages,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                1, &barrier, 0, nullptr, 0, nullptr);
-        };
-        shaderMemoryBarrier(VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR
-            | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        // transient and permanent images, and a pipeline bind does not make
+        // earlier shader writes visible in Vulkan. RELAX is especially
+        // sensitive because its longer A-trous chain can otherwise read
+        // partially written tiles, typically exposed as black blocks at a
+        // screen edge. The interop recording itself is ordered against the
+        // renderer's passes around it.
+        VkMemoryBarrier chain{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        chain.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        chain.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 
         std::vector<VkDescriptorSet> sets(r.setLayouts.size(), VK_NULL_HANDLE);
-        for (const Recorded& dispatch : recorded) {
+        for (std::size_t i = 0; i < recorded.size(); ++i) {
+            const Recorded& dispatch = recorded[i];
+            if (i != 0)
+                vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &chain, 0, nullptr, 0, nullptr);
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, dispatch.pipeline);
             sets[r.resourcesSet] = dispatch.resources;
             sets[r.constantsSet] = r.constants;
@@ -682,7 +807,6 @@ void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets
                     constants ? &dispatch.constantOffset : nullptr);
             }
             vkCmdDispatch(command, dispatch.groupsX, dispatch.groupsY, 1);
-            shaderMemoryBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
         }
     });
 }

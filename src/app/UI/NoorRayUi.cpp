@@ -140,6 +140,8 @@ void NoorRayUi::run()
                     accumulatedSamples = 0;
                 }
             }
+            if (session.prepareViewport())
+                accumulatedSamples = 0;
             if (viewportPanel) viewportPanel->preparePresentation();
         }
         if (session.hasRenderer()) session.commit();

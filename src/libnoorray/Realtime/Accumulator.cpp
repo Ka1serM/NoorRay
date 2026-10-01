@@ -4,15 +4,12 @@
 
 namespace
 {
-alignas(uint32_t) constexpr unsigned char accumulateSpv[] = {
-    #embed "RealtimeRaytracer/Accumulate.spv"
-};
 // Matches Accumulate.slang.
 constexpr uint32_t GroupSize = 8u;
 }
 
 Accumulator::Accumulator(noorrhi::Device& device)
-    : pipeline_(device.compute(loadShader(device, accumulateSpv)))
+    : pipeline_(device.compute(loadShader(device, "RealtimeRaytracer/Accumulate.spv")))
 {
 }
 

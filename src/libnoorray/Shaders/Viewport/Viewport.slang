@@ -6,29 +6,29 @@ static const int GROUP_SIZE = 16;
 
 [[vk::push_constant]] ConstantBuffer<ViewportCompositeRoot> root;
 
-static const float3x3 ACESInputMat = float3x3(
-    0.59719, 0.35458, 0.04823,
-    0.07600, 0.90834, 0.01566,
-    0.02840, 0.13383, 0.83777);
-
-static const float3x3 ACESOutputMat = float3x3(
-     1.60475, -0.53108, -0.07367,
-    -0.10208,  1.10813, -0.00605,
-    -0.00327, -0.07276,  1.07602);
-
-float3 rrtAndOdtFit(float3 value)
+float rawHighlightCurve1(float value)
 {
-    float3 a = value * (value + 0.0245786) - 0.000090537;
-    float3 b = value * (0.983729 * value + 0.4329510) + 0.238081;
-    return a / b;
+    if (value <= 0.0) return 0.0;
+    // Keep the lower range close to the Blender Raw look while reducing the
+    // early highlight clipping of its LUT. This rational segment maps 1.0 to
+    // about 0.61 without a log/exp conversion.
+    const float mid = value / (1.0 + 0.78 * max(value - 0.18, 0.0));
+
+    // A continuous, unit-slope knee eases values above 0.85 toward white. It
+    // preserves a little highlight clipping while keeping bright regions from
+    // flattening abruptly. This stays in display-linear values; no sRGB OETF.
+    const float knee = 0.85;
+    if (mid <= knee) return mid;
+    const float headroom = 1.0 - knee;
+    return 1.0 - headroom * headroom / (mid + 1.0 - 2.0 * knee);
 }
 
-float3 acesFitted(float3 color)
+float3 rawHighlightCurve(float3 color)
 {
-    color = mul(ACESInputMat, color);
-    color = rrtAndOdtFit(color);
-    color = mul(ACESOutputMat, color);
-    return clamp(color, 0.0, 1.0);
+    return clamp(float3(
+        rawHighlightCurve1(color.r),
+        rawHighlightCurve1(color.g),
+        rawHighlightCurve1(color.b)), 0.0, 1.0);
 }
 
 float3 hashIdToColor(uint id)
@@ -177,9 +177,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     RWTexture2D<float4> colorImage = ResourceDescriptorHeap[pushConstants.colorImage];
     RWTexture2D<float4> outputImage = ResourceDescriptorHeap[pushConstants.outputImage];
     RWTexture2D<uint> idImage = ResourceDescriptorHeap[pushConstants.idImage];
-    RWTexture2D<float4> albedoImage = ResourceDescriptorHeap[pushConstants.albedoImage];
-    RWTexture2D<float4> normalImage = ResourceDescriptorHeap[pushConstants.normalImage];
-    RWTexture2D<float4> positionImage = ResourceDescriptorHeap[pushConstants.positionImage];
+    // Not every renderer writes the albedo, normal and position images, so
+    // only their own views fetch their descriptors.
     uint* overdrawImage = pushConstants.overdraw;
     // The images may be allocated larger than the render. Only the logical
     // rectangle is traced, and the overdraw buffer uses its width as stride.
@@ -207,7 +206,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         const float3 straight = alpha > 0.0
             ? hdr.rgb / alpha * exp2(clamp(pushConstants.exposure, -20.0, 20.0))
             : float3(0.0);
-        color = pushConstants.tonemappingEnabled != 0 ? acesFitted(straight) : straight;
+        color = pushConstants.tonemappingEnabled != 0 ? rawHighlightCurve(straight) : straight;
 
         if (pushConstants.selectedCryptomatteId != ~0u)
         {
@@ -236,6 +235,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     {
     case 1: // Albedo
     {
+        RWTexture2D<float4> albedoImage = ResourceDescriptorHeap[pushConstants.albedoImage];
         const float4 s = albedoImage[pixel];
         color = s.rgb;
         alpha = s.a;
@@ -243,6 +243,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     }
     case 2: // Normal — remap [-1, 1] → [0, 1]
     {
+        RWTexture2D<float4> normalImage = ResourceDescriptorHeap[pushConstants.normalImage];
         const float3 n = normalImage[pixel].xyz;
         color = n * 0.5 + 0.5;
         break;
@@ -254,6 +255,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     }
     case 4: // Position — visualize as absolute world-space distance
     {
+        RWTexture2D<float4> positionImage = ResourceDescriptorHeap[pushConstants.positionImage];
         const float3 p = positionImage[pixel].xyz;
         color = abs(p) / (abs(p) + 1.0); // Reinhard-like to keep it in [0,1]
         break;
@@ -273,5 +275,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     }
     }
 
-    outputImage[threadId.xy] = float4(color, alpha);
+    // RmlUi's Vulkan blend state expects premultiplied color. Keeping the
+    // viewport texture in that form lets transparent-background renders show
+    // the viewport panel behind the image without dark fringes.
+    outputImage[threadId.xy] = float4(color * alpha, alpha);
 }

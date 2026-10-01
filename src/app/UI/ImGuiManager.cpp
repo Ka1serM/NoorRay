@@ -10,19 +10,9 @@
 #include <array>
 #include <cstddef>
 #include "Logging/Log.h"
+#include <cmrc/cmrc.hpp>
 
-namespace
-{
-constexpr unsigned char noorRayImGuiFont[] = {
-    #embed "../../../assets/fonts/Inter.ttf"
-};
-constexpr std::size_t noorRayImGuiFontLength = sizeof(noorRayImGuiFont);
-
-constexpr unsigned char noorRayImGuiLayout[] = {
-    #embed "../../../assets/imgui.ini"
-};
-constexpr std::size_t noorRayImGuiLayoutLength = sizeof(noorRayImGuiLayout);
-}
+CMRC_DECLARE(noorray_app);
 
 ImGuiManager::ImGuiManager(Window& window, noorrhi::Device& device, const uint32_t numImages,
     const noorrhi::ImageFormat targetFormat)
@@ -43,16 +33,17 @@ ImGuiManager::ImGuiManager(Window& window, noorrhi::Device& device, const uint32
     // Loading ./imgui.ini in debug builds made a stale local single-pane
     // layout silently replace the embedded editor arrangement.
     io.IniFilename = nullptr;
-    ImGui::LoadIniSettingsFromMemory(
-        reinterpret_cast<const char*>(noorRayImGuiLayout), noorRayImGuiLayoutLength);
+    const cmrc::embedded_filesystem assets = cmrc::noorray_app::get_filesystem();
+    const cmrc::file layout = assets.open("imgui.ini");
+    ImGui::LoadIniSettingsFromMemory(layout.begin(), layout.size());
 
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
     font_config.RasterizerDensity = window.getDpiScale();
 
     constexpr float font_size = 18.0f;
-    io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(noorRayImGuiFont), noorRayImGuiFontLength,
+    const cmrc::file font = assets.open("fonts/Inter.ttf");
+    io.Fonts->AddFontFromMemoryTTF(const_cast<char*>(font.begin()), static_cast<int>(font.size()),
         font_size, &font_config);
 
     if (const SDL_SystemTheme theme = SDL_GetSystemTheme(); theme == SDL_SYSTEM_THEME_LIGHT)
@@ -150,8 +141,7 @@ void ImGuiManager::renderDrawData(const noorrhi::Frame& frame) {
     // Vulkan dynamic rendering
     vk::RenderingAttachmentInfo colorAttachment{};
     colorAttachment.setImageView(targetView);
-    // NoorRHI keeps presentation images in GENERAL under
-    // VK_KHR_unified_image_layouts.  The external ImGui draw is part of that
+    // NoorRHI keeps presentation images in GENERAL.  The external ImGui draw is part of that
     // same frame, so it must use the layout the device established.
     colorAttachment.setImageLayout(vk::ImageLayout::eGeneral);
     // The raytracer and viewport passes have already written

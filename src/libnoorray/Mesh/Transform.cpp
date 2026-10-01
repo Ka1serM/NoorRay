@@ -40,6 +40,9 @@ void Transform::setFromMatrix(const glm::mat4& mat) {
     scale.x = glm::length(col0);
     scale.y = glm::length(col1);
     scale.z = glm::length(col2);
+    // A mirroring matrix keeps a proper rotation by negating one scale axis.
+    if (glm::determinant(glm::mat3(mat)) < 0.0f)
+        scale.x = -scale.x;
 
     // Remove scale from rotation matrix
     glm::mat3 rotationMat;

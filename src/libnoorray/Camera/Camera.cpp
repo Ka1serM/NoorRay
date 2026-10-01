@@ -117,16 +117,16 @@ ThinLensCamera::~ThinLensCamera() = default;
 OrthographicCamera::~OrthographicCamera() = default;
 FisheyeCamera::~FisheyeCamera() = default;
 
-float Camera::focalLengthMmForFovDegrees(const float fovDegrees) const
+float Camera::focalLengthMmForFovDegrees(const float fovDegrees, const float filmWidthMm)
 {
     const float halfAngle = glm::radians(std::clamp(fovDegrees, 1.f, 179.f)) * 0.5f;
-    return getSensor().filmWidth() / (2.f * std::tan(halfAngle));
+    return filmWidthMm / (2.f * std::tan(halfAngle));
 }
 
-float Camera::fovDegreesForFocalLengthMm(const float requestedFocalLengthMm) const
+float Camera::fovDegreesForFocalLengthMm(const float requestedFocalLengthMm, const float filmWidthMm)
 {
     const float fovDegrees = 2.f * std::atan(
-        getSensor().filmWidth() / (2.f * std::max(0.001f, requestedFocalLengthMm)))
+        filmWidthMm / (2.f * std::max(0.001f, requestedFocalLengthMm)))
         * (180.f / std::numbers::pi_v<float>);
     return std::clamp(fovDegrees, 1.f, 179.f);
 }

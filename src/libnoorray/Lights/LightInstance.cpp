@@ -6,6 +6,10 @@
 #include "Lights/SpotLightInstance.h"
 #include "Scene/Scene.h"
 
+#include <cmath>
+
+#include <glm/matrix.hpp>
+
 LightInstance::LightInstance(Scene& scene, const std::string& name,
                              const Transform& transform, const int type)
     : SceneObject(scene, name, transform)
@@ -16,8 +20,15 @@ LightInstance::LightInstance(Scene& scene, const std::string& name,
 void LightInstance::onTransformUpdated()
 {
     SceneObject::onTransformUpdated();
-    updateTransformData(getWorldTransform());
+    const Transform world = getWorldTransform();
+    worldScale = std::cbrt(std::abs(glm::determinant(glm::mat3(world.getMatrix()))));
+    updateTransformData(world);
     updateSceneRecord();
+}
+
+glm::vec3 LightInstance::worldDirection(const Transform& world, const glm::vec3 local)
+{
+    return glm::normalize(glm::mat3(world.getMatrix()) * local);
 }
 
 void LightInstance::updateSceneRecord()
@@ -26,18 +37,31 @@ void LightInstance::updateSceneRecord()
         return;
 
     switch (lightType) {
-    case TypePoint:
-        scene->pointLights[lightIndex] =
-            static_cast<PointLightInstance*>(this)->getData();
+    case TypePoint: {
+        PointLight record = static_cast<PointLightInstance*>(this)->getData();
+        record.softRadius *= worldScale;
+        record.sourceLength *= worldScale;
+        record.falloff.invRadius /= worldScale;
+        scene->pointLights[lightIndex] = record;
         break;
-    case TypeSpot:
-        scene->spotLights[lightIndex] =
-            static_cast<SpotLightInstance*>(this)->getData();
+    }
+    case TypeSpot: {
+        SpotLight record = static_cast<SpotLightInstance*>(this)->getData();
+        record.softRadius *= worldScale;
+        record.sourceLength *= worldScale;
+        record.falloff.invRadius /= worldScale;
+        scene->spotLights[lightIndex] = record;
         break;
-    case TypeRect:
-        scene->rectLights[lightIndex] =
-            static_cast<RectLightInstance*>(this)->getData();
+    }
+    case TypeRect: {
+        RectLight record = static_cast<RectLightInstance*>(this)->getData();
+        record.width *= worldScale;
+        record.height *= worldScale;
+        record.barnDoorLength *= worldScale;
+        record.falloff.invRadius /= worldScale;
+        scene->rectLights[lightIndex] = record;
         break;
+    }
     case TypeDirectional:
         scene->directionalLights[lightIndex] =
             static_cast<DirectionalLightInstance*>(this)->getData();

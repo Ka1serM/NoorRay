@@ -22,6 +22,8 @@ protected:
     std::vector<std::weak_ptr<SceneObject>> children;
 
     bool visible;
+    // Listed in Scene's root candidates, so it is listed at most once.
+    bool rootCandidate{};
     std::string sourceType;
     std::string sourcePath;
 
@@ -80,6 +82,8 @@ public:
     Transform getTransform() const { return transform; }
 
     virtual void onTransformUpdated();
+    // Called once Scene::add() has the object, so it may add objects of its own.
+    virtual void onAdded() {}
     
     virtual void setPosition(const glm::vec3& pos);
     virtual void setRotation(const glm::quat& rot);
@@ -92,5 +96,7 @@ public:
     Transform getWorldTransform() const;
 
 private:
+    // Applies a change to this object's own transform and reports it to the scene.
+    void transformChanged();
     void setHandle(const SceneObjectHandle newHandle) { handle = newHandle; }
 };

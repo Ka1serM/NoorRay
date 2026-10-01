@@ -202,7 +202,7 @@ class NoorRaySettings(PropertyGroup):
     max_bounces: IntProperty(
         name="Max Bounces",
         description="Maximum number of ray bounces (total depth)",
-        default=8,
+        default=3,
         min=1,
         max=65,
     )

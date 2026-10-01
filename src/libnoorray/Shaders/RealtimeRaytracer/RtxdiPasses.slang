@@ -1,23 +1,35 @@
-// ReSTIR DI and ReSTIR GI passes of the realtime renderer, one entry point
+// ReSTIR DI and PT passes of the realtime renderer, one entry point
 // per build: the command line defines exactly one RTXDI_PASS_* macro.
 //
-// Passes that test visibility trace shadow rays through the realtime
-// pipeline, so they are ray-generation stages dispatched per pixel; the
-// others are compute shaders.
+// As in RTXDI's sample, resampling tests RTXDI's conservative visibility with
+// inline ray queries (RtxdiBridge.slang), so the DI passes are compute
+// shaders. The PT resampling passes replay paths through the materials' hit
+// shaders and the shading pass traces final visibility, so those are
+// ray-generation stages of the realtime pipeline.
 //
 // Frame order (RealtimeRaytracer::renderImpl):
+//   PRESAMPLE_ENVIRONMENT
+//                     environment directions -> RIS tiles (compute)
 //   PRESAMPLE_LIGHTS  local lights -> RIS tiles, by power (compute)
 //   PRESAMPLE_REGIR   RIS tiles -> ReGIR world-space cells (compute)
-//   ... SHaRC update/resolve, then the primary pass writes the G-buffer ...
-//   DI_INITIAL        candidates per pixel from ReGIR, one visibility ray
-//   DI_TEMPORAL       reuse from the previous frame's reservoirs
+//   ... the lighting pass writes the G-buffer and records the surfaces
+//   (RealtimeRaytracer.slang) ...
+//   INITIAL           draw DI's candidates and PT's initial paths
+//   DI_TEMPORAL       reuse from the previous frame's reservoirs (compute)
 //   DI_BOILING        drop reservoirs far heavier than their neighbours (compute)
-//   DI_SPATIAL        reuse from screen-space neighbours
-//   DI_SHADE          shade the chosen light, add it to the primary pass's
-//                     indirect radiance and pack NRD's inputs (DI mode)
-//   GI_TEMPORAL, GI_BOILING, GI_SPATIAL, GI_SHADE
-//                     the same for the diffuse indirect sample the primary
-//                     pass produced (GI mode); GI_SHADE packs instead.
+//   DI_SPATIAL        reuse from screen-space neighbours (compute)
+//   PT_TEMPORAL       temporal hybrid shift and reconnection in RTXDI
+//   PT_BOILING        remove heavy temporal outliers (compute)
+//   PT_SPATIAL        spatial hybrid shift and reconnection in RTXDI
+//   SHADE             shade the chosen light and path, add to the primary
+//                     pass's radiance and pack NRD's inputs
+//
+// The DI and PT chains touch disjoint reservoirs between barriers.
+//
+// Everything from INITIAL on runs once per surface set: the first opaque
+// surfaces and the nearest fractional layers. Each launch's RealtimeArgs
+// point `lighting` at the set's surfaces and reservoirs and the shaded lobes
+// at the set's NRD inputs.
 
 #ifndef RTXDI_PASS_PRESAMPLE_LIGHTS
 #define RTXDI_PASS_PRESAMPLE_LIGHTS 0
@@ -25,8 +37,11 @@
 #ifndef RTXDI_PASS_PRESAMPLE_REGIR
 #define RTXDI_PASS_PRESAMPLE_REGIR 0
 #endif
-#ifndef RTXDI_PASS_DI_INITIAL
-#define RTXDI_PASS_DI_INITIAL 0
+#ifndef RTXDI_PASS_PRESAMPLE_ENVIRONMENT
+#define RTXDI_PASS_PRESAMPLE_ENVIRONMENT 0
+#endif
+#ifndef RTXDI_PASS_INITIAL
+#define RTXDI_PASS_INITIAL 0
 #endif
 #ifndef RTXDI_PASS_DI_TEMPORAL
 #define RTXDI_PASS_DI_TEMPORAL 0
@@ -37,23 +52,26 @@
 #ifndef RTXDI_PASS_DI_SPATIAL
 #define RTXDI_PASS_DI_SPATIAL 0
 #endif
-#ifndef RTXDI_PASS_DI_SHADE
-#define RTXDI_PASS_DI_SHADE 0
+#ifndef RTXDI_PASS_PT_TEMPORAL
+#define RTXDI_PASS_PT_TEMPORAL 0
 #endif
-#ifndef RTXDI_PASS_GI_TEMPORAL
-#define RTXDI_PASS_GI_TEMPORAL 0
+#ifndef RTXDI_PASS_PT_SPATIAL
+#define RTXDI_PASS_PT_SPATIAL 0
 #endif
-#ifndef RTXDI_PASS_GI_BOILING
-#define RTXDI_PASS_GI_BOILING 0
+#ifndef RTXDI_PASS_PT_BOILING
+#define RTXDI_PASS_PT_BOILING 0
 #endif
-#ifndef RTXDI_PASS_GI_SPATIAL
-#define RTXDI_PASS_GI_SPATIAL 0
-#endif
-#ifndef RTXDI_PASS_GI_SHADE
-#define RTXDI_PASS_GI_SHADE 0
+#ifndef RTXDI_PASS_SHADE
+#define RTXDI_PASS_SHADE 0
 #endif
 
 #include "RtxdiBridge.slang"
+#if RTXDI_PASS_INITIAL || RTXDI_PASS_PT_TEMPORAL || RTXDI_PASS_PT_SPATIAL
+#include "RtxdiPTPathTrace.slang"
+#elif RTXDI_PASS_SHADE || RTXDI_PASS_PT_BOILING
+#include "RtxdiPTBridge.slang"
+#include "Rtxdi/PT/Reservoir.hlsli"
+#endif
 #include "NrdSignal.slang"
 
 #include "Rtxdi/DI/ReservoirStorage.hlsli"
@@ -61,8 +79,8 @@
 #if RTXDI_PASS_PRESAMPLE_LIGHTS || RTXDI_PASS_PRESAMPLE_REGIR
 #include "Rtxdi/LightSampling/PresamplingFunctions.hlsli"
 #endif
-#if RTXDI_PASS_DI_INITIAL
-#include "Rtxdi/DI/InitialSampling.hlsli"
+#if RTXDI_PASS_INITIAL
+#include "Rtxdi/PT/InitialSampling.hlsli"
 #endif
 #if RTXDI_PASS_DI_TEMPORAL
 #include "Rtxdi/DI/TemporalResampling.hlsli"
@@ -70,32 +88,37 @@
 #if RTXDI_PASS_DI_SPATIAL
 #include "Rtxdi/DI/SpatialResampling.hlsli"
 #endif
-#if RTXDI_PASS_DI_BOILING || RTXDI_PASS_GI_BOILING
+#if RTXDI_PASS_DI_BOILING
 #define RTXDI_ENABLE_BOILING_FILTER
 #define RTXDI_BOILING_FILTER_GROUP_SIZE 16
 #include "Rtxdi/DI/BoilingFilter.hlsli"
-#include "Rtxdi/GI/BoilingFilter.hlsli"
 #endif
-#if RTXDI_PASS_GI_TEMPORAL
-#include "Rtxdi/GI/TemporalResampling.hlsli"
+#if RTXDI_PASS_PT_TEMPORAL
+#include "Rtxdi/PT/TemporalResampling.hlsli"
 #endif
-#if RTXDI_PASS_GI_SPATIAL
-#include "Rtxdi/GI/SpatialResampling.hlsli"
+#if RTXDI_PASS_PT_SPATIAL
+#include "Rtxdi/PT/SpatialResampling.hlsli"
 #endif
-#if RTXDI_PASS_GI_SHADE
-#include "Rtxdi/GI/Reservoir.hlsli"
+#if RTXDI_PASS_PT_BOILING
+#define RTXDI_ENABLE_BOILING_FILTER
+#define RTXDI_BOILING_FILTER_GROUP_SIZE 16
+#include "Rtxdi/PT/BoilingFilter.hlsli"
 #endif
 
 static const uint RtxdiPresampleGroupSize = 256u;
 static const uint RtxdiBoilingGroupSize = 16u;
+// Screen-space compute passes, as RTXDI_SCREEN_SPACE_GROUP_SIZE in its sample.
+static const uint RtxdiScreenSpaceGroupSize = 8u;
 
 RealtimeLighting* rtxdiLighting()
 {
     return &realtimeArgs()->lighting;
 }
 
-// Screen-space motion of a pixel's primary surface, in pixels, with the
-// change in linear depth in z, as RTXDI's temporal passes want it.
+// Screen-space motion of a pixel's primary surface, in lighting pixels, with
+// the change in linear depth in z, as RTXDI's temporal passes want it. Each
+// frame's position is in its own lighting rectangle, which a viewport resize
+// changes between them.
 float3 rtxdiMotion(Frame* frame, RAB_Surface surface)
 {
     const float4 current = transformToClip(realtimeArgs()->view.worldToClip, surface.worldPos);
@@ -104,8 +127,8 @@ float3 rtxdiMotion(Frame* frame, RAB_Surface surface)
         return float3(0.0);
     const float2 currentUv = float2(0.5, 0.5) + float2(0.5, -0.5) * current.xy / current.w;
     const float2 previousUv = float2(0.5, 0.5) + float2(0.5, -0.5) * previous.xy / previous.w;
-    return float3((previousUv - currentUv) * float2(frame.width, frame.height),
-        previous.w - current.w);
+    return float3(previousUv * float2(realtimeLightingSize(true))
+        - currentUv * float2(realtimeLightingSize(false)), previous.w - current.w);
 }
 
 #if RTXDI_PASS_PRESAMPLE_LIGHTS
@@ -138,6 +161,32 @@ void main(uint3 threadId : SV_DispatchThreadID)
         asuint(pdf > 0.0 ? 1.0 / pdf : 0.0));
 }
 
+#elif RTXDI_PASS_PRESAMPLE_ENVIRONMENT
+
+// Fills one RIS tile entry with an environment direction drawn from the
+// environment's own importance distribution, stored as the uv parameters
+// RAB_SamplePolymorphicLight() takes and their inverse density.
+[shader("compute")]
+[numthreads(RtxdiPresampleGroupSize, 1, 1)]
+void main(uint3 threadId : SV_DispatchThreadID)
+{
+    RealtimeLighting* lighting = rtxdiLighting();
+    const RTXDI_RISBufferSegmentParameters segment =
+        lighting.environmentLightRISBufferSegmentParams;
+    if (threadId.x >= segment.tileSize || threadId.y >= segment.tileCount)
+        return;
+    const uint entry = threadId.y * segment.tileSize + threadId.x;
+    Rng rng;
+    rng.state = pcgHash(hashCombine32(lighting.runtimeParams.frameIndex, entry) ^ 0x454E5649u);
+    const Environment environment = realtimeArgs()->frame.environment[0];
+    const EnvironmentSample sample = sampleEnvironmentDirection(environment, rng);
+    const float2 uv = environmentUv(environment, sample.direction);
+    const float uvPdf = sample.pdf / environmentUvPerSolidAngle(environment, uv);
+    const uint packedUv = uint(saturate(uv.x) * 0xffff) | (uint(saturate(uv.y) * 0xffff) << 16);
+    lighting.risBuffer[segment.bufferOffset + entry] = uint2(packedUv,
+        asuint(uvPdf > 0.0 ? 1.0 / uvPdf : 0.0));
+}
+
 #elif RTXDI_PASS_PRESAMPLE_REGIR
 
 [shader("compute")]
@@ -155,47 +204,71 @@ void main(uint3 threadId : SV_DispatchThreadID)
         lighting.localLightsRISBufferSegmentParams, lighting.regir);
 }
 
-#elif RTXDI_PASS_DI_INITIAL
+#elif RTXDI_PASS_INITIAL
 
+// The initial samples of the surface the lighting pass recorded: ReSTIR DI's
+// candidates (ReGIR-driven local lights, the directional and environment
+// lights and BRDF rays, the chosen one shadow-tested) and ReSTIR PT's
+// multi-bounce path, traced through RTXDI's context.
 [shader("raygeneration")]
 void main()
 {
-    const uint3 threadId = DispatchRaysIndex();
-    Frame* frame = &realtimeArgs()->frame;
-    RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = threadId.xy;
-    if (pixel.x >= frame.width || pixel.y >= frame.height)
+    const uint2 pixel = DispatchRaysIndex().xy;
+    if (!realtimePixelInView(int2(pixel)))
         return;
-    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
-        lighting.runtimeParams.frameIndex, RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
-    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(
-        pixel / RTXDI_TILE_SIZE_IN_PIXELS, lighting.runtimeParams.frameIndex,
-        RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+    RealtimeArgs* args = realtimeArgs();
+    RealtimeLighting* lighting = rtxdiLighting();
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
-    RTXDI_DIReservoir reservoir = RTXDI_EmptyDIReservoir();
-    if (RAB_IsSurfaceValid(surface))
+    const bool valid = RAB_IsSurfaceValid(surface);
+
+    RTXDI_DIReservoir light = RTXDI_EmptyDIReservoir();
+    if (valid)
     {
+        RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
+            lighting.runtimeParams.frameIndex, RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
+        RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(
+            pixel / RTXDI_TILE_SIZE_IN_PIXELS, lighting.runtimeParams.frameIndex,
+            RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
         RAB_LightSample lightSample;
-        reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, surface,
+        light = RTXDI_SampleLightsForSurface(rng, tileRng, surface,
             lighting.restirDI.initialSamplingParams, lighting.lightBufferParams,
             lighting.localLightsRISBufferSegmentParams,
-            lighting.environmentLightRISBufferSegmentParams, lighting.regir,
-            lightSample);
+            lighting.environmentLightRISBufferSegmentParams, lighting.regir, lightSample);
     }
-    RTXDI_StoreDIReservoir(reservoir, lighting.restirDI.reservoirBufferParams, pixel,
+    RTXDI_StoreDIReservoir(light, lighting.restirDI.reservoirBufferParams, pixel,
         lighting.restirDI.bufferIndices.initialSamplingOutputBufferIndex);
+
+    RTXDI_PTReservoir path = RTXDI_EmptyPTReservoir();
+    if (valid)
+    {
+        RTXDI_PathTracerRandomContext random = RTXDI_InitializePathTracerRandomContext(
+            pixel, lighting.runtimeParams.frameIndex,
+            RTXDI_PT_GENERATE_INITIAL_SAMPLES_RANDOM_SEED,
+            RTXDI_PT_GENERATE_INITIAL_SAMPLES_REPLAY_RANDOM_SEED);
+        RTXDI_PTInitialSamplingRuntimeParameters runtime =
+            RTXDI_EmptyPTInitialSamplingRuntimeParameters();
+        runtime.cameraPos = args.view.cameraPosition;
+        runtime.prevCameraPos = args.view.previousCameraPosition;
+        runtime.prevPrevCameraPos = args.view.previousPreviousCameraPosition;
+        RAB_PathTracerUserData userData = RAB_EmptyPathTracerUserData();
+        RAB_PathTracerUserDataSetPathType(userData, RTXDI_PTPathTraceInvocationType_Initial);
+        path = GenerateInitialSamples(lighting.restirPT.initialSampling, runtime,
+            lighting.restirPT.reconnection, random, surface, userData);
+    }
+    RTXDI_StorePTReservoir(path, lighting.restirPT.reservoirBuffer, pixel,
+        lighting.restirPT.bufferIndices.initialPathTracerOutputBufferIndex);
 }
 
 #elif RTXDI_PASS_DI_TEMPORAL
 
-[shader("raygeneration")]
-void main()
+[shader("compute")]
+[numthreads(RtxdiScreenSpaceGroupSize, RtxdiScreenSpaceGroupSize, 1)]
+void main(uint3 threadId : SV_DispatchThreadID)
 {
-    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
     const uint2 pixel = threadId.xy;
-    if (pixel.x >= frame.width || pixel.y >= frame.height)
+    if (!realtimePixelInView(int2(pixel)))
         return;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
         lighting.runtimeParams.frameIndex, RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED);
@@ -219,7 +292,7 @@ void main()
         restir.bufferIndices.temporalResamplingOutputBufferIndex);
 }
 
-#elif RTXDI_PASS_DI_BOILING || RTXDI_PASS_GI_BOILING
+#elif RTXDI_PASS_DI_BOILING
 
 // RTXDI's boiling filter needs group-shared memory, which ray-generation
 // stages lack, so it runs as its own pass over the temporal output: within
@@ -234,8 +307,7 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 localId : SV_GroupThreadID
     RealtimeLighting* lighting = rtxdiLighting();
     const uint2 pixel = threadId.xy;
     // Every thread joins the group reduction; outside threads carry nothing.
-    const bool inView = pixel.x < frame.width && pixel.y < frame.height;
-#if RTXDI_PASS_DI_BOILING
+    const bool inView = realtimePixelInView(int2(pixel));
     const RTXDI_Parameters restir = lighting.restirDI;
     RTXDI_DIReservoir reservoir = inView
         ? RTXDI_LoadDIReservoir(restir.reservoirBufferParams, pixel,
@@ -246,30 +318,18 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 localId : SV_GroupThreadID
     if (inView)
         RTXDI_StoreDIReservoir(reservoir, restir.reservoirBufferParams, pixel,
             restir.bufferIndices.temporalResamplingOutputBufferIndex);
-#else
-    const RTXDI_GIParameters restir = lighting.restirGI;
-    RTXDI_GIReservoir reservoir = inView
-        ? RTXDI_LoadGIReservoir(restir.reservoirBufferParams, pixel,
-            restir.bufferIndices.temporalResamplingOutputBufferIndex)
-        : RTXDI_EmptyGIReservoir();
-    RTXDI_GIBoilingFilter(localId.xy, restir.boilingFilterParams.boilingFilterStrength,
-        reservoir);
-    if (inView)
-        RTXDI_StoreGIReservoir(reservoir, restir.reservoirBufferParams, pixel,
-            restir.bufferIndices.temporalResamplingOutputBufferIndex);
-#endif
 }
 
 #elif RTXDI_PASS_DI_SPATIAL
 
-[shader("raygeneration")]
-void main()
+[shader("compute")]
+[numthreads(RtxdiScreenSpaceGroupSize, RtxdiScreenSpaceGroupSize, 1)]
+void main(uint3 threadId : SV_DispatchThreadID)
 {
-    const uint3 threadId = DispatchRaysIndex();
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
     const uint2 pixel = threadId.xy;
-    if (pixel.x >= frame.width || pixel.y >= frame.height)
+    if (!realtimePixelInView(int2(pixel)))
         return;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
         lighting.runtimeParams.frameIndex, RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED);
@@ -291,125 +351,105 @@ void main()
         restir.bufferIndices.spatialResamplingOutputBufferIndex);
 }
 
-#elif RTXDI_PASS_GI_TEMPORAL
+#elif RTXDI_PASS_PT_TEMPORAL
 
 [shader("raygeneration")]
 void main()
 {
-    const uint3 threadId = DispatchRaysIndex();
-    Frame* frame = &realtimeArgs()->frame;
-    RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = threadId.xy;
-    if (pixel.x >= frame.width || pixel.y >= frame.height)
+    const uint2 pixel = DispatchRaysIndex().xy;
+    if (!realtimePixelInView(int2(pixel)))
         return;
+    RealtimeLighting* lighting = rtxdiLighting();
+    const RTXDI_PTParameters pt = lighting.restirPT;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
-        lighting.runtimeParams.frameIndex, RTXDI_GI_TEMPORAL_RESAMPLING_RANDOM_SEED);
+        lighting.runtimeParams.frameIndex, RTXDI_PT_TEMPORAL_RESAMPLING_RANDOM_SEED);
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
-    const RTXDI_GIParameters restir = lighting.restirGI;
-    RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(restir.reservoirBufferParams,
-        pixel, restir.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);
-    if (RAB_IsSurfaceValid(surface))
-    {
-        RTXDI_GITemporalResamplingParameters parameters = restir.temporalResamplingParams;
-        // Staggered ages keep whole regions from expiring on the same frame.
-        parameters.maxReservoirAge = uint(float(parameters.maxReservoirAge)
-            * (0.5 + RTXDI_GetNextRandom(rng) * 0.5));
-        reservoir = RTXDI_GITemporalResampling(pixel, surface, rtxdiMotion(frame, surface),
-            restir.bufferIndices.temporalResamplingInputBufferIndex, reservoir, rng,
-            lighting.runtimeParams, restir.reservoirBufferParams, parameters);
-    }
-    RTXDI_StoreGIReservoir(reservoir, restir.reservoirBufferParams, pixel,
-        restir.bufferIndices.temporalResamplingOutputBufferIndex);
+    RTXDI_PTTemporalResamplingRuntimeParameters runtime =
+        RTXDI_EmptyPTTemporalResamplingRuntimeParameters();
+    runtime.pixelPosition = pixel;
+    runtime.reservoirPosition = pixel;
+    runtime.motionVector = rtxdiMotion(&realtimeArgs()->frame, surface);
+    runtime.cameraPos = realtimeArgs()->view.cameraPosition;
+    runtime.prevCameraPos = realtimeArgs()->view.previousCameraPosition;
+    runtime.prevPrevCameraPos = realtimeArgs()->view.previousPreviousCameraPosition;
+    RAB_PathTracerUserData userData = RAB_EmptyPathTracerUserData();
+    bool selectedPrevious = false;
+    const RTXDI_PTReservoir result = RTXDI_PTTemporalResampling(
+        pt.temporalResampling, runtime, pt.hybridShift, pt.reconnection,
+        lighting.runtimeParams, pt.reservoirBuffer, rng, pt.bufferIndices,
+        selectedPrevious, userData);
+    RTXDI_StorePTReservoir(result, pt.reservoirBuffer, pixel,
+        pt.bufferIndices.temporalResamplingOutputBufferIndex);
 }
 
-#elif RTXDI_PASS_GI_SPATIAL
+#elif RTXDI_PASS_PT_BOILING
+
+[shader("compute")]
+[numthreads(RtxdiBoilingGroupSize, RtxdiBoilingGroupSize, 1)]
+void main(uint3 threadId : SV_DispatchThreadID, uint3 localId : SV_GroupThreadID)
+{
+    RealtimeLighting* lighting = rtxdiLighting();
+    const uint2 pixel = threadId.xy;
+    const RTXDI_PTParameters pt = lighting.restirPT;
+    const bool inView = realtimePixelInView(int2(pixel));
+    RTXDI_PTReservoir reservoir = inView
+        ? RTXDI_LoadPTReservoir(pt.reservoirBuffer, pixel,
+            pt.bufferIndices.temporalResamplingOutputBufferIndex)
+        : RTXDI_EmptyPTReservoir();
+    RTXDI_PTBoilingFilter(localId.xy, pt.boilingFilter.boilingFilterStrength, reservoir);
+    if (inView)
+        RTXDI_StorePTReservoir(reservoir, pt.reservoirBuffer, pixel,
+            pt.bufferIndices.temporalResamplingOutputBufferIndex);
+}
+
+#elif RTXDI_PASS_PT_SPATIAL
 
 [shader("raygeneration")]
 void main()
 {
-    const uint3 threadId = DispatchRaysIndex();
-    Frame* frame = &realtimeArgs()->frame;
-    RealtimeLighting* lighting = rtxdiLighting();
-    const uint2 pixel = threadId.xy;
-    if (pixel.x >= frame.width || pixel.y >= frame.height)
+    const uint2 pixel = DispatchRaysIndex().xy;
+    if (!realtimePixelInView(int2(pixel)))
         return;
+    RealtimeLighting* lighting = rtxdiLighting();
+    const RTXDI_PTParameters pt = lighting.restirPT;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
-        lighting.runtimeParams.frameIndex, RTXDI_GI_SPATIAL_RESAMPLING_RANDOM_SEED);
-    const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
-    const RTXDI_GIParameters restir = lighting.restirGI;
-    RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(restir.reservoirBufferParams,
-        pixel, restir.bufferIndices.spatialResamplingInputBufferIndex);
-    if (RAB_IsSurfaceValid(surface))
-        reservoir = RTXDI_GISpatialResampling(pixel, surface,
-            restir.bufferIndices.spatialResamplingInputBufferIndex, reservoir, rng,
-            lighting.runtimeParams, restir.reservoirBufferParams,
-            restir.spatialResamplingParams);
-    RTXDI_StoreGIReservoir(reservoir, restir.reservoirBufferParams, pixel,
-        restir.bufferIndices.spatialResamplingOutputBufferIndex);
+        lighting.runtimeParams.frameIndex, RTXDI_PT_SPATIAL_RESAMPLING_RANDOM_SEED);
+    RTXDI_PTSpatialResamplingRuntimeParameters runtime =
+        RTXDI_EmptyPTSpatialResamplingRuntimeParameters();
+    runtime.pixelPosition = pixel;
+    runtime.reservoirPosition = pixel;
+    runtime.cameraPos = realtimeArgs()->view.cameraPosition;
+    runtime.prevCameraPos = realtimeArgs()->view.previousCameraPosition;
+    runtime.prevPrevCameraPos = realtimeArgs()->view.previousPreviousCameraPosition;
+    runtime.viewportSize = realtimeLightingSize();
+    RAB_PathTracerUserData userData = RAB_EmptyPathTracerUserData();
+    bool resampled = false;
+    const RTXDI_PTReservoir result = RTXDI_PTSpatialResampling(runtime,
+        pt.spatialResampling, pt.hybridShift, pt.reconnection, pt.reservoirBuffer,
+        pt.bufferIndices, lighting.runtimeParams, rng, resampled, userData);
+    RTXDI_StorePTReservoir(result, pt.reservoirBuffer, pixel,
+        pt.bufferIndices.spatialResamplingOutputBufferIndex);
 }
 
-#elif RTXDI_PASS_DI_SHADE || RTXDI_PASS_GI_SHADE
+#elif RTXDI_PASS_SHADE
 
-// The primary pass leaves each pixel's unpacked radiance in NRD's diffuse and
-// specular inputs (rgb: radiance already weighted by the camera, a: hit
-// distance). The shading passes add their resampled light to it; the last one
-// demodulates by the material factors and packs REBLUR's inputs.
-struct RealtimeLobes
+// Shades each pixel's resampled light and path, demodulates them by the
+// material factors and packs the denoiser's inputs.
+// Demodulates the lobe by its material factor and packs it for the denoiser.
+void storeLobe(RealtimeLobe lobe, uint signalTarget, uint directionTarget, float3 factor,
+    uint2 pixel, RAB_Surface surface, float roughness)
 {
-    float4 diffuse;
-    float4 specular;
-};
-
-// Adds `radiance` arriving over `distance` to a lobe. The hit distance NRD
-// sees is the brightest contribution's, as RTXDI's sample does it.
-void addLobeRadiance(inout float4 lobe, float3 radiance, float distance)
-{
-    if (!(realtimeMaxComponent(radiance) > 0.0) || !realtimeIsFinite(radiance))
-        return;
-    if (lobe.a <= 0.0 || realtimeLuminance(radiance) > realtimeLuminance(lobe.rgb))
-        lobe.a = distance;
-    lobe.rgb += radiance;
-}
-
-void storeLobes(Frame* frame, uint2 pixel, RAB_Surface surface, RealtimeLobes lobes,
-    bool pack)
-{
-    RWTexture2D<float4> nrdDiffuse = ResourceDescriptorHeap[realtimeArgs()->targets.diffuse];
-    RWTexture2D<float4> nrdSpecular = ResourceDescriptorHeap[realtimeArgs()->targets.specular];
-    if (!pack)
+    RWTexture2D<float4> signal = ResourceDescriptorHeap[signalTarget];
+    const bool valid = RAB_IsSurfaceValid(surface);
+    float4 sh1 = float4(0.0);
+    signal[pixel] = valid ? packNrdSignal(lobe.radiance / factor, lobe.hitDistance(),
+        surface.viewDepth, roughness, lobe.direction, lobe.radiance, sh1) : float4(0.0);
+    // The direction image exists only in SH form, so only it fetches it.
+    if (realtimeArgs()->denoiser.sphericalHarmonics != 0u)
     {
-        nrdDiffuse[pixel] = lobes.diffuse;
-        nrdSpecular[pixel] = lobes.specular;
-        return;
+        RWTexture2D<float4> direction = ResourceDescriptorHeap[directionTarget];
+        direction[pixel] = sh1;
     }
-    if (!RAB_IsSurfaceValid(surface))
-    {
-        nrdDiffuse[pixel] = float4(0.0);
-        nrdSpecular[pixel] = float4(0.0);
-        return;
-    }
-    RWTexture2D<float4> diffuseFactor = ResourceDescriptorHeap[realtimeArgs()->targets.diffuseFactor];
-    RWTexture2D<float4> specularFactor = ResourceDescriptorHeap[realtimeArgs()->targets.specularFactor];
-    const float viewZ = surface.viewDepth;
-    nrdDiffuse[pixel] = packNrdSignal(lobes.diffuse.rgb / diffuseFactor[pixel].rgb,
-        lobes.diffuse.a, viewZ, 1.0);
-    nrdSpecular[pixel] = packNrdSignal(lobes.specular.rgb / specularFactor[pixel].rgb, lobes.specular.a, viewZ,
-        surface.material.roughness);
-}
-
-RealtimeLobes loadLobes(Frame* frame, uint2 pixel)
-{
-    RWTexture2D<float4> nrdDiffuse = ResourceDescriptorHeap[realtimeArgs()->targets.diffuse];
-    RWTexture2D<float4> nrdSpecular = ResourceDescriptorHeap[realtimeArgs()->targets.specular];
-    RealtimeLobes lobes;
-    lobes.diffuse = nrdDiffuse[pixel];
-    lobes.specular = nrdSpecular[pixel];
-    return lobes;
-}
-
-float realtimeCameraWeight(uint2 pixel)
-{
-    return realtimeArgs()->lighting.surfaces[realtimeSurfaceIndex(pixel)].cameraWeight;
 }
 
 [shader("raygeneration")]
@@ -419,14 +459,14 @@ void main()
     Frame* frame = &realtimeArgs()->frame;
     RealtimeLighting* lighting = rtxdiLighting();
     const uint2 pixel = threadId.xy;
-    if (pixel.x >= frame.width || pixel.y >= frame.height)
+    if (!realtimePixelInView(int2(pixel)))
         return;
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
-    RealtimeLobes lobes = loadLobes(frame, pixel);
-    const float cameraWeight = realtimeCameraWeight(pixel);
+    const RenderTargetHandles targets = realtimeArgs()->targets;
+    RealtimeLobe diffuse = {};
+    RealtimeLobe specular = {};
     const RealtimeBsdf bsdf = realtimeSurfaceBsdf(surface);
 
-#if RTXDI_PASS_DI_SHADE
     const RTXDI_Parameters restir = lighting.restirDI;
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(restir.reservoirBufferParams,
         pixel, restir.bufferIndices.shadingInputBufferIndex);
@@ -438,44 +478,84 @@ void main()
         float3 direction;
         float distance;
         RAB_GetLightDirDistance(surface, lightSample, direction, distance);
-        const bool visible = lightSample.solidAnglePdf > 0.0
-            && realtimeVisible(surface.worldPos, surface.geoNormal, direction, distance);
+        const float visibility = realtimeLightTransmittance(surface, lightSample);
         // Remembered so temporal reuse can skip re-testing a light it saw.
-        RTXDI_StoreVisibilityInDIReservoir(reservoir, visible ? float3(1.0) : float3(0.0),
+        RTXDI_StoreVisibilityInDIReservoir(reservoir, float3(visibility),
             restir.temporalResamplingParams.enableVisibilityShortcut != 0u);
         RTXDI_StoreDIReservoir(reservoir, restir.reservoirBufferParams, pixel,
             restir.bufferIndices.shadingInputBufferIndex);
-        if (visible)
+        if (visibility > 0.0)
         {
             const float3 incoming = lightSample.radiance
                 * (RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf)
-                * cameraWeight;
-            const float hitDistance = min(distance, 1.0e7);
-            addLobeRadiance(lobes.diffuse, bsdf.evaluateDiffuse(direction) * incoming,
-                hitDistance);
-            addLobeRadiance(lobes.specular, bsdf.evaluateSpecular(direction) * incoming,
-                hitDistance);
+                * visibility;
+            // The light was picked for the whole BSDF, not the specular lobe:
+            // its distance would break NRD's reflection reprojection, so only
+            // diffuse takes it.
+            diffuse.addDirect(bsdf.evaluateDiffuse(direction) * (incoming * lightSample.diffuseScale),
+                direction, min(distance, 1.0e7));
+            specular.add(bsdf.evaluateSpecular(direction) * (incoming * lightSample.specularScale),
+                direction);
         }
     }
-    storeLobes(frame, pixel, surface, lobes, lighting.mode == RealtimeLightingReSTIRDI);
-#else
-    const RTXDI_GIParameters restir = lighting.restirGI;
-    const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(restir.reservoirBufferParams,
-        pixel, restir.bufferIndices.finalShadingInputBufferIndex);
-    if (RAB_IsSurfaceValid(surface) && RTXDI_IsValidGIReservoir(reservoir))
+
+    if (RAB_IsSurfaceValid(surface))
     {
-        const float3 toSample = reservoir.position - surface.worldPos;
-        const float distance = length(toSample);
-        const float3 direction = distance > 0.0 ? toSample / distance : surface.normal;
-        const bool visible = distance > 0.0
-            && (restir.finalShadingParams.enableFinalVisibility == 0u
-                || RAB_GetConservativeVisibility(surface, reservoir.position));
-        if (visible)
-            addLobeRadiance(lobes.diffuse, bsdf.evaluateDiffuse(direction)
-                * reservoir.radiance * (reservoir.weightSum * cameraWeight), distance);
+        const RTXDI_PTParameters pt = lighting.restirPT;
+        const RTXDI_PTReservoir reservoir = RTXDI_LoadPTReservoir(
+            pt.reservoirBuffer, pixel, pt.bufferIndices.finalShadingInputBufferIndex);
+        if (RTXDI_IsValidPTReservoir(reservoir) && reservoir.weightSum > 0.0
+            && realtimeIsFinite(reservoir.targetFunction))
+        {
+            const float3 delta = reservoir.translatedWorldPosition - surface.worldPos;
+            float3 direction = dot(delta, delta) > 1.0e-12
+                ? normalize(delta) : surface.normal;
+            float distance = length(delta);
+            if (reservoir.rcVertexLength > 2u)
+            {
+                RTXDI_RandomSamplerState replay = RTXDI_GetRngForShading(reservoir);
+                RAB_SurfaceImportanceSampleBrdf(surface, replay, direction);
+                RayDesc firstRay;
+                firstRay.Origin = surface.worldPos + surface.geoNormal
+                    * (dot(surface.geoNormal, direction) >= 0.0 ? 1.0e-2 : -1.0e-2);
+                firstRay.Direction = direction;
+                firstRay.TMin = 1.0e-3;
+                firstRay.TMax = 1.0e30;
+                // Only the hit distance is wanted, for NRD: opaque geometry
+                // suffices and no material runs.
+                RayQuery<RAY_FLAG_CULL_NON_OPAQUE> query;
+                query.TraceRayInline(RaytracingAccelerationStructure(frame.topLevelAS),
+                    RAY_FLAG_NONE, RaytracingMaskIndirect, firstRay);
+                query.Proceed();
+                distance = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT
+                    ? query.CommittedRayT() : NRD_INF;
+            }
+            const float3 diffuseBsdf = bsdf.evaluateDiffuse(direction);
+            const float3 specularBsdf = bsdf.evaluateSpecular(direction);
+            const float3 total = diffuseBsdf + specularBsdf;
+            const float3 contribution = reservoir.targetFunction * reservoir.weightSum;
+            const float3 diffusePart = contribution * diffuseBsdf / max(total, float3(1.0e-8));
+            const float3 specularPart = contribution * specularBsdf / max(total, float3(1.0e-8));
+            // The path's first bounce belongs to the lobe that picks it with
+            // the lobe's share of the BSDF; the other lobe's hit distance
+            // stays missing for NRD to reconstruct.
+            RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
+                lighting.runtimeParams.frameIndex, RTXDI_PT_FINAL_SHADING_RANDOM_SEED);
+            const bool specularLobe = RTXDI_GetNextRandom(rng) * realtimeLuminance(total)
+                < realtimeLuminance(specularBsdf);
+            diffuse.addIndirect(diffusePart, direction, distance, !specularLobe);
+            specular.addIndirect(specularPart, direction, distance, specularLobe);
+        }
     }
-    storeLobes(frame, pixel, surface, lobes, true);
-#endif
+    // The lighting pass's own material factors: the render-resolution ones
+    // belong to different samples when lighting runs below that resolution.
+    float3 diffuseFactor;
+    float3 specularFactor;
+    NRD_MaterialFactors(bsdf.normal, bsdf.view, bsdf.diffuse, bsdf.specularF0, bsdf.roughness,
+        diffuseFactor, specularFactor);
+    storeLobe(diffuse, targets.diffuse, targets.diffuseSh1, diffuseFactor, pixel, surface, 1.0);
+    storeLobe(specular, targets.specular, targets.specularSh1, specularFactor, pixel, surface,
+        bsdf.roughness);
 }
 
 #endif

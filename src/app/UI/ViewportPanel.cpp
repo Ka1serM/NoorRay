@@ -126,7 +126,6 @@ void ViewportPanel::updateDisplayDescriptor()
 
 void ViewportPanel::preparePresentation()
 {
-    session.prepareViewport();
     width = session.outputWidth();
     height = session.outputHeight();
 }

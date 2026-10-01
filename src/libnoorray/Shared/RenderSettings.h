@@ -6,9 +6,6 @@
 
 #ifdef __cplusplus
 #include <cstdint>
-#define NR_RENDER_SETTINGS_DEFAULT(value) {value}
-#else
-#define NR_RENDER_SETTINGS_DEFAULT(value)
 #endif
 
 // Which renderer draws the scene. Spectral is the reference path tracer;
@@ -27,14 +24,6 @@ enum class SphericalHarmonicsOrder : int
     Degree3 = 3,
 };
 
-enum class GaussianProxyType : int
-{
-    Icosphere,
-    Octahedron,
-    Icosahedron,
-    IcosphereLevel2,
-};
-
 enum class BufferVisualization : int
 {
     Beauty,
@@ -45,28 +34,9 @@ enum class BufferVisualization : int
     ProxyOverdraw,
 };
 
-// How the realtime renderer samples light (external/RTXDI-Library). ReSTIRDI
-// resamples direct light on primary surfaces with ReSTIR DI and draws light
-// samples at later path vertices from RTXDI's ReGIR grid; ReSTIRGI also
-// resamples the primary surfaces' diffuse indirect light with ReSTIR GI.
-// SingleSample bypasses RTXDI: one power-weighted light sample per vertex.
-enum class RealtimeLightingMode : int
-{
-    ReSTIRDI,
-    ReSTIRGI,
-    SingleSample,
-};
-
 // Stages of the realtime renderer. Each has an Off mode, in which the frame
 // passes through that stage unchanged.
 //
-// SHaRC's world-space radiance cache. Off traces indirect paths to their end.
-enum class RadianceCacheMode : int
-{
-    Off,
-    Sharc,
-};
-
 // FSR's quality modes: how much smaller than the output the realtime renderer
 // traces. NativeAA traces every output pixel and leaves FSR as temporal
 // anti-aliasing; the others trace 1.5x, 1.7x, 2x and 3x fewer pixels per axis.
@@ -79,6 +49,19 @@ enum class UpscalerMode : int
     Balanced,
     Performance,
     UltraPerformance,
+};
+
+// How much coarser than the render resolution the realtime renderer lights:
+// Half, Third and Quarter trace, resample and denoise lighting at 1/2, 1/3 or
+// 1/4 of the render resolution per axis. Primary visibility and the material factors stay
+// at the render resolution, and the composite resolves the lighting against
+// them (with the denoiser's SH form, which these modes switch on).
+enum class LightingResolution : int
+{
+    Full,
+    Half,
+    Third,
+    Quarter,
 };
 
 // NRD's denoisers. Off composites the noisy radiance as it is.
@@ -97,43 +80,54 @@ enum class GaussianShadingMode : int
 
 struct RenderSettings
 {
-    int samples NR_RENDER_SETTINGS_DEFAULT(1);
-    int maxSamples NR_RENDER_SETTINGS_DEFAULT(3000);
-    bool aovEnabled NR_RENDER_SETTINGS_DEFAULT(true);
-    int maxBounces NR_RENDER_SETTINGS_DEFAULT(10);
-    float indirectLightClamp NR_RENDER_SETTINGS_DEFAULT(10.0f);
-    bool tonemappingEnabled NR_RENDER_SETTINGS_DEFAULT(false);
-    bool transparentBackground NR_RENDER_SETTINGS_DEFAULT(false);
-    float cameraExposure NR_RENDER_SETTINGS_DEFAULT();
-    float gaussianCutoffSigma NR_RENDER_SETTINGS_DEFAULT(3.0f);
-    GaussianProxyType gaussianProxyType
-        NR_RENDER_SETTINGS_DEFAULT(GaussianProxyType::IcosphereLevel2);
-    GaussianShadingMode gaussianShadingMode
-        NR_RENDER_SETTINGS_DEFAULT(GaussianShadingMode::DirectColor);
-    SphericalHarmonicsOrder gaussianRenderSphericalHarmonics
-        NR_RENDER_SETTINGS_DEFAULT(SphericalHarmonicsOrder::Degree3);
-    bool gaussianProxyOverdrawVisualization
-        NR_RENDER_SETTINGS_DEFAULT(false);
-    int gaussianProxyOverdrawMax NR_RENDER_SETTINGS_DEFAULT(1024);
-    BufferVisualization bufferVisualization
-        NR_RENDER_SETTINGS_DEFAULT(BufferVisualization::Beauty);
-    RaytracerType raytracer NR_RENDER_SETTINGS_DEFAULT(RaytracerType::Realtime);
+    int samples;
+    int maxSamples;
+    int maxBounces;
+    float indirectLightClamp;
+    bool tonemappingEnabled;
+    bool transparentBackground;
+    float cameraExposure;
+    GaussianShadingMode gaussianShadingMode;
+    SphericalHarmonicsOrder gaussianRenderSphericalHarmonics;
+    bool gaussianProxyOverdrawVisualization;
+    int gaussianProxyOverdrawMax;
+    BufferVisualization bufferVisualization;
+    RaytracerType raytracer;
     // Realtime renderer stages.
-    RadianceCacheMode radianceCacheMode NR_RENDER_SETTINGS_DEFAULT(RadianceCacheMode::Sharc);
-    RealtimeLightingMode realtimeLighting
-        NR_RENDER_SETTINGS_DEFAULT(RealtimeLightingMode::ReSTIRDI);
     // RELAX is the quality-first choice for ReSTIR DI.  It retains the
     // direct-light hit-distance guide needed to stop hard local-light shadow
     // boundaries from bleeding during the spatial passes.
-    DenoiserMode denoiserMode NR_RENDER_SETTINGS_DEFAULT(DenoiserMode::Relax);
-    UpscalerMode upscalerMode NR_RENDER_SETTINGS_DEFAULT(UpscalerMode::Quality);
+    DenoiserMode denoiserMode;
+    UpscalerMode upscalerMode;
+    LightingResolution lightingResolution;
 
 #ifdef __cplusplus
+    // Slang reads this record through Frame.h and has no member initializers,
+    // so the defaults live in a C++-only constructor.
+    RenderSettings()
+        : samples(1)
+        , maxSamples(3000)
+        , maxBounces(3)
+        , indirectLightClamp(10.0f)
+        , tonemappingEnabled(false)
+        , transparentBackground(false)
+        , cameraExposure(0.0f)
+        , gaussianShadingMode(GaussianShadingMode::DirectColor)
+        , gaussianRenderSphericalHarmonics(SphericalHarmonicsOrder::Degree3)
+        , gaussianProxyOverdrawVisualization(false)
+        , gaussianProxyOverdrawMax(1024)
+        , bufferVisualization(BufferVisualization::Beauty)
+        , raytracer(RaytracerType::Realtime)
+        , denoiserMode(DenoiserMode::Relax)
+        , upscalerMode(UpscalerMode::Quality)
+        , lightingResolution(LightingResolution::Full)
+    {
+    }
+
     bool operator==(const RenderSettings&) const = default;
 #endif
 };
 
-#undef NR_RENDER_SETTINGS_DEFAULT
 
 #ifdef __cplusplus
 inline constexpr float upscalerRatio(const UpscalerMode mode)
@@ -148,6 +142,18 @@ inline constexpr float upscalerRatio(const UpscalerMode mode)
     case UpscalerMode::UltraPerformance: return 3.0f;
     }
     return 1.0f;
+}
+
+inline constexpr uint32_t lightingScale(const LightingResolution resolution)
+{
+    switch (resolution)
+    {
+    case LightingResolution::Full: return 1u;
+    case LightingResolution::Half: return 2u;
+    case LightingResolution::Third: return 3u;
+    case LightingResolution::Quarter: return 4u;
+    }
+    return 1u;
 }
 
 inline bool rendersProxyOverdraw(const RenderSettings& settings)

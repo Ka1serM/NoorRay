@@ -1,6 +1,4 @@
-#include "ByteBuffer.slang"
-#include "RaytracingAbi.slang"
-#include "../Gaussian/Gaussian.slang"
+#include "GaussianSplat.slang"
 #include "AnalyticLights.slang"
 #include "Environment.slang"
 
@@ -18,11 +16,12 @@ float3 sampleGaussianIsotropic(inout Rng rng)
 void main(inout RayPayload payload)
 {
     const Frame frame = *root.arguments;
-    ByteBuffer records = byteBuffer(frame.gaussianRecords);
-    const uint gaussianId = InstanceIndex() - frame.gaussianInstanceBase;
+    const GaussianSplat splat = loadGaussianSplat(frame, InstanceID());
+    ByteBuffer records = splat.records;
+    const uint gaussianId = splat.id;
     payload.hit = 2u;
-    payload.gaussianId = gaussianId;
-    payload.cryptomatte = gaussianId;
+    payload.splatInstance = InstanceID();
+    payload.cryptomatte = InstanceID();
     // Recompute for the committed instance: traversal may visit accepted
     // candidates out of distance order, so payload state from any-hit is not
     // guaranteed to belong to the final closest proxy triangle.
@@ -60,17 +59,12 @@ void main(inout RayPayload payload)
         -WorldRayDirection()), 0.0);
     payload.albedo = payload.radiance;
 
-    const float3 axis0 = gaussianRecordVector(records, gaussianId, 0u);
-    const float3 axis1 = gaussianRecordVector(records, gaussianId, 1u);
-    const float3 axis2 = gaussianRecordVector(records, gaussianId, 2u);
-    const float3 relative = payload.position - gaussianRecordCenter(records,
-        gaussianId);
-    const float3 localPoint = float3(dot(relative, axis0) / max(dot(axis0, axis0), 1e-12),
-        dot(relative, axis1) / max(dot(axis1, axis1), 1e-12),
-        dot(relative, axis2) / max(dot(axis2, axis2), 1e-12));
-    payload.normal = normalize(localPoint.x * axis0 / max(dot(axis0, axis0), 1e-12)
-        + localPoint.y * axis1 / max(dot(axis1, axis1), 1e-12)
-        + localPoint.z * axis2 / max(dot(axis2, axis2), 1e-12));
+    // The ellipsoid's gradient: the normalized-space point carried back to
+    // world space by the transpose of the world-to-object map.
+    const float3 localPoint = ObjectRayOrigin() + ObjectRayDirection() * exactT;
+    const float3x4 worldToObject = WorldToObject3x4();
+    payload.normal = normalize(localPoint.x * worldToObject[0].xyz
+        + localPoint.y * worldToObject[1].xyz + localPoint.z * worldToObject[2].xyz);
     // Acceptance in the any-hit stage is stochastic and therefore already
     // carries the Gaussian's density in expectation, in both shading modes. A
     // path that reaches closest hit is fully covered; republishing the density

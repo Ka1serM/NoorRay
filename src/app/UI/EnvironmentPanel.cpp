@@ -75,7 +75,7 @@ void EnvironmentPanel::renderUi() {
         
         if (environment.getTextureIndex() != -1) {
             float visibleExposure = environment.getVisibleExposure();
-            ImGuiManager::dragFloatRow("Visible Exposure", visibleExposure, 0.01f, -100.f, 100.f, [&](const float v) {
+            ImGuiManager::dragFloatRow("Visible Exposure", visibleExposure, 0.01f, -10.f, 10.f, [&](const float v) {
                 scene.synchronizeBeforeMutation(); environment.setVisibleExposure(v); anyChanged = true;
             });
             float rotation = environment.getRotation();

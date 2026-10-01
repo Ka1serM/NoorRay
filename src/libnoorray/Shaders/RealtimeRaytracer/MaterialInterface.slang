@@ -21,8 +21,75 @@ struct MaterialGeometry
     float3 tangent;
     float3 bitangent;
     float2 uv;
+    // Every UV channel of the mesh, uvCount per vertex, and the hit
+    // triangle's vertices in it.
+    float2* uvs;
+    uint uvCount;
+    uint3 uvVertices;
+    float2 uvBarycentrics;
     float4 color;
+    // Object-space bounds of the instance's mesh.
+    float3 boundsMin;
+    float3 boundsMax;
+    // Screen-space derivatives, per render pixel along the image's x and y,
+    // from the ray differentials (the *_ddx and *_ddy geometric properties).
+    float3 positionDx;
+    float3 positionDy;
+    float3 normalDx;
+    float3 normalDy;
+    float3 tangentDx;
+    float3 tangentDy;
+    float3 bitangentDx;
+    float3 bitangentDy;
+    float2 uvDx;
+    float2 uvDy;
+    float2 uvBarycentricsDx;
+    float2 uvBarycentricsDy;
+    float4 colorDx;
+    float4 colorDy;
 };
+
+// The channel's three vertex UVs, or none where the mesh lacks the channel.
+bool materialUvVertices(MaterialGeometry geometry, uint channel, out float2 a, out float2 b,
+    out float2 c)
+{
+    a = b = c = float2(0.0);
+    if (channel >= geometry.uvCount)
+        return false;
+    a = geometry.uvs[geometry.uvVertices.x * geometry.uvCount + channel];
+    b = geometry.uvs[geometry.uvVertices.y * geometry.uvCount + channel];
+    c = geometry.uvs[geometry.uvVertices.z * geometry.uvCount + channel];
+    return true;
+}
+
+// Fetch only the channel a generated MaterialX texcoord node actually uses.
+float2 materialUv(MaterialGeometry geometry, uint channel)
+{
+    if (channel == 0u) return geometry.uv;
+    float2 a, b, c;
+    if (!materialUvVertices(geometry, channel, a, b, c))
+        return float2(0.0);
+    return a * (1.0 - geometry.uvBarycentrics.x - geometry.uvBarycentrics.y)
+        + b * geometry.uvBarycentrics.x + c * geometry.uvBarycentrics.y;
+}
+
+// The channel's screen-space derivative along the image's x (axis 0) or y.
+float2 materialUvDerivative(MaterialGeometry geometry, uint channel, uint axis)
+{
+    if (channel == 0u) return axis == 0u ? geometry.uvDx : geometry.uvDy;
+    float2 a, b, c;
+    if (!materialUvVertices(geometry, channel, a, b, c))
+        return float2(0.0);
+    const float2 delta = axis == 0u ? geometry.uvBarycentricsDx : geometry.uvBarycentricsDy;
+    return (b - a) * delta.x + (c - a) * delta.y;
+}
+
+// An instance transform in MaterialX's convention: mx_matrix_mul(m, v) is
+// mul(v, m), so the rows are the images of the basis vectors and the origin.
+float4x4 materialMatrix(float4x3 m)
+{
+    return float4x4(float4(m[0], 0.0), float4(m[1], 0.0), float4(m[2], 0.0), float4(m[3], 1.0));
+}
 
 float closureLuminance(float3 value)
 {
@@ -237,9 +304,20 @@ struct SamplerTexture2D
     uint handle;
 }
 
-// Bilinear, wrapped addressing (MaterialX applies its own address modes to
-// the coordinates first). Images are single-level, so there is no mip
-// selection; sRGB and block-compressed formats are decoded by the image view.
+// Set by the hit shader for this invocation. UV units covered by one render
+// pixel: the longer of the ray differentials' UV derivatives.
+static float materialTextureFootprint = 0.0;
+static uint materialSamplerHandle = 0u;
+
+float4 sampleMaterialTexture(SamplerTexture2D tex, float2 uv, float lod)
+{
+    if (tex.handle == 0u || materialSamplerHandle == 0u)
+        return float4(1.0);
+    Texture2D<float4> image = ResourceDescriptorHeap[tex.handle];
+    SamplerState sampler = SamplerDescriptorHeap[materialSamplerHandle];
+    return image.SampleLevel(sampler, uv, max(lod, 0.0));
+}
+
 float4 texture(SamplerTexture2D tex, float2 uv)
 {
     if (tex.handle == 0u)
@@ -250,28 +328,27 @@ float4 texture(SamplerTexture2D tex, float2 uv)
     image.GetDimensions(width, height);
     if (width == 0u || height == 0u)
         return float4(1.0);
-
-    const int2 size = int2(width, height);
-    const float2 p = frac(uv) * float2(size) - 0.5;
-    const int2 base = int2(floor(p));
-    const float2 f = p - float2(base);
-    const int2 p00 = (base + size) % size;
-    const int2 p11 = (base + 1 + size) % size;
-    const float4 x0 = lerp(image.Load(int3(p00, 0)),
-        image.Load(int3(int2(p11.x, p00.y), 0)), f.x);
-    const float4 x1 = lerp(image.Load(int3(int2(p00.x, p11.y), 0)),
-        image.Load(int3(p11, 0)), f.x);
-    return lerp(x0, x1, f.y);
+    const float texelsPerPixel = materialTextureFootprint * float(max(width, height));
+    return sampleMaterialTexture(tex, uv, log2(max(texelsPerPixel, 1.0)));
 }
 
 float4 textureLod(SamplerTexture2D tex, float2 uv, float lod)
 {
-    return texture(tex, uv);
+    return sampleMaterialTexture(tex, uv, lod);
 }
 
 float4 textureGrad(SamplerTexture2D tex, float2 uv, float2 dx, float2 dy)
 {
-    return texture(tex, uv);
+    if (tex.handle == 0u)
+        return float4(1.0);
+    Texture2D<float4> image = ResourceDescriptorHeap[tex.handle];
+    uint width = 0u;
+    uint height = 0u;
+    image.GetDimensions(width, height);
+    const float2 texelDx = dx * float2(width, height);
+    const float2 texelDy = dy * float2(width, height);
+    return sampleMaterialTexture(tex, uv,
+        0.5 * log2(max(max(dot(texelDx, texelDx), dot(texelDy, texelDy)), 1.0)));
 }
 
 int2 textureSize(SamplerTexture2D tex, int mipLevel)

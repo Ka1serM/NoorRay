@@ -9,3 +9,7 @@ RealtimeArgs* realtimeArgs()
 {
     return ((RealtimeRoot*)root.arguments)->args;
 }
+
+// The largest finite value of the 16-bit float targets. Radiance beyond it,
+// such as a sun in an HDRI, is clamped rather than stored as infinity.
+static const float RealtimeHalfMax = 65504.0;

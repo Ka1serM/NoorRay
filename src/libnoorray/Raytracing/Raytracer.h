@@ -1,8 +1,13 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <span>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <noorrhi/noorrhi.hpp>
 
@@ -10,16 +15,17 @@
 #include "Shared/Environment.h"
 #include "Shared/Frame.h"
 #include "Shared/Raytracing.h"
-#include "Mesh/Assets/Gaussian.h"
 #include "Shared/Light.h"
 #include "Shared/Lens.h"
 #include "Shared/RenderSettings.h"
 #include "Optics/KolbLens.h"
+#include "Mesh/Assets/Mesh.h"
 #include <vector>
 
 class Scene;
 // The CPU mesh asset, distinct from the nr::graphics::Mesh record.
 class Mesh;
+class MeshInstance;
 
 namespace noorrhi { class Device; }
 namespace nr::materialx { struct MaterialShader; }
@@ -34,7 +40,9 @@ struct MaterialHitShaders
 
 // One shader-binding-table hit record of the shared TLAS, in record order: a
 // mesh instance's hit offset addresses RaytracingRayTypeCount records per
-// section of its mesh, and the Gaussian proxies' offset the last ones.
+// section of its mesh, drawn with its materials. A section drawn with a
+// Gaussian splat material is a Gaussian record, which the splat hit stages
+// serve.
 struct HitRecord
 {
     enum class Kind { Section, Gaussian };
@@ -45,6 +53,10 @@ struct HitRecord
     uint32_t materialShaders{~0u};
     // The material's opacity may be below one.
     bool transparent{};
+    // Shadow rays skip the section although other sections of its mesh cast
+    // shadows: its shadow any-hit stage ignores every hit.
+    bool shadowFiltered{};
+    bool operator==(const HitRecord&) const = default;
 };
 
 // graphics API ray tracer and sole render owner. It holds the TLAS, the per-frame
@@ -64,10 +76,11 @@ public:
     Raytracer(const Raytracer&) = delete;
     Raytracer& operator=(const Raytracer&) = delete;
 
-    // Sets the logical render size. A size that fits the current image
-    // allocation only changes the traced rectangle: no GPU wait and no image
-    // replacement. Without a reservation the allocation tracks the request
-    // exactly, so image handles change on every size change.
+    // Sets the logical render size; the images follow in
+    // prepareFrameResources(). Allocations are 150% of the size they are made
+    // for, so a larger size reallocates to 150% of itself, and a growing
+    // viewport reallocates a few times rather than on every step; the
+    // allocation shrinks to 150% of a size once it has settled.
     void resize(uint32_t width, uint32_t height);
     // Keeps the output images allocated at least this large, so interactive
     // hosts can resize within it every frame. Reallocating here synchronizes.
@@ -76,12 +89,14 @@ public:
     noorrhi::Shared<nr::graphics::Lens> lens;
     // Publish changed resident records before recording a frame.
     void commit();
-    // Rebuilds immutable graphics API BLAS/TLAS state from the scene's host geometry
-    // mirror. The replacement is published only after all builds complete.
+    // Publishes the whole scene from scratch, dropping whatever the scene's
+    // change lists hold. Waits for the device.
     void uploadScene(Scene& scene);
-    // Applies fixed-topology transforms and Gaussian value edits in place.
-    // Returns false when a structural rebuild is required.
-    bool updateScene(const Scene& scene, bool updateGaussians);
+    // Publishes what the scene's change lists name since the last
+    // publication: new textures, changed materials and meshes, and changed
+    // instance slots. The cost follows the size of the change; only the TLAS
+    // build or refit is proportional to the instance count.
+    void publishScene(Scene& scene);
     // Republishes every RenderSettings-derived push value. Settings such as
     // the Gaussian shading mode, proxy-overdraw counters, and transparent
     // background change no GPU resource, so hosts call this on its own rather
@@ -92,16 +107,15 @@ public:
     // Publishes the scene environment (colour, rotation, exposure, HDRI and
     // its importance CDF) as an immutable descriptor-heap record.
     void uploadEnvironment(Scene& scene);
-    // Rebuilds the material pointer table. Only needed when the set of
-    // materials changes; an edit to one material re-uploads only itself.
-    void uploadMaterials(Scene& scene);
     // Brings renderer-owned resources in line with the current settings and
-    // size. Reallocating a resource means destroying one the GPU may still be
+    // size, and releases image allocation a settled size no longer uses.
+    // Reallocating a resource means destroying one the GPU may still be
     // reading, so this waits for the device; hosts must therefore call it
     // outside any recorded frame, before render(). render() repeats the check
     // for hosts that do not (the offline path), where waiting mid-frame is
-    // harmless because there is no frame open.
-    virtual void prepareFrameResources() {}
+    // harmless because there is no frame open. Returns true when the images
+    // were replaced: the accumulation is gone and restarts at sample 0.
+    virtual bool prepareFrameResources();
     // Dispatch one sample into the renderer-owned output texture. The work is
     // recorded into the enclosing noorrhi::Frame when the caller has one open,
     // and submitted on its own when it does not.
@@ -123,7 +137,9 @@ public:
 
     // Descriptor-heap handles for the AOV textures the viewport composite pass
     // reads. Heap handles the images already own, so consumers need no
-    // descriptor allocation or renderer-specific presentation code.
+    // descriptor allocation or renderer-specific presentation code. Albedo,
+    // normal and position are empty, with a zero handle, for a renderer that
+    // does not write them (FullOutputAovs::Omitted).
     noorrhi::TextureHandle albedoTexture() const { return albedoImage.storage_handle(); }
     noorrhi::TextureHandle normalTexture() const { return normalImage.storage_handle(); }
     noorrhi::TextureHandle positionTexture() const { return positionImage.storage_handle(); }
@@ -143,6 +159,10 @@ public:
     // Out-of-range pixels read as a miss (~0u / zero).
     std::uint32_t readCryptomatteAt(uint32_t x, uint32_t y);
     noorrhi::float4 readPositionAt(uint32_t x, uint32_t y);
+    virtual std::uint32_t readCryptomatteAtOutput(uint32_t x, uint32_t y)
+    { return readCryptomatteAt(x, y); }
+    virtual noorrhi::float4 readPositionAtOutput(uint32_t x, uint32_t y)
+    { return readPositionAt(x, y); }
     uint32_t width() const { return renderWidth; }
     uint32_t height() const { return renderHeight; }
     // The resolution rays are actually traced at. A renderer that upscales -
@@ -154,11 +174,24 @@ public:
     uint32_t imageWidth() const { return imageWidth_; }
     uint32_t imageHeight() const { return imageHeight_; }
 
+    // A renderer may compile the shaders onMaterialShadersChanged() received
+    // in the background, shading their materials with the default surface
+    // meanwhile. This links what finished and returns true when the image
+    // changes; call it outside a recorded frame.
+    virtual bool linkCompiledMaterialShaders() { return false; }
+    // Waits for every background compile and links it, for offline renders
+    // that must not show default surfaces.
+    virtual void waitForMaterialShaders() {}
+
 protected:
+    // Whether the renderer writes the albedo, normal and position output
+    // images. Beauty and cryptomatte always exist.
+    enum class FullOutputAovs { Written, Omitted };
+
     // The device is owned by the session, not by the renderer: the viewport
     // composite, the swapchain and this renderer all share one noorrhi::Device.
     Raytracer(noorrhi::Device& device, uint32_t width, uint32_t height,
-        bool exportColorMemory);
+        bool exportColorMemory, FullOutputAovs fullOutputAovs);
 
     // Concrete renderers compile and own their shader pipeline and record
     // their frame here. The rest of the renderer state is intentionally shared
@@ -202,6 +235,10 @@ private:
     uint32_t imageHeight_{};
     uint32_t reservedWidth_{};
     uint32_t reservedHeight_{};
+    // When the logical size last changed; the allocation shrinks only after
+    // it has held for a while, so a drag never reallocates back and forth.
+    std::chrono::steady_clock::time_point resized_{};
+    FullOutputAovs fullOutputAovs_{};
     void reallocate(uint32_t width, uint32_t height);
     template<class T>
     std::vector<T> cropToRender(std::vector<T> pixels) const;
@@ -216,66 +253,101 @@ private:
     // One device pointer per scene material, pointing at that material's own
     // nr::graphics::Material record.
     noorrhi::Buffer<std::uint64_t> materials;
-    // Hit shaders of the materials, in the order renderers index them, and
-    // the compiled programs they were created from.
+    noorrhi::AccelerationStructure tlas;
+    // The TLAS instance count the current tlas was built with.
+    uint32_t tlasInstanceCount_{};
+    // The scene clear this renderer's indices belong to.
+    uint64_t publishedClearEpoch_{};
+    // Textures below this index were uploaded (or failed to).
+    std::size_t uploadedTextureCount_{};
+    // The texture, by clear epoch and index, the environment's images were
+    // made from; -1 for none.
+    std::pair<uint64_t, int> environmentImageSource_{0, -1};
+
+    // Mesh assets in the order instances first used them: an asset's index
+    // here is the meshIndex its instances carry. Entries stay until the
+    // scene is cleared.
+    std::vector<const ::Mesh*> sourceMeshes_;
+    std::unordered_map<const ::Mesh*, uint32_t> sourceMeshIndices_;
+    // A mesh drawn with one scene material per slot. Instances drawing the
+    // same mesh with the same materials share one: its hit records, its
+    // material table and the BLAS for its materials' opacity. Bindings stay
+    // until the scene is cleared, and their hit records follow in order.
+    struct MaterialBinding
+    {
+        ::Mesh* mesh{};
+        std::vector<uint32_t> materials;
+        noorrhi::Buffer<uint32_t> materialTable;
+        uint32_t hitRecordOffset{};
+        std::vector<bool> opacity;
+        noorrhi::AccelerationStructure blas;
+        uint8_t mask{};
+        // Some material's back faces are seen: camera rays cull no face.
+        bool doubleSided{};
+    };
+    std::vector<MaterialBinding> bindings_;
+    std::map<std::pair<const ::Mesh*, std::vector<uint32_t>>, uint32_t> bindingIndices_;
+    // Binding indices by the scene material they draw with, and by mesh.
+    std::vector<std::vector<uint32_t>> materialBindings_;
+    std::unordered_map<const ::Mesh*, std::vector<uint32_t>> meshBindings_;
+    std::vector<HitRecord> hitRecords_;
+    bool hitRecordsChanged_{};
+    // A binding's BLAS or hit records moved since the TLAS records were
+    // written, so every record must be rewritten.
+    bool bindingsMoved_{};
+    // Material hit shaders by program, in the order renderers index them.
+    std::unordered_map<const nr::materialx::MaterialShader*, uint32_t> materialShaderIndices_;
     std::vector<std::shared_ptr<const nr::materialx::MaterialShader>> materialShaderPrograms_;
     std::vector<MaterialHitShaders> materialShaders_;
-    // The TLAS and the per-mesh/per-instance record tables. These used to be a
-    // separate GpuScene object, but after resources became self-owning all it
-    // held was a TLAS plus pointer tables into Scene's deques.
-    struct GaussianProxy
-    {
-        noorrhi::Buffer<noorrhi::float3> positions;
-        noorrhi::Buffer<std::uint32_t> indices;
-        noorrhi::AccelerationStructure blas;
-    };
 
-    GaussianProxy gaussianProxy;
-    std::vector<noorrhi::float4x4> gaussianTransforms;
-    std::vector<noorrhi::Instance> tlasInstances;
-    std::vector<uint32_t> meshInstanceAssetIndices;
-    noorrhi::AccelerationStructure tlas;
-    uint32_t instanceCount_{};
-    // Host copy plus device allocation for each record table. The incremental
-    // editor path rewrites the host copy and re-uploads the whole table; a
-    // coalesced dirty range would just be a dirty queue by another name.
-    // Addresses of each Mesh's own shared record, not the records themselves.
+    // Host copies and device tables: one pointer per material and per source
+    // mesh, one instance per mesh instance slot and one TLAS record per
+    // placement. Each table grows by doubling and receives only the entries
+    // that changed.
+    std::vector<std::uint64_t> materialPointerData_;
     std::vector<std::uint64_t> meshRecordData_;
     std::vector<nr::graphics::Instance> instanceData_;
-    std::vector<Gaussian> gaussianRecordData_;
-    std::vector<float> gaussianOpacityData_;
-    std::vector<half> gaussianShCoefficientData_;
+    std::vector<noorrhi::InstanceRecord> tlasRecordData_;
+    // The first TLAS record of each slot, and one past the last.
+    std::vector<uint32_t> slotRecordOffsets_;
+    // A slot's per-instance stream on the GPU: its color override or custom
+    // data. The owner keeps the source alive, so an unchanged data pointer
+    // means an unchanged stream.
+    template <class T>
+    struct SlotStream
+    {
+        std::shared_ptr<const void> owner;
+        const T* data{};
+        noorrhi::Buffer<T> buffer;
+    };
+    std::vector<SlotStream<uint32_t>> slotColors_;
+    std::vector<SlotStream<float>> slotCustomData_;
     noorrhi::Buffer<std::uint64_t> meshRecords_;
     noorrhi::Buffer<nr::graphics::Instance> instances_;
-    noorrhi::Buffer<Gaussian> gaussianRecords_;
-    noorrhi::Buffer<float> gaussianOpacities_;
-    noorrhi::Buffer<half> gaussianShCoefficients_;
-    noorrhi::Buffer<uint32_t> gaussianInstanceOffsets_;
-    std::vector<const ::Mesh*> sourceMeshes_;
-    std::vector<const GaussianAsset*> gaussianAssets_;
-    std::vector<std::size_t> gaussianAssetCounts_;
-    uint32_t gaussianCount_{};
-    uint32_t gaussianShCoefficientCount_{};
-    uint32_t gaussianProxyTriangleCount_{8u};
-    uint32_t meshInstanceCount_{};
-    uint32_t gaussianInstanceCount_{};
-    uint32_t gaussianProxyType_{};
-    float gaussianCutoffSigma_{};
+    noorrhi::Buffer<noorrhi::InstanceRecord> tlasRecords_;
 
     nr::graphics::Scene sceneBuffers() const;
-    void uploadMeshRecords();
-    void uploadInstances();
-    void buildScene(Scene& scene);
-    uint32_t buildMesh(const ::Mesh& asset);
-    void buildGaussians(const Scene& scene);
-    void buildTopLevel(const Scene& scene);
-    // The records buildTopLevel()'s hit offsets address.
-    std::vector<HitRecord> hitRecords() const;
-    void buildSceneData(const Scene& scene);
-    // Updates fixed-topology editor mutations without replacing descriptors,
-    // geometry BLASes, or the TLAS allocation. Returns false when topology or
-    // proxy configuration changed and a transactional rebuild is required.
-    bool updateMutableData(const Scene& scene, bool updateGaussians);
+    void publishMaterials(Scene& scene, const std::vector<uint32_t>& changed);
+    // Uploads a changed mesh and rebuilds the BLAS of its bindings.
+    void publishMesh(const Scene& scene, ::Mesh& mesh);
+    uint32_t sourceMesh(::Mesh& mesh);
+    uint32_t binding(const Scene& scene, const MeshInstance& instance);
+    // Brings the binding's BLAS and mask in line with its materials; returns
+    // whether either changed.
+    bool updateBindingOpacity(const Scene& scene, uint32_t binding);
+    // Some section of the binding casts shadows.
+    static bool bindingCastsShadow(const Scene& scene, const MaterialBinding& binding);
+    static bool sectionCastsShadow(const Scene& scene, const MaterialBinding& binding,
+        const MeshSection& section);
+    void writeBindingHitRecords(const Scene& scene, uint32_t binding);
+    // Lays out every binding's hit records again, after one's section count
+    // changed.
+    void layoutHitRecords(const Scene& scene);
+    template <class T>
+    std::uint64_t uploadSlotStream(SlotStream<T>& entry, std::span<const T> data,
+        const std::shared_ptr<const void>& owner);
+    std::uint64_t slotColors(uint32_t slot, const MeshInstance& instance);
+    void publishInstances(const Scene& scene, std::vector<uint32_t> changedSlots, bool rewriteAll);
     noorrhi::Buffer<nr::graphics::PointLight> pointLights;
     noorrhi::Buffer<nr::graphics::SpotLight> spotLights;
     noorrhi::Buffer<nr::graphics::RectLight> rectLights;

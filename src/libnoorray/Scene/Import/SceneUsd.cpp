@@ -1,6 +1,7 @@
 #include "Scene/Import/SceneUsd.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -327,27 +328,36 @@ void writeMesh(const Scene& scene, const MeshInstance& instance,
     mesh.CreateFaceVertexCountsAttr().Set(counts);
     mesh.CreateFaceVertexIndicesAttr().Set(indices);
     mesh.CreateNormalsAttr().Set(normals);
-    VtArray<pxr::GfVec2f> uvs;
+    std::vector<VtArray<pxr::GfVec2f>> uvs(asset.getUvCount());
     VtArray<GfVec3f> tangents;
     VtArray<float> tangentSigns;
     VtArray<GfVec3f> displayColors;
     VtArray<float> displayOpacities;
-    uvs.reserve(asset.getVertices().size());
+    for (unsigned channel = 0; channel < asset.getUvCount(); ++channel)
+        uvs[channel].reserve(asset.getVertices().size());
     tangents.reserve(asset.getVertices().size());
     tangentSigns.reserve(asset.getVertices().size());
     displayColors.reserve(asset.getVertices().size());
     displayOpacities.reserve(asset.getVertices().size());
-    for (const Vertex& vertex : asset.getVertices()) {
-        uvs.push_back({vertex.uv.x, vertex.uv.y});
+    for (size_t index = 0; index < asset.getVertices().size(); ++index) {
+        const Vertex& vertex = asset.getVertices()[index];
+        for (unsigned channel = 0; channel < asset.getUvCount(); ++channel) {
+            const float2& uv = channel == 0 ? vertex.uv :
+                asset.getExtraUvs()[(channel - 1u) * asset.getVertices().size() + index];
+            uvs[channel].push_back({uv.x, uv.y});
+        }
         tangents.push_back(toUsd(vertex.tangent));
         tangentSigns.push_back(vertex.tangentSign);
         const glm::vec4 color = nr::vertex_color::unpackLinear(vertex.color);
         displayColors.push_back({color.r, color.g, color.b});
         displayOpacities.push_back(color.a);
     }
-    pxr::UsdGeomPrimvarsAPI(mesh).CreateNonIndexedPrimvar(
-        TfToken("st"), pxr::SdfValueTypeNames->TexCoord2fArray, uvs,
-        pxr::UsdGeomTokens->vertex);
+    for (unsigned channel = 0; channel < asset.getUvCount(); ++channel) {
+        const std::string name = channel == 0 ? "st" : "st" + std::to_string(channel);
+        pxr::UsdGeomPrimvarsAPI(mesh).CreateNonIndexedPrimvar(
+            TfToken(name), pxr::SdfValueTypeNames->TexCoord2fArray, uvs[channel],
+            pxr::UsdGeomTokens->vertex);
+    }
     pxr::UsdGeomPrimvarsAPI(mesh).CreateNonIndexedPrimvar(
         pxr::UsdGeomTokens->tangents, pxr::SdfValueTypeNames->Vector3fArray,
         tangents, pxr::UsdGeomTokens->vertex);
@@ -506,22 +516,45 @@ void readMesh(Scene& scene, const pxr::UsdGeomMesh& mesh, const std::string& nam
     mesh.GetNormalsAttr().Get(&normals);
     mesh.GetFaceVertexIndicesAttr().Get(&indices);
     mesh.GetFaceVertexCountsAttr().Get(&counts);
-    VtArray<pxr::GfVec2f> uvs;
+    const pxr::UsdGeomPrimvarsAPI primvars(mesh);
+    size_t maxUvChannel = 0;
+    for (const pxr::UsdGeomPrimvar& primvar : primvars.GetPrimvars()) {
+        const std::string base = primvar.GetBaseName().GetString();
+        if (base == "st") continue;
+        if (!base.starts_with("st")) continue;
+        unsigned channel = 0;
+        const std::string_view digits(base.data() + 2, base.size() - 2);
+        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), channel);
+        if (error == std::errc{} && end == digits.data() + digits.size())
+            maxUvChannel = std::max(maxUvChannel, static_cast<size_t>(channel));
+    }
+    std::vector<VtArray<pxr::GfVec2f>> uvs(maxUvChannel + 1);
     VtArray<GfVec3f> tangents;
     VtArray<float> tangentSigns;
     VtArray<GfVec3f> displayColors;
     VtArray<float> displayOpacities;
-    const pxr::UsdGeomPrimvar stPrimvar =
-        pxr::UsdGeomPrimvarsAPI(mesh).GetPrimvar(TfToken("st"));
     const pxr::UsdGeomPrimvar tangentPrimvar =
         pxr::UsdGeomPrimvarsAPI(mesh).GetPrimvar(pxr::UsdGeomTokens->tangents);
     const pxr::UsdGeomPrimvar colorPrimvar = mesh.GetDisplayColorPrimvar();
     const pxr::UsdGeomPrimvar opacityPrimvar = mesh.GetDisplayOpacityPrimvar();
     getAttr(mesh.GetPrim(), "nr:tangentSigns", &tangentSigns);
-    const bool hasVertexUvs = stPrimvar
-        && stPrimvar.GetInterpolation() == pxr::UsdGeomTokens->vertex
-        && stPrimvar.Get(&uvs)
-        && uvs.size() == points.size();
+    std::vector<bool> hasVertexUvs(uvs.size(), false);
+    for (size_t channel = 0; channel < uvs.size(); ++channel) {
+        const std::string name = channel == 0 ? "st" : "st" + std::to_string(channel);
+        const pxr::UsdGeomPrimvar primvar =
+            pxr::UsdGeomPrimvarsAPI(mesh).GetPrimvar(TfToken(name));
+        hasVertexUvs[channel] = primvar
+            && primvar.GetInterpolation() == pxr::UsdGeomTokens->vertex
+            && primvar.Get(&uvs[channel])
+            && uvs[channel].size() == points.size();
+    }
+    size_t uvCount = 1;
+    if (hasVertexUvs.size() > 1 && !hasVertexUvs[0] && hasVertexUvs[1])
+        throw std::runtime_error("USD mesh has UV1 without UV0");
+    while (uvCount < uvs.size() && hasVertexUvs[uvCount]) ++uvCount;
+    for (size_t channel = uvCount; channel < uvs.size(); ++channel)
+        if (hasVertexUvs[channel])
+            throw std::runtime_error("USD mesh has a missing preceding UV channel");
     const bool hasVertexTangents = tangentPrimvar
         && tangentPrimvar.GetInterpolation() == pxr::UsdGeomTokens->vertex
         && tangentPrimvar.Get(&tangents)
@@ -542,8 +575,8 @@ void readMesh(Scene& scene, const pxr::UsdGeomMesh& mesh, const std::string& nam
         vertices[i].tangent = hasVertexTangents
             ? toGlm(tangents[i]) : glm::vec3(1.0f, 0.0f, 0.0f);
         vertices[i].tangentSign = hasVertexTangentSigns ? tangentSigns[i] : 1.0f;
-        vertices[i].uv = hasVertexUvs
-            ? glm::vec2(uvs[i][0], uvs[i][1]) : glm::vec2(0.0f);
+        vertices[i].uv = hasVertexUvs[0]
+            ? glm::vec2(uvs[0][i][0], uvs[0][i][1]) : glm::vec2(0.0f);
         const glm::vec3 color = hasVertexColors
             ? toGlm(displayColors[i]) : glm::vec3(1.0f);
         const float opacity = hasVertexOpacities ? displayOpacities[i] : 1.0f;
@@ -577,6 +610,11 @@ void readMesh(Scene& scene, const pxr::UsdGeomMesh& mesh, const std::string& nam
         slot = std::min(slot, static_cast<uint32_t>(materialRefs.size() - 1));
     MeshGeometry geometry;
     geometry.vertices = std::vector<Vertex>(vertices.begin(), vertices.end());
+    geometry.uvCount = static_cast<uint32_t>(uvCount);
+    for (size_t channel = 1; channel < uvCount; ++channel) {
+        for (const auto& uv : uvs[channel])
+            geometry.extraUvs.push_back(glm::vec2(uv[0], uv[1]));
+    }
     geometry.indices = std::move(triangleIndices);
     geometry.sections = sortTrianglesBySlot(geometry.indices, triangleSlots);
     auto asset = scene.add(MeshAsset(scene, name, std::move(geometry), materialRefs));
@@ -726,7 +764,6 @@ void writeUsd(const Scene& scene, const std::string& filepath)
     setAttr(root.GetPrim(), "nr:visibleExposure", pxr::SdfValueTypeNames->Float,
         scene.getEnvironment().getVisibleExposure());
     setAttr(root.GetPrim(), "nr:maxSamples", pxr::SdfValueTypeNames->Int, scene.getRenderSettings().maxSamples);
-    setAttr(root.GetPrim(), "nr:aovEnabled", pxr::SdfValueTypeNames->Bool, scene.getRenderSettings().aovEnabled);
     setAttr(root.GetPrim(), "nr:indirectLightClamp", pxr::SdfValueTypeNames->Float, scene.getRenderSettings().indirectLightClamp);
     MaterialTable materialTable;
     for (const auto& object : scene.getRootObjects())
@@ -753,7 +790,6 @@ void readUsd(Scene& scene, const std::string& filepath)
     scene.getEnvironment().setLightingExposure(lightingExposure);
     scene.getEnvironment().setVisibleExposure(visibleExposure);
     getAttr(root, "nr:maxSamples", &scene.getRenderSettings().maxSamples);
-    getAttr(root, "nr:aovEnabled", &scene.getRenderSettings().aovEnabled);
     getAttr(root, "nr:indirectLightClamp", &scene.getRenderSettings().indirectLightClamp);
     scene.getRenderSettings().indirectLightClamp = std::max(
         scene.getRenderSettings().indirectLightClamp, 0.0f);

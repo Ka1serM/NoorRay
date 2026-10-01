@@ -19,7 +19,6 @@ struct EnvironmentFile {
 
 struct RenderSettingsFile {
     int max_samples{3000};
-    bool aov_enabled{true};
     float indirect_light_clamp{10.0f};
     int gaussian_shading_mode{};
     int gaussian_render_sh_degree{3};

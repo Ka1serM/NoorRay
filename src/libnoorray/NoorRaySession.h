@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -20,26 +21,33 @@ public:
     NoorRaySession();
     // Renders on a device the host owns, typically the one it also presents
     // with. The device must outlive the session. The session never presents:
-    // its result is the viewport output texture.
-    NoorRaySession(noorrhi::Device& device, uint32_t width = 1, uint32_t height = 1);
+    // its result is the viewport output texture. onMaterialWorkDone is called
+    // from background threads when material compilation finishes, so a host
+    // that waits for events knows to call processNativeMaterials().
+    NoorRaySession(noorrhi::Device& device, uint32_t width = 1, uint32_t height = 1,
+        std::function<void()> onMaterialWorkDone = {});
     ~NoorRaySession();
 
     // Publishes the current scene into the native raytracer. Hosts call
     // this after scene import or a batch of geometry edits; replacement is
     // immutable from the dispatcher's point of view.
     void rebuildNativeScene();
-    // Publishes scene edits made by the editor after startup. Returns true
-    // when a GPU snapshot changed and accumulation must restart.
+    // Publishes scene edits made by the editor after startup, including the
+    // viewport's light icons. Returns true when a GPU snapshot changed and
+    // accumulation must restart.
     bool pollNativeScene();
     void rebuildNativeMaterials();
-    // Processes MaterialX work after a scene/runtime completion notification
-    // and publishes one immutable GPU snapshot when all changed materials are ready.
+    // Publishes the materials compiled since the last call and links the
+    // renderer's shaders that finished compiling. Returns true when the
+    // image changes and accumulation must restart.
     bool processNativeMaterials();
     void updateNativeCamera();
-    // Prepares the final viewport texture. Call this before opening a NoorRHI
-    // frame; it refreshes AOV handles, resizes the viewport output, and uploads
-    // scene overlays when they changed.
-    void prepareViewport();
+    // Prepares the renderer's images for the current size and settings and
+    // the final viewport texture: it may replace images, which waits for the
+    // device, so call it before opening a NoorRHI frame. It does not read the
+    // scene, so hosts may call it without holding their scene lock. Returns
+    // true when the images were replaced and accumulation must restart.
+    bool prepareViewport();
     // Records the final composited viewport image into the current NoorRHI frame,
     // or submits it independently when no frame is open. The output includes
     // AOV visualization, tonemapping, and optional scene billboards.
@@ -78,10 +86,10 @@ public:
     // The device the renderer runs on: owned by a headless session, borrowed
     // from the host otherwise. Presentation is entirely the host's business.
     noorrhi::Device& device();
-    // Resizes the renderer and its composited viewport as one operation. The
-    // viewport's output image and all AOV bindings are replaced together, so
-    // hosts never need to rebuild ViewportInputs themselves.
-    // Resizing within the allocation only changes the traced rectangle.
+    // Sets the render size and fits the camera film to it. The images and
+    // the composited viewport follow in prepareViewport(), which replaces
+    // the output image and all AOV bindings together, so hosts never need to
+    // rebuild ViewportInputs themselves.
     void resizeViewport(uint32_t width, uint32_t height);
     // Allocates the render images at least this large so interactive resizes
     // up to it never wait on the GPU or replace images. Optional; without it
@@ -103,9 +111,6 @@ public:
     {
         bool hit = false;
         SceneObjectHandle object{};
-        // Flattened Gaussian index when a splat was hit, ~0u otherwise. Pass it
-        // to Scene::getActiveCryptomatteId to outline exactly that splat.
-        uint32_t gaussianIndex = ~0u;
     };
     // Picks the object at render pixel (x, y): origin at the bottom-left of the
     // output, x < outputWidth(), y < outputHeight(). Light icons are drawn on
@@ -135,6 +140,11 @@ private:
     // and consumed by the next renderViewport(), whose outline history
     // restarts with it.
     bool accumulationRestarted_{true};
+    // The session's last trace and composite. Only they read the scene's GPU
+    // data, so publishing edits waits for them rather than for the whole
+    // device, which also carries the host's own frames.
+    noorrhi::GpuToken lastRender_{};
+    noorrhi::GpuToken lastViewport_{};
     Scene scene_;
     Scene::ChangeState appliedSceneChanges_{};
     bool headless_{true};

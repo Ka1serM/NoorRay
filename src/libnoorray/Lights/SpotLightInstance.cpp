@@ -1,8 +1,5 @@
 #include "Lights/SpotLightInstance.h"
 
-#include <glm/geometric.hpp>
-#include <glm/gtc/quaternion.hpp>
-
 SpotLightInstance::SpotLightInstance(Scene& scene, const std::string& name,
                                      const Transform& transform)
     : LightInstance(scene, name, transform, TypeSpot)
@@ -13,8 +10,8 @@ SpotLightInstance::SpotLightInstance(Scene& scene, const std::string& name,
 void SpotLightInstance::updateTransformData(const Transform& world)
 {
     data.position = world.getPosition();
-    data.direction = glm::normalize(
-        world.getRotation() * glm::vec3(0.0f, -1.0f, 0.0f));
+    data.direction = worldDirection(world, glm::vec3(1.0f, 0.0f, 0.0f));
+    data.axis = worldDirection(world, glm::vec3(1.0f, 0.0f, 0.0f));
 }
 
 void SpotLightInstance::setColor(const glm::vec3& color)
@@ -32,6 +29,12 @@ void SpotLightInstance::setIntensity(const float intensity)
 void SpotLightInstance::setSoftRadius(const float radius)
 {
     data.softRadius = radius;
+    updateSceneRecord();
+}
+
+void SpotLightInstance::setSourceLength(const float length)
+{
+    data.sourceLength = length;
     updateSceneRecord();
 }
 

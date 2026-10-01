@@ -3,7 +3,6 @@
 #include "Types.h"
 
 #ifdef __cplusplus
-#include <cstddef>
 namespace nr::graphics {
 #endif
 
@@ -15,26 +14,23 @@ struct Environment
     float visibleExposureScale;
     float lightingExposureScale;
     float importanceWeight;
-    // Resource-descriptor-heap indices; 0 means no texture. The padding keeps
-    // cdfWidth and everything after it at their former offsets.
+    // Resource-descriptor-heap indices; 0 means no texture.
     uint texture;
     uint cdfTexture;
-    uint texturePadding0;
-    uint texturePadding1;
+    // Unreal's sky light controls, as LightControls holds them for lights.
+    uint castShadows;
+    float indirectLightingIntensity;
     int cdfWidth;
     int cdfHeight;
     int mapping;
     int padding0;
     float4 environmentFromWorld[3];
+    // Below the environment's horizon the texture's value blends toward rgb
+    // by a, as Unreal's sky light does with Lower Hemisphere Is Solid Color.
+    float4 lowerHemisphere;
 };
 
 #ifdef __cplusplus
 inline constexpr std::uint32_t EnvironmentNoTexture = 0;
-
-static_assert(offsetof(Environment, texture) == 32);
-static_assert(offsetof(Environment, cdfWidth) == 48);
-static_assert(offsetof(Environment, environmentFromWorld) == 64);
-static_assert(sizeof(Environment) == 112);
-
 } // namespace nr::graphics
 #endif

@@ -21,7 +21,7 @@
 #include "Camera/FisheyeCamera.h"
 #include "Camera/ThinLensCamera.h"
 #include "Mesh/Assets/Mesh.h"
-#include "Scene/GaussianInstance.h"
+#include "Scene/GaussianCloud.h"
 #include "Scene/LightInstance.h"
 #include "Lights/DirectionalLightInstance.h"
 #include "Lights/PointLightInstance.h"
@@ -76,7 +76,6 @@ nr::sceneio::RenderSettingsFile makeRenderSettingsFile(const RenderSettings& set
 {
     return {
         .max_samples = settings.maxSamples,
-        .aov_enabled = settings.aovEnabled,
         .indirect_light_clamp = settings.indirectLightClamp,
         .gaussian_shading_mode = static_cast<int>(settings.gaussianShadingMode),
         .gaussian_render_sh_degree = static_cast<int>(settings.gaussianRenderSphericalHarmonics),
@@ -136,9 +135,7 @@ std::optional<nr::sceneio::ObjectFile> makeObjectFile(
     if (const auto camera = std::dynamic_pointer_cast<CameraInstance>(object)) {
         file.type = "camera";
         file.camera = makeCameraFile(*camera, camera.get() == activeCamera);
-    } else if (const auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object)) {
-        if (file.path.empty())
-            file.path = gaussian->getGaussianAsset().getPath();
+    } else if (std::dynamic_pointer_cast<GaussianCloud>(object)) {
         if (file.type.empty())
             file.type = "gaussian";
     } else if (const auto mesh = std::dynamic_pointer_cast<MeshInstance>(object)) {
@@ -420,9 +417,12 @@ void writePbrtObject(std::ostream& out, const Scene& scene,
     if (!object) return;
     if (const auto mesh = std::dynamic_pointer_cast<MeshInstance>(object))
         writePbrtMesh(out, scene, *mesh, outputPath);
-    else if (std::dynamic_pointer_cast<GaussianInstance>(object))
+    else if (std::dynamic_pointer_cast<GaussianCloud>(object)) {
+        // Its children are its splats.
         out << "# NoorRay: Gaussian splat objects are not representable in PBRT and were skipped: "
             << pbrtQuote(object->getName()) << "\n";
+        return;
+    }
     for (const auto& child : object->getChildren())
         writePbrtObject(out, scene, child, outputPath);
 }
@@ -513,7 +513,7 @@ void writePbrtCamera(std::ostream& out, const CameraInstance& instance,
         << "] \"integer yresolution\" [" << resolution.y << "]\n";
     out << "Sampler \"independent\" \"integer pixelsamples\" ["
         << std::max(maxSamples, 1) << "]\n";
-    const float fov = camera.fovDegreesForFocalLengthMm(camera.getFocalLengthMm());
+    const float fov = Camera::fovDegreesForFocalLengthMm(camera.getFocalLengthMm(), camera.getSensor().filmWidth());
     if (instance.getProjectionType() == CameraProjectionType::Orthographic) {
         out << "Camera \"orthographic\" \"float fov\" [" << pbrtNumber(fov) << "]\n";
     } else if (instance.getProjectionType() == CameraProjectionType::ThinLens) {

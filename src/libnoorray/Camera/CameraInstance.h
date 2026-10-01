@@ -22,10 +22,11 @@ public:
         bool down = false;
     };
 
-    static constexpr glm::vec3 WorldUp{0.f, 1.f, 0.f};
-    static constexpr glm::vec3 LocalForward{0.f, 0.f, -1.f};
-    static constexpr glm::vec3 LocalUp{0.f, 1.f, 0.f};
-    static constexpr glm::vec3 LocalRight{1.f, 0.f, 0.f};
+    // Unreal's axes, in the world and in the camera.
+    static constexpr glm::vec3 WorldUp{0.f, 0.f, 1.f};
+    static constexpr glm::vec3 LocalForward{1.f, 0.f, 0.f};
+    static constexpr glm::vec3 LocalRight{0.f, 1.f, 0.f};
+    static constexpr glm::vec3 LocalUp{0.f, 0.f, 1.f};
 
     explicit CameraInstance(std::unique_ptr<Camera> camera,
         const std::string& name = "Camera",

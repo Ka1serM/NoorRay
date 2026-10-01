@@ -1,7 +1,5 @@
 #include "Lights/PointLightInstance.h"
 
-#include <glm/geometric.hpp>
-
 PointLightInstance::PointLightInstance(Scene& scene, const std::string& name,
                                        const Transform& transform)
     : LightInstance(scene, name, transform, TypePoint)
@@ -12,6 +10,7 @@ PointLightInstance::PointLightInstance(Scene& scene, const std::string& name,
 void PointLightInstance::updateTransformData(const Transform& world)
 {
     data.position = world.getPosition();
+    data.axis = worldDirection(world, glm::vec3(1.0f, 0.0f, 0.0f));
 }
 
 void PointLightInstance::setColor(const glm::vec3& color)
@@ -29,6 +28,12 @@ void PointLightInstance::setIntensity(const float intensity)
 void PointLightInstance::setSoftRadius(const float radius)
 {
     data.softRadius = radius;
+    updateSceneRecord();
+}
+
+void PointLightInstance::setSourceLength(const float length)
+{
+    data.sourceLength = length;
     updateSceneRecord();
 }
 

@@ -1,3 +1,6 @@
+#include <chrono>
+#include <cstdlib>
+#include <cstdio>
 #include "NoorRaySession.h"
 
 #include <stdexcept>
@@ -15,6 +18,17 @@
 namespace noorray
 {
 
+namespace {
+void requireRealtimeRayTracing(const noorrhi::Device& device)
+{
+    const auto features = device.features();
+    if (!features.ray_query || !features.ray_tracing)
+        throw std::runtime_error(
+            "Realtime NoorRay requires VK_KHR_ray_query and VK_KHR_ray_tracing_pipeline; "
+            "the selected Vulkan driver does not expose both features");
+}
+}
+
 NoorRaySession::NoorRaySession()
     : scene_()
 {}
@@ -27,6 +41,7 @@ void NoorRaySession::initializeHeadlessRenderer(const uint32_t width,
     shutdownRenderer();
     ownedDevice_.emplace();
     device_ = &*ownedDevice_;
+    requireRealtimeRayTracing(*device_);
     exportViewportMemory_ = exportColorMemory;
     viewportOutputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     scene_.getRenderSettings().raytracer = RaytracerType::Realtime;
@@ -36,13 +51,16 @@ void NoorRaySession::initializeHeadlessRenderer(const uint32_t width,
 }
 
 NoorRaySession::NoorRaySession(noorrhi::Device& device, const uint32_t width,
-    const uint32_t height)
+    const uint32_t height, std::function<void()> onMaterialWorkDone)
     : device_(&device)
     , scene_()
     , headless_(false)
+    , materialRuntime_(onMaterialWorkDone)
 {
+    requireRealtimeRayTracing(device);
     scene_.getRenderSettings().raytracer = RaytracerType::Realtime;
-    raytracer_ = std::make_unique<RealtimeRaytracer>(device, width, height);
+    raytracer_ = std::make_unique<RealtimeRaytracer>(device, width, height, false,
+        std::move(onMaterialWorkDone));
     exportViewportMemory_ = false;
     viewportOutputFormat_ = noorrhi::ImageFormat::Rgba32Float;
     prepareViewport();
@@ -62,6 +80,8 @@ void NoorRaySession::shutdownRenderer()
     scene_.releaseGpuResources();
     ownedDevice_.reset();
     device_ = nullptr;
+    lastRender_ = {};
+    lastViewport_ = {};
     headless_ = true;
     renderSettingsInitialized = false;
 }
@@ -112,7 +132,6 @@ void NoorRaySession::resizeViewport(const uint32_t width, const uint32_t height)
 
     raytracer_->resize(width, height);
     updateNativeCamera();
-    prepareViewport();
 }
 
 void NoorRaySession::reserveViewport(const uint32_t width, const uint32_t height)
@@ -140,6 +159,7 @@ void NoorRaySession::render(const uint32_t frameIndex, const uint32_t sampleInde
     if (!raytracer_)
         throw std::runtime_error("native raytracer is not initialized");
     raytracer_->render(frameIndex, sampleIndex);
+    lastRender_ = device_->signal();
     if (sampleIndex == 0)
         accumulationRestarted_ = true;
 }
@@ -208,10 +228,10 @@ NoorRaySession::ViewportPick NoorRaySession::pick(const uint32_t x, const uint32
         }
     }
 
-    const uint32_t id = raytracer_->readCryptomatteAt(x, y);
+    const uint32_t id = raytracer_->readCryptomatteAtOutput(x, y);
     if (id == ~0u)
         return result;
-    if (const SceneObject* object = scene_.findCryptomatteObject(id, result.gaussianIndex)) {
+    if (const SceneObject* object = scene_.findCryptomatteObject(id)) {
         result.hit = true;
         result.object = object->getHandle();
     }
@@ -227,11 +247,12 @@ std::optional<glm::vec3> NoorRaySession::pickPosition(const uint32_t x, const ui
         if (const auto light = viewport_->lightPositionAt(x, y))
             return light;
     // The position AOV holds no meaningful value where the camera ray missed.
-    if (raytracer_->readCryptomatteAt(x, y) == ~0u)
+    if (raytracer_->readCryptomatteAtOutput(x, y) == ~0u)
         return std::nullopt;
-    const noorrhi::float4 position = raytracer_->readPositionAt(x, y);
+    const noorrhi::float4 position = raytracer_->readPositionAtOutput(x, y);
     return glm::vec3(position.x, position.y, position.z);
 }
+
 
 void NoorRaySession::rebuildNativeScene()
 {
@@ -253,8 +274,10 @@ bool NoorRaySession::pollNativeScene()
     // immediately before replacing the renderer's immutable GPU snapshot.
     const uint8_t changes = scene_.changesSince(appliedSceneChanges_);
     const bool syncPending = scene_.consumeGpuSync();
-    if (syncPending || changes != 0)
-        raytracer_->device().synchronize();
+    if (syncPending || changes != 0) {
+        device_->wait(lastRender_);
+        device_->wait(lastViewport_);
+    }
 
     // Render settings are small launch data, but do not rewrite them when the
     // scene_ has not changed. This also keeps the update phase genuinely dirty-
@@ -271,18 +294,13 @@ bool NoorRaySession::pollNativeScene()
 
     const auto isDirty = [changes](DirtyFlag flag) { return (changes & flag) != 0; };
     bool changed = settingsChanged;
-    const bool geometryDirty = isDirty(TLAS)
-        || isDirty(Meshes) || isDirty(GaussianData) || isDirty(Textures);
-    if (geometryDirty)
+    if (isDirty(TLAS) || isDirty(Meshes) || isDirty(Textures) || isDirty(Materials))
     {
-        const bool structural = isDirty(Meshes) || isDirty(Textures);
-        const bool updateGaussians = isDirty(GaussianData);
-        if (structural || !raytracer_->updateScene(scene_, updateGaussians))
-            raytracer_->uploadScene(scene_);
-        scene_.clearDirtyFlag(TLAS);
-        scene_.clearDirtyFlag(Meshes);
-        scene_.clearDirtyFlag(Textures);
-        scene_.clearDirtyFlag(GaussianData);
+        const auto dbgStarted = std::chrono::steady_clock::now(); // DBGTIME
+        raytracer_->publishScene(scene_);
+        NR_LOG_INFO("DBGTIME publishScene " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - dbgStarted).count() << " ms"); // DBGTIME
+        for (const DirtyFlag flag : {TLAS, Meshes, Textures, Materials})
+            scene_.clearDirtyFlag(flag);
         changed = true;
     }
 
@@ -312,6 +330,8 @@ bool NoorRaySession::pollNativeScene()
         changed = true;
     }
     appliedSceneChanges_ = scene_.getChangeState();
+    if (viewport_)
+        viewport_->updateBillboards(scene_);
     return changed;
 }
 
@@ -322,15 +342,21 @@ void NoorRaySession::updateNativeCamera()
     raytracer_->updateCamera(scene_);
 }
 
-void NoorRaySession::prepareViewport()
+bool NoorRaySession::prepareViewport()
 {
     if (!raytracer_)
-        return;
+        return false;
+
+    // The viewport composite computes selection outlines from the full-output
+    // cryptomatte image. Realtime picking reads the render-resolution target
+    // directly, so keep this AOV refreshed even while showing beauty.
+    if (auto* realtime = dynamic_cast<RealtimeRaytracer*>(raytracer_.get()))
+        realtime->setSelectionAovRequired(true);
 
     // Outside any recorded frame: this may wait for the device and replace the
     // renderer's per-frame images, and it must happen before the trace size
     // below is read.
-    raytracer_->prepareFrameResources();
+    const bool accumulationRestarts = raytracer_->prepareFrameResources();
 
     const ViewportInputs inputs{
         raytracer_->outputTexture(), raytracer_->albedoTexture(),
@@ -346,7 +372,7 @@ void NoorRaySession::prepareViewport()
             raytracer_->traceWidth(), raytracer_->traceHeight(),
             raytracer_->imageWidth(), raytracer_->imageHeight(), inputs,
             viewportOutputFormat_);
-    viewport_->updateBillboards(scene_);
+    return accumulationRestarts;
 }
 
 void NoorRaySession::renderViewport(const glm::mat4& viewProjection,
@@ -361,6 +387,7 @@ void NoorRaySession::renderViewport(const glm::mat4& viewProjection,
         static_cast<int>(settings.bufferVisualization),
         settings.gaussianProxyOverdrawMax, settings.tonemappingEnabled,
         showBillboards, scene_.getActiveObjectHandle());
+    lastViewport_ = device_->signal();
 }
 
 void NoorRaySession::renderViewport(const uint32_t selectedCryptomatteId,
@@ -430,6 +457,7 @@ void NoorRaySession::rebuildNativeMaterials()
     // A published program changes its material's hit groups and its sections'
     // opacity, which the scene upload applies along with the materials.
     raytracer_->uploadScene(scene_);
+    raytracer_->waitForMaterialShaders();
     raytracer_->uploadEnvironment(scene_);
 }
 
@@ -437,13 +465,9 @@ bool NoorRaySession::processNativeMaterials()
 {
     if (!raytracer_)
         return false;
-    const bool wasIncomplete = materialRuntime_.needsCompilation(scene_);
-    materialRuntime_.processPending(scene_);
-    if (!wasIncomplete || materialRuntime_.needsCompilation(scene_))
-        return false;
-
-    raytracer_->uploadMaterials(scene_);
-    return true;
+    const bool linked = raytracer_->linkCompiledMaterialShaders();
+    // Published programs reach the GPU with the next pollNativeScene().
+    return materialRuntime_.processPending(scene_) || linked;
 }
 
 }

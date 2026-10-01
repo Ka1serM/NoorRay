@@ -370,9 +370,8 @@ void HdNoorRayRenderPass::_Render(const HdRenderPassStateSharedPtr& state)
     RenderSettings& settings = session.scene().getRenderSettings();
     settings.samples = 1;
     settings.maxSamples = static_cast<int>(targetSamples);
-    settings.maxBounces = std::max(1, delegate->GetRenderSetting<int>(TfToken("maxBounces"), 8));
+    settings.maxBounces = std::max(1, delegate->GetRenderSetting<int>(TfToken("maxBounces"), 3));
     settings.indirectLightClamp = std::max(0.0f, delegate->GetRenderSetting<float>(TfToken("indirectLightClamp"), 10.0f));
-    settings.aovEnabled = delegate->GetRenderSetting<int>(TfToken("aovEnabled"), 1) != 0;
     settings.transparentBackground = delegate->GetRenderSetting<int>(TfToken("transparentBackground"), 0) != 0;
     settings.gaussianCutoffSigma = std::max(0.1f, delegate->GetRenderSetting<float>(TfToken("gaussianCutoffSigma"), 3.0f));
     settings.gaussianProxyType = static_cast<GaussianProxyType>(std::clamp(
@@ -391,11 +390,13 @@ void HdNoorRayRenderPass::_Render(const HdRenderPassStateSharedPtr& state)
     if (reset)
         session.rebuildNativeScene();
 
-    session.prepareViewport();
+    if (session.prepareViewport())
+        accumulatedSamples_ = 0;
 
     if (accumulatedSamples_ < targetSamples) {
         session.pollNativeScene();
-        session.prepareViewport();
+        if (session.prepareViewport())
+            accumulatedSamples_ = 0;
         session.commit();
         session.render(accumulatedSamples_, accumulatedSamples_);
         ++accumulatedSamples_;

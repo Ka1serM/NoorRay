@@ -1,5 +1,6 @@
 #include "Scene.h"
 #include <algorithm>
+#include <utility>
 #include "Camera/CameraInstance.h"
 #include "Scene/LightInstance.h"
 #include "Lights/DirectionalLightInstance.h"
@@ -7,9 +8,6 @@
 #include "Lights/RectLightInstance.h"
 #include "Lights/SpotLightInstance.h"
 #include "Scene/MeshInstance.h"
-#include "Scene/GaussianInstance.h"
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
 #include "Scene/SceneObject.h"
 
 using glm::inverse;
@@ -91,41 +89,20 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
 
     if (auto light = std::dynamic_pointer_cast<LightInstance>(sharedObject))
         registerLight(*light);
-    const auto gaussianInstance = std::dynamic_pointer_cast<GaussianInstance>(sharedObject);
-    if (gaussianInstance)
-        setDirtyFlag(GaussianData);
 
     notifyGeometryChanged();
     // The slot is published only once the object is reachable through the dense
     // array, so a handle never points at a gap.
     const uint32_t denseIndex = static_cast<uint32_t>(sceneObjects.size());
     sharedObject->setHandle(allocateObjectSlot(denseIndex));
+    if (auto* meshInstance = dynamic_cast<MeshInstance*>(sharedObject.get());
+        meshInstance && meshInstance->hasMesh())
+        addMeshInstanceSlot(*meshInstance);
+    if (!sharedObject->getParent())
+        addRootCandidate(*sharedObject);
     sceneObjects.push_back(std::move(sharedObject));
-    ++hierarchyRevision;
-    if (gaussianInstance && gaussianInstance->hasGaussianAsset())
-    {
-        gaussianCount += gaussianInstance->getGaussianAsset().getGaussianCount();
-        gaussianInstances.push_back(gaussianInstance);
-    }
+    notifyHierarchyChanged();
     return denseIndex;
-}
-
-void Scene::rebuildGaussianInstanceCache()
-{
-    gaussianInstances.clear();
-    gaussianCount = 0;
-    for (const auto& object : sceneObjects)
-    {
-        if (auto instance = std::dynamic_pointer_cast<GaussianInstance>(object))
-        {
-            // An instance whose asset was reclaimed has nothing to render, so
-            // it stays out of the flattened splat data and the TLAS.
-            if (!instance->hasGaussianAsset())
-                continue;
-            gaussianCount += instance->getGaussianAsset().getGaussianCount();
-            gaussianInstances.push_back(std::move(instance));
-        }
-    }
 }
 
 // ── Public lifetime API ───────────────────────────────────────────────────────
@@ -137,7 +114,20 @@ void Scene::clear() {
     activateCamera(nullptr);
     copiedObject.reset();
     sceneObjects.clear();
-    ++hierarchyRevision;
+    ++clearEpoch_;
+    meshInstanceSlots_.clear();
+    changedMeshInstanceSlots_.clear();
+    meshInstanceSlotListed_.clear();
+    changedMeshes_.clear();
+    meshListed_.clear();
+    changedMaterials_.clear();
+    materialListed_.clear();
+    materialsToCompile_.clear();
+    materialCompileListed_.clear();
+    for (auto& lights : lightObjects_)
+        lights.clear();
+    rootCandidates_.clear();
+    notifyHierarchyChanged();
     // Retire the slots rather than dropping the table, so handles that outlive
     // the clear stay detectably stale instead of aliasing a future object.
     for (uint32_t slot = 0; slot < objectSlots.size(); ++slot) {
@@ -147,43 +137,45 @@ void Scene::clear() {
         ++objectSlots[slot].generation;
         freeObjectSlots.push_back(slot);
     }
-    gaussianInstances.clear();
-    gaussianCount = 0;
     meshes.clear();
     materials.clear();
-    gaussianAssets.clear();
     textures.clear();
     meshesByPath_.clear();
     texturesByKey_.clear();
-    ++textureRevision_;
+    notifyTexturesChanged();
     pointLights.clear();
     spotLights.clear();
     rectLights.clear();
     directionalLights.clear();
-    gaussianOpacities.clear();
-    gaussianShCoeffs.clear();
-    gaussianInstanceOffsets.clear();
     materialxSourcePaths.clear();
     materialxDocuments.clear();
     notifyMaterialChanged();
     importedFileRoots_.clear();
-    activeObject = {};
+    assignActiveObject({});
     renderSettings = {};
     environment->clearHdriTexture();
     environment->setColor(vec3(1.0f));
     environment->setRotation(0.0f);
     environment->setVisibleExposure(0.0f);
     environment->setLightingExposure(1.0f);
+    environment->setVisibleToCamera(true);
+    environment->setLowerHemisphere(vec3(0.0f), 0.0f);
+    environment->setLightControls(true, 1.0f);
     environment->setEquirectangularMapping();
     for (const auto flag : {TLAS, Meshes, Textures, EnvironmentCdf, Lights,
-                           CameraState, Accumulation, GaussianData})
+                           CameraState, Accumulation, Materials})
         setDirtyFlag(flag);
 }
 
-SceneObjectHandle Scene::add(std::unique_ptr<SceneObject> sceneObject) {
+SceneObjectHandle Scene::add(std::unique_ptr<SceneObject> sceneObject, const SceneObjectHandle parent) {
     synchronizeBeforeMutation();
+    const auto parentPtr = findObjectPtr(parent);
     const uint32_t index = registerObject(std::move(sceneObject));
-    return sceneObjects[index]->getHandle();
+    if (parentPtr)
+        parentPtr->addChild(sceneObjects[index]);
+    const std::shared_ptr<SceneObject> object = sceneObjects[index];
+    object->onAdded();
+    return object->getHandle();
 }
 
 Mesh* Scene::add(Mesh mesh, const bool reuseExisting) {
@@ -199,27 +191,39 @@ Mesh* Scene::add(Mesh mesh, const bool reuseExisting) {
     result->setMeshIndex(static_cast<uint32_t>(meshes.size() - 1));
     if (!key.empty())
         meshesByPath_.insert_or_assign(key, result);
-    setDirtyFlag(Meshes);
+    meshListed_.push_back(false);
+    markMeshChanged(*result);
     return result;
 }
 
 Material* Scene::add(Material material) {
     synchronizeBeforeMutation();
     materials.push_back(std::move(material));
+    const auto index = static_cast<uint32_t>(materials.size() - 1);
+    materials.back().sceneIndex = index;
     // Publish a record immediately so the renderer's pointer table never
     // contains a null entry for a material whose program has not compiled yet.
     materialxSourcePaths.emplace_back();
     materialxDocuments.emplace_back();
+    materialListed_.push_back(false);
+    materialCompileListed_.push_back(false);
     notifyMaterialChanged();
-    setDirtyFlag(Meshes);
+    materials.back().revision = materialRevision_;
+    markMaterialChanged(index);
+    markMaterialForCompile(index);
     setDirtyFlag(Accumulation);
     return &materials.back();
 }
 
-Material* Scene::addMaterial(MaterialX::DocumentPtr material) {
-    Material* result = add(Material{});
+Material* Scene::addMaterial(MaterialX::DocumentPtr material, const uint32_t flags) {
+    Material record{};
+    nr::graphics::Material data{};
+    data.flags = flags;
+    record.setData(data);
+    Material* result = add(std::move(record));
     materialxDocuments.back() = std::move(material);
     notifyMaterialChanged();
+    result->revision = materialRevision_;
     return result;
 }
 
@@ -235,31 +239,28 @@ void Scene::updateMaterialDocument(
     // The published program was compiled from the old document.
     material->shaderProgram = {};
     material->compiled = false;
-    setDirtyFlag(Meshes);
+    markMaterialChanged(index);
+    markMaterialForCompile(index);
     setDirtyFlag(Accumulation);
     notifyMaterialChanged();
+    material->revision = materialRevision_;
 }
 
 void Scene::invalidateMaterial(Material* material)
 {
-    if (getMaterialIndex(material) == ~0u)
+    const uint32_t index = getMaterialIndex(material);
+    if (index == ~0u)
         return;
     synchronizeBeforeMutation();
     // Dropping the program is what marks the material for recompilation; its
     // GPU allocations are replaced wholesale when the new one is published.
     material->shaderProgram = {};
     material->compiled = false;
-    setDirtyFlag(Meshes);
+    markMaterialChanged(index);
+    markMaterialForCompile(index);
     setDirtyFlag(Accumulation);
     notifyMaterialChanged();
-}
-
-GaussianAsset* Scene::add(GaussianAsset gaussianAsset) {
-    synchronizeBeforeMutation();
-    gaussianAssets.push_back(std::move(gaussianAsset));
-    setDirtyFlag(TLAS);
-    setDirtyFlag(GaussianData);
-    return &gaussianAssets.back();
+    material->revision = materialRevision_;
 }
 
 Texture* Scene::addTexture(Texture texture) {
@@ -279,7 +280,7 @@ Texture* Scene::addTexture(Texture texture) {
     if (!key.empty())
         texturesByKey_.insert_or_assign(key, result);
     setDirtyFlag(Textures);
-    ++textureRevision_;
+    notifyTexturesChanged();
     return result;
 }
 
@@ -314,53 +315,53 @@ void Scene::clearEnvironmentTexture() {
 }
 
 bool Scene::remove(SceneObject* objToRemove) {
-    if (!objToRemove)
+    const auto root = findObjectPtr(objToRemove);
+    if (!root)
         return false;
 
-    // Recursively remove children first
-    while (true) {
-        const auto children = objToRemove->getChildren();
-        if (children.empty()) break;
-        remove(children.back().get());
+    // One pass over the subtree; each object leaves in O(1), which keeps
+    // removing a whole imported map linear in its size.
+    std::vector<std::shared_ptr<SceneObject>> subtree{root};
+    for (std::size_t i = 0; i < subtree.size(); ++i)
+        for (const auto& child : subtree[i]->children)
+            if (auto locked = child.lock())
+                subtree.push_back(std::move(locked));
+    if (SceneObject* parent = root->getParent())
+        parent->removeChild(root.get());
+
+    const CameraInstance* activeCameraBefore = getActiveCamera();
+    bool removedActiveCamera = false;
+    for (const auto& object : subtree) {
+        if (auto* light = dynamic_cast<LightInstance*>(object.get()))
+            unregisterLight(*light);
+        if (auto* meshInstance = dynamic_cast<MeshInstance*>(object.get());
+            meshInstance && meshInstance->slot != ~0u)
+            removeMeshInstanceSlot(*meshInstance);
+        removedActiveCamera |= object.get() == activeCameraBefore;
+        if (activeObject == object->getHandle())
+            assignActiveObject({});
+
+        // Object order carries no meaning, so the last object fills the hole.
+        const uint32_t hole = objectSlots[object->getHandle().index()].denseIndex;
+        if (hole + 1 != sceneObjects.size()) {
+            sceneObjects[hole] = std::move(sceneObjects.back());
+            objectSlots[sceneObjects[hole]->getHandle().index()].denseIndex = hole;
+        }
+        sceneObjects.pop_back();
+        releaseObjectSlot(object->getHandle());
+        object->scene = nullptr;
     }
 
-    if (objToRemove->getParent())
-        objToRemove->getParent()->removeChild(objToRemove);
-
-    if (auto* light = dynamic_cast<LightInstance*>(objToRemove))
-        unregisterLight(*light);
-    if (dynamic_cast<GaussianInstance*>(objToRemove))
-        setDirtyFlag(GaussianData);
-
-    const auto it = std::ranges::find_if(sceneObjects, [objToRemove](const auto& ptr) {
-        return ptr.get() == objToRemove;
-    });
-    if (it == sceneObjects.end())
-        return false;
-
-    if (activeObject == (*it)->getHandle())
-        activeObject = {};
-    if (objToRemove == getActiveCamera()) {
+    if (removedActiveCamera) {
         const auto replacement = std::ranges::find_if(sceneObjects,
-            [objToRemove](const std::shared_ptr<SceneObject>& object) {
-                return object.get() != objToRemove
-                    && dynamic_cast<CameraInstance*>(object.get()) != nullptr;
+            [](const std::shared_ptr<SceneObject>& object) {
+                return dynamic_cast<CameraInstance*>(object.get()) != nullptr;
             });
         activateCamera(replacement != sceneObjects.end()
             ? std::static_pointer_cast<CameraInstance>(*replacement) : nullptr);
     }
-
-    releaseObjectSlot(objToRemove->getHandle());
-    objToRemove->scene = nullptr;
-    const auto erased = sceneObjects.erase(it);
-    // Erasing shifts everything behind the hole down by one; the slot table is
-    // the only thing that knows where an object lives, so it follows along.
-    for (auto follower = erased; follower != sceneObjects.end(); ++follower)
-        objectSlots[(*follower)->getHandle().index()].denseIndex =
-            static_cast<uint32_t>(std::distance(sceneObjects.begin(), follower));
-    rebuildGaussianInstanceCache();
     notifyGeometryChanged();
-    ++hierarchyRevision;
+    notifyHierarchyChanged();
     return true;
 }
 
@@ -374,17 +375,12 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     if (!oldObject || !newObject)
         return false;
 
-    const auto it = std::ranges::find_if(sceneObjects, [oldObject](const auto& ptr) {
-        return ptr.get() == oldObject;
-    });
-    if (it == sceneObjects.end())
+    if (!findObjectPtr(oldObject))
         return false;
-
-    const uint32_t index = static_cast<uint32_t>(std::distance(sceneObjects.begin(), it));
+    const uint32_t index = objectSlots[oldObject->getHandle().index()].denseIndex;
+    const auto it = sceneObjects.begin() + index;
     const bool wasActiveCamera = oldObject == getActiveCamera();
     const bool replacedCamera = dynamic_cast<CameraInstance*>(oldObject) != nullptr;
-    const bool replacedGaussian = dynamic_cast<GaussianInstance*>(oldObject) != nullptr;
-    const bool replacementGaussian = dynamic_cast<GaussianInstance*>(newObject.get()) != nullptr;
     SceneObject* parent = oldObject->getParent();
     const auto parentPtr = findObjectPtr(parent);
     const auto children = oldObject->getChildren();
@@ -394,6 +390,8 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
         parent->removeChild(oldObject);
     if (auto* oldLight = dynamic_cast<LightInstance*>(oldObject))
         unregisterLight(*oldLight);
+    if (auto* oldMesh = dynamic_cast<MeshInstance*>(oldObject); oldMesh && oldMesh->slot != ~0u)
+        removeMeshInstanceSlot(*oldMesh);
     oldObject->clearParent();
     oldObject->children.clear();
     oldObject->scene = nullptr;
@@ -406,27 +404,28 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
 
     if (auto* newLight = dynamic_cast<LightInstance*>(newShared.get()))
         registerLight(*newLight);
+    if (auto* newMesh = dynamic_cast<MeshInstance*>(newShared.get()); newMesh && newMesh->hasMesh())
+        addMeshInstanceSlot(*newMesh);
 
     if (wasActiveCamera || activeCamera.expired())
         activateCamera(std::dynamic_pointer_cast<CameraInstance>(newShared));
 
     *it = std::move(newShared);
-    rebuildGaussianInstanceCache();
 
     if (replacedCamera || dynamic_cast<CameraInstance*>(sceneObjects[index].get()))
         setDirtyFlag(CameraState);
-    if (replacedGaussian || replacementGaussian)
-        setDirtyFlag(GaussianData);
 
     if (parentPtr)
         parentPtr->addChild(sceneObjects[index]);
+    else
+        addRootCandidate(*sceneObjects[index]);
     for (const auto& child : children)
         sceneObjects[index]->addChild(child);
     if (wasCopied)
         copiedObject = sceneObjects[index];
 
     notifyGeometryChanged();
-    ++hierarchyRevision;
+    notifyHierarchyChanged();
     return true;
 }
 
@@ -444,6 +443,8 @@ void Scene::activateCamera(const std::shared_ptr<CameraInstance>& camera)
     ++activeCameraRevision;
     setDirtyFlag(CameraState);
     setDirtyFlag(Accumulation);
+    for (SceneListener* listener : listeners_)
+        listener->onActiveCameraChanged();
 }
 
 bool Scene::setActiveCamera(CameraInstance* camera) {
@@ -462,14 +463,35 @@ bool Scene::setActiveCamera(CameraInstance* camera) {
 }
 
 bool Scene::setActiveObject(const SceneObjectHandle handle) {
-    if (!handle.isValid()) {
-        activeObject = {};
-        return true;
-    }
-    if (!isValid(handle))
+    if (handle.isValid() && !isValid(handle))
         return false;
-    activeObject = handle;
+    assignActiveObject(handle.isValid() ? handle : SceneObjectHandle{});
     return true;
+}
+
+void Scene::assignActiveObject(const SceneObjectHandle handle) {
+    if (activeObject == handle)
+        return;
+    activeObject = handle;
+    for (SceneListener* listener : listeners_)
+        listener->onActiveObjectChanged();
+}
+
+void Scene::notifyHierarchyChanged() {
+    ++hierarchyRevision;
+    for (SceneListener* listener : listeners_)
+        listener->onHierarchyChanged();
+}
+
+void Scene::notifyTexturesChanged() {
+    ++textureRevision_;
+    for (SceneListener* listener : listeners_)
+        listener->onTexturesChanged();
+}
+
+void Scene::notifyObjectTransformChanged(const SceneObject& object) {
+    for (SceneListener* listener : listeners_)
+        listener->onObjectTransformChanged(object.getHandle());
 }
 
 // ── Light management ─────────────────────────────────────────────────────────
@@ -496,6 +518,9 @@ uint32_t Scene::registerLight(LightInstance& light)
         break;
     }
     light.setLightIndex(idx);
+    // The pushed record holds authored lengths; this scales them to the world.
+    light.commitLightChanges();
+    lightObjects_[light.getLightType()].push_back(&light);
     setDirtyFlag(Lights);
     setDirtyFlag(Accumulation);
     return idx;
@@ -504,51 +529,36 @@ uint32_t Scene::registerLight(LightInstance& light)
 void Scene::unregisterLight(LightInstance& light)
 {
     const uint32_t idx = light.getLightIndex();
+    const auto removeRecord = [idx](auto& records) {
+        if (idx + 1 != records.size())
+            records[idx] = std::move(records.back());
+        records.pop_back();
+    };
     switch (light.getLightType()) {
-    case LightInstance::TypePoint:
-        { const uint32_t displaced = static_cast<uint32_t>(pointLights.size() - 1);
-        if (idx != displaced) pointLights[idx] = std::move(pointLights.back());
-        pointLights.pop_back();
-        for (auto& obj : sceneObjects)
-            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->getLightType() == LightInstance::TypePoint && li->getLightIndex() == displaced)
-                    { li->setLightIndex(idx); break; }
-        }
-        break;
-    case LightInstance::TypeSpot:
-        { const uint32_t displaced = static_cast<uint32_t>(spotLights.size() - 1);
-        if (idx != displaced) spotLights[idx] = std::move(spotLights.back());
-        spotLights.pop_back();
-        for (auto& obj : sceneObjects)
-            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->getLightType() == LightInstance::TypeSpot && li->getLightIndex() == displaced)
-                    { li->setLightIndex(idx); break; }
-        }
-        break;
-    case LightInstance::TypeRect:
-        { const uint32_t displaced = static_cast<uint32_t>(rectLights.size() - 1);
-        if (idx != displaced) rectLights[idx] = std::move(rectLights.back());
-        rectLights.pop_back();
-        for (auto& obj : sceneObjects)
-            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->getLightType() == LightInstance::TypeRect && li->getLightIndex() == displaced)
-                    { li->setLightIndex(idx); break; }
-        }
-        break;
-    case LightInstance::TypeDirectional:
-        { const uint32_t displaced = static_cast<uint32_t>(directionalLights.size() - 1);
-        if (idx != displaced) directionalLights[idx] = std::move(directionalLights.back());
-        directionalLights.pop_back();
-        for (auto& obj : sceneObjects)
-            if (auto* li = dynamic_cast<LightInstance*>(obj.get()))
-                if (li->getLightType() == LightInstance::TypeDirectional && li->getLightIndex() == displaced)
-                    { li->setLightIndex(idx); break; }
-        }
-        break;
+    case LightInstance::TypePoint: removeRecord(pointLights); break;
+    case LightInstance::TypeSpot: removeRecord(spotLights); break;
+    case LightInstance::TypeRect: removeRecord(rectLights); break;
+    case LightInstance::TypeDirectional: removeRecord(directionalLights); break;
     }
+    // The objects mirror the records, so the displaced record's object is
+    // the one that moves along with it.
+    auto& objects = lightObjects_[light.getLightType()];
+    if (idx + 1 != objects.size()) {
+        objects[idx] = objects.back();
+        objects[idx]->setLightIndex(idx);
+    }
+    objects.pop_back();
     light.setLightIndex(UINT32_MAX);
     setDirtyFlag(Lights);
     setDirtyFlag(Accumulation);
+}
+
+std::vector<const LightInstance*> Scene::getLightObjects() const
+{
+    std::vector<const LightInstance*> result;
+    for (const auto& objects : lightObjects_)
+        result.insert(result.end(), objects.begin(), objects.end());
+    return result;
 }
 
 // ── Hierarchy ────────────────────────────────────────────────────────────────
@@ -577,9 +587,10 @@ void Scene::reparent(SceneObject* objectToMove, SceneObject* newParent) {
         objectToMove->setLocalTransform(Transform{newLocal});
     } else {
         objectToMove->clearParent();
+        addRootCandidate(*objectToMove);
         objectToMove->setLocalTransform(Transform{oldWorldMatrix});
     }
-    ++hierarchyRevision;
+    notifyHierarchyChanged();
 }
 
 bool Scene::reparentObject(
@@ -629,171 +640,115 @@ void Scene::paste() {
 
 std::vector<std::shared_ptr<SceneObject>> Scene::getRootObjects() const {
     std::vector<std::shared_ptr<SceneObject>> result;
-    for (const auto& obj : sceneObjects)
-        if (obj->getParent() == nullptr)
-            result.push_back(obj);
-    return result;
-}
-
-std::vector<std::shared_ptr<MeshInstance>> Scene::getMeshInstances() const {
-    std::vector<std::shared_ptr<MeshInstance>> result;
-    for (const auto& obj : sceneObjects)
-        if (auto mi = std::dynamic_pointer_cast<MeshInstance>(obj); mi && mi->hasMesh())
-            result.push_back(mi);
-    return result;
-}
-
-void Scene::buildGaussianRenderData()
-{
-    struct GaussianSpan
-    {
-        const Gaussian* gaussians;
-        uint32_t offset;
-    };
-
-    std::vector<GaussianSpan> spans;
-    const auto& gaussianInstances = getGaussianInstances();
-    gaussianInstanceOffsets.resize(gaussianInstances.size());
-    uint32_t total = 0;
-    for (size_t instanceIndex = 0; instanceIndex < gaussianInstances.size(); ++instanceIndex)
-    {
-        const auto& instance = gaussianInstances[instanceIndex];
-        const GaussianAsset& asset = instance->getGaussianAsset();
-        gaussianInstanceOffsets[instanceIndex] = total;
-        const auto& gaussians = asset.getGaussians();
-        spans.push_back({gaussians.data(), total});
-        total += static_cast<uint32_t>(gaussians.size());
-    }
-
-    const uint32_t coefficientsPerGaussian = sphericalHarmonicsCoefficientCount(
-        renderSettings.gaussianRenderSphericalHarmonics);
-    gaussianShCoefficientCount = coefficientsPerGaussian;
-    if (total == 0)
-    {
-        // The packed SH array is the largest managed allocation in a splat
-        // scene. resize(0) would keep its capacity, so hand the memory back.
-        gaussianOpacities = std::vector<float>{};
-        gaussianShCoeffs = std::vector<half>{};
-        gaussianInstanceOffsets = std::vector<uint32_t>{};
-        return;
-    }
-    gaussianOpacities.resize(total);
-    gaussianShCoeffs.resize(static_cast<size_t>(total)
-        * coefficientsPerGaussian * SphericalHarmonicsChannelCount);
-
-    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, total, 1024),
-        [&](const tbb::blocked_range<uint32_t>& range)
-    {
-        for (uint32_t globalIndex = range.begin(); globalIndex != range.end(); ++globalIndex)
-        {
-            const GaussianSpan* span = &spans.front();
-            if (spans.size() > 1)
-            {
-                auto found = std::upper_bound(spans.begin(), spans.end(), globalIndex,
-                    [](const uint32_t value, const GaussianSpan& candidate) {
-                        return value < candidate.offset;
-                    });
-                span = &*--found;
-            }
-            const Gaussian& gaussian = span->gaussians[globalIndex - span->offset];
-            gaussianOpacities[globalIndex] = gaussian.opacity;
-            half* coefficients = gaussianShCoeffs.data()
-                + static_cast<size_t>(globalIndex) * coefficientsPerGaussian
-                    * SphericalHarmonicsChannelCount;
-            std::fill_n(coefficients,
-                coefficientsPerGaussian * SphericalHarmonicsChannelCount, half{});
-            const uint32_t count = std::min(
-                gaussian.sphericalHarmonics.count, coefficientsPerGaussian);
-            const half* source = gaussian.sphericalHarmonics.values.data();
-            for (uint32_t coefficient = 0; coefficient < count; ++coefficient)
-            {
-                std::copy_n(source + coefficient * 3, 3,
-                    coefficients + coefficient * 3);
-            }
+    std::erase_if(rootCandidates_, [this, &result](const SceneObjectHandle handle) {
+        auto object = findObjectPtr(handle);
+        if (!object)
+            return true;
+        if (object->getParent()) {
+            object->rootCandidate = false;
+            return true;
         }
+        result.push_back(std::move(object));
+        return false;
     });
+    return result;
 }
 
-uint32_t Scene::getActiveCryptomatteId(const uint32_t selectedGaussianIndex) const
-{
-    // Cryptomatte ids follow the same ordering as the TLAS, so instances whose
-    // asset has been reclaimed are skipped here exactly as they are there.
-    uint32_t meshInstanceCount = 0;
-    for (const auto& object : sceneObjects)
-        if (const auto mesh = std::dynamic_pointer_cast<MeshInstance>(object);
-            mesh && mesh->hasMesh())
-            ++meshInstanceCount;
-
-    uint32_t meshIndex = 0;
-    uint32_t gaussianOffset = 0;
-    for (const auto& object : sceneObjects)
-    {
-        if (auto mesh = std::dynamic_pointer_cast<MeshInstance>(object))
-        {
-            if (!mesh->hasMesh())
-                continue;
-            if (object->getHandle() == activeObject)
-                return meshIndex;
-            ++meshIndex;
-        }
-        else if (auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object))
-        {
-            if (!gaussian->hasGaussianAsset())
-                continue;
-            if (object->getHandle() == activeObject)
-            {
-                const uint32_t gaussianCount = gaussian->getGaussianAsset().getGaussianCount();
-                // The picker and transform gizmo use flattened Gaussian
-                // indices; Cryptomatte places those after all mesh instances.
-                if (selectedGaussianIndex >= gaussianOffset
-                    && selectedGaussianIndex < gaussianOffset + gaussianCount)
-                {
-                    return meshInstanceCount + selectedGaussianIndex;
-                }
-                return meshInstanceCount + gaussianOffset;
-            }
-            gaussianOffset += gaussian->getGaussianAsset().getGaussianCount();
-        }
-    }
-    return ~0u;
+void Scene::addRootCandidate(SceneObject& object) const {
+    if (std::exchange(object.rootCandidate, true))
+        return;
+    rootCandidates_.push_back(object.getHandle());
 }
 
-SceneObject* Scene::findCryptomatteObject(const uint32_t id, uint32_t& gaussianIndex) const
-{
-    gaussianIndex = ~0u;
-    if (id == ~0u)
-        return nullptr;
-    // Same ordering as getActiveCryptomatteId and the TLAS: mesh instances
-    // that have geometry first, then every Gaussian, flattened in scene order.
-    uint32_t meshIndex = 0;
-    for (const auto& object : sceneObjects)
-    {
-        if (const auto mesh = std::dynamic_pointer_cast<MeshInstance>(object);
-            mesh && mesh->hasMesh())
-        {
-            if (meshIndex == id)
-                return object.get();
-            ++meshIndex;
-        }
-    }
+void Scene::addMeshInstanceSlot(MeshInstance& instance) {
+    instance.slot = static_cast<uint32_t>(meshInstanceSlots_.size());
+    meshInstanceSlots_.push_back(&instance);
+    meshInstanceSlotListed_.push_back(false);
+    markMeshInstanceChanged(instance.slot);
+}
 
-    const uint32_t flattened = id - meshIndex;
-    uint32_t gaussianOffset = 0;
-    for (const auto& object : sceneObjects)
-    {
-        if (const auto gaussian = std::dynamic_pointer_cast<GaussianInstance>(object);
-            gaussian && gaussian->hasGaussianAsset())
-        {
-            const uint32_t gaussianCount = gaussian->getGaussianAsset().getGaussianCount();
-            if (flattened < gaussianOffset + gaussianCount)
-            {
-                gaussianIndex = flattened;
-                return object.get();
-            }
-            gaussianOffset += gaussianCount;
-        }
+void Scene::removeMeshInstanceSlot(MeshInstance& instance) {
+    const uint32_t hole = instance.slot;
+    const uint32_t last = static_cast<uint32_t>(meshInstanceSlots_.size() - 1);
+    if (hole != last) {
+        meshInstanceSlots_[hole] = meshInstanceSlots_[last];
+        meshInstanceSlots_[hole]->slot = hole;
+        markMeshInstanceChanged(hole);
     }
-    return nullptr;
+    meshInstanceSlots_.pop_back();
+    meshInstanceSlotListed_.pop_back();
+    instance.slot = ~0u;
+}
+
+void Scene::markMeshInstanceChanged(const uint32_t slot) {
+    if (meshInstanceSlotListed_[slot])
+        return;
+    meshInstanceSlotListed_[slot] = true;
+    changedMeshInstanceSlots_.push_back(slot);
+}
+
+void Scene::markMeshChanged(Mesh& mesh) {
+    // A mesh outside the scene is listed when add() takes it.
+    if (mesh.getMeshIndex() >= meshListed_.size() || meshListed_[mesh.getMeshIndex()])
+        return;
+    meshListed_[mesh.getMeshIndex()] = true;
+    changedMeshes_.push_back(&mesh);
+    setDirtyFlag(Meshes);
+}
+
+void Scene::markMaterialChanged(const uint32_t materialIndex) {
+    setDirtyFlag(Materials);
+    if (materialListed_[materialIndex])
+        return;
+    materialListed_[materialIndex] = true;
+    changedMaterials_.push_back(materialIndex);
+}
+
+void Scene::markMaterialForCompile(const uint32_t materialIndex) {
+    if (materialCompileListed_[materialIndex])
+        return;
+    materialCompileListed_[materialIndex] = true;
+    materialsToCompile_.push_back(materialIndex);
+}
+
+std::vector<uint32_t> Scene::takeChangedMeshInstanceSlots() {
+    // A slot listed before a removal shrank the table no longer exists.
+    std::erase_if(changedMeshInstanceSlots_, [this](const uint32_t slot) {
+        return slot >= meshInstanceSlots_.size();
+    });
+    for (const uint32_t slot : changedMeshInstanceSlots_)
+        meshInstanceSlotListed_[slot] = false;
+    return std::exchange(changedMeshInstanceSlots_, {});
+}
+
+std::vector<Mesh*> Scene::takeChangedMeshes() {
+    for (const Mesh* mesh : changedMeshes_)
+        meshListed_[mesh->getMeshIndex()] = false;
+    return std::exchange(changedMeshes_, {});
+}
+
+std::vector<uint32_t> Scene::takeChangedMaterials() {
+    for (const uint32_t index : changedMaterials_)
+        materialListed_[index] = false;
+    return std::exchange(changedMaterials_, {});
+}
+
+std::vector<uint32_t> Scene::takeMaterialsToCompile() {
+    for (const uint32_t index : materialsToCompile_)
+        materialCompileListed_[index] = false;
+    return std::exchange(materialsToCompile_, {});
+}
+
+uint32_t Scene::getActiveCryptomatteId() const
+{
+    // Mesh instances are numbered by their slot, as in the TLAS.
+    const auto* mesh = dynamic_cast<const MeshInstance*>(getObject(activeObject));
+    return mesh ? mesh->slot : ~0u;
+}
+
+SceneObject* Scene::findCryptomatteObject(const uint32_t id) const
+{
+    return id < meshInstanceSlots_.size() ? meshInstanceSlots_[id] : nullptr;
 }
 
 Texture* Scene::findTexture(const std::string& key) const {
@@ -808,13 +763,10 @@ Mesh* Scene::findMesh(const std::string& path) const {
 
 uint32_t Scene::getMaterialIndex(const Material* material) const
 {
-    if (material == nullptr)
+    if (material == nullptr || material->sceneIndex >= materials.size()
+        || &materials[material->sceneIndex] != material)
         return ~0u;
-
-    for (uint32_t index = 0; index < materials.size(); ++index)
-        if (&materials[index] == material)
-            return index;
-    return ~0u;
+    return material->sceneIndex;
 }
 
 SceneObjectHandle Scene::findImportedFileRoot(const std::string& resolvedPath) const {
@@ -833,11 +785,10 @@ void Scene::registerImportedFileRoot(
 // ── Lookups ───────────────────────────────────────────────────────────────────
 
 std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObject* object) const {
-    if (!object) return nullptr;
-    const auto it = std::ranges::find_if(sceneObjects, [object](const auto& ptr) {
-        return ptr.get() == object;
-    });
-    return it != sceneObjects.end() ? *it : nullptr;
+    if (!object || object->scene != this)
+        return nullptr;
+    auto found = findObjectPtr(object->getHandle());
+    return found.get() == object ? found : nullptr;
 }
 
 std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObjectHandle handle) const {
@@ -854,6 +805,6 @@ void Scene::setMaterialProgram(const std::size_t materialIndex,
     material.releaseGpu();
     material.shaderProgram = std::move(shaderProgram);
     material.compiled = true;
-    setDirtyFlag(Meshes);
+    markMaterialChanged(static_cast<uint32_t>(materialIndex));
     setDirtyFlag(Accumulation);
 }

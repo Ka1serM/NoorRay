@@ -1,5 +1,6 @@
 ﻿#include "SceneImporter.h"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -35,7 +36,7 @@
 #include "Scene/Import/GaussianReader.h"
 #include "Mesh/Transform.h"
 #include "Math/CoordinateSystem.h"
-#include "Scene/GaussianInstance.h"
+#include "Scene/GaussianCloud.h"
 #include "Scene/Import/AssetPath.h"
 #include "Scene/Import/SceneReader.h"
 #include "Scene/Import/SceneUsd.h"
@@ -378,12 +379,34 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             gltfFloatAccessor(model, primitive, "NORMAL", 3);
         const GltfFloatAccessor tangents =
             gltfFloatAccessor(model, primitive, "TANGENT", 4);
-        const GltfFloatAccessor texcoords =
-            gltfFloatAccessor(model, primitive, "TEXCOORD_0", 2);
+        size_t maxUvChannel = 0;
+        for (const auto& attribute : primitive.attributes) {
+            const std::string& name = attribute.first;
+            if (name.starts_with("TEXCOORD_"))
+                maxUvChannel = std::max(maxUvChannel, static_cast<size_t>(
+                    std::stoul(name.substr(sizeof("TEXCOORD_") - 1))));
+        }
+        std::vector<GltfFloatAccessor> texcoords(maxUvChannel + 1);
+        for (size_t channel = 0; channel < texcoords.size(); ++channel) {
+            const std::string name = "TEXCOORD_" + std::to_string(channel);
+            texcoords[channel] = gltfFloatAccessor(model, primitive, name.c_str(), 2);
+        }
         const tinygltf::Accessor* colors = nullptr;
         if (!positions)
             return;
         const size_t vertexCount = positions.count;
+        if ((!texcoords[0] || texcoords[0].count < vertexCount) &&
+            primitive.attributes.contains("TEXCOORD_1"))
+            throw std::runtime_error("glTF mesh has UV1 without UV0");
+        output.geometry.uvCount = 1u;
+        while (output.geometry.uvCount < texcoords.size() &&
+            texcoords[output.geometry.uvCount] &&
+            texcoords[output.geometry.uvCount].count >= vertexCount)
+            ++output.geometry.uvCount;
+        for (size_t channel = output.geometry.uvCount; channel < texcoords.size(); ++channel)
+            if (primitive.attributes.contains("TEXCOORD_" + std::to_string(channel)))
+                throw std::runtime_error("glTF mesh has a missing or invalid preceding UV channel");
+        output.geometry.extraUvs.resize(vertexCount * (output.geometry.uvCount - 1u));
         if (const auto colorIt = primitive.attributes.find("COLOR_0");
             colorIt != primitive.attributes.end()
             && colorIt->second >= 0
@@ -394,31 +417,38 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
         output.geometry.vertices.reserve(vertexCount);
         for (size_t vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex) {
             Vertex vertex = defaultVertex();
-            vertex.position = nr::coords::toOpenGlVector(
+            vertex.position = nr::coords::toWorldPosition(
                 vec3(positions.component(vertexIndex, 0),
                     positions.component(vertexIndex, 1),
                     positions.component(vertexIndex, 2)),
                 nr::coords::OpenGlSpace);
             vertex.normal = normals && normals.count > vertexIndex
-                ? normalize(nr::coords::toOpenGlVector(
+                ? normalize(nr::coords::toWorldDirection(
                     vec3(normals.component(vertexIndex, 0),
                         normals.component(vertexIndex, 1),
                         normals.component(vertexIndex, 2)),
                     nr::coords::OpenGlSpace))
                 : vec3(0, 1, 0);
-            vertex.uv = texcoords && texcoords.count > vertexIndex
-                ? vec2(texcoords.component(vertexIndex, 0),
-                    1.0f - texcoords.component(vertexIndex, 1))
-                : vec2(0);
+            const GltfFloatAccessor& uv0 = texcoords[0];
+            vertex.uv = uv0 && uv0.count > vertexIndex
+                ? vec2(uv0.component(vertexIndex, 0),
+                    1.0f - uv0.component(vertexIndex, 1)) : vec2(0);
+            for (size_t channel = 1; channel < output.geometry.uvCount; ++channel) {
+                const GltfFloatAccessor& uv = texcoords[channel];
+                output.geometry.extraUvs[(channel - 1u) * vertexCount + vertexIndex] = {
+                    uv.component(vertexIndex, 0), 1.0f - uv.component(vertexIndex, 1)};
+            }
             vertex.tangent = tangents && tangents.count > vertexIndex
-                ? normalize(nr::coords::toOpenGlVector(
+                ? normalize(nr::coords::toWorldDirection(
                     vec3(tangents.component(vertexIndex, 0),
                         tangents.component(vertexIndex, 1),
                         tangents.component(vertexIndex, 2)),
                     nr::coords::OpenGlSpace))
                 : vec3(1, 0, 0);
             vertex.tangentSign = tangents && tangents.count > vertexIndex
-                ? tangents.component(vertexIndex, 3) : 1.0f;
+                ? tangents.component(vertexIndex, 3)
+                    * (nr::coords::isMirrored(nr::coords::OpenGlSpace) ? -1.0f : 1.0f)
+                : 1.0f;
             if (colors)
                 vertex.color = nr::vertex_color::packLinear(
                     gltfVertexColor(model, *colors, vertexIndex));
@@ -498,6 +528,9 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             }
         }
 
+        if (nr::coords::isMirrored(nr::coords::OpenGlSpace))
+            nr::coords::reverseWinding(output.geometry.indices);
+
         output.geometry.sections = singleSection(output.geometry.indices);
         const int material = primitive.material < 0 ? 0 : primitive.material;
         output.materialIndex =
@@ -563,7 +596,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
             vec3 S = node.scale.size() == 3 ? vec3(glm::make_vec3(node.scale.data())) : vec3(1.0f);
             localTransform = translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S);
         }
-        localTransform = nr::coords::toOpenGlTransform(localTransform, nr::coords::OpenGlSpace);
+        localTransform = nr::coords::toWorldTransform(localTransform, nr::coords::OpenGlSpace);
 
         worldTransforms[nodeIndex] = parentWorld * localTransform;
 
@@ -621,7 +654,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                     if (matrixAcc >= 0) {
                         const float* matrices = readAccData(matrixAcc);
                         for (size_t inst = 0; inst < instanceCount; ++inst)
-                            perInstanceTransforms.push_back(nr::coords::toOpenGlTransform(glm::make_mat4(&matrices[inst * 16]), nr::coords::OpenGlSpace));
+                            perInstanceTransforms.push_back(nr::coords::toWorldTransform(glm::make_mat4(&matrices[inst * 16]), nr::coords::OpenGlSpace));
                     } else {
                         const float* translations = readAccData(transAcc);
                         const float* rotations    = readAccData(rotAcc);
@@ -632,7 +665,7 @@ void SceneImporter::ImportGltfScene(Scene& scene, const std::string& filepath)
                                 ? quat(rotations[inst * 4 + 3], rotations[inst * 4], rotations[inst * 4 + 1], rotations[inst * 4 + 2])
                                 : quat(1.0f, 0.0f, 0.0f, 0.0f);
                             vec3 S = scales ? glm::make_vec3(&scales[inst * 3]) : vec3(1.0f);
-                            perInstanceTransforms.push_back(nr::coords::toOpenGlTransform(
+                            perInstanceTransforms.push_back(nr::coords::toWorldTransform(
                                 translate(mat4(1.0f), T) * toMat4(R) * scale(mat4(1.0f), S), nr::coords::OpenGlSpace));
                         }
                     }
@@ -877,21 +910,21 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                     break;
                 }
                 Vertex& vertex = triangleVertices[corner];
-                vertex.position = nr::coords::toOpenGlVector({
+                vertex.position = nr::coords::toWorldPosition({
                     attrib.vertices[3 * sourceIndex.vertex_index],
                     attrib.vertices[3 * sourceIndex.vertex_index + 1],
                     attrib.vertices[3 * sourceIndex.vertex_index + 2],
                 }, nr::coords::OpenGlSpace);
-                vertex.normal = vec3(0.0f, 1.0f, 0.0f);
+                vertex.normal = nr::coords::toWorldDirection(vec3(0.0f, 1.0f, 0.0f), nr::coords::OpenGlSpace);
                 if (sourceIndex.normal_index >= 0
                     && static_cast<size_t>(
                         sourceIndex.normal_index * 3 + 2)
                         < attrib.normals.size())
-                    vertex.normal = nr::coords::toOpenGlVector({
+                    vertex.normal = normalize(nr::coords::toWorldDirection({
                         attrib.normals[3 * sourceIndex.normal_index],
                         attrib.normals[3 * sourceIndex.normal_index + 1],
                         attrib.normals[3 * sourceIndex.normal_index + 2],
-                    }, nr::coords::OpenGlSpace);
+                    }, nr::coords::OpenGlSpace));
                 vertex.uv = vec2(0.0f);
                 if (sourceIndex.texcoord_index >= 0
                     && static_cast<size_t>(
@@ -953,6 +986,12 @@ void SceneImporter::ImportObjScene(Scene& scene, const std::string& filepath, co
                 output.geometry.indices.push_back(triangleIndices[corner]);
             }
             triangleSlots.push_back(slot);
+        }
+
+        if (nr::coords::isMirrored(nr::coords::OpenGlSpace)) {
+            nr::coords::reverseWinding(output.geometry.indices);
+            for (Vertex& vertex : output.geometry.vertices)
+                vertex.tangentSign = -vertex.tangentSign;
         }
 
         if (output.geometry.vertices.empty())
@@ -1108,9 +1147,7 @@ void SceneImporter::ImportGaussianScene(Scene& scene, const std::string& filepat
         throw std::runtime_error("File not found: " + filepath);
 
     const std::string name = nameFromPath(filePath.filename().string());
-    GaussianAsset* asset =
-        scene.add(GaussianReader::read(scene, name, filePath.string()));
-    auto instance = std::make_unique<GaussianInstance>(scene, name, asset, Transform{});
-    instance->setSource("gaussian", filePath.string());
-    scene.add(std::move(instance));
+    auto cloud = std::make_unique<GaussianCloud>(scene, name, GaussianReader::read(filePath.string()));
+    cloud->setSource("gaussian", filePath.string());
+    scene.add(std::move(cloud));
 }

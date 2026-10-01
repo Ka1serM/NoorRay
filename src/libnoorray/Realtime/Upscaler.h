@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <memory>
 
@@ -38,15 +37,20 @@ public:
     // returns the offset in the renderer's convention: render pixel p samples
     // the scene at p + 0.5 + jitter. Zero when off.
     std::array<float, 2> nextJitter(Extent render, Extent output, bool reset);
+    // Mip bias for textures sampled at the render resolution, FidelityFX's
+    // log2(render / output) - 1: the output resolves texels finer than one
+    // render pixel. Zero when off.
+    float textureLodBias(Extent render, Extent output) const;
     // The image the composite writes: the color target FSR reads, or the
     // output image itself when off.
     std::uint32_t compositeTarget(const RenderTargets& targets,
         noorrhi::TextureHandle output) const;
 
-    // Recreates the FSR context for render and output images up to this
-    // size. The GPU must be idle. A repeat of the current size is a no-op, so
-    // the accumulated history survives a render-resolution change inside it.
-    void resize(Extent maxOutput);
+    // Recreates the FSR context for render and output rectangles up to these
+    // sizes, or releases it while the mode is off. The GPU must be idle.
+    // Inside them both rectangles may change every frame and FSR carries its
+    // history across.
+    void resize(Extent maxRender, Extent maxOutput);
     // Upscales the color target into `output`, an RGBA32F image allocated at
     // `outputAllocation` whose frame.output rectangle holds the frame.
     void record(const FrameContext& frame, const RenderTargets& targets,
@@ -59,5 +63,4 @@ private:
     UpscalerMode mode_{RenderSettings{}.upscalerMode};
     std::unique_ptr<State> state_;
     std::uint32_t jitterIndex_{};
-    std::chrono::steady_clock::time_point lastFrameTime_{};
 };

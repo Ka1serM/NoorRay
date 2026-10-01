@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <vector>
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <Rtxdi/ImportanceSamplingContext.h>
+#include <Rtxdi/PT/ReSTIRPT.h>
 #include <Rtxdi/LightSampling/RISBufferSegmentAllocator.h>
 #include <Rtxdi/RtxdiUtils.h>
 
@@ -15,67 +17,53 @@
 
 namespace
 {
-alignas(uint32_t) constexpr unsigned char presampleLightsSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiPresampleLights.spv"
-};
-alignas(uint32_t) constexpr unsigned char presampleReGIRSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiPresampleReGIR.spv"
-};
-alignas(uint32_t) constexpr unsigned char diInitialSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiDIInitial.spv"
-};
-alignas(uint32_t) constexpr unsigned char diTemporalSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiDITemporal.spv"
-};
-alignas(uint32_t) constexpr unsigned char diBoilingSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiDIBoiling.spv"
-};
-alignas(uint32_t) constexpr unsigned char diSpatialSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiDISpatial.spv"
-};
-alignas(uint32_t) constexpr unsigned char diShadeSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiDIShade.spv"
-};
-alignas(uint32_t) constexpr unsigned char giTemporalSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiGITemporal.spv"
-};
-alignas(uint32_t) constexpr unsigned char giBoilingSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiGIBoiling.spv"
-};
-alignas(uint32_t) constexpr unsigned char giSpatialSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiGISpatial.spv"
-};
-alignas(uint32_t) constexpr unsigned char giShadeSpv[] = {
-    #embed "RealtimeRaytracer/RtxdiGIShade.spv"
-};
+constexpr const char* presampleLightsSpv = "RealtimeRaytracer/RtxdiPresampleLights.spv";
+constexpr const char* presampleReGIRSpv = "RealtimeRaytracer/RtxdiPresampleReGIR.spv";
+constexpr const char* presampleEnvironmentSpv = "RealtimeRaytracer/RtxdiPresampleEnvironment.spv";
+constexpr const char* initialSpv = "RealtimeRaytracer/RtxdiInitial.spv";
+constexpr const char* diTemporalSpv = "RealtimeRaytracer/RtxdiDITemporal.spv";
+constexpr const char* diBoilingSpv = "RealtimeRaytracer/RtxdiDIBoiling.spv";
+constexpr const char* diSpatialSpv = "RealtimeRaytracer/RtxdiDISpatial.spv";
+constexpr const char* ptTemporalSpv = "RealtimeRaytracer/RtxdiPTTemporal.spv";
+constexpr const char* ptSpatialSpv = "RealtimeRaytracer/RtxdiPTSpatial.spv";
+constexpr const char* ptBoilingSpv = "RealtimeRaytracer/RtxdiPTBoiling.spv";
+constexpr const char* shadeSpv = "RealtimeRaytracer/RtxdiShade.spv";
+
 
 // Group sizes, matching RtxdiPasses.slang.
 constexpr uint32_t PresampleGroupSize = 256u;
 constexpr uint32_t BoilingGroupSize = 16u;
+constexpr uint32_t ScreenSpaceGroupSize = 8u;
 // Screen-space offsets spatial resampling draws its neighbours from.
 constexpr uint32_t NeighborOffsetCount = 8192u;
 // Candidate lights per vertex in world-space (ReGIR) sampling beyond the
-// G-buffer; primary surfaces use RTXDI's default of eight too.
-constexpr uint32_t SecondaryLocalLightSamples = 8u;
+// G-buffer, as RTXDI's sample takes for its path tracer's NEE; primary
+// surfaces keep RTXDI's default of eight.
+constexpr uint32_t SecondaryLocalLightSamples = 4u;
 // ReGIR's grid spans the lit region in this many cells per axis.
 constexpr float ReGIRCellsAcrossLights = 16.0f;
+
+// Zero for an absent buffer.
+std::uint64_t address(const noorrhi::Buffer<std::uint32_t>& buffer)
+{
+    return buffer ? buffer.ptr().address : 0u;
+}
 }
 
 Restir::Restir(noorrhi::Device& device)
     : device_(device)
     , presampleLightsPipeline_(device.compute(loadShader(device, presampleLightsSpv)))
     , presampleReGIRPipeline_(device.compute(loadShader(device, presampleReGIRSpv)))
-    , diInitialRaygen_(loadShader(device, diInitialSpv))
-    , diTemporalRaygen_(loadShader(device, diTemporalSpv))
+    , presampleEnvironmentPipeline_(device.compute(loadShader(device, presampleEnvironmentSpv)))
+    , initialRaygen_(loadShader(device, initialSpv))
+    , diTemporalPipeline_(device.compute(loadShader(device, diTemporalSpv)))
     , diBoilingPipeline_(device.compute(loadShader(device, diBoilingSpv)))
-    , diSpatialRaygen_(loadShader(device, diSpatialSpv))
-    , diShadeRaygen_(loadShader(device, diShadeSpv))
-    , giTemporalRaygen_(loadShader(device, giTemporalSpv))
-    , giBoilingPipeline_(device.compute(loadShader(device, giBoilingSpv)))
-    , giSpatialRaygen_(loadShader(device, giSpatialSpv))
-    , giShadeRaygen_(loadShader(device, giShadeSpv))
+    , diSpatialPipeline_(device.compute(loadShader(device, diSpatialSpv)))
+    , ptTemporalRaygen_(loadShader(device, ptTemporalSpv))
+    , ptBoilingPipeline_(device.compute(loadShader(device, ptBoilingSpv)))
+    , ptSpatialRaygen_(loadShader(device, ptSpatialSpv))
+    , shadeRaygen_(loadShader(device, shadeSpv))
 {
-
     // RTXDI packs its offsets as RG8_SNORM texels; the shaders read floats.
     std::vector<std::uint8_t> packedOffsets(NeighborOffsetCount * 2u);
     rtxdi::FillNeighborOffsetBuffer(packedOffsets.data(), NeighborOffsetCount);
@@ -86,36 +74,42 @@ Restir::Restir(noorrhi::Device& device)
     neighborOffsets_ = device.buffer<float>(offsets.size());
     neighborOffsets_.upload(std::span<const float>(offsets));
     // An empty light table until the first light upload.
-    lightAlias_ = device.buffer<std::uint32_t>(4u);
-    lightAlias_.upload(std::span<const std::uint32_t>(std::vector<std::uint32_t>(4u)));
+    constexpr std::size_t aliasWords = sizeof(nr::graphics::RealtimeLightAlias) / 4u;
+    lightAlias_ = device.buffer<std::uint32_t>(aliasWords);
+    lightAlias_.upload(std::span<const std::uint32_t>(std::vector<std::uint32_t>(aliasWords)));
 }
-
-
 
 Restir::~Restir() = default;
 
-void Restir::resize(const Extent render)
+void Restir::resize(const Extent lighting, const bool layers)
 {
+    // RTXDI derives the reservoirs' block-linear pitch from these, so frames
+    // of any smaller rectangle address them alike.
     rtxdi::ImportanceSamplingContext_StaticParameters parameters;
-    parameters.renderWidth = render.width;
-    parameters.renderHeight = render.height;
+    parameters.renderWidth = lighting.width;
+    parameters.renderHeight = lighting.height;
     parameters.NeighborOffsetCount = NeighborOffsetCount;
     parameters.regirStaticParams.mode = rtxdi::ReGIRMode::Grid;
     context_ = std::make_unique<rtxdi::ImportanceSamplingContext>(parameters);
+    rtxdi::ReSTIRPTStaticParameters ptParameters;
+    ptParameters.RenderWidth = lighting.width;
+    ptParameters.RenderHeight = lighting.height;
+    ptContext_ = std::make_unique<rtxdi::ReSTIRPTContext>(ptParameters);
+    ptContext_->SetResamplingMode(rtxdi::ReSTIRPT_ResamplingMode::TemporalAndSpatial);
+    auto ptDecorrelation = ptContext_->GetDecorrelationParameters();
+    ptDecorrelation.decorrelationMode = RTXDI_PTDecorrelationMode::None;
+    ptDecorrelation.decorrelationFactor = 0.0f;
+    ptContext_->SetDecorrelationParameters(ptDecorrelation);
     rtxdi::ReSTIRDIContext& di = context_->GetReSTIRDIContext();
-    rtxdi::ReSTIRGIContext& gi = context_->GetReSTIRGIContext();
     di.SetResamplingMode(rtxdi::ReSTIRDI_ResamplingMode::TemporalAndSpatial);
-    gi.SetResamplingMode(rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial);
 
-    // Direct light at primary surfaces: eight ReGIR-driven candidates and one
-    // directional light per pixel, the chosen one shadow-tested. The
-    // environment is sampled outside RTXDI, and BRDF samples cannot find
-    // analytic light shapes, so neither candidate kind is drawn.
+    // All direct light at primary surfaces: eight ReGIR-driven candidates, one
+    // directional light, one environment direction and one BRDF direction per
+    // pixel, the chosen one shadow-tested. BRDF rays can only find the
+    // environment, which RTXDI then weighs against its light samples, so
+    // glossy surfaces still see sharp reflections of it.
     auto initial = di.GetInitialSamplingParameters();
     initial.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
-    initial.numEnvironmentSamples = 0;
-    initial.environmentMapImportanceSampling = 0;
-    initial.numBrdfSamples = 0;
     di.SetInitialSamplingParameters(initial);
     // RTXDI's default Basic bias correction leaves visibility out of the
     // resampling MIS weights, which biases reuse across shadow boundaries;
@@ -126,35 +120,35 @@ void Restir::resize(const Extent render)
     auto diSpatial = di.GetSpatialResamplingParameters();
     diSpatial.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
     di.SetSpatialResamplingParameters(diSpatial);
-    auto giTemporal = gi.GetTemporalResamplingParameters();
-    giTemporal.biasCorrectionMode = RTXDI_GIBiasCorrectionMode::Raytraced;
-    gi.SetTemporalResamplingParameters(giTemporal);
-    auto giSpatial = gi.GetSpatialResamplingParameters();
-    giSpatial.biasCorrectionMode = RTXDI_GIBiasCorrectionMode::Raytraced;
-    gi.SetSpatialResamplingParameters(giSpatial);
-    // ReSTIR GI's final pass skips its MIS against the initial sample: that
-    // step exists for glossy lobes, and only the diffuse lobe is resampled.
-    auto finalShading = gi.GetFinalShadingParameters();
-    finalShading.enableFinalMIS = 0;
-    gi.SetFinalShadingParameters(finalShading);
 
-    constexpr std::size_t diReservoirWords = sizeof(RTXDI_PackedDIReservoir) / 4u;
-    constexpr std::size_t giReservoirWords = sizeof(RTXDI_PackedGIReservoir) / 4u;
-    constexpr std::size_t surfaceWords = sizeof(nr::graphics::RealtimeSurface) / 4u;
-    diReservoirs_ = device_.buffer<std::uint32_t>(diReservoirWords
-        * di.GetReservoirBufferParameters().reservoirArrayPitch
-        * rtxdi::c_NumReSTIRDIReservoirBuffers);
-    giReservoirs_ = device_.buffer<std::uint32_t>(giReservoirWords
-        * gi.GetReservoirBufferParameters().reservoirArrayPitch
-        * rtxdi::c_NumReSTIRGIReservoirBuffers);
     risBuffer_ = device_.buffer<std::uint32_t>(2u * std::max(
         context_->GetRISBufferSegmentAllocator().GetTotalSizeInElements(), 1u));
-    for (auto& surfaces : surfaces_)
-        surfaces = device_.buffer<std::uint32_t>(surfaceWords
-            * std::max<std::size_t>(std::size_t(render.width) * render.height, 1u));
+    const std::size_t pixels =
+        std::max<std::size_t>(std::size_t(lighting.width) * lighting.height, 1u);
+    opaque_ = surfaceSet(pixels);
+    layers_.reset();
+    if (layers)
+        layers_ = surfaceSet(pixels);
     frameIndex_ = 0;
     surfaceParity_ = 0;
     historyValid_ = false;
+}
+
+Restir::SurfaceSet Restir::surfaceSet(const std::size_t pixels) const
+{
+    constexpr std::size_t diReservoirWords = sizeof(RTXDI_PackedDIReservoir) / 4u;
+    constexpr std::size_t ptReservoirWords = sizeof(RTXDI_PackedPTReservoir) / 4u;
+    constexpr std::size_t surfaceWords = sizeof(nr::graphics::RealtimeSurface) / 4u;
+    SurfaceSet set;
+    set.diReservoirs = device_.buffer<std::uint32_t>(diReservoirWords
+        * context_->GetReSTIRDIContext().GetReservoirBufferParameters().reservoirArrayPitch
+        * rtxdi::c_NumReSTIRDIReservoirBuffers);
+    set.ptReservoirs = device_.buffer<std::uint32_t>(ptReservoirWords
+        * ptContext_->GetReservoirBufferParameters().reservoirArrayPitch
+        * rtxdi::c_NumReSTIRPTReservoirBuffers);
+    for (auto& surfaces : set.surfaces)
+        surfaces = device_.buffer<std::uint32_t>(surfaceWords * pixels);
+    return set;
 }
 
 void Restir::uploadLights(const std::span<const nr::graphics::PointLight> points,
@@ -214,9 +208,9 @@ void Restir::uploadLights(const std::span<const nr::graphics::PointLight> points
         for (const uint32_t i : small)
             table[i].probability = 1.0f;
     }
-    static_assert(sizeof(nr::graphics::RealtimeLightAlias) == 16);
     const auto* words = reinterpret_cast<const std::uint32_t*>(table.data());
-    const std::span<const std::uint32_t> upload(words, table.size() * 4u);
+    const std::span<const std::uint32_t> upload(words,
+        table.size() * sizeof(nr::graphics::RealtimeLightAlias) / 4u);
     if (lightAlias_.size() != upload.size())
         lightAlias_ = device_.buffer<std::uint32_t>(upload.size());
     lightAlias_.upload(upload);
@@ -231,10 +225,21 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
 {
     using namespace nr::graphics;
     rtxdi::ReSTIRDIContext& di = context_->GetReSTIRDIContext();
-    rtxdi::ReSTIRGIContext& gi = context_->GetReSTIRGIContext();
     rtxdi::ReGIRContext& regir = context_->GetReGIRContext();
     di.SetFrameIndex(frameIndex_);
-    gi.SetFrameIndex(frameIndex_);
+    ptContext_->SetFrameIndex(frameIndex_);
+    auto ptInitial = ptContext_->GetInitialSamplingParameters();
+    // Max bounces counts indirect bounces. RTXDI's depth counts path
+    // vertices, the primary surface as 1: the light found after N indirect
+    // bounces is vertex N + 2. RTXDI packs the selected path length and
+    // reconnection length into bytes.
+    ptInitial.maxBounceDepth = std::clamp(args.frame.maxBounces + 2u, 3u, 253u);
+    ptInitial.maxRcVertexLength = ptInitial.maxBounceDepth + 2u;
+    ptContext_->SetInitialSamplingParameters(ptInitial);
+    auto ptHybrid = ptContext_->GetHybridShiftParameters();
+    ptHybrid.maxBounceDepth = ptInitial.maxBounceDepth;
+    ptHybrid.maxRcVertexLength = ptInitial.maxRcVertexLength;
+    ptContext_->SetHybridShiftParameters(ptHybrid);
     ++frameIndex_;
 
     RTXDI_LightBufferParameters lightBuffer{};
@@ -242,7 +247,8 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
     lightBuffer.localLightBufferRegion.numLights = localLightCount_;
     lightBuffer.infiniteLightBufferRegion.firstLightIndex = localLightCount_;
     lightBuffer.infiniteLightBufferRegion.numLights = infiniteLightCount_;
-    lightBuffer.environmentLightParams.lightPresent = 0;
+    lightBuffer.environmentLightParams.lightPresent = args.frame.environment != 0 ? 1u : 0u;
+    lightBuffer.environmentLightParams.lightIndex = localLightCount_ + infiniteLightCount_;
     context_->SetLightBufferParams(lightBuffer);
 
     // ReGIR's grid follows the camera, with cells sized to the lit region.
@@ -252,14 +258,17 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
     regirParameters.regirCellSize = lightExtent_ / ReGIRCellsAcrossLights;
     regir.SetDynamicParameters(regirParameters);
 
+    // Last frame's surfaces are this frame's previous ones.
+    surfaceParity_ ^= 1u;
     RealtimeLighting& lighting = args.lighting;
     lighting = {};
     lighting.risBuffer = risBuffer_.ptr().address;
-    lighting.diReservoirs = diReservoirs_.ptr().address;
-    lighting.giReservoirs = giReservoirs_.ptr().address;
+    lighting.diReservoirs = opaque_.diReservoirs.ptr().address;
+    lighting.ptReservoirs = address(opaque_.ptReservoirs);
     lighting.neighborOffsets = neighborOffsets_.ptr().address;
-    lighting.surfaces = surfaces_[surfaceParity_].ptr().address;
-    lighting.previousSurfaces = surfaces_[surfaceParity_ ^ 1u].ptr().address;
+    lighting.surfaces = opaque_.surfaces[surfaceParity_].ptr().address;
+    lighting.previousSurfaces = opaque_.surfaces[surfaceParity_ ^ 1u].ptr().address;
+    lighting.layerSurfaces = layers_ ? layers_->surfaces[surfaceParity_].ptr().address : 0;
     lighting.localLightAlias = lightAlias_.ptr().address;
 
     lighting.lightBufferParams = context_->GetLightBufferParameters();
@@ -279,14 +288,15 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
         di.GetSpatioTemporalResamplingParameters();
     lighting.restirDI.shadingParams = di.GetShadingParameters();
 
-    lighting.restirGI.reservoirBufferParams = gi.GetReservoirBufferParameters();
-    lighting.restirGI.bufferIndices = gi.GetBufferIndices();
-    lighting.restirGI.temporalResamplingParams = gi.GetTemporalResamplingParameters();
-    lighting.restirGI.boilingFilterParams = gi.GetBoilingFilterParameters();
-    lighting.restirGI.spatialResamplingParams = gi.GetSpatialResamplingParameters();
-    lighting.restirGI.spatioTemporalResamplingParams =
-        gi.GetSpatioTemporalResamplingParameters();
-    lighting.restirGI.finalShadingParams = gi.GetFinalShadingParameters();
+    lighting.restirPT.reservoirBuffer = ptContext_->GetReservoirBufferParameters();
+    lighting.restirPT.bufferIndices = ptContext_->GetBufferIndices();
+    lighting.restirPT.initialSampling = ptContext_->GetInitialSamplingParameters();
+    lighting.restirPT.decorrelation = ptContext_->GetDecorrelationParameters();
+    lighting.restirPT.reconnection = ptContext_->GetReconnectionParameters();
+    lighting.restirPT.temporalResampling = ptContext_->GetTemporalResamplingParameters();
+    lighting.restirPT.hybridShift = ptContext_->GetHybridShiftParameters();
+    lighting.restirPT.boilingFilter = ptContext_->GetBoilingFilterParameters();
+    lighting.restirPT.spatialResampling = ptContext_->GetSpatialResamplingParameters();
 
     // As RTXDI's sample fills ReGIR_Parameters from the context.
     const rtxdi::ReGIRStaticParameters regirStatic = regir.GetReGIRStaticParameters();
@@ -327,82 +337,114 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
              RTXDI_ONION_MAX_RINGS); ++ring)
         regirConstants.onionParams.rings[ring] = onion.regirOnionRings[ring];
 
-    // Path vertices beyond the G-buffer: the same candidates, no visibility
-    // test (the caller traces one shadow ray for the chosen light).
+    // Surfaces beyond the G-buffer: the same light candidates without BRDF
+    // rays, which the path tracer traces itself, and no visibility test (the
+    // caller traces one shadow ray for the chosen light).
     lighting.secondaryInitialSamplingParams = lighting.restirDI.initialSamplingParams;
     lighting.secondaryInitialSamplingParams.numLocalLightSamples = SecondaryLocalLightSamples;
+    lighting.secondaryInitialSamplingParams.numBrdfSamples = 0;
     lighting.secondaryInitialSamplingParams.enableInitialVisibility = 0;
 
-    lighting.enabled = mode_ != RealtimeLightingMode::SingleSample ? 1u : 0u;
-    lighting.mode = mode_ == RealtimeLightingMode::ReSTIRGI
-        ? RealtimeLightingReSTIRGI : RealtimeLightingReSTIRDI;
     // Temporal reuse needs last frame's G-buffer and light indices to still
     // describe last frame.
-    lighting.previousSurfacesValid =
-        historyValid_ && !frame.resetHistory && historyMode_ == mode_ ? 1u : 0u;
+    lighting.previousSurfacesValid = historyValid_ && !frame.resetHistory ? 1u : 0u;
     lighting.reservoirBlockRowPitch =
         lighting.restirDI.reservoirBufferParams.reservoirBlockRowPitch;
-
-    // This frame's G-buffer is next frame's previous one.
-    surfaceParity_ ^= 1u;
     historyValid_ = true;
-    historyMode_ = mode_;
+}
+
+nr::graphics::RealtimeLighting Restir::layerLighting(
+    const nr::graphics::RealtimeLighting& lighting) const
+{
+    const SurfaceSet& layers = layers_.value();
+    nr::graphics::RealtimeLighting result = lighting;
+    result.diReservoirs = layers.diReservoirs.ptr().address;
+    result.ptReservoirs = address(layers.ptReservoirs);
+    result.surfaces = layers.surfaces[surfaceParity_].ptr().address;
+    result.previousSurfaces = layers.surfaces[surfaceParity_ ^ 1u].ptr().address;
+    return result;
 }
 
 void Restir::presample(const nr::graphics::RealtimeArgs& args,
     const nr::graphics::RealtimeRoot root) const
 {
-    if (args.lighting.enabled == 0 || localLightCount_ == 0)
+    // The environment and local-light tiles are disjoint segments of the RIS
+    // buffer, so both fill at once; only ReGIR reads the local-light tiles.
+    const bool environment =
+        args.lighting.lightBufferParams.environmentLightParams.lightPresent != 0;
+    if (!environment && localLightCount_ == 0)
         return;
-    const RTXDI_RISBufferSegmentParameters& tiles =
-        args.lighting.localLightsRISBufferSegmentParams;
-    presampleLightsPipeline_.launch({divideRoundingUp(tiles.tileSize, PresampleGroupSize),
-        tiles.tileCount, 1}, root);
-    device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
-    presampleReGIRPipeline_.launch({divideRoundingUp(
-        context_->GetReGIRContext().GetReGIRLightSlotCount(), PresampleGroupSize), 1, 1}, root);
+    if (environment) {
+        const RTXDI_RISBufferSegmentParameters& environmentTiles =
+            args.lighting.environmentLightRISBufferSegmentParams;
+        presampleEnvironmentPipeline_.launch({divideRoundingUp(environmentTiles.tileSize,
+            PresampleGroupSize), environmentTiles.tileCount, 1}, root);
+    }
+    if (localLightCount_ != 0) {
+        const RTXDI_RISBufferSegmentParameters& tiles =
+            args.lighting.localLightsRISBufferSegmentParams;
+        presampleLightsPipeline_.launch({divideRoundingUp(tiles.tileSize, PresampleGroupSize),
+            tiles.tileCount, 1}, root);
+        device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
+        presampleReGIRPipeline_.launch({divideRoundingUp(
+            context_->GetReGIRContext().GetReGIRLightSlotCount(), PresampleGroupSize), 1, 1},
+            root);
+    }
     device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::RayTracing);
 }
 
 std::vector<noorrhi::Shader> Restir::raygens() const
 {
-    return {diInitialRaygen_, diTemporalRaygen_, diSpatialRaygen_, diShadeRaygen_,
-        giTemporalRaygen_, giSpatialRaygen_, giShadeRaygen_};
+    return {initialRaygen_, ptTemporalRaygen_, ptSpatialRaygen_, shadeRaygen_};
 }
 
 void Restir::resample(const nr::graphics::RealtimeArgs& args,
-    const nr::graphics::RealtimeRoot root, const Extent render,
+    const std::span<const nr::graphics::RealtimeRoot> surfaceSets, const Extent lighting,
     const noorrhi::RayTracingPipeline& tracePipeline) const
 {
-    if (args.lighting.enabled == 0)
-        return;
-    const noorrhi::DispatchSize tiles{divideRoundingUp(render.width, BoilingGroupSize),
-        divideRoundingUp(render.height, BoilingGroupSize), 1};
-    // Every pass reads what the previous one wrote: the image pass's G-buffer
-    // and GI sample, then each resampling stage's reservoirs.
+    using noorrhi::Stage;
+    const bool diBoiling = args.lighting.restirDI.boilingFilterParams.enableBoilingFilter != 0;
+    const bool ptBoiling = args.lighting.restirPT.boilingFilter.enableBoilingFilter != 0;
+    const noorrhi::DispatchSize pixels{divideRoundingUp(lighting.width, ScreenSpaceGroupSize),
+        divideRoundingUp(lighting.height, ScreenSpaceGroupSize), 1};
+    const noorrhi::DispatchSize tiles{divideRoundingUp(lighting.width, BoilingGroupSize),
+        divideRoundingUp(lighting.height, BoilingGroupSize), 1};
     const auto trace = [&](const noorrhi::Shader& raygen) {
-        tracePipeline.trace(raygen, {render.width, render.height, 1}, root);
-        device_.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::RayTracing);
+        for (const nr::graphics::RealtimeRoot root : surfaceSets)
+            tracePipeline.trace(raygen, {lighting.width, lighting.height, 1}, root);
     };
-    const auto boil = [&](const noorrhi::ComputePipeline& pipeline, const bool enabled) {
-        if (!enabled)
-            return;
-        device_.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::Compute);
-        pipeline.launch(tiles, root);
-        device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::RayTracing);
+    const auto launch = [&](const noorrhi::ComputePipeline& pipeline,
+        const noorrhi::DispatchSize size) {
+        for (const nr::graphics::RealtimeRoot root : surfaceSets)
+            pipeline.launch(size, root);
     };
-    // The image pass's G-buffer was written by an earlier trace.
-    device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::RayTracing);
-    trace(diInitialRaygen_);
-    trace(diTemporalRaygen_);
-    boil(diBoilingPipeline_, args.lighting.restirDI.boilingFilterParams.enableBoilingFilter != 0);
-    trace(diSpatialRaygen_);
-    trace(diShadeRaygen_);
-    if (args.lighting.mode == nr::graphics::RealtimeLightingReSTIRGI) {
-        trace(giTemporalRaygen_);
-        boil(giBoilingPipeline_, args.lighting.restirGI.boilingFilterParams.enableBoilingFilter != 0);
-        trace(giSpatialRaygen_);
-        trace(giShadeRaygen_);
+    // The DI chain runs as compute and the PT chain as ray tracing; each
+    // step's passes run together and read what the steps before them wrote,
+    // starting with the surfaces the lighting pass recorded.
+    const auto barrier = [&](const std::initializer_list<Stage> sources,
+        const std::initializer_list<Stage> destinations) {
+        for (const Stage source : sources)
+            for (const Stage destination : destinations)
+                device_.barrier(source, destination);
+    };
+
+    barrier({Stage::RayTracing}, {Stage::RayTracing});
+    trace(initialRaygen_);
+    barrier({Stage::RayTracing}, {Stage::Compute, Stage::RayTracing});
+    launch(diTemporalPipeline_, pixels);
+    trace(ptTemporalRaygen_);
+    if (diBoiling || ptBoiling) {
+        barrier({Stage::Compute, Stage::RayTracing}, {Stage::Compute});
+        if (diBoiling)
+            launch(diBoilingPipeline_, tiles);
+        if (ptBoiling)
+            launch(ptBoilingPipeline_, tiles);
+        barrier({Stage::Compute}, {Stage::Compute, Stage::RayTracing});
+    } else {
+        barrier({Stage::Compute, Stage::RayTracing}, {Stage::Compute, Stage::RayTracing});
     }
-    device_.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::Compute);
+    launch(diSpatialPipeline_, pixels);
+    trace(ptSpatialRaygen_);
+    barrier({Stage::Compute, Stage::RayTracing}, {Stage::RayTracing});
+    trace(shadeRaygen_);
 }

@@ -1,8 +1,10 @@
 #pragma once
 
-// Typed native-mesh access for the graphics API ray-tracing path. The host uploads
-// separate arrays for records, vertices, indices, faces, and material IDs;
-// this code only performs element indexing and interpolation.
+// Typed native-mesh access for the graphics API ray-tracing path. Meshes hold
+// Unreal's vertex streams (Shared/Mesh.h); this code only performs element
+// indexing, decoding and interpolation.
+
+#include "RayDifferential.slang"
 
 struct RegularSurface
 {
@@ -10,98 +12,259 @@ struct RegularSurface
     float3 geometricNormal;
     float3 shadingNormal;
     float3 tangent;
-    float tangentSign;
+    float bitangentSign;
     float2 uv;
+    float2* uvs;
+    uint uvCount;
+    uint3 uvVertices;
+    float2 uvBarycentrics;
     float4 vertexColor;
     uint instanceIndex;
     uint primitiveIndex;
     uint materialIndex;
 };
 
-float3 transformPoint(Instance instance, float3 p)
+// Unreal's FPackedRGBA16N: four SNORM16 components in two words.
+float4 unpackSnorm16x4(uint2 packed)
 {
-    return float3(
-        dot(float4(p, 1.0), float4(instance.objectToWorld[0],
-            instance.objectToWorld[1], instance.objectToWorld[2],
-            instance.objectToWorld[3])),
-        dot(float4(p, 1.0), float4(instance.objectToWorld[4],
-            instance.objectToWorld[5], instance.objectToWorld[6],
-            instance.objectToWorld[7])),
-        dot(float4(p, 1.0), float4(instance.objectToWorld[8],
-            instance.objectToWorld[9], instance.objectToWorld[10],
-            instance.objectToWorld[11])));
+    const int4 values = int4(int(packed.x << 16u) >> 16, int(packed.x) >> 16,
+                             int(packed.y << 16u) >> 16, int(packed.y) >> 16);
+    return max(float4(values) / 32767.0, -1.0);
 }
 
-float3 transformVector(Instance instance, float3 p)
-{
-    return float3(
-        dot(p, float3(instance.objectToWorld[0], instance.objectToWorld[1],
-            instance.objectToWorld[2])),
-        dot(p, float3(instance.objectToWorld[4], instance.objectToWorld[5],
-            instance.objectToWorld[6])),
-        dot(p, float3(instance.objectToWorld[8], instance.objectToWorld[9],
-            instance.objectToWorld[10])));
-}
-
-// Matches nr::vertex_color::packLinear: RGB is sRGB UNORM8, alpha is linear UNORM8.
-float srgbToLinear(float value)
-{
-    return value <= 0.04045 ? value / 12.92
-        : pow((value + 0.055) / 1.055, 2.4);
-}
-
+// Unreal's FColor, linear UNORM8: B | G << 8 | R << 16 | A << 24.
 float4 unpackVertexColor(uint packed)
 {
-    const float4 encoded = float4(packed & 0xffu, (packed >> 8u) & 0xffu,
-                                  (packed >> 16u) & 0xffu, packed >> 24u) / 255.0;
-    return float4(srgbToLinear(encoded.r), srgbToLinear(encoded.g),
-                  srgbToLinear(encoded.b), encoded.a);
+    return float4((packed >> 16u) & 0xffu, (packed >> 8u) & 0xffu, packed & 0xffu,
+                  packed >> 24u) / 255.0;
 }
 
 // Each mesh section is its own BLAS geometry, whose PrimitiveIndex() counts
-// from the section's first triangle; the section also names the material.
-RegularSurface loadRegularSurface(Scene scene, uint instanceId, uint geometryIndex,
-    uint primitiveIndex, float2 barycentric)
+// from the section's first triangle; the section names the instance's
+// material slot. The hit triangle, its vertices in world space: fetched once
+// for both the surface and its differentials.
+struct SurfaceTriangle
+{
+    uint instanceIndex;
+    uint triangle;
+    uint materialIndex;
+    uint3 indices;
+    float3 positions[3];
+    float3 normals[3];
+    float3 tangents[3];
+    float2 uvs[3];
+    float4 colors[3];
+    // cross(normal, tangent) times this is the world-space bitangent.
+    float bitangentSign;
+    float2* uvStream;
+    uint uvCount;
+};
+
+// Whether a hit section blocks shadow rays: the section and its material
+// both cast shadows.
+bool sectionCastsShadow(Scene scene, Material** materials, uint instanceId, uint geometryIndex)
+{
+    const Instance instance = scene.instances[min(instanceId, scene.instanceCount - 1u)];
+    const Mesh mesh = *scene.meshes[min(instance.meshIndex, scene.meshCount - 1u)];
+    const SectionRecord section = mesh.sections[min(geometryIndex, mesh.sectionCount - 1u)];
+    return section.castsShadow != 0u
+        && (materials[instance.materials[section.slot]]->flags & MaterialFlagNoShadows) == 0u;
+}
+
+// Must run in a hit stage: the transform is the hit TLAS record's.
+SurfaceTriangle loadSurfaceTriangle(Scene scene, uint instanceId, uint geometryIndex,
+    uint primitiveIndex)
 {
     instanceId = min(instanceId, scene.instanceCount - 1u);
     const Instance instance = scene.instances[instanceId];
     const uint meshIndex = min(instance.meshIndex, scene.meshCount - 1u);
     const Mesh mesh = *scene.meshes[meshIndex];
     const SectionRecord section = mesh.sections[min(geometryIndex, mesh.sectionCount - 1u)];
+    const float3x4 objectToWorld = ObjectToWorld3x4();
+    const float3x3 linear = float3x3(objectToWorld[0].xyz, objectToWorld[1].xyz,
+        objectToWorld[2].xyz);
+    // Normals transform by the inverse transpose, so non-uniform scales keep
+    // them perpendicular to the surface.
+    const float3x4 worldToObject = WorldToObject3x4();
+    const float3x3 normalMatrix = transpose(float3x3(worldToObject[0].xyz,
+        worldToObject[1].xyz, worldToObject[2].xyz));
+    uint* colors = instance.colors != nullptr ? instance.colors : mesh.colors;
 
-    const uint triangle = min(section.firstTriangle + primitiveIndex,
+    SurfaceTriangle result;
+    result.instanceIndex = instanceId;
+    result.triangle = min(section.firstTriangle + primitiveIndex,
         max(mesh.indexCount / 3u, 1u) - 1u);
-    const uint i0 = min(mesh.indices[triangle * 3u], mesh.vertexCount - 1u);
-    const uint i1 = min(mesh.indices[triangle * 3u + 1u], mesh.vertexCount - 1u);
-    const uint i2 = min(mesh.indices[triangle * 3u + 2u], mesh.vertexCount - 1u);
+    result.materialIndex = instance.materials[section.slot];
+    result.uvStream = mesh.uvs;
+    result.uvCount = mesh.uvCount;
+    [unroll]
+    for (uint i = 0u; i < 3u; ++i)
+    {
+        const uint vertex = min(mesh.indices[result.triangle * 3u + i], mesh.vertexCount - 1u);
+        const uint4 tangentFrame = mesh.tangents[vertex];
+        const float4 tangentZ = unpackSnorm16x4(tangentFrame.zw);
+        result.indices[i] = vertex;
+        result.positions[i] = mul(objectToWorld, float4(mesh.positions[vertex], 1.0));
+        result.normals[i] = mul(normalMatrix, tangentZ.xyz);
+        result.tangents[i] = mul(linear, unpackSnorm16x4(tangentFrame.xy).xyz);
+        result.uvs[i] = mesh.uvs[vertex * mesh.uvCount];
+        result.colors[i] = colors != nullptr ? unpackVertexColor(colors[vertex]) : float4(1.0);
+        if (i == 0u)
+            // A mirroring transform flips the cross product of the
+            // transformed normal and tangent, as Unreal's determinant sign does.
+            result.bitangentSign = (tangentZ.w < 0.0 ? -1.0 : 1.0)
+                * (determinant(linear) < 0.0 ? -1.0 : 1.0);
+    }
+    return result;
+}
 
-    const Vertex vertex0 = mesh.vertices[i0];
-    const Vertex vertex1 = mesh.vertices[i1];
-    const Vertex vertex2 = mesh.vertices[i2];
-    const float w = 1.0 - barycentric.x - barycentric.y;
-    const float3 p0 = transformPoint(instance, vertex0.position);
-    const float3 p1 = transformPoint(instance, vertex1.position);
-    const float3 p2 = transformPoint(instance, vertex2.position);
-    const float3 n0 = transformVector(instance, vertex0.normal);
-    const float3 n1 = transformVector(instance, vertex1.normal);
-    const float3 n2 = transformVector(instance, vertex2.normal);
-    const float3 t0 = transformVector(instance, vertex0.tangent);
-    const float3 t1 = transformVector(instance, vertex1.tangent);
-    const float3 t2 = transformVector(instance, vertex2.tangent);
+float2 interpolate(float2 a, float2 b, float2 c, float2 barycentric)
+{
+    return a * (1.0 - barycentric.x - barycentric.y) + b * barycentric.x + c * barycentric.y;
+}
 
+float3 interpolate(float3 a, float3 b, float3 c, float2 barycentric)
+{
+    return a * (1.0 - barycentric.x - barycentric.y) + b * barycentric.x + c * barycentric.y;
+}
+
+float4 interpolate(float4 a, float4 b, float4 c, float2 barycentric)
+{
+    return a * (1.0 - barycentric.x - barycentric.y) + b * barycentric.x + c * barycentric.y;
+}
+
+RegularSurface interpolateSurface(SurfaceTriangle triangle, float2 barycentric)
+{
+    const float3 p0 = triangle.positions[0];
+    const float3 p1 = triangle.positions[1];
+    const float3 p2 = triangle.positions[2];
     RegularSurface surface;
-    surface.position = p0 * w + p1 * barycentric.x + p2 * barycentric.y;
+    surface.position = interpolate(p0, p1, p2, barycentric);
     surface.geometricNormal = normalize(cross(p1 - p0, p2 - p0));
-    surface.shadingNormal = normalize(n0 * w + n1 * barycentric.x + n2 * barycentric.y);
-    surface.tangent = normalize(t0 * w + t1 * barycentric.x + t2 * barycentric.y);
-    surface.tangentSign = vertex0.tangentSign;
-    surface.uv = vertex0.uv * w + vertex1.uv * barycentric.x
-        + vertex2.uv * barycentric.y;
-    surface.vertexColor = unpackVertexColor(vertex0.color) * w
-        + unpackVertexColor(vertex1.color) * barycentric.x
-        + unpackVertexColor(vertex2.color) * barycentric.y;
-    surface.instanceIndex = instanceId;
-    surface.primitiveIndex = triangle;
-    surface.materialIndex = section.material;
+    surface.shadingNormal = normalize(interpolate(triangle.normals[0], triangle.normals[1],
+        triangle.normals[2], barycentric));
+    surface.tangent = normalize(interpolate(triangle.tangents[0], triangle.tangents[1],
+        triangle.tangents[2], barycentric));
+    surface.bitangentSign = triangle.bitangentSign;
+    surface.uv = interpolate(triangle.uvs[0], triangle.uvs[1], triangle.uvs[2], barycentric);
+    surface.uvs = triangle.uvStream;
+    surface.uvCount = triangle.uvCount;
+    surface.uvVertices = triangle.indices;
+    surface.uvBarycentrics = barycentric;
+    surface.vertexColor = interpolate(triangle.colors[0], triangle.colors[1],
+        triangle.colors[2], barycentric);
+    surface.instanceIndex = triangle.instanceIndex;
+    surface.primitiveIndex = triangle.triangle;
+    surface.materialIndex = triangle.materialIndex;
     return surface;
+}
+
+RegularSurface loadRegularSurface(Scene scene, uint instanceId, uint geometryIndex,
+    uint primitiveIndex, float2 barycentric)
+{
+    return interpolateSurface(loadSurfaceTriangle(scene, instanceId, geometryIndex,
+        primitiveIndex), barycentric);
+}
+
+// Screen-space derivatives of what is interpolated over a hit, per render
+// pixel along the image's x and y.
+struct SurfaceDifferentials
+{
+    // The hit's position and shading normal, and the arriving ray's direction.
+    VertexDifferential vertex;
+    float2 barycentricDx;
+    float2 barycentricDy;
+    float3 tangentDx;
+    float3 tangentDy;
+    float3 bitangentDx;
+    float3 bitangentDy;
+    float2 uvDx;
+    float2 uvDy;
+    float4 colorDx;
+    float4 colorDy;
+};
+
+// The barycentric change that moves a point of the triangle by `positionDelta`,
+// which lies in its plane.
+float2 barycentricDelta(float3 edge1, float3 edge2, float3 positionDelta)
+{
+    const float3 areaNormal = cross(edge1, edge2);
+    const float areaSquared = dot(areaNormal, areaNormal);
+    if (areaSquared <= 1.0e-20)
+        return float2(0.0);
+    return float2(dot(cross(positionDelta, edge2), areaNormal),
+        dot(cross(edge1, positionDelta), areaNormal)) / areaSquared;
+}
+
+float2 interpolatedDelta(float2 a, float2 b, float2 c, float2 barycentricDelta)
+{
+    return (b - a) * barycentricDelta.x + (c - a) * barycentricDelta.y;
+}
+
+float3 interpolatedDelta(float3 a, float3 b, float3 c, float2 barycentricDelta)
+{
+    return (b - a) * barycentricDelta.x + (c - a) * barycentricDelta.y;
+}
+
+float4 interpolatedDelta(float4 a, float4 b, float4 c, float2 barycentricDelta)
+{
+    return (b - a) * barycentricDelta.x + (c - a) * barycentricDelta.y;
+}
+
+// The change of normalize(v) when v changes by `delta`.
+float3 normalizedDelta(float3 v, float3 delta)
+{
+    const float size = max(length(v), 1.0e-12);
+    const float3 unit = v / size;
+    return (delta - unit * dot(unit, delta)) / size;
+}
+
+// The differentials of the ray `ray`, travelling along `direction`, where it
+// hits `triangle` at distance t.
+SurfaceDifferentials surfaceDifferentials(SurfaceTriangle triangle, float2 barycentric,
+    VertexDifferential ray, float3 direction, float t)
+{
+    const float3 edge1 = triangle.positions[1] - triangle.positions[0];
+    const float3 edge2 = triangle.positions[2] - triangle.positions[0];
+    SurfaceDifferentials result;
+    result.vertex = arriveAt(ray, direction, t, normalize(cross(edge1, edge2)));
+    result.barycentricDx = barycentricDelta(edge1, edge2, result.vertex.positionDx);
+    result.barycentricDy = barycentricDelta(edge1, edge2, result.vertex.positionDy);
+
+    const float3 normal = interpolate(triangle.normals[0], triangle.normals[1],
+        triangle.normals[2], barycentric);
+    const float3 tangent = interpolate(triangle.tangents[0], triangle.tangents[1],
+        triangle.tangents[2], barycentric);
+    const float3 normalDx = interpolatedDelta(triangle.normals[0], triangle.normals[1],
+        triangle.normals[2], result.barycentricDx);
+    const float3 normalDy = interpolatedDelta(triangle.normals[0], triangle.normals[1],
+        triangle.normals[2], result.barycentricDy);
+    const float3 tangentDx = interpolatedDelta(triangle.tangents[0], triangle.tangents[1],
+        triangle.tangents[2], result.barycentricDx);
+    const float3 tangentDy = interpolatedDelta(triangle.tangents[0], triangle.tangents[1],
+        triangle.tangents[2], result.barycentricDy);
+    result.vertex.normalDx = normalizedDelta(normal, normalDx);
+    result.vertex.normalDy = normalizedDelta(normal, normalDy);
+    result.tangentDx = normalizedDelta(tangent, tangentDx);
+    result.tangentDy = normalizedDelta(tangent, tangentDy);
+
+    // The bitangent is normalize(cross(normal, tangent)) times the tangent sign.
+    const float3 unitNormal = normalize(normal);
+    const float3 unitTangent = normalize(tangent);
+    const float3 bitangent = cross(unitNormal, unitTangent);
+    const float sign = triangle.bitangentSign;
+    result.bitangentDx = sign * normalizedDelta(bitangent, cross(result.vertex.normalDx, unitTangent)
+        + cross(unitNormal, result.tangentDx));
+    result.bitangentDy = sign * normalizedDelta(bitangent, cross(result.vertex.normalDy, unitTangent)
+        + cross(unitNormal, result.tangentDy));
+
+    result.uvDx = interpolatedDelta(triangle.uvs[0], triangle.uvs[1], triangle.uvs[2],
+        result.barycentricDx);
+    result.uvDy = interpolatedDelta(triangle.uvs[0], triangle.uvs[1], triangle.uvs[2],
+        result.barycentricDy);
+    result.colorDx = interpolatedDelta(triangle.colors[0], triangle.colors[1], triangle.colors[2],
+        result.barycentricDx);
+    result.colorDy = interpolatedDelta(triangle.colors[0], triangle.colors[1], triangle.colors[2],
+        result.barycentricDy);
+    return result;
 }

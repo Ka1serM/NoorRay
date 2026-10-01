@@ -70,6 +70,7 @@ struct MaterialXSceneRuntime::Impl
     std::size_t active{};
     bool stopping{};
     std::vector<std::thread> workers;
+    std::function<void()> onCompleted;
 
     std::vector<Ready> ready;
 
@@ -129,8 +130,29 @@ std::string normalizedPath(const std::string& value)
     return path.lexically_normal().string();
 }
 
+struct SceneTextureLookup
+{
+    std::unordered_map<std::string, std::uint32_t> byPath;
+    std::vector<std::pair<std::string, std::uint32_t>> normalizedPaths;
+};
+
+SceneTextureLookup makeSceneTextureLookup(const Scene& scene)
+{
+    SceneTextureLookup lookup;
+    lookup.normalizedPaths.reserve(scene.getTextures().size());
+    for (std::size_t index = 0; index < scene.getTextures().size(); ++index) {
+        const std::string& path = scene.getTextures()[index].getName();
+        const auto number = static_cast<std::uint32_t>(index);
+        lookup.byPath.try_emplace(path, number);
+        std::string normalized = normalizedPath(path);
+        lookup.byPath.try_emplace(normalized, number);
+        lookup.normalizedPaths.emplace_back(std::move(normalized), number);
+    }
+    return lookup;
+}
+
 std::unordered_map<std::string, std::uint32_t> resolveSceneTextures(
-    const MaterialX::DocumentPtr& document, const Scene& scene,
+    const MaterialX::DocumentPtr& document, const SceneTextureLookup& lookup,
     const std::string& sceneDirectory)
 {
     std::unordered_map<std::string, std::uint32_t> resolved;
@@ -141,25 +163,25 @@ std::unordered_map<std::string, std::uint32_t> resolveSceneTextures(
         if (!rawPath.is_absolute() && !sceneDirectory.empty())
             candidates.push_back((std::filesystem::path(sceneDirectory) / rawPath).string());
 
-        for (std::size_t textureIndex = 0; textureIndex < scene.getTextures().size(); ++textureIndex) {
-            const std::string texturePath = scene.getTextures()[textureIndex].getName();
-            const std::string normalizedTexturePath = normalizedPath(texturePath);
-            const bool matches = std::ranges::any_of(candidates,
-                [&](const std::string& candidate) {
-                    const std::string normalizedCandidate = normalizedPath(candidate);
-                    const bool suffixMatch = normalizedTexturePath.size()
-                        > normalizedCandidate.size()
-                        && normalizedTexturePath.ends_with(normalizedCandidate)
-                        && normalizedTexturePath[normalizedTexturePath.size()
-                            - normalizedCandidate.size() - 1] == '/';
-                    return candidate == texturePath
-                        || normalizedCandidate == normalizedTexturePath
-                        || suffixMatch;
-                });
-            if (matches) {
-                resolved[image.rawFilePath] = static_cast<std::uint32_t>(textureIndex);
+        for (const std::string& candidate : candidates) {
+            const std::string normalized = normalizedPath(candidate);
+            if (const auto found = lookup.byPath.find(candidate); found != lookup.byPath.end()) {
+                resolved[image.rawFilePath] = found->second;
                 break;
             }
+            if (const auto found = lookup.byPath.find(normalized); found != lookup.byPath.end()) {
+                resolved[image.rawFilePath] = found->second;
+                break;
+            }
+            // Preserve the previous suffix resolution for documents with relative image paths.
+            for (const auto& [path, index] : lookup.normalizedPaths) {
+                if (path.size() > normalized.size() && path.ends_with(normalized)
+                    && path[path.size() - normalized.size() - 1] == '/') {
+                    resolved[image.rawFilePath] = index;
+                    break;
+                }
+            }
+            if (resolved.contains(image.rawFilePath)) break;
         }
     }
     return resolved;
@@ -199,12 +221,15 @@ MaterialShaderProgram MaterialXSceneRuntime::Impl::compileShaderProgram(
     return result;
 }
 
-MaterialXSceneRuntime::MaterialXSceneRuntime()
+MaterialXSceneRuntime::MaterialXSceneRuntime(std::function<void()> onCompleted)
     : impl_(std::make_unique<Impl>())
 {
-    // Both MaterialX's generator and a Slang session are worker-local. Four
-    // workers keep large imports responsive without taking every CPU from the
-    // render thread; the shared cache still compiles each shape only once.
+    impl_->onCompleted = std::move(onCompleted);
+    // MaterialX generation and Slang compilation are heavy jobs, and each
+    // compiled shader then feeds a driver compiler that also uses worker
+    // threads. Let TBB own the wide import parallelism and keep this stage
+    // bounded so it does not oversubscribe the machine. This also matches the
+    // older import path that was substantially faster on high-core-count CPUs.
     const unsigned workerCount = std::clamp(std::thread::hardware_concurrency() > 1
         ? std::thread::hardware_concurrency() - 1 : 1u, 1u, 4u);
     impl_->workers.reserve(workerCount);
@@ -245,6 +270,8 @@ MaterialXSceneRuntime::MaterialXSceneRuntime()
                 impl_->completed.push_back(std::move(completion));
             }
             impl_->condition.notify_all();
+            if (impl_->onCompleted)
+                impl_->onCompleted();
         }
         });
 }
@@ -270,11 +297,12 @@ void MaterialXSceneRuntime::shutdown()
 
 bool MaterialXSceneRuntime::needsCompilation(const Scene& scene) const
 {
-    return std::ranges::any_of(scene.getMaterials(),
-        [](const Material& material) { return !material.compiled; });
+    return std::ranges::any_of(scene.getMaterials(), [](const Material& material) {
+        return !material.compiled && material.kind == MaterialKind::Surface;
+    });
 }
 
-void MaterialXSceneRuntime::processPending(Scene& scene, const std::string& sceneDirectory)
+bool MaterialXSceneRuntime::processPending(Scene& scene, const std::string& sceneDirectory)
 {
     auto& materials = scene.getMaterials();
     const auto& paths = scene.getMaterialXSourcePaths();
@@ -285,16 +313,25 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const std::string& scen
         completed.swap(impl_->completed);
     }
 
-    // A material the scene no longer holds must not be published onto whatever
-    // took its index, so a scene edit drops what was compiled for the old one.
-    std::erase_if(impl_->ready, [&scene](const Impl::Ready& ready) {
-        return ready.materialRevision != scene.getMaterialRevision();
+    // A program compiled from a document the material no longer holds, or
+    // for a material a clear() replaced, must not be published.
+    const auto current = [&materials](const std::size_t index, const std::uint64_t revision) {
+        return index < materials.size() && materials[index].revision == revision;
+    };
+    std::erase_if(impl_->ready, [&current](const Impl::Ready& ready) {
+        return !current(ready.materialIndex, ready.materialRevision);
     });
 
     std::vector<std::size_t> fallbackCompiles;
+    // Materials edited while they compiled; their stale result is dropped.
+    std::vector<std::size_t> recompiles;
     for (auto& completion : completed) {
-        if (completion.materialRevision != scene.getMaterialRevision())
+        if (!current(completion.materialIndex, completion.materialRevision)) {
+            if (completion.materialIndex < materials.size()
+                && !materials[completion.materialIndex].compiled)
+                recompiles.push_back(completion.materialIndex);
             continue;
+        }
         if (completion.shaderProgram) {
             if (completion.materialIndex < materials.size()
                 && !materials[completion.materialIndex].compiled)
@@ -326,21 +363,29 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const std::string& scen
     for (const std::size_t materialIndex : fallbackCompiles) {
         NR_LOG_WARN("Falling back to the default MaterialX material for material "
             << materialIndex);
-        schedule(materialIndex, scene.getMaterialRevision(),
+        schedule(materialIndex, materials[materialIndex].revision,
             nr::materialx::defaultMaterial(), {});
     }
 
-    for (std::size_t i = 0; i < materials.size(); ++i) {
-        if (materials[i].compiled)
+    // Only materials the scene listed, and those whose compile went stale,
+    // are considered; the rest are compiled or already on their way.
+    std::vector<std::size_t> candidates(recompiles);
+    for (const uint32_t index : scene.takeMaterialsToCompile())
+        candidates.push_back(index);
+    std::unordered_set<std::size_t> readyIndices;
+    for (const Impl::Ready& ready : impl_->ready)
+        readyIndices.insert(ready.materialIndex);
+    const SceneTextureLookup textureLookup = makeSceneTextureLookup(scene);
+    for (const std::size_t i : candidates) {
+        // Splat materials are drawn by built-in stages and have nothing to compile.
+        if (i >= materials.size() || materials[i].compiled || readyIndices.contains(i)
+            || materials[i].kind != MaterialKind::Surface)
             continue;
         {
             std::lock_guard lock(impl_->mutex);
             if (impl_->scheduled.contains(i))
                 continue;
         }
-        if (std::ranges::any_of(impl_->ready,
-            [i](const Impl::Ready& ready) { return ready.materialIndex == i; }))
-            continue;
 
         const bool hasSource = i < paths.size() && !paths[i].empty();
         const bool hasDocument = i < documents.size() && documents[i] != nullptr;
@@ -369,9 +414,9 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const std::string& scen
             document = nr::materialx::defaultMaterial();
         }
         auto resolvedTextures = document
-            ? resolveSceneTextures(document, scene, sceneDirectory)
+            ? resolveSceneTextures(document, textureLookup, sceneDirectory)
             : std::unordered_map<std::string, std::uint32_t>{};
-        schedule(i, scene.getMaterialRevision(), std::move(document),
+        schedule(i, materials[i].revision, std::move(document),
             std::move(resolvedTextures));
     }
 
@@ -381,17 +426,26 @@ void MaterialXSceneRuntime::processPending(Scene& scene, const std::string& scen
         backgroundWork = !impl_->jobs.empty() || impl_->active != 0
             || !impl_->completed.empty();
     }
-    if (backgroundWork || (needsCompilation(scene) && impl_->ready.empty()))
-        return;
+    // Feed the driver a steady stream of small shader waves while imports are
+    // still running. Waiting for every MaterialX job to finish produces one
+    // very large ray-tracing compilation burst at the end of a level batch.
+    constexpr std::size_t publicationWave = 32;
+    if (impl_->ready.empty() || (backgroundWork && impl_->ready.size() < publicationWave))
+        return false;
 
-    for (Impl::Ready& ready : impl_->ready) {
+    bool published = false;
+    const std::size_t count = std::min(publicationWave, impl_->ready.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        Impl::Ready& ready = impl_->ready[index];
         if (ready.materialIndex >= materials.size() || materials[ready.materialIndex].compiled)
             continue;
         // Publishing uploads this one material's buffers and marks the scene
         // dirty; no other material is re-uploaded.
         scene.setMaterialProgram(ready.materialIndex, std::move(ready.shaderProgram));
+        published = true;
     }
-    impl_->ready.clear();
+    impl_->ready.erase(impl_->ready.begin(), impl_->ready.begin() + count);
+    return published;
 }
 
 void MaterialXSceneRuntime::compileAndWait(Scene& scene, const std::string& sceneDirectory)

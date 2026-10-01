@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CameraLens.slang"
+#include "RayDifferential.slang"
 
 // Camera-ray construction shared by every ray-generation shader, so the
 // spectral reference and the RGB preview frame the scene identically.
@@ -56,8 +57,8 @@ CameraRay generateCameraRay(Frame frame, float2 uv, float2 lensSample,
     const float sensorHeight = max(camera.sensorHeightMm, 0.001);
     const float focalLength = max(camera.focalLengthMm, 0.001);
     const uint projection = camera.projection;
-    const float focusDistance = max(camera.focusDistanceCm, 0.1) * 0.01;
-    const float apertureRadius = max(camera.apertureDiameterMm, 0.0) * 0.0005;
+    const float focusDistance = max(camera.focusDistanceCm, 0.1);
+    const float apertureRadius = max(camera.apertureDiameterMm, 0.0) * 0.05;
     float2 normalizedSensor = (uv - 0.5) * 2.0;
     // Presentation flips the storage image back to NoorRay's historical
     // bottom-left GPU convention. Upper-left therefore already has positive
@@ -68,7 +69,7 @@ CameraRay generateCameraRay(Frame frame, float2 uv, float2 lensSample,
     float3 localDirection;
     if (projection == 1u) // Orthographic
     {
-        const float height = 10.0 * 21.0 / focalLength;
+        const float height = 1000.0 * 21.0 / focalLength;
         localOrigin = float3(normalizedSensor.x * height
             * sensorWidth / sensorHeight * 0.5,
             normalizedSensor.y * height * 0.5, 0.0);
@@ -135,7 +136,7 @@ CameraRay generateCameraRay(Frame frame, float2 uv, float2 lensSample,
                 result.weight = 3.141592654 * pupilRadius * pupilRadius
                     * cosineSquared * cosineSquared
                     / max(1.0e-6, pupilZ * pupilZ);
-                localOrigin = lensOrigin * 0.001;
+                localOrigin = lensOrigin * 0.1;
                 localDirection = normalize(float3(lensDirection.xy,
                     -lensDirection.z));
             }
@@ -155,4 +156,34 @@ CameraRay generateCameraRay(Frame frame, float2 uv, float2 lensSample,
     result.origin = cameraTransformPoint(camera, localOrigin);
     result.direction = cameraTransformVector(camera, localDirection);
     return result;
+}
+
+// The change from `ray` at film position `uv` to the ray one render pixel
+// along `step`, or from the ray one pixel back where the film ends there.
+void cameraPixelStep(Frame frame, CameraRay ray, float2 uv, float2 step, float2 lensSample,
+    float wavelengthNm, out float3 originDelta, out float3 directionDelta)
+{
+    float sign = 1.0;
+    CameraRay next = generateCameraRay(frame, uv + step, lensSample, wavelengthNm);
+    if (!next.valid)
+    {
+        sign = -1.0;
+        next = generateCameraRay(frame, uv - step, lensSample, wavelengthNm);
+    }
+    originDelta = next.valid ? sign * (next.origin - ray.origin) : float3(0.0);
+    directionDelta = next.valid ? sign * (next.direction - ray.direction) : float3(0.0);
+}
+
+// A camera ray's differential per render pixel: the rays through the
+// neighbouring pixels, which is exact for every projection and lens.
+VertexDifferential cameraRayDifferential(Frame frame, CameraRay ray, float2 uv,
+    float2 lensSample, float wavelengthNm)
+{
+    const float2 pixel = 1.0 / float2(max(frame.width, 1u), max(frame.height, 1u));
+    VertexDifferential differential = zeroVertexDifferential();
+    cameraPixelStep(frame, ray, uv, float2(pixel.x, 0.0), lensSample, wavelengthNm,
+        differential.positionDx, differential.directionDx);
+    cameraPixelStep(frame, ray, uv, float2(0.0, pixel.y), lensSample, wavelengthNm,
+        differential.positionDy, differential.directionDy);
+    return differential;
 }

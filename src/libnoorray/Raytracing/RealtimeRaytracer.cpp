@@ -3,8 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
+#include <thread>
 
 #include <glm/geometric.hpp>
 
@@ -14,31 +18,24 @@
 
 namespace
 {
-alignas(uint32_t) constexpr unsigned char raygenSpv[] = {
-    #embed "RealtimeRaytracer/RealtimeRaytracer.spv"
-};
-alignas(uint32_t) constexpr unsigned char missSpv[] = {
-    #embed "RealtimeRaytracer/RealtimeMiss.spv"
-};
-alignas(uint32_t) constexpr unsigned char shadowMissSpv[] = {
-    #embed "RealtimeRaytracer/RealtimeShadowMiss.spv"
-};
-alignas(uint32_t) constexpr unsigned char defaultMaterialHitSpv[] = {
-    #embed "RealtimeRaytracer/DefaultMaterialHit.spv"
-};
-alignas(uint32_t) constexpr unsigned char compositeSpv[] = {
-    #embed "RealtimeRaytracer/RealtimeComposite.spv"
-};
-alignas(uint32_t) constexpr unsigned char outputAovsSpv[] = {
-    #embed "RealtimeRaytracer/RealtimeOutputAovs.spv"
-};
+constexpr const char* lightingSpv = "RealtimeRaytracer/RealtimeRaytracer.spv";
+constexpr const char* layeredLightingSpv = "RealtimeRaytracer/RealtimeRaytracerLayered.spv";
+constexpr const char* gBufferSpv = "RealtimeRaytracer/RealtimeGBuffer.spv";
+constexpr const char* layeredGBufferSpv = "RealtimeRaytracer/RealtimeGBufferLayered.spv";
+constexpr const char* missSpv = "RealtimeRaytracer/RealtimeMiss.spv";
+constexpr const char* shadowMissSpv = "RealtimeRaytracer/RealtimeShadowMiss.spv";
+constexpr const char* defaultMaterialHitSpv = "RealtimeRaytracer/DefaultMaterialHit.spv";
+constexpr const char* compositeSpv = "RealtimeRaytracer/RealtimeComposite.spv";
+constexpr const char* layeredCompositeSpv = "RealtimeRaytracer/RealtimeCompositeLayered.spv";
+constexpr const char* outputAovsSpv = "RealtimeRaytracer/RealtimeOutputAovs.spv";
+constexpr const char* pickSpv = "RealtimeRaytracer/RealtimePick.spv";
 
 // Matches RealtimeComposite.slang and RealtimeOutputAovs.slang.
 constexpr uint32_t CompositeGroupSize = 8u;
-constexpr float NearPlane = 0.01f;
+constexpr float NearPlane = 1.0f;
 // Far plane of the orthographic projection: beyond anything the denoiser
 // treats as geometry.
-constexpr float OrthographicFarPlane = 4.0e5f;
+constexpr float OrthographicFarPlane = 4.0e7f;
 
 // Every realtime stage agrees on this; the surface payload is the largest.
 constexpr noorrhi::RayTracingInterface TraceInterface{sizeof(nr::graphics::RealtimeHitPayload)};
@@ -51,6 +48,30 @@ constexpr uint32_t DefaultMaterialGroup = 0u;
 constexpr uint32_t EmptyGroup = 1u;
 constexpr uint32_t FirstMaterialGroup = 2u;
 enum MaterialGroup : uint32_t { TransparentSurface, OpaqueSurface, Shadow, MaterialGroupCount };
+constexpr uint32_t NoMaterialGroups = ~0u;
+
+// Runs work on its own thread and sets `done` as it finishes, before `onDone`
+// wakes the host.
+template <class Work>
+auto runInBackground(std::atomic<bool>& done, const std::function<void()>& onDone, Work work)
+{
+    return std::async(std::launch::async, [&done, &onDone, work = std::move(work)]() mutable {
+        const auto finished = [&done, &onDone] {
+            done = true;
+            if (onDone)
+                onDone();
+        };
+        try {
+            auto result = work();
+            finished();
+            return result;
+        } catch (...) {
+            // get() rethrows it on the thread that links.
+            finished();
+            throw;
+        }
+    });
+}
 
 noorrhi::RayTracingLibrary buildPassLibrary(noorrhi::Device& device,
     std::vector<noorrhi::Shader> raygens)
@@ -130,28 +151,36 @@ std::array<float, 16> viewToClipMatrix(const nr::graphics::Camera& camera)
 }
 
 RealtimeRaytracer::RealtimeRaytracer(noorrhi::Device& device,
-    const uint32_t width, const uint32_t height, const bool exportColorMemory)
-    : Raytracer(device, width, height, exportColorMemory)
-    , imageRaygen(loadShader(device, raygenSpv))
-    , radianceCache(device)
+    const uint32_t width, const uint32_t height, const bool exportColorMemory,
+    std::function<void()> onMaterialShadersCompiled)
+    : Raytracer(device, width, height, exportColorMemory, FullOutputAovs::Omitted)
+    , lightingRaygen(loadShader(device, lightingSpv))
+    , layeredLightingRaygen(loadShader(device, layeredLightingSpv))
+    , materialSampler(device.sampler({}))
+    , gBufferRaygen(loadShader(device, gBufferSpv))
+    , layeredGBufferRaygen(loadShader(device, layeredGBufferSpv))
     , restir(device)
     , denoiser(device)
     , upscaler(device)
     , accumulator(device)
-    , targets(device, upscaler.renderExtent(outputExtent()))
     , compositePipeline(device.compute(loadShader(device, compositeSpv)))
+    , layeredCompositePipeline(device.compute(loadShader(device, layeredCompositeSpv)))
     , outputAovsPipeline(device.compute(loadShader(device, outputAovsSpv)))
+    , pickPipeline(device.compute(loadShader(device, pickSpv)))
+    , pickPosition(device.buffer<noorrhi::float4>(1))
     , args(std::make_unique<nr::graphics::RealtimeArgs>())
+    , layerArgs(std::make_unique<nr::graphics::RealtimeArgs>())
+    , nextMaterialGroup(FirstMaterialGroup)
+    , onMaterialShadersCompiled(std::move(onMaterialShadersCompiled))
 {
     const auto started = std::chrono::steady_clock::now();
-    std::vector<noorrhi::Shader> raygens{imageRaygen, radianceCache.raygen()};
+    std::vector<noorrhi::Shader> raygens{lightingRaygen, layeredLightingRaygen,
+        gBufferRaygen, layeredGBufferRaygen};
     std::ranges::copy(restir.raygens(), std::back_inserter(raygens));
     passLibrary = buildPassLibrary(device, std::move(raygens));
-    device.save_pipeline_cache();
     NR_LOG_INFO("Compiled the ray-tracing pass library in " << millisecondsSince(started) << " ms");
     linkTracePipeline();
-    upscaler.resize({imageWidth(), imageHeight()});
-    resizeRenderResolution();
+    ensureResources();
 }
 
 RealtimeRaytracer::~RealtimeRaytracer() = default;
@@ -166,6 +195,36 @@ Extent RealtimeRaytracer::renderExtent() const
     return upscaler.renderExtent(outputExtent());
 }
 
+Extent RealtimeRaytracer::lightingExtent() const
+{
+    return lightingExtent(renderExtent());
+}
+
+Extent RealtimeRaytracer::lightingExtent(const Extent render) const
+{
+    const uint32_t scale = lightingScale(lightingResolution);
+    return {divideRoundingUp(render.width, scale), divideRoundingUp(render.height, scale)};
+}
+
+RealtimeRaytracer::ResourceLayout RealtimeRaytracer::requiredLayout() const
+{
+    // Both extents grow with the output, so every rectangle the image
+    // allocation admits fits inside the ones derived from it.
+    const Extent output{imageWidth(), imageHeight()};
+    const Extent render = upscaler.renderExtent(output);
+    ResourceLayout layout;
+    layout.targets.render = render;
+    layout.targets.lighting = lightingExtent(render);
+    layout.targets.sharedGuides = lightingScale(lightingResolution) == 1u;
+    layout.targets.layers = transparentMaterials;
+    layout.targets.sphericalHarmonics = denoiserMode != DenoiserMode::Off;
+    layout.targets.upscaled = upscaler.mode() != UpscalerMode::Off;
+    layout.output = output;
+    layout.denoiser = denoiserMode;
+    layout.upscaler = upscaler.mode();
+    return layout;
+}
+
 uint32_t RealtimeRaytracer::traceWidth() const
 {
     return renderExtent().width;
@@ -176,11 +235,51 @@ uint32_t RealtimeRaytracer::traceHeight() const
     return renderExtent().height;
 }
 
+namespace
+{
+uint32_t outputToRenderCoordinate(const uint32_t outputPixel, const uint32_t outputSize,
+    const uint32_t renderSize, const float jitter)
+{
+    if (!outputSize || !renderSize) return 0u;
+    const float source = (static_cast<float>(outputPixel) + 0.5f)
+        * static_cast<float>(renderSize) / static_cast<float>(outputSize) - 0.5f - jitter;
+    return static_cast<uint32_t>(std::clamp(std::lround(source), 0l,
+        static_cast<long>(renderSize - 1u)));
+}
+}
+
+std::uint32_t RealtimeRaytracer::readCryptomatteAtOutput(const uint32_t x, const uint32_t y)
+{
+    // The image on screen is the latest frame's, whose rectangles `args` holds.
+    const Extent output{args->view.outputWidth, args->view.outputHeight};
+    const Extent render{args->frame.width, args->frame.height};
+    if (x >= output.width || y >= output.height || !render.width || !render.height) return ~0u;
+    const uint32_t sx = outputToRenderCoordinate(x, output.width, render.width, previousJitter[0]);
+    const uint32_t sy = outputToRenderCoordinate(y, output.height, render.height, previousJitter[1]);
+    std::uint32_t id = ~0u;
+    targets->cryptomatteImage().download_region(sx, sy, 1, 1,
+        std::as_writable_bytes(std::span(&id, 1)));
+    return id;
+}
+
+noorrhi::float4 RealtimeRaytracer::readPositionAtOutput(const uint32_t x, const uint32_t y)
+{
+    const Extent output{args->view.outputWidth, args->view.outputHeight};
+    const Extent render{args->frame.width, args->frame.height};
+    noorrhi::float4 position{};
+    if (x >= output.width || y >= output.height || !render.width || !render.height) return position;
+    const uint32_t sx = outputToRenderCoordinate(x, output.width, render.width, previousJitter[0]);
+    const uint32_t sy = outputToRenderCoordinate(y, output.height, render.height, previousJitter[1]);
+    const noorrhi::StagedArguments staged = renderDevice().stage(*args);
+    pickPipeline.launch({1, 1, 1},
+        nr::graphics::RealtimePickRoot{staged.address(), pickPosition.ptr().address, sx, sy});
+    pickPosition.download(std::span(&position, 1));
+    return position;
+}
+
 void RealtimeRaytracer::onImageAllocationChanged()
 {
-    // The base class has synchronized the device before reallocating.
-    upscaler.resize({imageWidth(), imageHeight()});
-    resizeRenderResolution();
+    ensureResources();
 }
 
 void RealtimeRaytracer::onLightsUploaded()
@@ -191,92 +290,244 @@ void RealtimeRaytracer::onLightsUploaded()
 
 void RealtimeRaytracer::onRenderSettingsApplied(const RenderSettings& settings)
 {
-    radianceCache.setMode(settings.radianceCacheMode);
-    restir.setMode(settings.realtimeLighting);
-    denoiser.setMode(settings.denoiserMode);
+    lightingResolution = settings.lightingResolution;
+    bufferVisualization = settings.bufferVisualization;
+    denoiserMode = settings.denoiserMode;
     upscaler.setMode(settings.upscalerMode);
 }
 
 void RealtimeRaytracer::onMaterialShadersChanged(const std::span<const MaterialHitShaders> shaders)
 {
-    // The list only grows, so the shaders past the last batch are exactly
-    // the new ones. Each gets its MaterialGroup hit groups, in that order.
-    const auto started = std::chrono::steady_clock::now();
-    noorrhi::RayTracingPipelineDesc desc;
-    for (const MaterialHitShaders& material : shaders.subspan(materialShaderCount)) {
-        desc.closest_hit.insert(desc.closest_hit.end(),
-            {material.closestHit, material.closestHit, noorrhi::Shader{}});
-        desc.any_hit.insert(desc.any_hit.end(),
-            {material.anyHit, noorrhi::Shader{}, material.shadowAnyHit});
+    materialShaders.assign(shaders.begin(), shaders.end());
+    compilePendingMaterialShaders();
+}
+
+void RealtimeRaytracer::compilePendingMaterialShaders()
+{
+    const std::size_t hardware = std::max<std::size_t>(std::thread::hardware_concurrency(), 1u);
+    std::size_t maxBatches = std::clamp<std::size_t>(hardware / 2u, 4u, 10u);
+    const noorrhi::DeviceInfo deviceInfo = renderDevice().info();
+    const std::uint32_t driverMajor = deviceInfo.driver_version >> 22u;
+    const bool nvidia615 = deviceInfo.vendor_id == 0x10deu && driverMajor == 615u;
+    // Keep the CPU-side MaterialX/Slang workers parallel, but limit NVIDIA's
+    // 615 driver branch to one material per Vulkan library creation. This is a
+    // workaround for crashes observed in that branch's pipeline compiler.
+    std::size_t materialsPerBatch = nvidia615 ? 1u : std::numeric_limits<std::size_t>::max();
+    if (const char* requested = std::getenv("NR_MATERIAL_LIBRARY_MATERIALS_PER_BATCH")) {
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(requested, &end, 10);
+        if (end != requested && value > 0)
+            materialsPerBatch = static_cast<std::size_t>(value);
     }
-    materialLibraries.push_back(renderDevice().ray_tracing_library(desc, TraceInterface));
-    NR_LOG_INFO("Compiled " << shaders.size() - materialShaderCount
-        << " material shader(s) in " << millisecondsSince(started) << " ms");
-    materialShaderCount = shaders.size();
-    renderDevice().save_pipeline_cache();
+    if (const char* requested = std::getenv("NR_MATERIAL_LIBRARY_BATCHES")) {
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(requested, &end, 10);
+        if (end != requested && value > 0)
+            maxBatches = static_cast<std::size_t>(value);
+    }
+    // Treat this as a hard safety cap on the known-problematic driver branch;
+    // the general tuning variables must not silently re-enable larger jobs.
+    if (nvidia615) {
+        maxBatches = 1;
+        materialsPerBatch = 1;
+    }
+    while (compilingMaterialLibraries.size() < maxBatches
+        && requestedMaterialShaderCount < materialShaders.size()) {
+        const std::size_t pending = materialShaders.size() - requestedMaterialShaderCount;
+        const std::size_t freeSlots = maxBatches - compilingMaterialLibraries.size();
+        const std::size_t count = std::min(materialsPerBatch,
+            std::max<std::size_t>((pending + freeSlots - 1u) / freeSlots, 1u));
+        const std::size_t begin = requestedMaterialShaderCount;
+        const std::size_t end = std::min(begin + count, materialShaders.size());
+
+        noorrhi::RayTracingPipelineDesc desc;
+        for (std::size_t i = begin; i < end; ++i) {
+            const MaterialHitShaders& material = materialShaders[i];
+            desc.closest_hit.insert(desc.closest_hit.end(),
+                {material.closestHit, material.closestHit, noorrhi::Shader{}});
+            desc.any_hit.insert(desc.any_hit.end(),
+                {material.anyHit, noorrhi::Shader{}, material.shadowAnyHit});
+        }
+        compilingMaterialLibraries.emplace_back();
+        MaterialLibraryBatch& batch = compilingMaterialLibraries.back();
+        batch.shaderCount = end - begin;
+        batch.library = runInBackground(batch.done, onMaterialShadersCompiled,
+            [this, desc = std::move(desc)]() mutable {
+                return renderDevice().ray_tracing_library(desc, TraceInterface);
+            });
+        requestedMaterialShaderCount = end;
+    }
+}
+
+void RealtimeRaytracer::addCompiledBatch(MaterialLibraryBatch& batch)
+{
+    const std::size_t first = compiledMaterialShaderCount;
+    try {
+        noorrhi::RayTracingLibrary library = batch.library.get();
+        if (library) {
+            materialLibraries.push_back(std::move(library));
+            for (std::size_t i = 0; i < batch.shaderCount; ++i) {
+                materialGroupBases.push_back(nextMaterialGroup);
+                nextMaterialGroup += MaterialGroupCount;
+            }
+        } else {
+            materialGroupBases.insert(materialGroupBases.end(), batch.shaderCount, NoMaterialGroups);
+        }
+    } catch (const std::exception& error) {
+        NR_LOG_WARN("Material shader batch rejected; using default material: " << error.what());
+        materialGroupBases.insert(materialGroupBases.end(), batch.shaderCount, NoMaterialGroups);
+    }
+    compiledMaterialShaderCount = first + batch.shaderCount;
+}
+
+void RealtimeRaytracer::startPipelineLink()
+{
+    requestedLibraryCount = materialLibraries.size();
+    const std::size_t shaderCount = compiledMaterialShaderCount;
+    std::vector<noorrhi::RayTracingLibrary> libraries{passLibrary};
+    libraries.insert(libraries.end(), materialLibraries.begin(), materialLibraries.end());
+    pipelineLink.emplace();
+    PipelineLink& link = *pipelineLink;
+    link.shaderCount = shaderCount;
+    link.pipeline = runInBackground(link.done, onMaterialShadersCompiled,
+        [this, libraries = std::move(libraries)]() mutable {
+            const auto started = std::chrono::steady_clock::now();
+            try {
+                noorrhi::RayTracingPipeline pipeline = renderDevice().ray_tracing(
+                    std::span<const noorrhi::RayTracingLibrary>(libraries), {});
+                NR_LOG_INFO("Linked " << libraries.size() << " ray-tracing libraries in "
+                    << millisecondsSince(started) << " ms");
+                return pipeline;
+            } catch (const std::exception& error) {
+                NR_LOG_WARN("The driver rejected linking the material shaders; they render "
+                    "with the default material: " << error.what());
+                return noorrhi::RayTracingPipeline{};
+            }
+        });
+}
+
+bool RealtimeRaytracer::adoptLinkedPipeline()
+{
+    if (!pipelineLink || !pipelineLink->done)
+        return false;
+    noorrhi::RayTracingPipeline pipeline = pipelineLink->pipeline.get();
+    const std::size_t shaderCount = pipelineLink->shaderCount;
+    pipelineLink.reset();
+    if (!pipeline)
+        return false;
+    linkedMaterialShaderCount = shaderCount;
+    assignHitGroups();
+    tracePipeline = renderDevice().ray_tracing(pipeline, hitGroups);
+    return true;
+}
+
+bool RealtimeRaytracer::linkCompiledMaterialShaders()
+{
+    while (!compilingMaterialLibraries.empty() && compilingMaterialLibraries.front().done) {
+        addCompiledBatch(compilingMaterialLibraries.front());
+        compilingMaterialLibraries.pop_front();
+    }
+    compilePendingMaterialShaders();
+    const bool adopted = adoptLinkedPipeline();
+    if (!pipelineLink && compilingMaterialLibraries.empty()
+        && materialLibraries.size() > requestedLibraryCount)
+        startPipelineLink();
+    return adopted;
+}
+
+void RealtimeRaytracer::waitForMaterialShaders()
+{
+    while (!compilingMaterialLibraries.empty() || pipelineLink) {
+        if (!compilingMaterialLibraries.empty())
+            compilingMaterialLibraries.front().library.wait();
+        else
+            pipelineLink->pipeline.wait();
+        linkCompiledMaterialShaders();
+    }
 }
 
 void RealtimeRaytracer::onHitRecordsChanged(const std::span<const HitRecord> records)
 {
-    hitGroups.clear();
-    for (const HitRecord& record : records) {
-        const uint32_t materialGroups = FirstMaterialGroup
-            + record.materialShaders * MaterialGroupCount;
-        const bool compiled = record.kind == HitRecord::Kind::Section
-            && record.materialShaders != ~0u;
-        if (record.rayType == nr::graphics::RealtimeRayTypeSurface)
-            hitGroups.push_back(!compiled ? (record.kind == HitRecord::Kind::Section
-                    ? DefaultMaterialGroup : EmptyGroup)
-                : materialGroups + (record.transparent ? TransparentSurface : OpaqueSurface));
-        else
-            hitGroups.push_back(compiled && record.transparent ? materialGroups + Shadow
-                : EmptyGroup);
-    }
+    hitRecords.assign(records.begin(), records.end());
+    assignHitGroups();
     const auto started = std::chrono::steady_clock::now();
     linkTracePipeline();
     NR_LOG_INFO("Linked the ray-tracing pipeline for " << records.size()
         << " hit records in " << millisecondsSince(started) << " ms");
 }
 
+void RealtimeRaytracer::assignHitGroups()
+{
+    hitGroups.clear();
+    transparentMaterials = false;
+    for (const HitRecord& record : hitRecords) {
+        const bool compiled = record.kind == HitRecord::Kind::Section
+            && record.materialShaders < linkedMaterialShaderCount
+            && record.materialShaders < materialGroupBases.size()
+            && materialGroupBases[record.materialShaders] != NoMaterialGroups;
+        const uint32_t materialGroups = compiled ? materialGroupBases[record.materialShaders] : 0u;
+        transparentMaterials |= compiled && record.transparent;
+        if (record.rayType == nr::graphics::RealtimeRayTypeSurface)
+            hitGroups.push_back(!compiled ? (record.kind == HitRecord::Kind::Section
+                    ? DefaultMaterialGroup : EmptyGroup)
+                : materialGroups + (record.transparent ? TransparentSurface : OpaqueSurface));
+        else
+            hitGroups.push_back(compiled && (record.transparent || record.shadowFiltered)
+                    ? materialGroups + Shadow
+                : EmptyGroup);
+    }
+}
+
 void RealtimeRaytracer::linkTracePipeline()
 {
-    std::vector<noorrhi::RayTracingLibrary> libraries{passLibrary};
-    libraries.insert(libraries.end(), materialLibraries.begin(), materialLibraries.end());
+    if (tracePipeline) {
+        tracePipeline = renderDevice().ray_tracing(tracePipeline, hitGroups);
+        return;
+    }
     tracePipeline = renderDevice().ray_tracing(
-        std::span<const noorrhi::RayTracingLibrary>(libraries), hitGroups);
+        std::span<const noorrhi::RayTracingLibrary>(&passLibrary, 1), hitGroups);
 }
 
-void RealtimeRaytracer::prepareFrameResources()
+bool RealtimeRaytracer::prepareFrameResources()
 {
-    ensureRenderResolution();
+    const bool replaced = Raytracer::prepareFrameResources();
+    ensureResources();
+    return replaced;
 }
 
-void RealtimeRaytracer::ensureRenderResolution()
+void RealtimeRaytracer::ensureResources()
 {
-    // The render resolution moves with the viewport and with the upscaler
-    // mode, and only a viewport change reallocates the base class's images.
-    if (targets.extent() == renderExtent())
+    // Viewport resizes inside the base class's image allocation only move
+    // the rectangles; the settings and that allocation decide the layout.
+    const ResourceLayout required = requiredLayout();
+    if (allocatedLayout == required)
         return;
     renderDevice().synchronize();
-    resizeRenderResolution();
-}
-
-void RealtimeRaytracer::resizeRenderResolution()
-{
-    const Extent render = renderExtent();
-    targets = RenderTargets(renderDevice(), render);
-    restir.resize(render);
-    denoiser.resize(render);
+    targets.reset();
+    targets.emplace(renderDevice(), required.targets);
+    restir.resize(required.targets.lighting, required.targets.layers);
+    denoiser.configure({required.targets.lighting, required.denoiser,
+        required.targets.sphericalHarmonics, required.targets.layers});
+    upscaler.resize(required.targets.render, required.output);
+    allocatedLayout = required;
+    hasHistory = false;
 }
 
 FrameContext RealtimeRaytracer::beginFrame()
 {
     FrameContext frame;
     frame.output = outputExtent();
-    frame.render = targets.extent();
-    const HistoryKey key{frame.render, frame.output, radianceCache.mode(), restir.mode(),
-        denoiser.mode(), upscaler.mode()};
-    frame.resetHistory = !hasHistory || key != historyKey;
+    frame.render = renderExtent();
+    frame.lighting = lightingExtent();
+    frame.lightingScale = lightingScale(lightingResolution);
+    // A viewport resize keeps history: every temporal stage reprojects from
+    // the previous frame's rectangle into this one's.
+    frame.resetHistory = !hasHistory;
+    frame.previousLighting = frame.resetHistory ? frame.lighting : previousLighting;
+    const auto now = std::chrono::steady_clock::now();
+    frame.frameTimeMilliseconds = previousFrameStart.time_since_epoch().count() == 0 ? 16.7f
+        : std::chrono::duration<float, std::milli>(now - previousFrameStart).count();
+    previousFrameStart = now;
 
     const nr::graphics::Camera& camera = data.camera;
     frame.worldToView = worldToViewMatrix(camera);
@@ -294,6 +545,8 @@ FrameContext RealtimeRaytracer::beginFrame()
         cameraToWorld[3], cameraToWorld[7], cameraToWorld[11]};
     const std::array<float, 3> cameraBefore =
         frame.resetHistory ? cameraPosition : previousCameraPosition;
+    const std::array<float, 3> cameraBeforeBefore =
+        frame.resetHistory ? cameraPosition : previousPreviousCameraPosition;
     const glm::vec3 forward = -glm::normalize(glm::vec3{
         cameraToWorld[2], cameraToWorld[6], cameraToWorld[10]});
 
@@ -306,25 +559,38 @@ FrameContext RealtimeRaytracer::beginFrame()
     std::copy(previousWorldToClip.begin(), previousWorldToClip.end(), view.previousWorldToClip);
     view.cameraPosition = {cameraPosition[0], cameraPosition[1], cameraPosition[2]};
     view.previousCameraPosition = {cameraBefore[0], cameraBefore[1], cameraBefore[2]};
+    view.previousPreviousCameraPosition = {cameraBeforeBefore[0],
+        cameraBeforeBefore[1], cameraBeforeBefore[2]};
     view.cameraForward = forward;
     view.nearPlane = NearPlane;
     view.frameIndex = frameIndex++;
     view.outputWidth = frame.output.width;
     view.outputHeight = frame.output.height;
     view.jitter = {frame.jitter[0], frame.jitter[1]};
+    view.lightingScale = frame.lightingScale;
+    view.lightingWidth = frame.lighting.width;
+    view.lightingHeight = frame.lighting.height;
+    view.surfaceStride = targets->layout().lighting.width;
+    view.previousLightingWidth = frame.previousLighting.width;
+    view.previousLightingHeight = frame.previousLighting.height;
+    // Picking reads the render-resolution cryptomatte directly; the viewport
+    // composite reads the full-output one.
+    view.outputCryptomatte = selectionAovRequired
+        || bufferVisualization == BufferVisualization::Cryptomatte ? 1u : 0u;
 
-    historyKey = key;
     hasHistory = true;
+    previousLighting = frame.lighting;
     previousWorldToView = frame.worldToView;
     previousViewToClip = frame.viewToClip;
     previousJitter = frame.jitter;
+    previousPreviousCameraPosition = cameraBefore;
     previousCameraPosition = cameraPosition;
     return frame;
 }
 
 void RealtimeRaytracer::renderImpl()
 {
-    ensureRenderResolution();
+    ensureResources();
     const FrameContext frame = beginFrame();
     nr::graphics::RealtimeArgs& frameArgs = *args;
     // The realtime passes see the render resolution; everything outside this
@@ -332,10 +598,13 @@ void RealtimeRaytracer::renderImpl()
     frameArgs.frame = data;
     frameArgs.frame.width = frame.render.width;
     frameArgs.frame.height = frame.render.height;
-    frameArgs.targets = targets.handles();
-    frameArgs.targets.color = upscaler.compositeTarget(targets, outputTexture());
-    frameArgs.radianceCache = radianceCache.args(frame);
-    frameArgs.denoiser = denoiser.args(targets);
+    frameArgs.frame.materialSampler = materialSampler.handle().value;
+    frameArgs.frame.textureLodBias = upscaler.textureLodBias(frame.render, frame.output);
+    frameArgs.frame.nearPlane = NearPlane;
+    frameArgs.frame.orthographicFarPlane = OrthographicFarPlane;
+    frameArgs.targets = targets->handles();
+    frameArgs.targets.color = upscaler.compositeTarget(*targets, outputTexture());
+    frameArgs.denoiser = denoiser.args(*targets);
     restir.prepare(frame, frameArgs);
 
     noorrhi::Device& device = renderDevice();
@@ -350,18 +619,39 @@ void RealtimeRaytracer::renderImpl()
     // and hand each launch only their address.
     const noorrhi::StagedArguments staged = device.stage(frameArgs);
     const nr::graphics::RealtimeRoot root{staged.address()};
-
     restir.presample(frameArgs, root);
-    radianceCache.record(frameArgs, root, tracePipeline);
-    tracePipeline.trace(imageRaygen, {frame.render.width, frame.render.height, 1}, root);
+    if (frame.lightingScale != 1u)
+        tracePipeline.trace(transparentMaterials ? layeredGBufferRaygen : gBufferRaygen,
+            {frame.render.width, frame.render.height, 1}, root);
+    tracePipeline.trace(transparentMaterials ? layeredLightingRaygen : lightingRaygen,
+        {frame.lighting.width, frame.lighting.height, 1}, root);
+
+    if (transparentMaterials)
+    {
+        nr::graphics::RealtimeArgs& layerFrameArgs = *layerArgs;
+        layerFrameArgs = frameArgs;
+        layerFrameArgs.lighting = restir.layerLighting(frameArgs.lighting);
+        layerFrameArgs.targets.diffuse = frameArgs.targets.layerDiffuse;
+        layerFrameArgs.targets.specular = frameArgs.targets.layerSpecular;
+        layerFrameArgs.denoiser.sphericalHarmonics = 0u;
+        const noorrhi::StagedArguments layerStaged = device.stage(layerFrameArgs);
+        const std::array<nr::graphics::RealtimeRoot, 2> surfaceSets{root,
+            nr::graphics::RealtimeRoot{layerStaged.address()}};
+        restir.resample(frameArgs, surfaceSets, frame.lighting, tracePipeline);
+    }
+    else
+    {
+        const std::array<nr::graphics::RealtimeRoot, 1> surfaceSets{root};
+        restir.resample(frameArgs, surfaceSets, frame.lighting, tracePipeline);
+    }
     device.barrier(noorrhi::Stage::RayTracing, noorrhi::Stage::Compute);
-    restir.resample(frameArgs, root, frame.render, tracePipeline);
-    denoiser.record(frame, targets);
-    device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
-    compositePipeline.launch(renderGroups, root);
-    device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
-    upscaler.record(frame, targets, outputImageHandle(), {imageWidth(), imageHeight()});
+    denoiser.record(frame, *targets);
+    (transparentMaterials ? layeredCompositePipeline : compositePipeline).launch(renderGroups, root);
+    upscaler.record(frame, *targets, outputImageHandle(), {imageWidth(), imageHeight()});
+    // Resolve output AOVs and coverage after upscaling. The alpha resolve reads
+    // the render-resolution composite and restores coverage in the final image.
     device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
     outputAovsPipeline.launch(outputGroups, root);
+    device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
     accumulator.record(frameArgs, root);
 }

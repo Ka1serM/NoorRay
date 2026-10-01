@@ -6,10 +6,15 @@
 #include <string>
 #include <string_view>
 
+#include <vector>
+
+#include <cmrc/cmrc.hpp>
 #include <MaterialXCore/Document.h>
 #include <MaterialXFormat/XmlIo.h>
 
 #include "Materials/MaterialX/MaterialXLibraryFiles.h"
+
+CMRC_DECLARE(noorray_materialx);
 
 
 namespace nr::materialx
@@ -47,22 +52,39 @@ MaterialX::NodePtr addDisneyPrincipled(const MaterialX::DocumentPtr& document,
 
 std::string_view embeddedLibraryFile(const std::string_view path)
 {
-    const auto file = std::ranges::find(embeddedLibraryFiles, path, &EmbeddedLibraryFile::path);
-    if (file == embeddedLibraryFiles.end())
-        throw std::runtime_error("MaterialX library file is not embedded: " + std::string(path));
-    return {reinterpret_cast<const char*>(file->content.data()), file->content.size()};
+    const cmrc::embedded_filesystem files = cmrc::noorray_materialx::get_filesystem();
+    const std::string name(path);
+    if (!files.is_file(name))
+        throw std::runtime_error("MaterialX library file is not embedded: " + name);
+    const cmrc::file file = files.open(name);
+    return {file.begin(), file.size()};
 }
+
+namespace
+{
+void collectDocuments(const cmrc::embedded_filesystem& files, const std::string& directory,
+    std::vector<std::string>& documents)
+{
+    for (const cmrc::directory_entry& entry : files.iterate_directory(directory)) {
+        const std::string path = directory.empty() ? entry.filename() : directory + "/" + entry.filename();
+        if (entry.is_directory())
+            collectDocuments(files, path, documents);
+        else if (path.ends_with(".mtlx"))
+            documents.push_back(path);
+    }
+}
+} // namespace
 
 MaterialX::DocumentPtr loadStandardLibraries()
 {
+    std::vector<std::string> documents;
+    collectDocuments(cmrc::noorray_materialx::get_filesystem(), "", documents);
     MaterialX::DocumentPtr libraries = MaterialX::createDocument();
-    for (const EmbeddedLibraryFile& file : embeddedLibraryFiles) {
-        if (!file.path.ends_with(".mtlx"))
-            continue;
+    for (const std::string& path : documents) {
         MaterialX::DocumentPtr library = MaterialX::createDocument();
-        MaterialX::readFromXmlString(library, std::string(embeddedLibraryFile(file.path)));
+        MaterialX::readFromXmlString(library, std::string(embeddedLibraryFile(path)));
         // Implementations name their source files relative to this URI.
-        library->setSourceUri(std::string(file.path));
+        library->setSourceUri(path);
         libraries->importLibrary(library);
     }
     addNoorRayExtensions(libraries);

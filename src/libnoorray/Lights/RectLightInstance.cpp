@@ -1,8 +1,5 @@
 #include "Lights/RectLightInstance.h"
 
-#include <glm/geometric.hpp>
-#include <glm/gtc/quaternion.hpp>
-
 RectLightInstance::RectLightInstance(Scene& scene, const std::string& name,
                                      const Transform& transform)
     : LightInstance(scene, name, transform, TypeRect)
@@ -13,11 +10,8 @@ RectLightInstance::RectLightInstance(Scene& scene, const std::string& name,
 void RectLightInstance::updateTransformData(const Transform& world)
 {
     data.position = world.getPosition();
-    const glm::quat rotation = world.getRotation();
-    data.direction = glm::normalize(
-        rotation * glm::vec3(0.0f, -1.0f, 0.0f));
-    data.tangent = glm::normalize(
-        rotation * glm::vec3(1.0f, 0.0f, 0.0f));
+    data.direction = worldDirection(world, glm::vec3(1.0f, 0.0f, 0.0f));
+    data.tangent = worldDirection(world, glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
 void RectLightInstance::setColor(const glm::vec3& color)
@@ -36,6 +30,13 @@ void RectLightInstance::setRectSize(const float width, const float height)
 {
     data.width = width;
     data.height = height;
+    updateSceneRecord();
+}
+
+void RectLightInstance::setBarnDoor(const float angleDegrees, const float length)
+{
+    data.barnDoorAngle = angleDegrees;
+    data.barnDoorLength = length;
     updateSceneRecord();
 }
 

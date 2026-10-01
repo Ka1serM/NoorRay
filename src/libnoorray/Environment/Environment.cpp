@@ -18,6 +18,8 @@ Environment::Environment(Scene* owner) : owner_(owner)
     // The record is value-initialised, so any default that is not zero has to
     // be established here rather than in a member initialiser.
     data.color = glm::vec3(1.0f);
+    data.castShadows = 1u;
+    data.indirectLightingIntensity = 1.0f;
     setEquirectangularMapping();
     setRotation(rotation);
     setLightingExposure(lightingExposure);

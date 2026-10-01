@@ -103,8 +103,10 @@ void CameraInstance::rebuildCamera()
     const quat  rot    = getRotation();
     const vec3  dir    = normalize(rot * LocalForward);
     const vec3  up     = normalize(rot * LocalUp);
-    const vec3  right  = normalize(cross(dir, up));
+    const vec3  right  = normalize(rot * LocalRight);
 
+    // Camera space stays x right, y up, looking along -z; in the left-handed world
+    // that makes cameraToWorld a mirroring matrix rather than a rotation.
     const mat4 cameraToWorld = mat4(
         vec4(right,         0.f),
         vec4(up,            0.f),
@@ -161,9 +163,16 @@ const char* CameraInstance::getProjectionName() const
 
 mat4 CameraInstance::getViewMatrix() const
 {
-    const vec3 dir = normalize(getRotation() * LocalForward);
-    const vec3 up  = normalize(getRotation() * LocalUp);
-    return lookAt(getPosition(), getPosition() + dir, up);
+    // lookAt() derives right-handed axes; the camera's own are the left-handed world's.
+    const quat rot = getRotation();
+    const vec3 right = normalize(rot * LocalRight);
+    const vec3 up = normalize(rot * LocalUp);
+    const vec3 back = -normalize(rot * LocalForward);
+    const vec3 position = getPosition();
+    return mat4(vec4(right.x, up.x, back.x, 0.f),
+                vec4(right.y, up.y, back.y, 0.f),
+                vec4(right.z, up.z, back.z, 0.f),
+                vec4(-dot(right, position), -dot(up, position), -dot(back, position), 1.f));
 }
 
 mat4 CameraInstance::getProjectionMatrix() const
@@ -172,7 +181,7 @@ mat4 CameraInstance::getProjectionMatrix() const
     const float aspect = sensor.filmWidth() / sensor.filmHeight();
     const float focalLengthMm = camera->getFocalLengthMm();
     const float fovY = 2.f * std::atan(sensor.filmHeight() / (2.f * focalLengthMm));
-    return perspective(fovY, aspect, 0.01f, 10000.f);
+    return perspective(fovY, aspect, 1.0f, 1000000.f);
 }
 
 // ── arcball ──────────────────────────────────────────────────────────────────
@@ -192,7 +201,7 @@ void CameraInstance::update(const float dx, const float dy, const InputState& in
     if (arcballMode) {
         vec3 position    = getPosition();
         quat orientation = getRotation();
-        float moveSpeed  = input.deltaTime * 5.f;
+        float moveSpeed  = input.deltaTime * 500.f;
         if (input.accelerate) moveSpeed *= 10.f;
 
         const vec3 dirToCamera = normalize(position - arcballPivot);
@@ -208,21 +217,21 @@ void CameraInstance::update(const float dx, const float dy, const InputState& in
         setRotation(normalize(yawQuat * pitchQuat * orientation));
     } else {
         constexpr float sensitivity = 0.1f;
-        const float yaw   = radians(-dx * sensitivity);
-        const float pitch = radians(-dy * sensitivity);
+        const float yaw   = radians(dx * sensitivity);
+        const float pitch = radians(dy * sensitivity);
         quat rot = getRotation();
         const quat yawQuat   = angleAxis(yaw, WorldUp);
         const quat pitchQuat = angleAxis(pitch, rot * LocalRight);
         const quat newRot    = normalize(yawQuat * pitchQuat * rot);
         setRotation(newRot);
 
-        float speed = input.deltaTime * 5.f;
+        float speed = input.deltaTime * 500.f;
         if (input.accelerate) speed *= 10.f;
 
         vec3 position   = getPosition();
         const vec3 fwd  = normalize(newRot * LocalForward);
         const vec3 up   = normalize(newRot * LocalUp);
-        const vec3 rgt  = normalize(cross(fwd, up));
+        const vec3 rgt  = normalize(newRot * LocalRight);
 
         if (input.forward) position += fwd * speed;
         if (input.backward) position -= fwd * speed;

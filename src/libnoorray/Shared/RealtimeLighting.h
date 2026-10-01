@@ -6,17 +6,12 @@
 // host and the Slang passes. RTXDI's parameter records are plain 32-bit
 // fields in both languages, so they are embedded as they are.
 #include "Rtxdi/DI/ReSTIRDIParameters.h"
-#include "Rtxdi/GI/ReSTIRGIParameters.h"
+#include "Rtxdi/PT/ReSTIRPTParameters.h"
 #include "Rtxdi/ReGIR/ReGIRParameters.h"
 
 #ifdef __cplusplus
-#include <cstddef>
 namespace nr::graphics {
 #endif
-
-// RenderSettings::realtimeLighting, as the shaders see it.
-static const uint RealtimeLightingReSTIRDI = 0u;
-static const uint RealtimeLightingReSTIRGI = 1u;
 
 // One primary surface of the realtime G-buffer, as the ReSTIR passes
 // reconstruct it. Directions are RTXDI octahedral snorm2x16 words. A zero
@@ -29,16 +24,12 @@ struct RealtimeSurface
     uint normal;
     uint geometricNormal;
     uint view;
-    float roughness;
-    float3 diffuse;
-    // Probability the BSDF sampler picks its diffuse lobe.
-    float diffuseProbability;
-    float3 specularF0;
-    // The camera ray's weight, which the primary pass already applied to the
-    // radiance it left for the shading passes.
-    float cameraWeight;
-    float3 specularF90;
-    float padding;
+    // The material's closure, packed as in RealtimeHitPayload.
+    uint closure[5];
+    // The surface's ray differential, packed as in RealtimeHitPayload.
+    uint differential[9];
+    // The Unreal lighting channels of the surface's instance.
+    uint lightingChannels;
 };
 
 // Vose alias table over the local lights, weighted by power, from which the
@@ -49,20 +40,23 @@ struct RealtimeLightAlias
     uint alias;
     // Selection pdf of this entry's own light.
     float pdf;
-    uint padding;
 };
 
 struct RealtimeLighting
 {
     // RTXDI buffers. Reservoirs and the G-buffer use RTXDI's block-linear
     // reservoir addressing; the G-buffer is ping-ponged so the temporal passes
-    // see the previous frame's surfaces.
+    // see the previous frame's surfaces. The resampling passes run once per
+    // surface set, each with its own surfaces and reservoirs here.
     GpuPtr(uint2) risBuffer;
     GpuPtr(RTXDI_PackedDIReservoir) diReservoirs;
-    GpuPtr(RTXDI_PackedGIReservoir) giReservoirs;
+    GpuPtr(RTXDI_PackedPTReservoir) ptReservoirs;
     GpuPtr(float2) neighborOffsets;
     GpuPtr(RealtimeSurface) surfaces;
     GpuPtr(RealtimeSurface) previousSurfaces;
+    // This frame's surfaces of the translucent layer set, which the lighting
+    // pass records alongside `surfaces`.
+    GpuPtr(RealtimeSurface) layerSurfaces;
     GpuPtr(RealtimeLightAlias) localLightAlias;
 
     RTXDI_LightBufferParameters lightBufferParams;
@@ -70,25 +64,19 @@ struct RealtimeLighting
     RTXDI_RISBufferSegmentParameters environmentLightRISBufferSegmentParams;
     RTXDI_RuntimeParameters runtimeParams;
     RTXDI_Parameters restirDI;
-    RTXDI_GIParameters restirGI;
+    RTXDI_PTParameters restirPT;
     ReGIR_Parameters regir;
-    // World-space resampling for path vertices beyond the G-buffer: the SHaRC
-    // update paths and the indirect bounces.
+    // World-space resampling for surfaces beyond the G-buffer: ReSTIR PT's
+    // path vertices.
     RTXDI_DIInitialSamplingParameters secondaryInitialSamplingParams;
 
-    // Nonzero once RTXDI owns analytic-light sampling. The environment is
-    // always sampled separately.
-    uint enabled;
-    uint mode;
     // Zero when the previous G-buffer does not describe the previous frame
     // (first frame, resize), which disables temporal reuse.
     uint previousSurfacesValid;
     uint reservoirBlockRowPitch;
+    uint padding;
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(RealtimeSurface) == 80);
-static_assert(sizeof(RTXDI_PackedGIReservoir) == 32);
-static_assert(sizeof(RTXDI_PackedDIReservoir) == 24);
 } // namespace nr::graphics
 #endif

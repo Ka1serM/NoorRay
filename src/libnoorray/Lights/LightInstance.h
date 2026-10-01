@@ -43,6 +43,9 @@ public:
     virtual void setIntensity(float intensity) = 0;
     virtual float getSoftRadius() const = 0;
     virtual void setSoftRadius(float radius) = 0;
+    // Unreal ELightUnits value (Shared/Light.h).
+    virtual void setUnits(uint32_t units) = 0;
+    virtual void setControls(const LightControls& controls) = 0;
     void setPhotometry(const glm::vec3& color, float intensity);
 
     // Synchronize the typed record with the scene's typed light vector. GPU
@@ -53,6 +56,12 @@ public:
 protected:
     int lightType;
     uint32_t lightIndex{~0u};
+    // How much the world transform scales lengths. The records hold authored
+    // lengths; the scene's copies hold them times this.
+    float worldScale{1.0f};
+
+    // A local direction in world space, following mirroring parents too.
+    static glm::vec3 worldDirection(const Transform& world, glm::vec3 local);
 
     virtual void updateTransformData(const Transform& world) = 0;
     void updateSceneRecord();

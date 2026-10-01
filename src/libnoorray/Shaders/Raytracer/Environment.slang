@@ -93,6 +93,36 @@ float2 environmentUv(Environment environment, float3 direction)
         acos(clamp(local.y, -1.0, 1.0)) / EnvironmentPi);
 }
 
+// Inverse of environmentUv().
+float3 environmentDirection(Environment environment, float2 uv)
+{
+    float3 local;
+    if (environment.mapping == EnvironmentMappingEqualArea)
+    {
+        local = equalAreaSquareToSphere(uv);
+        local = float3(environment.rotationCos * local.x + environment.rotationSin * local.y,
+            -environment.rotationSin * local.x + environment.rotationCos * local.y, local.z);
+    }
+    else
+    {
+        const float phi = 2.0 * EnvironmentPi * (uv.x - 0.5);
+        const float theta = EnvironmentPi * uv.y;
+        const float3 rotated = float3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+        local = float3(environment.rotationCos * rotated.x + environment.rotationSin * rotated.z,
+            rotated.y, -environment.rotationSin * rotated.x + environment.rotationCos * rotated.z);
+    }
+    return normalize(mul(transpose(environmentRotation(environment)), local));
+}
+
+// Density of environmentUv() coordinates per unit solid angle at `uv`.
+float environmentUvPerSolidAngle(Environment environment, float2 uv)
+{
+    if (environment.mapping == EnvironmentMappingEqualArea)
+        return 1.0 / (4.0 * EnvironmentPi);
+    return 1.0 / (2.0 * EnvironmentPi * EnvironmentPi
+        * max(sin(EnvironmentPi * uv.y), 1.0e-6));
+}
+
 float4 environmentTexel(uint handle, float2 uv)
 {
     Texture2D<float4> image = ResourceDescriptorHeap[handle];
@@ -107,15 +137,24 @@ float4 environmentTexel(uint handle, float2 uv)
     return image.Load(int3(pixel, 0));
 }
 
+// The environment's up coordinate of `direction`.
+float environmentHeight(Environment environment, float3 direction)
+{
+    const float3 local = mul(environmentRotation(environment), direction);
+    return environment.mapping == EnvironmentMappingEqualArea ? local.z : local.y;
+}
+
 float3 environmentRadianceRgb(Environment environment, float3 direction,
     bool cameraRay)
 {
-    float3 rgb = environment.color;
+    float3 texel = float3(1.0);
     if (environment.texture != EnvironmentNoTexture)
-        rgb *= environmentTexel(environment.texture,
+        texel = environmentTexel(environment.texture,
             environmentUv(environment, direction)).rgb;
-    return rgb * (cameraRay ? environment.visibleExposureScale
-                            : environment.lightingExposureScale);
+    if (environment.lowerHemisphere.a > 0.0 && environmentHeight(environment, direction) < 0.0)
+        texel = lerp(texel, environment.lowerHemisphere.rgb, environment.lowerHemisphere.a);
+    return environment.color * texel * (cameraRay ? environment.visibleExposureScale
+                                                  : environment.lightingExposureScale);
 }
 
 // Solid-angle PDF of environmentSampleDirection() returning `direction`.

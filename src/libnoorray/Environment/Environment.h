@@ -50,7 +50,27 @@ public:
     void setVisibleExposure(float value)
     {
         visibleExposure = value;
-        data.visibleExposureScale = lightingExposure * std::pow(2.0f, visibleExposure);
+        updateVisibleExposureScale();
+        markChanged();
+    }
+    // Camera rays that escape see the environment; Unreal's path tracer shows
+    // a sky light only as the light it casts.
+    bool isVisibleToCamera() const { return visibleToCamera; }
+    void setVisibleToCamera(bool value)
+    {
+        visibleToCamera = value;
+        updateVisibleExposureScale();
+        markChanged();
+    }
+    void setLowerHemisphere(const glm::vec3& color, float blend)
+    {
+        data.lowerHemisphere = float4(color, blend);
+        markChanged();
+    }
+    void setLightControls(bool castShadows, float indirectLightingIntensity)
+    {
+        data.castShadows = castShadows ? 1u : 0u;
+        data.indirectLightingIntensity = indirectLightingIntensity;
         markChanged();
     }
     float getLightingExposure() const;
@@ -58,7 +78,7 @@ public:
     {
         lightingExposure = value;
         data.lightingExposureScale = lightingExposure;
-        data.visibleExposureScale = lightingExposure * std::pow(2.0f, visibleExposure);
+        updateVisibleExposureScale();
         const float luminance = std::max(0.2126f * data.color.r
             + 0.7152f * data.color.g + 0.0722f * data.color.b, 0.0f);
         data.importanceWeight = 4.0f * 3.14159265f * luminance
@@ -105,10 +125,16 @@ public:
 private:
     Scene* owner_{};
     void markChanged();
+    void updateVisibleExposureScale()
+    {
+        data.visibleExposureScale = visibleToCamera
+            ? lightingExposure * std::pow(2.0f, visibleExposure) : 0.0f;
+    }
     // Authored inputs. `data` stores their shader-ready derived values.
     float rotation{};
     float visibleExposure{};
     float lightingExposure{1.0f};
+    bool visibleToCamera{true};
     int textureIndex{-1};
     int cdfDirty{1};
 

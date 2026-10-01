@@ -495,6 +495,9 @@ struct RAB_LightSample
     // Already scaled by the light's indirect lighting intensity for the
     // surface's path.
     float3 radiance;
+    // Converts the unscaled BSDF weighting in RTXDI's stock hybrid-shift
+    // callback to this light's diffuse/specular weighting for this surface.
+    float3 hybridShiftReflectanceRatio;
     // Solid-angle density of the point given the light, or 1 for a delta
     // light whose radiance then already carries the inverse square falloff.
     float solidAnglePdf;
@@ -510,6 +513,7 @@ RAB_LightSample RAB_EmptyLightSample()
     RAB_LightSample sample;
     sample.position = float3(0.0);
     sample.radiance = float3(0.0);
+    sample.hybridShiftReflectanceRatio = float3(0.0);
     sample.solidAnglePdf = 0.0;
     sample.kind = RealtimeLightNone;
     sample.diffuseScale = 1.0;
@@ -526,7 +530,10 @@ bool RAB_IsAnalyticLightSample(RAB_LightSample lightSample)
 }
 float RAB_LightSampleSolidAnglePdf(RAB_LightSample lightSample) { return lightSample.solidAnglePdf; }
 float3 RAB_LightSamplePosition(RAB_LightSample lightSample) { return lightSample.position; }
-float3 RAB_LightSampleRadiance(RAB_LightSample lightSample) { return lightSample.radiance; }
+float3 RAB_LightSampleRadiance(RAB_LightSample lightSample)
+{
+    return lightSample.radiance * lightSample.hybridShiftReflectanceRatio;
+}
 
 void RAB_GetLightDirDistance(RAB_Surface surface, RAB_LightSample lightSample,
     out float3 o_lightDir, out float o_lightDistance)
@@ -818,7 +825,21 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
     if (!realtimeIsFinite(sample.radiance) || !(sample.solidAnglePdf > 0.0))
         return RAB_EmptyLightSample();
     sample.kind = lightInfo.kind;
-    return applyLightControls(sample, controls, surface);
+    sample = applyLightControls(sample, controls, surface);
+
+    // RTXDI's stock hybrid-shift callback evaluates the unscaled BSDF and
+    // multiplies it by RAB_LightSampleRadiance(). Fold NoorRay's per-light
+    // lobe controls into that radiance so the callback matches the scaled
+    // reflectance used by direct lighting, without changing RTXDI itself.
+    float3 direction;
+    float distance;
+    RAB_GetLightDirDistance(surface, sample, direction, distance);
+    const float3 unscaledReflectance = realtimeSurfaceReflectance(surface, direction);
+    const float3 scaledReflectance = realtimeScaledReflectance(surface, direction,
+        sample.diffuseScale, sample.specularScale);
+    sample.hybridShiftReflectanceRatio = select(unscaledReflectance != 0.0,
+        scaledReflectance / max(abs(unscaledReflectance), 1.0e-20), float3(0.0));
+    return sample;
 }
 
 // Final visibility of a light sample: every fractional layer is evaluated,

@@ -22,7 +22,7 @@
 namespace
 {
 std::mutex resourceCreateMutex;
-std::unordered_map<FfxInterface*, FfxCreateResourceFunc> resourceCreateCallbacks;
+std::unordered_map<void*, FfxCreateResourceFunc> resourceCreateCallbacks;
 
 void check(const FfxErrorCode result, const char* what)
 {
@@ -37,14 +37,20 @@ FfxErrorCode createResourceWithRgba8LumaHistory(
     const FfxUInt32 effectContextId,
     FfxResourceInternal* outResource)
 {
+    if (!backendInterface || !description)
+        return FFX_ERROR_INVALID_POINTER;
+
     FfxCreateResourceFunc createResource = nullptr;
     {
         const std::lock_guard lock(resourceCreateMutex);
-        const auto callback = resourceCreateCallbacks.find(backendInterface);
+        // FidelityFX copies FfxInterface into its context, so the callback
+        // receives a different interface address from the one registered by
+        // Upscaler. The backend scratch buffer remains stable across that copy.
+        const auto callback = resourceCreateCallbacks.find(backendInterface->scratchBuffer);
         if (callback != resourceCreateCallbacks.end())
             createResource = callback->second;
     }
-    if (!createResource || !description)
+    if (!createResource)
         return FFX_ERROR_INVALID_POINTER;
 
     const std::wstring_view name = description->name ? description->name : L"";
@@ -147,7 +153,7 @@ Upscaler::Upscaler(noorrhi::Device& device)
         "ffxGetInterfaceVK");
     {
         const std::lock_guard lock(resourceCreateMutex);
-        resourceCreateCallbacks.emplace(&state.backend, state.backend.fpCreateResource);
+        resourceCreateCallbacks.emplace(state.backend.scratchBuffer, state.backend.fpCreateResource);
     }
     state.backend.fpCreateResource = createResourceWithRgba8LumaHistory;
 }
@@ -161,7 +167,7 @@ Upscaler::~Upscaler()
     if (state_->sharedContextCreated)
         state_->backend.fpDestroyBackendContext(&state_->backend, state_->sharedEffectContext);
     const std::lock_guard lock(resourceCreateMutex);
-    resourceCreateCallbacks.erase(&state_->backend);
+    resourceCreateCallbacks.erase(state_->backend.scratchBuffer);
 }
 
 void Upscaler::resize(const Extent maxRender, const Extent maxOutput)

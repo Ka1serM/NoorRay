@@ -314,7 +314,7 @@ void main()
     viewZTarget[pixel] = float4(g.viewZ, 0.0, 0.0, 0.0);
     motionTarget[pixel] = float4(g.motion, 0.0, 0.0);
     // At full lighting resolution there is no separate G-buffer pass.
-    if (args.view.lightingScale == 1u)
+    if (args.view.lightingScale == 1.0f)
     {
 #if REALTIME_LAYERS
         applyTranslucentLayers(g, visibility, cameraRay.weight);

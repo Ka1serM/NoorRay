@@ -20,7 +20,8 @@ constexpr const char* gaussianHitSpv = "Raytracer/GaussianHit.spv";
 
 SpectralRaytracer::SpectralRaytracer(noorrhi::Device& device,
     const uint32_t width, const uint32_t height, const bool exportColorMemory)
-    : Raytracer(device, width, height, exportColorMemory, FullOutputAovs::Written)
+    : common(device, width, height, exportColorMemory,
+        RaytracerResources::FullOutputAovs::Written, true)
 {
     raygen = loadShader(device, raygenSpv);
     const noorrhi::Shader miss = loadShader(device, missSpv);
@@ -41,11 +42,21 @@ SpectralRaytracer::SpectralRaytracer(noorrhi::Device& device,
     const std::vector<std::uint16_t> lut = nr::shading::packEnergyLutTables();
     energyLuts = device.buffer<std::uint16_t>(lut.size());
     energyLuts.upload(std::span<const std::uint16_t>(lut));
-    data.energyLuts = energyLuts.ptr().address;
+    common.data.energyLuts = energyLuts.ptr().address;
     const std::vector<float> tables = nr::shading::packSpectralTables();
     spectralTables = device.buffer<float>(tables.size());
     spectralTables.upload(std::span<const float>(tables));
-    data.spectralTables = spectralTables.ptr().address;
+    common.data.spectralTables = spectralTables.ptr().address;
+    RaytracerResources::Callbacks callbacks;
+    callbacks.hitRecordsChanged = [this](const std::span<const HitRecord> records) {
+        onHitRecordsChanged(records);
+    };
+    common.setCallbacks(std::move(callbacks));
+}
+
+void SpectralRaytracer::render(const uint32_t frameIndex, const uint32_t sampleIndex)
+{
+    common.dispatch(frameIndex, sampleIndex, [this] { renderImpl(); });
 }
 
 // Every section's records use the two mesh groups, whatever the material.
@@ -55,10 +66,10 @@ void SpectralRaytracer::onHitRecordsChanged(const std::span<const HitRecord> rec
     groups.reserve(records.size());
     for (const HitRecord& record : records)
         groups.push_back(record.rayType + (record.kind == HitRecord::Kind::Gaussian ? 2u : 0u));
-    pipeline = renderDevice().ray_tracing(std::span(&library, 1), groups);
+    pipeline = common.device().ray_tracing(std::span(&library, 1), groups);
 }
 
 void SpectralRaytracer::renderImpl()
 {
-    pipeline.trace(raygen, {logicalRenderWidth(), logicalRenderHeight(), 1}, data);
+    pipeline.trace(raygen, {common.width(), common.height(), 1}, common.data);
 }

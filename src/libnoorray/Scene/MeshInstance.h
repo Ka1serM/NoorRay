@@ -41,6 +41,8 @@ public:
         bool indirect = true;
         // Triangles wound clockwise face forward instead of counterclockwise.
         bool reverseCulling = false;
+        // The mesh is animated independently of scene publication.
+        bool animated = false;
         bool operator==(const RayTracingFlags&) const = default;
     };
 private:
@@ -94,4 +96,5 @@ public:
     }
 
     void onTransformUpdated() override;
+    void onVisibilityChanged() override { markChanged(); }
 };

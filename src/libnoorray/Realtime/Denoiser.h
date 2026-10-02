@@ -32,7 +32,7 @@ struct DenoiserLayout
     bool operator==(const DenoiserLayout&) const = default;
 };
 
-// NVIDIA's REBLUR or RELAX diffuse + specular denoiser (external/NRD), in its
+// NVIDIA's RELAX diffuse + specular denoiser (external/NRD), in its
 // radiance or its spherical-harmonics (SH) form. It reads the diffuse,
 // specular, normal-roughness, view Z and motion targets (plus the SH1 targets
 // in SH form) and writes its own outputs, which the composite reads. Off, the
@@ -92,8 +92,8 @@ private:
     // Exponentially smoothed, so the history length does not follow every
     // frame-time spike.
     float smoothedFrameTimeMilliseconds_{};
-    // REBLUR's and RELAX's history lengths as last set.
-    std::array<std::uint32_t, 2> historyFrames_{};
+    // RELAX's history length as last set.
+    std::uint32_t historyFrames_{};
     nrd::Instance* instance_{};
     std::unique_ptr<Resources> resources_;
     std::vector<Texture> pool_;

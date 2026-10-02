@@ -6,29 +6,41 @@ static const int GROUP_SIZE = 16;
 
 [[vk::push_constant]] ConstantBuffer<ViewportCompositeRoot> root;
 
-float rawHighlightCurve1(float value)
+// Blender 5.2 "Raw" with the "Very Low Contrast" Filmic look.  The OCIO
+// config defines that look in Filmic Log as filmic_to_0-35_1-30.spi1d
+// followed by the inverse of filmic_to_0-70_1-03.spi1d.  These samples are
+// that exact LUT composition, resampled uniformly in Filmic-log space.
+static const float BlenderVeryLowContrast[65] = {
+    0.000000000, 0.056577142, 0.097656381, 0.130399487, 0.157937676, 0.181923780, 0.203337549, 0.222808383,
+    0.240764739, 0.257511610, 0.273274335, 0.288223848, 0.302493459, 0.316189037, 0.329396276, 0.342185631,
+    0.354615956, 0.366736906, 0.378591012, 0.390215104, 0.401641265, 0.412898023, 0.424010717, 0.435002284,
+    0.445893610, 0.456703839, 0.467450892, 0.478151559, 0.488821724, 0.499476748, 0.510131490, 0.520800442,
+    0.531498120, 0.542238995, 0.553037757, 0.563909461, 0.574869708, 0.585934819, 0.597122104, 0.608205789,
+    0.618567634, 0.629090756, 0.639786767, 0.650668375, 0.661749521, 0.673045596, 0.684573639, 0.696352601,
+    0.708403699, 0.720750912, 0.733421386, 0.746446325, 0.759861901, 0.773710598, 0.788043112, 0.802921234,
+    0.818421886, 0.834643622, 0.851717823, 0.869827411, 0.889243604, 0.910402333, 0.934093971, 0.962054729,
+    1.000000000
+};
+
+float blenderVeryLowContrast1(float value)
 {
     if (value <= 0.0) return 0.0;
-    // Keep the lower range close to the Blender Raw look while reducing the
-    // early highlight clipping of its LUT. This rational segment maps 1.0 to
-    // about 0.61 without a log/exp conversion.
-    const float mid = value / (1.0 + 0.78 * max(value - 0.18, 0.0));
-
-    // A continuous, unit-slope knee eases values above 0.85 toward white. It
-    // preserves a little highlight clipping while keeping bright regions from
-    // flattening abruptly. This stays in display-linear values; no sRGB OETF.
-    const float knee = 0.85;
-    if (mid <= knee) return mid;
-    const float headroom = 1.0 - knee;
-    return 1.0 - headroom * headroom / (mid + 1.0 - 2.0 * knee);
+    // Filmic Log's effective scene-linear range from Blender's config: the
+    // uniform [0, 0.66] allocation maps the first 16.5 stops of the 25-stop
+    // lg2 allocation [-12.473931188, 12.526068812] onto [0, 1].
+    const float x = clamp((log2(value) + 12.473931188) / 16.5, 0.0, 1.0);
+    const float p = x * 64.0;
+    const uint i = min((uint)floor(p), 63u);
+    const float y = lerp(BlenderVeryLowContrast[i], BlenderVeryLowContrast[i + 1u], p - float(i));
+    return exp2(y * 16.5 - 12.473931188);
 }
 
-float3 rawHighlightCurve(float3 color)
+float3 blenderRawVeryLowContrast(float3 color)
 {
     return clamp(float3(
-        rawHighlightCurve1(color.r),
-        rawHighlightCurve1(color.g),
-        rawHighlightCurve1(color.b)), 0.0, 1.0);
+        blenderVeryLowContrast1(color.r),
+        blenderVeryLowContrast1(color.g),
+        blenderVeryLowContrast1(color.b)), 0.0, 1.0);
 }
 
 float3 hashIdToColor(uint id)
@@ -206,7 +218,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         const float3 straight = alpha > 0.0
             ? hdr.rgb / alpha * exp2(clamp(pushConstants.exposure, -20.0, 20.0))
             : float3(0.0);
-        color = pushConstants.tonemappingEnabled != 0 ? rawHighlightCurve(straight) : straight;
+        color = pushConstants.tonemappingEnabled != 0 ? blenderRawVeryLowContrast(straight) : straight;
 
         if (pushConstants.selectedCryptomatteId != ~0u)
         {
@@ -215,8 +227,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
             const float current = outlineDistance(idImage, pixel,
                 pushConstants.selectedCryptomatteId, int2(width, height),
                 pushConstants.upscaleRatio);
-            // Running average of every frame since the outline's accumulation
-            // restarted, as the renderer accumulates its samples. Only this
+            // Running average of every frame since the outline history
+            // restarted, independent of beauty accumulation. Only this
             // thread's own texel is read and written here, while the
             // neighbourhood above comes from an image no thread in this
             // dispatch writes, so the blend needs no second pass.

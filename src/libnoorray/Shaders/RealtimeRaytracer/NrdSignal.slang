@@ -3,9 +3,8 @@
 #include "RealtimeArgs.slang"
 #include "NRD.hlsli"
 
-// NRD's diffuse and specular signals in the encoding of the active denoiser:
-// REBLUR normalizes the hit distance, RELAX takes it in world units. With the
-// denoiser off the composite reads the inputs directly, in REBLUR's encoding.
+// RELAX diffuse/specular signals use hit distances in world units. When off,
+// the composite reads the same packed inputs directly.
 //
 // The SH denoisers also take each lobe's lighting direction. A lobe sums
 // several contributions (indirect bounce, resampled lights), so the caller
@@ -83,43 +82,24 @@ float4 packNrdSignal(float3 radiance, float hitDistance, float viewZ, float roug
 {
     sh1 = float4(0.0);
     const DenoiserArgs denoiser = realtimeArgs()->denoiser;
-    const bool relax = denoiser.relax != 0u;
     if (denoiser.sphericalHarmonics == 0u)
-    {
-        if (relax)
-            return RELAX_FrontEnd_PackRadianceAndHitDist(radiance, hitDistance, true);
-        return REBLUR_FrontEnd_PackRadianceAndNormHitDist(radiance,
-            REBLUR_FrontEnd_GetNormHitDist(hitDistance, viewZ,
-                denoiser.hitDistanceParameters, roughness), true);
-    }
+        return RELAX_FrontEnd_PackRadianceAndHitDist(radiance, hitDistance, true);
     const float3 direction = directionSum / max(nrdLuminance(totalRadiance), 1.0e-6);
-    if (relax)
-        return RELAX_FrontEnd_PackSh(radiance, hitDistance, direction, sh1, true);
-    return REBLUR_FrontEnd_PackSh(radiance, REBLUR_FrontEnd_GetNormHitDist(hitDistance,
-        viewZ, denoiser.hitDistanceParameters, roughness), direction, sh1, true);
+    return RELAX_FrontEnd_PackSh(radiance, hitDistance, direction, sh1, true);
 }
 
 float4 packNrdPlainSignal(float3 radiance, float hitDistance, float viewZ, float roughness)
 {
-    const DenoiserArgs denoiser = realtimeArgs()->denoiser;
-    if (denoiser.relax != 0u)
-        return RELAX_FrontEnd_PackRadianceAndHitDist(radiance, hitDistance, true);
-    return REBLUR_FrontEnd_PackRadianceAndNormHitDist(radiance,
-        REBLUR_FrontEnd_GetNormHitDist(hitDistance, viewZ,
-            denoiser.hitDistanceParameters, roughness), true);
+    return RELAX_FrontEnd_PackRadianceAndHitDist(radiance, hitDistance, true);
 }
 
 // A lobe's radiance as the non-SH denoisers pack and output it.
 float3 unpackNrdRadiance(float4 signal)
 {
-    if (realtimeArgs()->denoiser.relax != 0u)
-        return RELAX_BackEnd_UnpackRadiance(signal).rgb;
-    return REBLUR_BackEnd_UnpackRadianceAndNormHitDist(signal).rgb;
+    return RELAX_BackEnd_UnpackRadiance(signal).rgb;
 }
 
 NRD_SG unpackNrdSh(float4 sh0, float4 sh1)
 {
-    if (realtimeArgs()->denoiser.relax != 0u)
-        return RELAX_BackEnd_UnpackSh(sh0, sh1.xyz);
-    return REBLUR_BackEnd_UnpackSh(sh0, sh1.xyz);
+    return RELAX_BackEnd_UnpackSh(sh0, sh1.xyz);
 }

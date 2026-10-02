@@ -34,14 +34,28 @@ public:
     void rebuildNativeScene();
     // Publishes scene edits made by the editor after startup, including the
     // viewport's light icons. Returns true when a GPU snapshot changed and
-    // accumulation must restart.
+    // viewport history must restart.
     bool pollNativeScene();
     void rebuildNativeMaterials();
     // Publishes the materials compiled since the last call and links the
     // renderer's shaders that finished compiling. Returns true when the
     // image changes and accumulation must restart.
     bool processNativeMaterials();
+    void beginNativeMaterialImport();
+    void endNativeMaterialImport();
+    bool nativeMaterialImportReady() const;
+    // Reports the driver work needed before published material programs shade.
+    MaterialShaderStage materialShaderStage() const;
     void updateNativeCamera();
+    // Starts a fresh beauty average and invalidates temporal renderer history.
+    void restartAccumulation();
+    // Starts a fresh beauty average while preserving temporal reprojection.
+    // Use for continuous camera motion, where history remains useful.
+    void restartBeautyAccumulation() { accumulationRestarted_ = true; }
+    // Consumed by the viewport before assigning the next sample index.
+    bool consumeAccumulationRestart();
+    // Restarts only the viewport's temporally averaged selection outline.
+    void restartViewportOutlineHistory() { outlineHistoryRestarted_ = true; }
     // Prepares the renderer's images for the current size and settings and
     // the final viewport texture: it may replace images, which waits for the
     // device, so call it before opening a NoorRHI frame. It does not read the
@@ -52,6 +66,10 @@ public:
     // or submits it independently when no frame is open. The output includes
     // AOV visualization, tonemapping, and optional scene billboards.
     void renderViewport(const glm::mat4& viewProjection,
+        uint32_t selectedCryptomatteId = ~0u, bool showBillboards = true);
+    // Records the composite into a host-owned, writable presentation target.
+    // The host keeps that image alive until this dispatch's GPU token finishes.
+    void renderViewport(const glm::mat4& viewProjection, const ViewportOutput& output,
         uint32_t selectedCryptomatteId = ~0u, bool showBillboards = true);
     void renderViewport(uint32_t selectedCryptomatteId = ~0u,
         bool showBillboards = true);
@@ -91,11 +109,9 @@ public:
     // the output image and all AOV bindings together, so hosts never need to
     // rebuild ViewportInputs themselves.
     void resizeViewport(uint32_t width, uint32_t height);
-    // Allocates the render images at least this large so interactive resizes
-    // up to it never wait on the GPU or replace images. Optional; without it
-    // the allocation always matches the requested viewport size.
-    void reserveViewport(uint32_t width, uint32_t height);
-    void resize(uint32_t width, uint32_t height);
+    // Use externally-owned frame images for the viewport composite instead of
+    // allocating an intermediate presentation image in the session.
+    void setViewportExternalOutput(bool enabled, noorrhi::ImageFormat format);
     void commit();
     void render(uint32_t frameIndex = 0, uint32_t sampleIndex = 0);
     double lastDispatchMilliseconds();
@@ -136,9 +152,8 @@ private:
     // Declared after raytracer so it is destroyed first; its inputs are views
     // into the raytracer's AOV resources.
     std::optional<Viewport> viewport_;
-    // Set by a render() of sample 0 - the host restarted its accumulation -
-    // and consumed by the next renderViewport(), whose outline history
-    // restarts with it.
+    // Consumed by the next renderViewport() to restart its outline history.
+    bool outlineHistoryRestarted_{true};
     bool accumulationRestarted_{true};
     // The session's last trace and composite. Only they read the scene's GPU
     // data, so publishing edits waits for them rather than for the whole
@@ -154,6 +169,7 @@ private:
 private:
     noorrhi::ImageFormat viewportOutputFormat_{noorrhi::ImageFormat::Rgba32Float};
     bool exportViewportMemory_{};
+    bool viewportExternalOutput_{};
     RenderSettings appliedRenderSettings{};
     bool renderSettingsInitialized{};
 };

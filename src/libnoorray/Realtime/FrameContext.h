@@ -23,7 +23,7 @@ struct FrameContext
     // The previous frame's lighting rectangle, which the temporal stages
     // reproject from; `lighting` after a history reset.
     Extent previousLighting;
-    std::uint32_t lightingScale{1};
+    float lightingScale{1.0f};
     Extent output;
     // Unjittered, column-major, in NRD's conventions. After a history reset
     // the previous matrices equal the current ones.

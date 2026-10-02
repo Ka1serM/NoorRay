@@ -95,14 +95,14 @@ void RenderSettingsPanel::renderUi()
                 changed = true;
             }
         };
-        static constexpr const char* kDenoiserModeNames[] = { "Off", "REBLUR", "RELAX" };
+        static constexpr const char* kDenoiserModeNames[] = { "Off", "RELAX SH" };
         static constexpr const char* kUpscalerModeNames[] = { "Off", "Native AA", "Quality",
             "Balanced", "Performance", "Ultra Performance" };
         stageCombo("Denoiser", "##DenoiserMode", settings.denoiserMode, kDenoiserModeNames);
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
         stageCombo("Upscaler", "##UpscalerMode", settings.upscalerMode, kUpscalerModeNames);
-        static constexpr const char* kLightingResolutionNames[] = { "Full", "Half", "Third", "Quarter" };
+        static constexpr const char* kLightingResolutionNames[] = { "Full", "Half", "Third", "Quarter", "3/4" };
         stageCombo("Lighting Resolution", "##LightingResolution", settings.lightingResolution,
             kLightingResolutionNames);
 

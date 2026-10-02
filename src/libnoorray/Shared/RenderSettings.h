@@ -52,7 +52,7 @@ enum class UpscalerMode : int
 };
 
 // How much coarser than the render resolution the realtime renderer lights:
-// Half, Third and Quarter trace, resample and denoise lighting at 1/2, 1/3 or
+// ThreeQuarter, Half, Third and Quarter trace, resample and denoise lighting at 3/4, 1/2, 1/3 or
 // 1/4 of the render resolution per axis. Primary visibility and the material factors stay
 // at the render resolution, and the composite resolves the lighting against
 // them (with the denoiser's SH form, which these modes switch on).
@@ -62,13 +62,13 @@ enum class LightingResolution : int
     Half,
     Third,
     Quarter,
+    ThreeQuarter,
 };
 
 // NRD's denoisers. Off composites the noisy radiance as it is.
 enum class DenoiserMode : int
 {
     Off,
-    Reblur,
     Relax,
 };
 
@@ -110,7 +110,7 @@ struct RenderSettings
         , maxBounces(3)
         , indirectLightClamp(10.0f)
         , tonemappingEnabled(false)
-        , transparentBackground(false)
+        , transparentBackground(true)
         , cameraExposure(0.0f)
         , gaussianShadingMode(GaussianShadingMode::DirectColor)
         , gaussianRenderSphericalHarmonics(SphericalHarmonicsOrder::Degree3)
@@ -144,16 +144,17 @@ inline constexpr float upscalerRatio(const UpscalerMode mode)
     return 1.0f;
 }
 
-inline constexpr uint32_t lightingScale(const LightingResolution resolution)
+inline constexpr float lightingScale(const LightingResolution resolution)
 {
     switch (resolution)
     {
-    case LightingResolution::Full: return 1u;
-    case LightingResolution::Half: return 2u;
-    case LightingResolution::Third: return 3u;
-    case LightingResolution::Quarter: return 4u;
+    case LightingResolution::Full: return 1.0f;
+    case LightingResolution::Half: return 2.0f;
+    case LightingResolution::Third: return 3.0f;
+    case LightingResolution::Quarter: return 4.0f;
+    case LightingResolution::ThreeQuarter: return 4.0f / 3.0f;
     }
-    return 1u;
+    return 1.0f;
 }
 
 inline bool rendersProxyOverdraw(const RenderSettings& settings)

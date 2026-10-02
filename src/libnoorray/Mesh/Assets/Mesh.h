@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -13,12 +14,14 @@
 #include <glm/vec3.hpp>
 
 #include "Shared/Mesh.h"
+#include "Shared/SplineMesh.h"
 
 class Scene;
+class SplineMeshPass;
 
-// One vertex's tangent basis as Unreal stores it (FPackedRGBA16N): TangentX,
-// then TangentZ, the normal, whose w is the bitangent sign. The bitangent is
-// cross(normal, tangent) * sign.
+// One vertex's tangent basis as Unreal stores it (FPackedNormal): TangentX,
+// then TangentZ, the normal, whose w is the bitangent sign. Each is SNORM8x4,
+// x in the low byte. The bitangent is cross(normal, tangent) * sign.
 struct TangentFrame
 {
     TangentFrame() = default;
@@ -28,10 +31,10 @@ struct TangentFrame
     glm::vec3 normal() const;
     float bitangentSign() const;
 
-    int16_t tangentX[4]{};
-    int16_t tangentZ[4]{};
+    int8_t tangentX[4]{};
+    int8_t tangentZ[4]{};
 };
-static_assert(sizeof(TangentFrame) == 16);
+static_assert(sizeof(TangentFrame) == 8);
 
 // A contiguous run of triangles drawn with one material slot, as Unreal's
 // mesh sections are. A mesh's sections tile its triangles in order; several
@@ -85,9 +88,12 @@ struct MeshGeometry
     std::span<const uint32_t> colors;
     std::span<const uint32_t> indices;
     std::vector<MeshSection> sections;
+    // Of the vertices as drawn, bent when `spline` is set.
     glm::vec3 boundsMin{};
     glm::vec3 boundsMax{};
     std::shared_ptr<const void> owner;
+    // Bends the uploaded positions and tangent frames on the GPU.
+    std::optional<nr::graphics::SplineMesh> spline;
 };
 
 // Geometry only: the materials belong to the instances that draw it. Each
@@ -121,15 +127,20 @@ public:
     const MeshGeometry& getGeometry() const { return geometry; }
     const std::vector<MeshSection>& getSections() const { return geometry.sections; }
     uint32_t getVertexCount() const { return static_cast<uint32_t>(geometry.positions.size()); }
+    // Animated/deforming geometry builds a fast-build, updateable BLAS;
+    // static geometry favors fast tracing and omits BLAS update support.
+    bool isAnimated() const { return animated; }
+    void setAnimated(bool value);
     // How many materials an instance must supply: one past the highest slot
     // a section draws with.
     uint32_t getSlotCount() const { return slotCount; }
 
     void replaceGeometry(MeshGeometry value);
 
-    // Uploads the streams when the geometry changed since the last upload;
+    // Uploads the streams when the geometry changed since the last upload,
+    // bending them with `splineMeshPass` when the geometry has a spline;
     // scene publication calls this for every changed mesh.
-    void upload(noorrhi::Device& device);
+    void upload(noorrhi::Device& device, const SplineMeshPass& splineMeshPass);
     // The BLAS whose sections have the given opacity (opaque sections skip
     // any-hit stages), built on first use and kept until the geometry
     // changes. Instances whose materials agree on opacity share it.
@@ -145,6 +156,7 @@ private:
     std::string path;
     uint32_t index = ~0u;
     bool gpuDirty = true;
+    bool animated = false;
     MeshGeometry geometry;
     uint32_t slotCount = 0;
     noorrhi::Buffer<glm::vec3> positionBuffer;

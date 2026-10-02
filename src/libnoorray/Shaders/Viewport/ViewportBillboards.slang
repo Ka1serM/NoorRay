@@ -22,16 +22,45 @@ struct VertexOutput
     float2 local         : LOCAL;
     float3 color          : COLOR;
     nointerpolation int type : TYPE;
-    nointerpolation float radius : RADIUS;
+    nointerpolation float distanceFade : DISTANCEFADE;
 };
 
-// Icon half-size in pixels for a billboard whose clip-space w (its view-space
-// distance under a perspective camera) is viewDistance.
-float billboardRadius(ViewportBillboardPushConstants pushConstants, float viewDistance)
+// Exact bounds of the glyph strokes, including their 0.045 half-width.
+// xy is the centre and zw the half-extent in the glyph's native coordinates.
+float4 glyphBounds(int type)
 {
-    const float range = max(pushConstants.farDistance - pushConstants.nearDistance, 1.0e-4);
-    const float t = saturate((viewDistance - pushConstants.nearDistance) / range);
-    return lerp(pushConstants.maxRadius, pushConstants.minRadius, t);
+    switch (type)
+    {
+    case BillboardTypePoint: return float4(0.0, 0.0, 0.725, 0.725);
+    case BillboardTypeSpot: return float4(0.0, -0.085, 0.695, 0.630);
+    case BillboardTypeRect: return float4(0.0, 0.0, 0.605, 0.625);
+    default: return float4(0.065, -0.020, 0.690, 0.645);
+    }
+}
+
+// Each instance is a fixed-size plane at the light's world position. The
+// projection's first two rows give camera right/up, including camera roll.
+float4 billboardCorner(ViewportBillboardPushConstants args, float3 center, int type, float2 corner)
+{
+    const float3 right = normalize(args.viewProjection[0].xyz);
+    const float3 up = normalize(args.viewProjection[1].xyz);
+    const float2 bounds = glyphBounds(type).zw;
+    const float2 extent = args.worldHalfSize * bounds / max(bounds.x, bounds.y);
+    const float3 world = center + right * (corner.x * extent.x) + up * (corner.y * extent.y);
+    return mul(args.viewProjection, float4(world, 1.0));
+}
+
+// The icons are an editing overlay and intentionally render through level
+// geometry. Fade them only by their distance to the camera: this prevents a
+// large glyph from clipping across the viewport when the camera enters it,
+// and keeps distant map-wide lights out of the editing view.
+float billboardDistanceFade(ViewportBillboardPushConstants args, float3 center)
+{
+    if (args.cameraPosition.w == 0.0)
+        return 1.0;
+    const float distanceToCamera = length(center - args.cameraPosition.xyz);
+    return smoothstep(args.distanceFade.x, args.distanceFade.y, distanceToCamera)
+        * (1.0 - smoothstep(args.distanceFade.z, args.distanceFade.w, distanceToCamera));
 }
 
 [shader("vertex")]
@@ -46,29 +75,22 @@ VertexOutput vertMain(uint vertexId : SV_VertexID, uint instanceId : SV_Instance
     output.color = instanceId == pushConstants.selectedBillboard
         ? ViewportSelectionColor : billboard.color.rgb;
     output.type = int(billboard.positionType.w);
-    output.radius = billboardRadius(pushConstants, clip.w) * pushConstants.radiusScale;
+    output.distanceFade = billboardDistanceFade(pushConstants, billboard.positionType.xyz);
 
-    if (clip.w <= 0.0)
+    if (clip.w <= 0.0 || billboard.color.a == 0.0)
     {
-        // Behind the camera — collapse to a degenerate (zero-area) triangle so
+        // Behind the camera or hidden — collapse to a degenerate (zero-area) triangle so
         // nothing gets rasterized, rather than branching in the fragment stage.
         output.clipPosition = float4(0.0, 0.0, 0.0, 1.0);
         output.local = float2(0.0, 0.0);
-        output.radius = 0.0;
-            return output;
+        return output;
     }
 
     const float2 corner = corners[vertexId];
-    const float2 ndc = clip.xy / clip.w;
-    // The raw output is presented with a single V flip, so use its bottom-left
-    // convention here as well. Scaling by clip.w preserves the pixel size
-    // through the perspective divide.
-    const float2 ndcOffset = corner * output.radius * 2.0 / pushConstants.screenSize;
-    // The attachment may be larger than the render; squeeze the logical NDC
-    // range into its bottom-left rectangle, which is what gets presented.
-    const float2 targetNdc = (ndc + ndcOffset + 1.0) * pushConstants.targetScale - 1.0;
-
-    output.clipPosition = float4(targetNdc * clip.w, clip.z, clip.w);
+    const float4 planeClip = billboardCorner(pushConstants, billboard.positionType.xyz, int(billboard.positionType.w), corner);
+    // Map the projected plane into the logical rectangle of the attachment.
+    const float2 targetClip = (planeClip.xy + planeClip.w) * pushConstants.targetScale - planeClip.w;
+    output.clipPosition = float4(targetClip, planeClip.z, planeClip.w);
     output.local = corner;
     return output;
 }
@@ -175,16 +197,20 @@ float directionalLightAlpha(const float2 p, const float aa)
 
 float billboardAlpha(const float2 p, const int type, const float aa)
 {
+    // Map the complete plane to the tight glyph bounds, without extra padding.
+    const float4 bounds = glyphBounds(type);
+    const float2 glyph = bounds.xy + p * bounds.zw;
+    const float glyphAa = aa * min(bounds.z, bounds.w);
     switch (type)
     {
     case BillboardTypePoint:
-        return pointLightAlpha(p, aa);
+        return pointLightAlpha(glyph, glyphAa);
     case BillboardTypeSpot:
-        return spotLightAlpha(p, aa);
+        return spotLightAlpha(glyph, glyphAa);
     case BillboardTypeRect:
-        return rectLightAlpha(p, aa);
+        return rectLightAlpha(glyph, glyphAa);
     default:
-        return directionalLightAlpha(p, aa);
+        return directionalLightAlpha(glyph, glyphAa);
     }
 }
 
@@ -193,8 +219,8 @@ float4 fragMain(VertexOutput input) : SV_Target
 {
     // Antialias in local billboard units. The glyphs are strokes, not filled SDF
     // blobs, which keeps them crisp and avoids a heavy outline.
-    const float aa = 1.15 / input.radius;
-    const float alpha = billboardAlpha(input.local, input.type, aa);
+    const float aa = max(max(fwidth(input.local.x), fwidth(input.local.y)) * 0.575, 1.0e-5);
+    const float alpha = billboardAlpha(input.local, input.type, aa) * input.distanceFade;
     if (alpha <= 0.003)
         discard;
 
@@ -204,11 +230,10 @@ float4 fragMain(VertexOutput input) : SV_Target
 
 // Light picking. A separate buffer holds one uint per output pixel: 0 where no
 // icon is, otherwise the billboard index + 1. Clear resets the logical
-// rectangle each frame; Stamp then writes a filled circle per light, one group
+// rectangle each frame; Stamp then writes each visible glyph, one group
 // per billboard. Overlaps keep the highest index - the icon drawn last, which
 // is the one blended on top.
 static const uint LightIdGroupSize = 16u;
-static const int LightIdMaxExtent = 64;
 
 [shader("compute")]
 [numthreads(LightIdGroupSize, LightIdGroupSize, 1)]
@@ -232,27 +257,34 @@ void lightIdStamp(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     ViewportBillboard* billboardBuffer = pushConstants.billboards;
     const ViewportBillboard billboard = billboardBuffer[index];
     const float4 clip = mul(pushConstants.viewProjection, float4(billboard.positionType.xyz, 1.0));
-    if (clip.w <= 0.0)
+    const float distanceFade = billboardDistanceFade(pushConstants, billboard.positionType.xyz);
+    if (clip.w <= 0.0 || distanceFade <= 0.003)
         return;
 
     // Same bottom-left pixel space the vertex stage draws the icon into.
     const float2 center = (clip.xy / clip.w * 0.5 + 0.5) * pushConstants.screenSize;
-    const float radius = billboardRadius(pushConstants, clip.w) * pushConstants.radiusScale;
-    const int2 origin = int2(floor(center - radius));
-    const int extent = min(int(ceil(radius * 2.0)) + 1, LightIdMaxExtent);
+    const float4 edge = billboardCorner(pushConstants, billboard.positionType.xyz, int(billboard.positionType.w), float2(1.0));
+    const float2 edgePixel = (edge.xy / edge.w * 0.5 + 0.5) * pushConstants.screenSize;
+    const float2 halfExtent = abs(edgePixel - center);
+    if (any(halfExtent <= 0.0)) return;
     const int2 size = int2(pushConstants.screenSize);
+    const int2 origin = clamp(int2(floor(center - halfExtent)), int2(0), size);
+    const int2 end = clamp(int2(ceil(center + halfExtent)), int2(0), size);
+    const int2 extent = end - origin;
     uint* lightIds = pushConstants.lightIds;
     uint previous;
 
-    for (int y = int(threadId.y); y < extent; y += int(LightIdGroupSize))
+    for (int y = int(threadId.y); y < extent.y; y += int(LightIdGroupSize))
     {
-        for (int x = int(threadId.x); x < extent; x += int(LightIdGroupSize))
+        for (int x = int(threadId.x); x < extent.x; x += int(LightIdGroupSize))
         {
             const int2 pixel = origin + int2(x, y);
             if (any(pixel < 0) || any(pixel >= size))
                 continue;
             const float2 delta = float2(pixel) + 0.5 - center;
-            if (dot(delta, delta) > radius * radius)
+            const float2 local = delta / halfExtent;
+            const float aa = 1.15 / max(min(halfExtent.x, halfExtent.y), 1.0e-4);
+            if (billboardAlpha(local, int(billboard.positionType.w), aa) <= 0.05)
                 continue;
             InterlockedMax(lightIds[uint(pixel.y) * pushConstants.lightIdStride + uint(pixel.x)],
                 index + 1u, previous);

@@ -1,5 +1,6 @@
 #include "Scene.h"
 #include <algorithm>
+#include <optional>
 #include <utility>
 #include "Camera/CameraInstance.h"
 #include "Scene/LightInstance.h"
@@ -107,8 +108,21 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
 
 // ── Public lifetime API ───────────────────────────────────────────────────────
 
-void Scene::clear() {
+void Scene::clear(const bool preserveViewportState) {
     synchronizeBeforeMutation();
+    std::optional<Texture> environmentTexture;
+    if (preserveViewportState) {
+        // A scene-owned camera is about to leave. Carry its lens and world
+        // transform into the persistent viewport camera before removing it.
+        if (const auto camera = activeCamera.lock()) {
+            viewportCamera = std::make_shared<CameraInstance>(*camera);
+            viewportCamera->name = "Viewport Camera";
+            viewportCamera->setWorldTransformFromMatrix(camera->getWorldTransform().getMatrix());
+        }
+        const int texture = environment->getTextureIndex();
+        if (texture >= 0 && static_cast<size_t>(texture) < textures.size())
+            environmentTexture.emplace(std::move(textures[texture]));
+    }
     // Switch rendering to the persistent viewport camera before scene-owned
     // cameras are destroyed.
     activateCamera(nullptr);
@@ -118,6 +132,10 @@ void Scene::clear() {
     meshInstanceSlots_.clear();
     changedMeshInstanceSlots_.clear();
     meshInstanceSlotListed_.clear();
+    for (auto& lights : changedLights_)
+        lights.clear();
+    for (auto& listed : lightListed_)
+        listed.clear();
     changedMeshes_.clear();
     meshListed_.clear();
     changedMaterials_.clear();
@@ -152,16 +170,21 @@ void Scene::clear() {
     notifyMaterialChanged();
     importedFileRoots_.clear();
     assignActiveObject({});
-    renderSettings = {};
-    environment->clearHdriTexture();
-    environment->setColor(vec3(1.0f));
-    environment->setRotation(0.0f);
-    environment->setVisibleExposure(0.0f);
-    environment->setLightingExposure(1.0f);
-    environment->setVisibleToCamera(true);
-    environment->setLowerHemisphere(vec3(0.0f), 0.0f);
-    environment->setLightControls(true, 1.0f);
-    environment->setEquirectangularMapping();
+    if (preserveViewportState) {
+        if (environmentTexture)
+            environment->setHdriTexture(*addTexture(std::move(*environmentTexture)));
+    } else {
+        renderSettings = {};
+        environment->clearHdriTexture();
+        environment->setColor(vec3(1.0f));
+        environment->setRotation(0.0f);
+        environment->setVisibleExposure(0.0f);
+        environment->setLightingExposure(1.0f);
+        environment->setVisibleToCamera(true);
+        environment->setLowerHemisphere(vec3(0.0f), 0.0f);
+        environment->setLightControls(true, 1.0f);
+        environment->setEquirectangularMapping();
+    }
     for (const auto flag : {TLAS, Meshes, Textures, EnvironmentCdf, Lights,
                            CameraState, Accumulation, Materials})
         setDirtyFlag(flag);
@@ -553,6 +576,11 @@ void Scene::unregisterLight(LightInstance& light)
     setDirtyFlag(Accumulation);
 }
 
+const LightInstance& Scene::getLightObject(const int lightType, const uint32_t lightIndex) const
+{
+    return *lightObjects_[lightType][lightIndex];
+}
+
 std::vector<const LightInstance*> Scene::getLightObjects() const
 {
     std::vector<const LightInstance*> result;
@@ -719,6 +747,29 @@ std::vector<uint32_t> Scene::takeChangedMeshInstanceSlots() {
     for (const uint32_t slot : changedMeshInstanceSlots_)
         meshInstanceSlotListed_[slot] = false;
     return std::exchange(changedMeshInstanceSlots_, {});
+}
+
+void Scene::markLightChanged(const int lightType, const uint32_t lightIndex) {
+    std::vector<bool>& listed = lightListed_[lightType];
+    if (lightIndex >= listed.size())
+        listed.resize(lightIndex + 1);
+    if (listed[lightIndex])
+        return;
+    listed[lightIndex] = true;
+    changedLights_[lightType].push_back(lightIndex);
+}
+
+Scene::LightIndices Scene::takeChangedLights() {
+    LightIndices changed = std::exchange(changedLights_, {});
+    for (size_t type = 0; type < changed.size(); ++type) {
+        for (const uint32_t index : changed[type])
+            lightListed_[type][index] = false;
+        // A record listed before a removal shrank the table no longer exists.
+        std::erase_if(changed[type], [this, type](const uint32_t index) {
+            return index >= lightObjects_[type].size();
+        });
+    }
+    return changed;
 }
 
 std::vector<Mesh*> Scene::takeChangedMeshes() {

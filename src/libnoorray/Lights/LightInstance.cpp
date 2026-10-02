@@ -42,6 +42,7 @@ void LightInstance::updateSceneRecord()
         record.softRadius *= worldScale;
         record.sourceLength *= worldScale;
         record.falloff.invRadius /= worldScale;
+        record.controls.visible = visible ? 1u : 0u;
         scene->pointLights[lightIndex] = record;
         break;
     }
@@ -50,6 +51,7 @@ void LightInstance::updateSceneRecord()
         record.softRadius *= worldScale;
         record.sourceLength *= worldScale;
         record.falloff.invRadius /= worldScale;
+        record.controls.visible = visible ? 1u : 0u;
         scene->spotLights[lightIndex] = record;
         break;
     }
@@ -59,16 +61,20 @@ void LightInstance::updateSceneRecord()
         record.height *= worldScale;
         record.barnDoorLength *= worldScale;
         record.falloff.invRadius /= worldScale;
+        record.controls.visible = visible ? 1u : 0u;
         scene->rectLights[lightIndex] = record;
         break;
     }
-    case TypeDirectional:
-        scene->directionalLights[lightIndex] =
-            static_cast<DirectionalLightInstance*>(this)->getData();
+    case TypeDirectional: {
+        DirectionalLight record = static_cast<DirectionalLightInstance*>(this)->getData();
+        record.controls.visible = visible ? 1u : 0u;
+        scene->directionalLights[lightIndex] = record;
         break;
+    }
     default:
         return;
     }
+    scene->markLightChanged(lightType, lightIndex);
     scene->setDirtyFlag(Lights);
     scene->setDirtyFlag(Accumulation);
 }

@@ -111,14 +111,14 @@ void Restir::resize(const Extent lighting, const bool layers)
     auto initial = di.GetInitialSamplingParameters();
     initial.localLightSamplingMode = ReSTIRDI_LocalLightSamplingMode::ReGIR_RIS;
     di.SetInitialSamplingParameters(initial);
-    // RTXDI's default Basic bias correction leaves visibility out of the
-    // resampling MIS weights, which biases reuse across shadow boundaries;
-    // the viewport accumulates these frames, so that bias never averages out.
+    // Prefer speed and stable interactive output over correcting the estimator's
+    // bias. Ray-traced correction adds work to temporal and spatial reuse and
+    // can introduce extra visibility noise around shadow boundaries.
     auto diTemporal = di.GetTemporalResamplingParameters();
-    diTemporal.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Raytraced;
+    diTemporal.biasCorrectionMode = ReSTIRDI_TemporalBiasCorrectionMode::Off;
     di.SetTemporalResamplingParameters(diTemporal);
     auto diSpatial = di.GetSpatialResamplingParameters();
-    diSpatial.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Raytraced;
+    diSpatial.biasCorrectionMode = ReSTIRDI_SpatialBiasCorrectionMode::Off;
     di.SetSpatialResamplingParameters(diSpatial);
 
     risBuffer_ = device_.buffer<std::uint32_t>(2u * std::max(
@@ -377,18 +377,24 @@ void Restir::presample(const nr::graphics::RealtimeArgs& args,
     if (environment) {
         const RTXDI_RISBufferSegmentParameters& environmentTiles =
             args.lighting.environmentLightRISBufferSegmentParams;
-        presampleEnvironmentPipeline_.launch({divideRoundingUp(environmentTiles.tileSize,
-            PresampleGroupSize), environmentTiles.tileCount, 1}, root);
+        device_.label("Presample Environment", [&] {
+            presampleEnvironmentPipeline_.launch({divideRoundingUp(environmentTiles.tileSize,
+                PresampleGroupSize), environmentTiles.tileCount, 1}, root);
+        });
     }
     if (localLightCount_ != 0) {
         const RTXDI_RISBufferSegmentParameters& tiles =
             args.lighting.localLightsRISBufferSegmentParams;
-        presampleLightsPipeline_.launch({divideRoundingUp(tiles.tileSize, PresampleGroupSize),
-            tiles.tileCount, 1}, root);
+        device_.label("Presample Local Lights", [&] {
+            presampleLightsPipeline_.launch({divideRoundingUp(tiles.tileSize, PresampleGroupSize),
+                tiles.tileCount, 1}, root);
+        });
         device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
-        presampleReGIRPipeline_.launch({divideRoundingUp(
-            context_->GetReGIRContext().GetReGIRLightSlotCount(), PresampleGroupSize), 1, 1},
-            root);
+        device_.label("Presample ReGIR", [&] {
+            presampleReGIRPipeline_.launch({divideRoundingUp(
+                context_->GetReGIRContext().GetReGIRLightSlotCount(), PresampleGroupSize), 1, 1},
+                root);
+        });
     }
     device_.barrier(noorrhi::Stage::Compute, noorrhi::Stage::RayTracing);
 }
@@ -409,14 +415,18 @@ void Restir::resample(const nr::graphics::RealtimeArgs& args,
         divideRoundingUp(lighting.height, ScreenSpaceGroupSize), 1};
     const noorrhi::DispatchSize tiles{divideRoundingUp(lighting.width, BoilingGroupSize),
         divideRoundingUp(lighting.height, BoilingGroupSize), 1};
-    const auto trace = [&](const noorrhi::Shader& raygen) {
-        for (const nr::graphics::RealtimeRoot root : surfaceSets)
-            tracePipeline.trace(raygen, {lighting.width, lighting.height, 1}, root);
+    const auto trace = [&](const std::string_view name, const noorrhi::Shader& raygen) {
+        device_.label(name, [&] {
+            for (const nr::graphics::RealtimeRoot root : surfaceSets)
+                tracePipeline.trace(raygen, {lighting.width, lighting.height, 1}, root);
+        });
     };
-    const auto launch = [&](const noorrhi::ComputePipeline& pipeline,
+    const auto launch = [&](const std::string_view name, const noorrhi::ComputePipeline& pipeline,
         const noorrhi::DispatchSize size) {
-        for (const nr::graphics::RealtimeRoot root : surfaceSets)
-            pipeline.launch(size, root);
+        device_.label(name, [&] {
+            for (const nr::graphics::RealtimeRoot root : surfaceSets)
+                pipeline.launch(size, root);
+        });
     };
     // The DI chain runs as compute and the PT chain as ray tracing; each
     // step's passes run together and read what the steps before them wrote,
@@ -429,22 +439,22 @@ void Restir::resample(const nr::graphics::RealtimeArgs& args,
     };
 
     barrier({Stage::RayTracing}, {Stage::RayTracing});
-    trace(initialRaygen_);
+    trace("Initial Samples", initialRaygen_);
     barrier({Stage::RayTracing}, {Stage::Compute, Stage::RayTracing});
-    launch(diTemporalPipeline_, pixels);
-    trace(ptTemporalRaygen_);
+    launch("DI Temporal", diTemporalPipeline_, pixels);
+    trace("PT Temporal", ptTemporalRaygen_);
     if (diBoiling || ptBoiling) {
         barrier({Stage::Compute, Stage::RayTracing}, {Stage::Compute});
         if (diBoiling)
-            launch(diBoilingPipeline_, tiles);
+            launch("DI Boiling Filter", diBoilingPipeline_, tiles);
         if (ptBoiling)
-            launch(ptBoilingPipeline_, tiles);
+            launch("PT Boiling Filter", ptBoilingPipeline_, tiles);
         barrier({Stage::Compute}, {Stage::Compute, Stage::RayTracing});
     } else {
         barrier({Stage::Compute, Stage::RayTracing}, {Stage::Compute, Stage::RayTracing});
     }
-    launch(diSpatialPipeline_, pixels);
-    trace(ptSpatialRaygen_);
+    launch("DI Spatial", diSpatialPipeline_, pixels);
+    trace("PT Spatial", ptSpatialRaygen_);
     barrier({Stage::Compute, Stage::RayTracing}, {Stage::RayTracing});
-    trace(shadeRaygen_);
+    trace("Shade", shadeRaygen_);
 }

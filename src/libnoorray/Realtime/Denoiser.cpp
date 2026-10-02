@@ -13,11 +13,8 @@
 
 namespace
 {
-constexpr nrd::Identifier ReblurIdentifier = 0;
 constexpr nrd::Identifier RelaxIdentifier = 1;
-constexpr nrd::Identifier ReblurShIdentifier = 2;
 constexpr nrd::Identifier RelaxShIdentifier = 3;
-constexpr nrd::Identifier ReblurLayerIdentifier = 4;
 constexpr nrd::Identifier RelaxLayerIdentifier = 5;
 // Weight of each frame's time in the smoothed frame time.
 constexpr float FrameTimeSmoothing = 0.1f;
@@ -60,16 +57,6 @@ std::uint32_t historyFrames(const float accumulationTime, const float fps,
 // distance for diffuse; the small minHitDistanceWeight gives that guide the
 // authority to reject samples across a hard local-light shadow boundary
 // instead of softening it.
-nrd::ReblurSettings reblurSettings(const float fps)
-{
-    nrd::ReblurSettings settings{};
-    settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
-    settings.minHitDistanceWeight = 0.01f;
-    settings.maxAccumulatedFrameNum = historyFrames(nrd::REBLUR_DEFAULT_ACCUMULATION_TIME, fps,
-        nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
-    return settings;
-}
-
 nrd::RelaxSettings relaxSettings(const float fps)
 {
     nrd::RelaxSettings settings{};
@@ -167,6 +154,9 @@ struct Denoiser::Resources
     VkDescriptorPool constantsPool{VK_NULL_HANDLE};
     VkDescriptorSet constants{VK_NULL_HANDLE};
     VkPhysicalDeviceMemoryProperties memoryProperties{};
+    // Null without VK_EXT_debug_utils; they name each NRD pass for profilers.
+    PFN_vkCmdBeginDebugUtilsLabelEXT beginLabel{};
+    PFN_vkCmdEndDebugUtilsLabelEXT endLabel{};
 
     std::uint32_t memoryType(const std::uint32_t allowed, const VkMemoryPropertyFlags flags) const
     {
@@ -188,6 +178,10 @@ Denoiser::Denoiser(noorrhi::Device& device)
     resources_->pipelineCache = reinterpret_cast<VkPipelineCache>(handles.pipeline_cache);
     vkGetPhysicalDeviceMemoryProperties(resources_->physicalDevice,
         &resources_->memoryProperties);
+    resources_->beginLabel = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(resources_->device, "vkCmdBeginDebugUtilsLabelEXT"));
+    resources_->endLabel = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(resources_->device, "vkCmdEndDebugUtilsLabelEXT"));
 }
 
 Denoiser::~Denoiser()
@@ -201,12 +195,8 @@ Denoiser::~Denoiser()
 
 std::vector<std::uint32_t> Denoiser::identifiers() const
 {
-    const bool relax = layout_.mode == DenoiserMode::Relax;
-    std::vector<std::uint32_t> result{layout_.sphericalHarmonics
-        ? (relax ? RelaxShIdentifier : ReblurShIdentifier)
-        : (relax ? RelaxIdentifier : ReblurIdentifier)};
-    if (layout_.layers)
-        result.push_back(relax ? RelaxLayerIdentifier : ReblurLayerIdentifier);
+    std::vector<std::uint32_t> result{layout_.sphericalHarmonics ? RelaxShIdentifier : RelaxIdentifier};
+    if (layout_.layers) result.push_back(RelaxLayerIdentifier);
     return result;
 }
 
@@ -220,12 +210,9 @@ void Denoiser::configure(const DenoiserLayout& layout)
     // its own history pools, whether it runs or not.
     std::vector<nrd::DenoiserDesc> denoisers;
     for (const std::uint32_t identifier : identifiers()) {
-        const bool sh = identifier == ReblurShIdentifier || identifier == RelaxShIdentifier;
-        const bool relax = identifier == RelaxIdentifier || identifier == RelaxShIdentifier
-            || identifier == RelaxLayerIdentifier;
-        denoisers.push_back({identifier, relax
-            ? (sh ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR_SH : nrd::Denoiser::RELAX_DIFFUSE_SPECULAR)
-            : (sh ? nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_SH : nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR)});
+        const bool sh = identifier == RelaxShIdentifier;
+        denoisers.push_back({identifier, sh
+            ? nrd::Denoiser::RELAX_DIFFUSE_SPECULAR_SH : nrd::Denoiser::RELAX_DIFFUSE_SPECULAR});
     }
     nrd::InstanceCreationDesc creation{};
     creation.denoisers = denoisers.data();
@@ -285,11 +272,8 @@ nr::graphics::DenoiserArgs Denoiser::args(const RenderTargets& targets) const
         : layerDiffuseOutput_.storage_handle().value;
     args.layerSpecular = off ? targets.handles().layerSpecular
         : layerSpecularOutput_.storage_handle().value;
-    args.relax = layout_.mode == DenoiserMode::Relax ? 1u : 0u;
     args.sphericalHarmonics = sphericalHarmonics() ? 1u : 0u;
     args.denoisingRange = DenoisingRange;
-    const nrd::ReblurHitDistanceParameters hitDistance{};
-    args.hitDistanceParameters = {hitDistance.A, hitDistance.B, hitDistance.C};
     return args;
 }
 
@@ -344,19 +328,16 @@ void Denoiser::updateHistoryLength(const float frameTimeMilliseconds)
         : smoothedFrameTimeMilliseconds_
             + FrameTimeSmoothing * (frameTimeMilliseconds - smoothedFrameTimeMilliseconds_);
     const float fps = 1000.0f / std::max(smoothedFrameTimeMilliseconds_, 0.1f);
-    const nrd::ReblurSettings reblur = reblurSettings(fps);
     const nrd::RelaxSettings relax = relaxSettings(fps);
     // NRD re-derives its constants on every settings change; only pass on
     // one that changes a history length.
-    const std::array<std::uint32_t, 2> frames{reblur.maxAccumulatedFrameNum,
-        relax.diffuseMaxAccumulatedFrameNum};
+    const std::uint32_t frames = relax.diffuseMaxAccumulatedFrameNum;
     if (frames == historyFrames_)
         return;
     historyFrames_ = frames;
-    const bool relaxMode = layout_.mode == DenoiserMode::Relax;
     for (const std::uint32_t identifier : identifiers())
         check(nrd::SetDenoiserSettings(*instance_, identifier,
-            relaxMode ? static_cast<const void*>(&relax) : &reblur), "SetDenoiserSettings");
+            &relax), "SetDenoiserSettings");
 }
 
 void Denoiser::createPipelines()
@@ -689,8 +670,7 @@ std::uint64_t Denoiser::descriptorSet(const std::uint16_t pipelineIndex,
 void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets& targets)
 {
     const std::vector<std::uint32_t> running = identifiers();
-    const nrd::Identifier layerIdentifier = layout_.mode == DenoiserMode::Relax
-        ? RelaxLayerIdentifier : ReblurLayerIdentifier;
+    const nrd::Identifier layerIdentifier = RelaxLayerIdentifier;
     Resources& r = *resources_;
     check(nrd::SetCommonSettings(*instance_, settings), "SetCommonSettings");
     const nrd::DispatchDesc* dispatches = nullptr;
@@ -728,6 +708,7 @@ void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets
 
     struct Recorded
     {
+        const char* name;
         VkPipeline pipeline;
         VkDescriptorSet resources;
         std::uint32_t constantOffset;
@@ -766,7 +747,7 @@ void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets
             previousConstantOffset_ = offset;
         }
 
-        recorded.push_back({r.pipelines.at(dispatch.pipelineIndex),
+        recorded.push_back({dispatch.name, r.pipelines.at(dispatch.pipelineIndex),
             reinterpret_cast<VkDescriptorSet>(descriptorSet(dispatch.pipelineIndex, views)),
             static_cast<std::uint32_t>(offset), dispatch.gridWidth, dispatch.gridHeight});
     }
@@ -806,7 +787,14 @@ void Denoiser::dispatch(const nrd::CommonSettings& settings, const RenderTargets
                     r.pipelineLayout, set, 1, &sets[set], constants ? 1 : 0,
                     constants ? &dispatch.constantOffset : nullptr);
             }
+            if (r.beginLabel && dispatch.name) {
+                VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
+                label.pLabelName = dispatch.name;
+                r.beginLabel(command, &label);
+            }
             vkCmdDispatch(command, dispatch.groupsX, dispatch.groupsY, 1);
+            if (r.beginLabel && dispatch.name)
+                r.endLabel(command);
         }
     });
 }

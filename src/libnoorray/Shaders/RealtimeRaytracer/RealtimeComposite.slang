@@ -43,9 +43,9 @@ LightingSample upsampleLighting(uint2 pixel, float viewZ, float3 normal, float n
     RealtimeArgs* args = realtimeArgs();
     RWTexture2D<float4> diffuse = ResourceDescriptorHeap[diffuseSource];
     RWTexture2D<float4> specular = ResourceDescriptorHeap[specularSource];
-    const uint scale = args.view.lightingScale;
+    const float scale = args.view.lightingScale;
     LightingSample result = (LightingSample)0;
-    if (scale == 1u)
+    if (scale == 1.0f)
     {
         result.diffuse = diffuse[pixel];
         result.specular = specular[pixel];
@@ -63,7 +63,7 @@ LightingSample upsampleLighting(uint2 pixel, float viewZ, float3 normal, float n
     // so the jitter cancels: render pixel p lies at (p + 0.5) / scale - 0.5 on
     // the grid of lighting samples.
     const float2 position = (float2(pixel) + 0.5) / float(scale) - 0.5;
-    const int radius = scale <= 2u ? 1 : 2;
+    const int radius = scale <= 2.0f ? 1 : 2;
     const int2 base = int2(floor(position));
     const int2 lastPixel = int2(args.view.lightingWidth, args.view.lightingHeight) - 1;
     const float depthTolerance = UpsampleDepthSigma / (abs(normalView) * 0.95 + 0.05);

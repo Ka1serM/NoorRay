@@ -35,7 +35,7 @@ struct RealtimeView
     uint outputHeight;
     // Lighting pixels are this many render pixels across (1 at full
     // resolution); the lighting rectangle is lightingWidth x lightingHeight.
-    uint lightingScale;
+    float lightingScale;
     uint lightingWidth;
     uint lightingHeight;
     // Nonzero when RealtimeOutputAovs refreshes the full-output cryptomatte,
@@ -110,20 +110,13 @@ struct DenoiserArgs
     uint specularSh1;
     uint layerDiffuse;
     uint layerSpecular;
-    // Nonzero when the signals are packed for RELAX instead of REBLUR.
-    uint relax;
     // Nonzero when the signals are packed for an SH denoiser. Only set while
     // a denoiser runs.
     uint sphericalHarmonics;
     // View Z beyond this is background, which the primary pass writes at twice
     // the range.
     float denoisingRange;
-    uint padding;
-    // REBLUR hit distance normalization (A, B, C).
-    float3 hitDistanceParameters;
-    uint padding1;
-    uint padding2;
-    uint padding3;
+
 };
 
 struct RealtimeArgs

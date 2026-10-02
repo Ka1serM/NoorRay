@@ -48,9 +48,8 @@ float3 materialCameraUp()
 
 // MaterialX's view and projection uniforms, in its viewer's conventions: a
 // right-handed view space looking down -Z, GL clip space with an infinite far
-// plane, and matrices applied to row vectors (see materialMatrix). Fisheye and
-// sequential lenses project like the pinhole of the same film and focal
-// length, as the renderer's own projection does.
+// plane, and matrices applied to row vectors (see materialMatrix). The
+// realtime renderer uses perspective projection.
 float4x4 materialViewInverseMatrix()
 {
     const Camera camera = materialFrame()->camera;
@@ -71,18 +70,13 @@ float4x4 materialViewMatrix()
         float4(rotation[2], 0.0), float4(-mul(position, rotation), 1.0));
 }
 
-// The film's half extents at unit distance (perspective) or in metres
-// (orthographic), matching generateCameraRay().
+// The film's half extents at unit distance, matching perspective ray
+// generation.
 float2 materialFilmScale(Camera camera)
 {
     const float sensorWidth = max(camera.sensorWidthMm, 0.001);
     const float sensorHeight = max(camera.sensorHeightMm, 0.001);
     const float focalLength = max(camera.focalLengthMm, 0.001);
-    if (camera.projection == 1u)
-    {
-        const float height = 10.0 * 21.0 / focalLength;
-        return float2(height * sensorWidth / sensorHeight, height) * 0.5;
-    }
     return float2(sensorWidth, sensorHeight) / (2.0 * focalLength);
 }
 
@@ -91,13 +85,6 @@ float4x4 materialProjectionMatrix()
     Frame* frame = materialFrame();
     const float2 scale = materialFilmScale(frame->camera);
     const float nearPlane = frame->nearPlane;
-    if (frame->camera.projection == 1u)
-    {
-        const float farPlane = frame->orthographicFarPlane;
-        return float4x4(float4(1.0 / scale.x, 0.0, 0.0, 0.0), float4(0.0, 1.0 / scale.y, 0.0, 0.0),
-            float4(0.0, 0.0, -2.0 / (farPlane - nearPlane), 0.0),
-            float4(0.0, 0.0, -(farPlane + nearPlane) / (farPlane - nearPlane), 1.0));
-    }
     return float4x4(float4(1.0 / scale.x, 0.0, 0.0, 0.0), float4(0.0, 1.0 / scale.y, 0.0, 0.0),
         float4(0.0, 0.0, -1.0, -1.0), float4(0.0, 0.0, -2.0 * nearPlane, 0.0));
 }
@@ -107,13 +94,6 @@ float4x4 materialProjectionInverseMatrix()
     Frame* frame = materialFrame();
     const float2 scale = materialFilmScale(frame->camera);
     const float nearPlane = frame->nearPlane;
-    if (frame->camera.projection == 1u)
-    {
-        const float farPlane = frame->orthographicFarPlane;
-        return float4x4(float4(scale.x, 0.0, 0.0, 0.0), float4(0.0, scale.y, 0.0, 0.0),
-            float4(0.0, 0.0, -(farPlane - nearPlane) * 0.5, 0.0),
-            float4(0.0, 0.0, -(farPlane + nearPlane) * 0.5, 1.0));
-    }
     return float4x4(float4(scale.x, 0.0, 0.0, 0.0), float4(0.0, scale.y, 0.0, 0.0),
         float4(0.0, 0.0, 0.0, -0.5 / nearPlane), float4(0.0, 0.0, -1.0, 0.5 / nearPlane));
 }
@@ -238,8 +218,12 @@ void materialClosestHit<M : IMaterial>(inout RealtimeHitPayload payload, float2 
     const MaterialHitSurface hit = hitSurface(frame, barycentrics,
         unpackVertexDifferential(payload.differential));
     const RegularSurface surface = hit.surface;
-    const surfaceshader shaded = evaluateHit<M>(frame, hit);
     const uint materialFlags = frame->materials[surface.materialIndex]->flags;
+    const Instance instance = frame->scene.instances[min(InstanceID(), frame->scene.instanceCount - 1u)];
+    if ((materialFlags & MaterialFlagAnimated) != 0u
+        || (instance.flags & InstanceFlagAnimated) != 0u)
+        InterlockedExchange(frame->beautyAccumulation->animatedHit[frame->accumulationSlot], 1u);
+    const surfaceshader shaded = evaluateHit<M>(frame, hit);
     // Unreal's one-sided materials emit nothing from their back.
     const bool emits = (materialFlags & MaterialFlagOneSided) == 0u
         || HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
@@ -256,13 +240,20 @@ void materialClosestHit<M : IMaterial>(inout RealtimeHitPayload payload, float2 
     payload.flags = (materialFlags & MaterialFlagSky) != 0u ? RealtimeHitSky : 0u;
 }
 
-// Only empty coverage is discarded. Fractional surfaces are returned to the
+// One-sided backfaces and empty coverage are discarded. Fractional surfaces are returned to the
 // ray-generation stage, which composites all layers in distance order.
 void materialAnyHit<M : IMaterial>(RealtimeHitPayload payload, float2 barycentrics)
 {
     Frame* frame = materialFrame();
-    if (evaluateHit<M>(frame, hitSurface(frame, barycentrics,
-            unpackVertexDifferential(payload.differential))).opacity <= 0.0)
+    const MaterialHitSurface hit = hitSurface(frame, barycentrics,
+        unpackVertexDifferential(payload.differential));
+    if (HitKind() == HIT_KIND_TRIANGLE_BACK_FACE
+        && (frame->materials[hit.surface.materialIndex]->flags & MaterialFlagOneSided) != 0u)
+    {
+        IgnoreHit();
+        return;
+    }
+    if (evaluateHit<M>(frame, hit).opacity <= 0.0)
         IgnoreHit();
 }
 
@@ -280,9 +271,14 @@ void materialShadowAnyHit<M : IMaterial>(inout RealtimeShadowPayload payload,
         IgnoreHit();
         return;
     }
-    payload.transmittance *= 1.0
-        - saturate(evaluateHit<M>(frame, hitSurface(frame, barycentrics,
-            zeroVertexDifferential())).opacity);
+    const MaterialHitSurface hit = hitSurface(frame, barycentrics, zeroVertexDifferential());
+    if (HitKind() == HIT_KIND_TRIANGLE_BACK_FACE
+        && (frame->materials[hit.surface.materialIndex]->flags & MaterialFlagOneSided) != 0u)
+    {
+        IgnoreHit();
+        return;
+    }
+    payload.transmittance *= 1.0 - saturate(evaluateHit<M>(frame, hit).opacity);
     if (payload.transmittance < RealtimeMinTransmittance)
         AcceptHitAndEndSearch();
     else

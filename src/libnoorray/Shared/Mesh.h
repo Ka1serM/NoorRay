@@ -25,7 +25,10 @@ struct Instance
     // through a channel they share.
     uint lightingChannels;
     uint customDataCount;
+    uint flags;
 };
+
+static const uint InstanceFlagAnimated = 0x1u;
 
 // A mesh section as the hit stages see it. Each section is one BLAS
 // geometry, so a hit's triangle is sections[GeometryIndex()].firstTriangle +
@@ -44,9 +47,9 @@ struct SectionRecord
 struct Mesh
 {
     GpuPtr(float3) positions;
-    // TangentX then TangentZ as SNORM16x4; TangentZ is the normal and
+    // TangentX then TangentZ as SNORM8x4; TangentZ is the normal and
     // TangentZ.w the bitangent sign.
-    GpuPtr(uint4) tangents;
+    GpuPtr(uint2) tangents;
     // uvCount channels per vertex: uvs[uvCount * vertex + channel].
     GpuPtr(float2) uvs;
     // Optional FColor per vertex: B | G << 8 | R << 16 | A << 24, linear

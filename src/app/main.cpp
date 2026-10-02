@@ -92,7 +92,7 @@ void printUsage()
         << "  --max-bounces <int>  Maximum path depth (default: from scene)\n"
         << "  --fsr-mode <native|quality|balanced|performance|ultra-performance>\n"
         << "                       Realtime FSR mode, which sets the trace resolution\n"
-        << "  --nrd-mode <reblur|relax>\n"
+        << "  --nrd-mode <relax>\n"
         << "                       Realtime NRD denoiser\n"
         << "  --no-nrd             Composite the noisy radiance without NRD\n"
         << "  --no-fsr             Trace at the output resolution without FSR\n"
@@ -165,12 +165,10 @@ CliOptions parseOptions(const int argc, char* argv[])
         else if (arg == "--nrd-mode")
         {
             const std::string mode = requireValue(argc, argv, i);
-            if (mode == "reblur")
-                options.denoiserMode = DenoiserMode::Reblur;
-            else if (mode == "relax")
+            if (mode == "relax")
                 options.denoiserMode = DenoiserMode::Relax;
             else
-                throw std::invalid_argument("--nrd-mode must be 'reblur' or 'relax'");
+                throw std::invalid_argument("--nrd-mode must be 'relax'");
         }
         else if (arg == "--no-nrd")
             options.denoiserMode = DenoiserMode::Off;

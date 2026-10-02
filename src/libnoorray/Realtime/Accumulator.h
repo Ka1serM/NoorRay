@@ -5,7 +5,8 @@
 #include "Shared/RealtimeArgs.h"
 
 // Folds each frame's output beauty into a running average, as the offline
-// tracer does, so a still view converges. Frame sample index 0 restarts it.
+// tracer does, so a still view converges. Frame sample index 0 or an animated
+// hit restarts it.
 class Accumulator
 {
 public:

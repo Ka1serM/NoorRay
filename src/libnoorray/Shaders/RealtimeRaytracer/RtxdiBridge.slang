@@ -755,7 +755,7 @@ RAB_LightSample sampleDirectionalLight(DirectionalLight light, float3 origin, fl
 RAB_LightSample applyLightControls(RAB_LightSample sample, LightControls controls,
     RAB_Surface surface)
 {
-    if ((controls.lightingChannels & surface.lightingChannels) == 0u)
+    if (controls.visible == 0u || (controls.lightingChannels & surface.lightingChannels) == 0u)
         return RAB_EmptyLightSample();
     sample.radiance *= lerp(1.0, controls.indirectLightingIntensity,
         saturate(4.0 * surface.pathRoughness));
@@ -819,6 +819,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
         controls.diffuseScale = 1.0;
         controls.specularScale = 1.0;
         controls.indirectLightingIntensity = environment.indirectLightingIntensity;
+        controls.visible = 1u;
     }
     else
         return sample;

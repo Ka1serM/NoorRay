@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <span>
@@ -20,9 +21,8 @@
 #include "Shared/RenderSettings.h"
 #include "Optics/KolbLens.h"
 #include "Mesh/Assets/Mesh.h"
-#include <vector>
-
-class Scene;
+#include "Mesh/SplineMeshPass.h"
+#include "Scene/Scene.h"
 // The CPU mesh asset, distinct from the nr::graphics::Mesh record.
 class Mesh;
 class MeshInstance;
@@ -37,6 +37,10 @@ struct MaterialHitShaders
     noorrhi::Shader anyHit;
     noorrhi::Shader shadowAnyHit;
 };
+
+// The driver work between publishing a MaterialX program and using it for
+// tracing. Hosts use this to distinguish the visible post-compilation pause.
+enum class MaterialShaderStage { Idle, CompilingLibraries, LinkingPipeline };
 
 // One shader-binding-table hit record of the shared TLAS, in record order: a
 // mesh instance's hit offset addresses RaytracingRayTypeCount records per
@@ -59,22 +63,28 @@ struct HitRecord
     bool operator==(const HitRecord&) const = default;
 };
 
-// graphics API ray tracer and sole render owner. It holds the TLAS, the per-frame
-// record, and the pointer tables that address resources the Scene owns.
-//
-// Scene publication, output images and readback are shared; each renderer
-// only supplies its ray-tracing pipeline. Every implementation reads the same
-// nr::graphics::Frame and writes the same beauty and AOV images, so hosts and
-// the viewport composite treat them interchangeably.
-class Raytracer
+// Common scene and output-image resources, composed into each concrete
+// renderer. This is deliberately not a base class: renderer-specific
+// construction owns its resources and decides which common resources it needs.
+class RaytracerResources
 {
 public:
-    virtual ~Raytracer();
+    enum class FullOutputAovs { Written, Omitted };
+    struct Callbacks
+    {
+        std::function<void()> imageAllocationChanged;
+        std::function<void(const RenderSettings&)> renderSettingsApplied;
+        std::function<void()> lightsUploaded;
+        std::function<void(std::span<const MaterialHitShaders>)> materialShadersChanged;
+        std::function<void(std::span<const HitRecord>)> hitRecordsChanged;
+    };
 
-    virtual RaytracerType type() const noexcept = 0;
-
-    Raytracer(const Raytracer&) = delete;
-    Raytracer& operator=(const Raytracer&) = delete;
+    RaytracerResources(noorrhi::Device& device, uint32_t width, uint32_t height,
+        bool exportColorMemory, FullOutputAovs fullOutputAovs, bool allocateAccumulationBuffer);
+    ~RaytracerResources();
+    RaytracerResources(const RaytracerResources&) = delete;
+    RaytracerResources& operator=(const RaytracerResources&) = delete;
+    void setCallbacks(Callbacks callbacks) { callbacks_ = std::move(callbacks); }
 
     // Sets the logical render size; the images follow in
     // prepareFrameResources(). Allocations are 150% of the size they are made
@@ -82,9 +92,6 @@ public:
     // viewport reallocates a few times rather than on every step; the
     // allocation shrinks to 150% of a size once it has settled.
     void resize(uint32_t width, uint32_t height);
-    // Keeps the output images allocated at least this large, so interactive
-    // hosts can resize within it every frame. Reallocating here synchronizes.
-    void reserve(uint32_t width, uint32_t height);
     nr::graphics::Frame data{};
     noorrhi::Shared<nr::graphics::Lens> lens;
     // Publish changed resident records before recording a frame.
@@ -102,7 +109,9 @@ public:
     // background change no GPU resource, so hosts call this on its own rather
     // than forcing a scene re-upload just to make an edit observable.
     void applyRenderSettings(const RenderSettings& settings);
-    void updateLights(const Scene& scene);
+    // Patches the light records `changed` names; a change in the light set
+    // republishes them all.
+    void updateLights(const Scene& scene, const Scene::LightIndices& changed);
     void updateCamera(const Scene& scene);
     // Publishes the scene environment (colour, rotation, exposure, HDRI and
     // its importance CDF) as an immutable descriptor-heap record.
@@ -113,21 +122,21 @@ public:
     // reading, so this waits for the device; hosts must therefore call it
     // outside any recorded frame, before render(). render() repeats the check
     // for hosts that do not (the offline path), where waiting mid-frame is
-    // harmless because there is no frame open. Returns true when the images
-    // were replaced: the accumulation is gone and restarts at sample 0.
-    virtual bool prepareFrameResources();
-    // Dispatch one sample into the renderer-owned output texture. The work is
-    // recorded into the enclosing noorrhi::Frame when the caller has one open,
-    // and submitted on its own when it does not.
-    virtual void render(uint32_t frameIndex = 0, uint32_t sampleIndex = 0);
+    // harmless because there is no frame open. Returns true when the common
+    // output images were replaced; the concrete renderer can rebuild its own
+    // size-dependent resources in response.
+    bool prepareFrameResources();
+    // Records a concrete renderer's work with the common timestamp and frame
+    // data setup. The callable records into the active frame, if any.
+    void dispatch(uint32_t frameIndex, uint32_t sampleIndex, const std::function<void()>& record);
     // Valid after the command buffer containing the most recent record() has
     // completed. Returns actual device timestamp time, not CPU wall time.
     double lastDispatchMilliseconds();
     // The ray tracer's contract is a texture, not a window or swapchain. The
     // image handle is for native GPU operations/interop; the texture handle is
     // for sampling or storage access in another NoorRHI pipeline. Both refer to
-    // the same scene-linear RGBA32F image and remain valid until resize() or
-    // reserve() reallocates. The image may be larger than width() x height();
+    // the same scene-linear RGBA32F image and remain valid until a resize
+    // reallocates. The image may be larger than width() x height();
     // only the bottom-left logical rectangle holds the current render.
     noorrhi::ImageHandle outputImageHandle() const { return colorImage.handle(); }
     // Storage view for NoorRHI shader pipelines that read/write the output.
@@ -159,82 +168,38 @@ public:
     // Out-of-range pixels read as a miss (~0u / zero).
     std::uint32_t readCryptomatteAt(uint32_t x, uint32_t y);
     noorrhi::float4 readPositionAt(uint32_t x, uint32_t y);
-    virtual std::uint32_t readCryptomatteAtOutput(uint32_t x, uint32_t y)
-    { return readCryptomatteAt(x, y); }
-    virtual noorrhi::float4 readPositionAtOutput(uint32_t x, uint32_t y)
-    { return readPositionAt(x, y); }
     uint32_t width() const { return renderWidth; }
     uint32_t height() const { return renderHeight; }
     // The resolution rays are actually traced at. A renderer that upscales -
     // the realtime path, through FSR - traces a fixed, smaller resolution and
     // upscales to the logical size; by default the two are the same.
-    virtual uint32_t traceWidth() const { return renderWidth; }
-    virtual uint32_t traceHeight() const { return renderHeight; }
     // Allocated size of every output image and per-pixel buffer.
     uint32_t imageWidth() const { return imageWidth_; }
     uint32_t imageHeight() const { return imageHeight_; }
 
-    // A renderer may compile the shaders onMaterialShadersChanged() received
-    // in the background, shading their materials with the default surface
-    // meanwhile. This links what finished and returns true when the image
-    // changes; call it outside a recorded frame.
-    virtual bool linkCompiledMaterialShaders() { return false; }
-    // Waits for every background compile and links it, for offline renders
-    // that must not show default surfaces.
-    virtual void waitForMaterialShaders() {}
-
-protected:
-    // Whether the renderer writes the albedo, normal and position output
-    // images. Beauty and cryptomatte always exist.
-    enum class FullOutputAovs { Written, Omitted };
-
-    // The device is owned by the session, not by the renderer: the viewport
-    // composite, the swapchain and this renderer all share one noorrhi::Device.
-    Raytracer(noorrhi::Device& device, uint32_t width, uint32_t height,
-        bool exportColorMemory, FullOutputAovs fullOutputAovs);
-
-    // Concrete renderers compile and own their shader pipeline and record
-    // their frame here. The rest of the renderer state is intentionally shared
-    // so scene publication, accumulation, AOVs and viewport integration stay
-    // renderer-agnostic.
-    virtual void renderImpl() = 0;
-    virtual void onImageAllocationChanged() {}
-    noorrhi::Device& renderDevice() const { return *gpuDevice; }
-    uint32_t logicalRenderWidth() const { return renderWidth; }
-    uint32_t logicalRenderHeight() const { return renderHeight; }
-    // Called at the end of applyRenderSettings(), for settings only one
-    // renderer reads.
-    virtual void onRenderSettingsApplied(const RenderSettings&) {}
-    // Called after every light upload, with the records the GPU now holds.
-    virtual void onLightsUploaded() {}
-    // Called when material uploads added hit shaders. The list only grows,
-    // so a material's index into it stays valid.
-    virtual void onMaterialShadersChanged(std::span<const MaterialHitShaders>) {}
-    // Called after every scene upload with the hit records the new TLAS
-    // addresses; a renderer's pipeline needs one hit group per record.
-    virtual void onHitRecordsChanged(std::span<const HitRecord>) = 0;
     const std::vector<nr::graphics::PointLight>& pointLightRecords() const { return pointLightData_; }
     const std::vector<nr::graphics::SpotLight>& spotLightRecords() const { return spotLightData_; }
     const std::vector<nr::graphics::RectLight>& rectLightRecords() const { return rectLightData_; }
     const std::vector<nr::graphics::DirectionalLight>& directionalLightRecords() const
-    {
-        return directionalLightData_;
-    }
-
+    { return directionalLightData_; }
 private:
+    // Hooks keep renderer-specific state synchronized with common publications.
+    Callbacks callbacks_;
     void createImages();
     void updateRoot();
     void uploadLights(const Scene& scene);
+    // Republishes what the light samplers derive from every selection weight.
+    void publishLightSampling();
     void uploadTextures(Scene& scene);
 
     noorrhi::Device* gpuDevice{};
+    SplineMeshPass splineMeshPass_;
     bool exportColorMemory{};
+    bool allocateAccumulationBuffer{};
     uint32_t renderWidth{};
     uint32_t renderHeight{};
     uint32_t imageWidth_{};
     uint32_t imageHeight_{};
-    uint32_t reservedWidth_{};
-    uint32_t reservedHeight_{};
     // When the logical size last changed; the allocation shrinks only after
     // it has held for a while, so a drag never reallocates back and forth.
     std::chrono::steady_clock::time_point resized_{};
@@ -365,4 +330,58 @@ private:
     bool lightBuffersValid_{};
     // Sampled by any material whose texture failed to load at import time.
     noorrhi::Image<std::byte> whiteTexture;
+};
+
+// Renderer contract shared by the session and integrations. It owns no GPU
+// resources; concrete renderers compose RaytracerResources as needed.
+class Raytracer
+{
+public:
+    virtual ~Raytracer() = default;
+    virtual RaytracerType type() const noexcept = 0;
+    virtual RaytracerResources& resources() = 0;
+    virtual const RaytracerResources& resources() const = 0;
+    virtual bool prepareFrameResources() = 0;
+    virtual void render(uint32_t frameIndex = 0, uint32_t sampleIndex = 0) = 0;
+    // Discards temporal state before the next frame. Stateless renderers do
+    // not need to override this.
+    virtual void restartTemporalHistory() {}
+    virtual uint32_t traceWidth() const { return resources().width(); }
+    virtual uint32_t traceHeight() const { return resources().height(); }
+    virtual uint32_t readCryptomatteAtOutput(uint32_t x, uint32_t y)
+    { return resources().readCryptomatteAt(x, y); }
+    virtual noorrhi::float4 readPositionAtOutput(uint32_t x, uint32_t y)
+    { return resources().readPositionAt(x, y); }
+
+    void resize(uint32_t width, uint32_t height) { resources().resize(width, height); }
+    nr::graphics::Frame& data() { return resources().data; }
+    void commit() { resources().commit(); }
+    void uploadScene(Scene& scene) { resources().uploadScene(scene); }
+    void publishScene(Scene& scene, bool = true) { resources().publishScene(scene); }
+    void applyRenderSettings(const RenderSettings& settings) { resources().applyRenderSettings(settings); }
+    void updateLights(const Scene& scene, const Scene::LightIndices& changed)
+    { resources().updateLights(scene, changed); }
+    void updateCamera(const Scene& scene) { resources().updateCamera(scene); }
+    void uploadEnvironment(Scene& scene) { resources().uploadEnvironment(scene); }
+    double lastDispatchMilliseconds() { return resources().lastDispatchMilliseconds(); }
+    noorrhi::ImageHandle outputImageHandle() const { return resources().outputImageHandle(); }
+    noorrhi::TextureHandle outputTexture() const { return resources().outputTexture(); }
+    noorrhi::TextureHandle outputSampledTexture() const { return resources().outputSampledTexture(); }
+    noorrhi::TextureHandle albedoTexture() const { return resources().albedoTexture(); }
+    noorrhi::TextureHandle normalTexture() const { return resources().normalTexture(); }
+    noorrhi::TextureHandle positionTexture() const { return resources().positionTexture(); }
+    noorrhi::TextureHandle cryptomatteTexture() const { return resources().cryptomatteTexture(); }
+    noorrhi::GpuPtr<std::uint32_t> gaussianOverdrawPtr() const { return resources().gaussianOverdrawPtr(); }
+    noorrhi::Device& device() const { return resources().device(); }
+    std::vector<std::byte> readColor() { return resources().readColor(); }
+    std::vector<noorrhi::float4> readBeauty() { return resources().readBeauty(); }
+    std::vector<std::uint32_t> readCryptomatte() { return resources().readCryptomatte(); }
+    std::vector<noorrhi::float4> readPosition() { return resources().readPosition(); }
+    uint32_t width() const { return resources().width(); }
+    uint32_t height() const { return resources().height(); }
+    uint32_t imageWidth() const { return resources().imageWidth(); }
+    uint32_t imageHeight() const { return resources().imageHeight(); }
+    virtual bool linkCompiledMaterialShaders() { return false; }
+    virtual MaterialShaderStage materialShaderStage() const { return MaterialShaderStage::Idle; }
+    virtual void waitForMaterialShaders() {}
 };

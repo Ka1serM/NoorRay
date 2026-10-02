@@ -36,6 +36,7 @@ public:
     void setLightIndex(uint32_t index) { lightIndex = index; }
 
     void onTransformUpdated() override;
+    void onVisibilityChanged() override { commitLightChanges(); }
 
     virtual glm::vec3 getColor() const = 0;
     virtual void setColor(const glm::vec3& color) = 0;

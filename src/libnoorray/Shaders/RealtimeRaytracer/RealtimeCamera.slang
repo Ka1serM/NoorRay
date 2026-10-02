@@ -15,8 +15,8 @@ CameraRay realtimeCameraRay(uint2 pixel)
     return generateCameraRay(args.frame, uv, float2(0.5), 550.0);
 }
 
-// The point of `ray` at `viewZ`, which is measured from the camera position
-// along its forward axis; orthographic and lens rays start elsewhere.
+// The point of `ray` at `viewZ`, measured from the camera position along its
+// forward axis.
 float3 realtimeRayPoint(CameraRay ray, float viewZ)
 {
     const RealtimeView view = realtimeArgs()->view;

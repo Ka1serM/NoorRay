@@ -142,6 +142,40 @@ float rectLightIntensity(const RectLight& light)
     throw std::invalid_argument("unknown light units " + std::to_string(light.units));
 }
 
+// A scene light record as the renderer reads it: its intensity in renderer
+// units and its weight for light selection.
+PointLight publishedRecord(PointLight record)
+{
+    record.intensity = localLightIntensity(record.falloff, record.units, record.intensity,
+        record.softRadius, record.sourceLength, 4.0f * LightPi);
+    record.selectionWeight = pointLightSelectionWeight(record);
+    return record;
+}
+
+SpotLight publishedRecord(SpotLight record)
+{
+    record.intensity = localLightIntensity(record.falloff, record.units, record.intensity,
+        record.softRadius, record.sourceLength, spotSolidAngle(record));
+    record.selectionWeight = spotLightSelectionWeight(record);
+    return record;
+}
+
+RectLight publishedRecord(RectLight record)
+{
+    record.intensity = rectLightIntensity(record);
+    record.twoSided = record.twoSided != 0 ? 1u : 0u;
+    record.selectionWeight = rectLightSelectionWeight(record);
+    return record;
+}
+
+// Unreal directional light intensity is in lux. Keep its ELightUnits value
+// intact in the record, as for every other light type.
+DirectionalLight publishedRecord(DirectionalLight record)
+{
+    record.selectionWeight = directionalLightSelectionWeight(record);
+    return record;
+}
+
 // Keep texture uploads bounded by the descriptor-heap budget.  The first
 // entry is reserved for the white fallback, leaving room for render targets,
 // scene buffers, and repeated immutable material updates.
@@ -223,15 +257,17 @@ noorrhi::InstanceRecord instanceRecord(const glm::mat4& objectToWorld, const uin
 
 }
 
-Raytracer::Raytracer(noorrhi::Device& device,
+RaytracerResources::RaytracerResources(noorrhi::Device& device,
     const uint32_t width, const uint32_t height, const bool exportColorMemory,
-    const FullOutputAovs fullOutputAovs)
+    const FullOutputAovs fullOutputAovs, const bool allocateAccumulationBuffer)
     : renderWidth(std::max(width, 1u))
     , renderHeight(std::max(height, 1u))
     , imageWidth_(allocationExtent(renderWidth))
     , imageHeight_(allocationExtent(renderHeight))
     , gpuDevice(&device)
+    , splineMeshPass_(device)
     , exportColorMemory(exportColorMemory)
+    , allocateAccumulationBuffer(allocateAccumulationBuffer)
     , fullOutputAovs_(fullOutputAovs)
 {
     dispatchTimestamp = gpuDevice->timestamp();
@@ -265,9 +301,9 @@ Raytracer::Raytracer(noorrhi::Device& device,
     NR_LOG_INFO("graphics API raytracer: ready");
 }
 
-Raytracer::~Raytracer() = default;
+RaytracerResources::~RaytracerResources() = default;
 
-void Raytracer::createImages()
+void RaytracerResources::createImages()
 {
     const auto storage = noorrhi::ImageUsage::Storage | noorrhi::ImageUsage::Sampled;
     // Beauty is the authoritative scene-linear HDR image.  Presentation to an
@@ -288,14 +324,16 @@ void Raytracer::createImages()
             noorrhi::ImageFormat::Rgba32Float);
     }
     // Per-pixel buffers are indexed with the logical width as the stride, so
-    // any logical size up to the image allocation fits inside them. Sample 0
-    // restarts the accumulation without reading it, so it needs no clear.
+    // any logical size up to the image allocation fits inside them.
     const std::size_t pixelCount = static_cast<std::size_t>(imageWidth_) * imageHeight_;
     gaussianOverdrawBuffer = gpuDevice->buffer<std::uint32_t>(pixelCount);
-    accumulationBuffer = gpuDevice->buffer<noorrhi::float4>(pixelCount);
+    if (allocateAccumulationBuffer)
+        accumulationBuffer = gpuDevice->buffer<noorrhi::float4>(pixelCount);
+    else
+        accumulationBuffer = {};
 }
 
-void Raytracer::updateRoot()
+void RaytracerResources::updateRoot()
 {
     // Nothing is published to a heap here any more. Buffers contribute their
     // device address and images their descriptor-heap index; both are plain
@@ -327,7 +365,7 @@ void Raytracer::updateRoot()
     data.meshLights = address(meshLights);
 }
 
-void Raytracer::resize(const uint32_t width, const uint32_t height)
+void RaytracerResources::resize(const uint32_t width, const uint32_t height)
 {
     if (width == 0 || height == 0
         || (width == renderWidth && height == renderHeight))
@@ -338,21 +376,20 @@ void Raytracer::resize(const uint32_t width, const uint32_t height)
     updateRoot();
 }
 
-bool Raytracer::prepareFrameResources()
+bool RaytracerResources::prepareFrameResources()
 {
     if (renderWidth > imageWidth_ || renderHeight > imageHeight_)
     {
         const auto grown = [](const uint32_t allocated, const uint32_t logical) {
             return logical <= allocated ? allocated : allocationExtent(logical);
         };
-        reallocate(std::max(grown(imageWidth_, renderWidth), reservedWidth_),
-            std::max(grown(imageHeight_, renderHeight), reservedHeight_));
+        reallocate(grown(imageWidth_, renderWidth), grown(imageHeight_, renderHeight));
         return true;
     }
     // A settled size gives back an allocation it leaves mostly unused, such
     // as the one a maximized viewport left behind.
-    const uint32_t width = std::max(allocationExtent(renderWidth), reservedWidth_);
-    const uint32_t height = std::max(allocationExtent(renderHeight), reservedHeight_);
+    const uint32_t width = allocationExtent(renderWidth);
+    const uint32_t height = allocationExtent(renderHeight);
     if (static_cast<uint64_t>(imageWidth_) * imageHeight_
             <= MaxAllocatedAreaFactor * static_cast<uint64_t>(width) * height
         || std::chrono::steady_clock::now() - resized_ < ShrinkDelay)
@@ -361,28 +398,19 @@ bool Raytracer::prepareFrameResources()
     return true;
 }
 
-void Raytracer::reserve(const uint32_t width, const uint32_t height)
-{
-    reservedWidth_ = width;
-    reservedHeight_ = height;
-    const uint32_t targetWidth = std::max(width, renderWidth);
-    const uint32_t targetHeight = std::max(height, renderHeight);
-    if (targetWidth != imageWidth_ || targetHeight != imageHeight_)
-        reallocate(targetWidth, targetHeight);
-}
-
-void Raytracer::reallocate(const uint32_t width, const uint32_t height)
+void RaytracerResources::reallocate(const uint32_t width, const uint32_t height)
 {
     // In-flight command buffers may still reference the images being replaced.
     gpuDevice->synchronize();
     imageWidth_ = width;
     imageHeight_ = height;
     createImages();
-    onImageAllocationChanged();
+    if (callbacks_.imageAllocationChanged)
+        callbacks_.imageAllocationChanged();
     updateRoot();
 }
 
-void Raytracer::commit()
+void RaytracerResources::commit()
 {
     lens.commit();
     // The Environment commits its own record; data.environment is published
@@ -390,7 +418,7 @@ void Raytracer::commit()
     data.lens = lens.ptr().address;
 }
 
-void Raytracer::uploadScene(Scene& scene)
+void RaytracerResources::uploadScene(Scene& scene)
 {
     gpuDevice->synchronize();
     // Everything is republished, so whatever the change lists hold is moot.
@@ -426,7 +454,7 @@ void Raytracer::uploadScene(Scene& scene)
     std::iota(allMaterials.begin(), allMaterials.end(), 0u);
     publishMaterials(scene, allMaterials);
     for (Mesh& mesh : scene.getMeshes())
-        mesh.upload(*gpuDevice);
+        mesh.upload(*gpuDevice, splineMeshPass_);
     std::vector<uint32_t> allSlots(scene.getMeshInstanceSlots().size());
     std::iota(allSlots.begin(), allSlots.end(), 0u);
     publishInstances(scene, std::move(allSlots), true);
@@ -434,7 +462,7 @@ void Raytracer::uploadScene(Scene& scene)
     applyRenderSettings(scene.getRenderSettings());
 }
 
-void Raytracer::publishScene(Scene& scene)
+void RaytracerResources::publishScene(Scene& scene)
 {
     if (scene.getClearEpoch() != publishedClearEpoch_) {
         uploadScene(scene);
@@ -448,7 +476,7 @@ void Raytracer::publishScene(Scene& scene)
     applyRenderSettings(scene.getRenderSettings());
 }
 
-void Raytracer::applyRenderSettings(const RenderSettings& settings)
+void RaytracerResources::applyRenderSettings(const RenderSettings& settings)
 {
     // The SH coefficients splats are shaded with, and above them the flag
     // for the direct-colour shading mode.
@@ -463,10 +491,11 @@ void Raytracer::applyRenderSettings(const RenderSettings& settings)
     data.gaussianOverdrawEnabled = rendersProxyOverdraw(settings) ? 1u : 0u;
     data.gaussianOverdrawMax = static_cast<std::uint32_t>(std::max(
         settings.gaussianProxyOverdrawMax, 1));
-    onRenderSettingsApplied(settings);
+    if (callbacks_.renderSettingsApplied)
+        callbacks_.renderSettingsApplied(settings);
 }
 
-void Raytracer::updateCamera(const Scene& scene)
+void RaytracerResources::updateCamera(const Scene& scene)
 {
     nr::graphics::Camera snapshot{};
     if (const CameraInstance* instance = scene.getRenderCamera())
@@ -480,12 +509,41 @@ void Raytracer::updateCamera(const Scene& scene)
     data.camera = snapshot;
 }
 
-void Raytracer::updateLights(const Scene& scene)
+void RaytracerResources::updateLights(const Scene& scene, const Scene::LightIndices& changed)
 {
-    uploadLights(scene);
+    if (!lightBuffersValid_
+        || scene.getPointLightCount() != pointLightData_.size()
+        || scene.getSpotLightCount() != spotLightData_.size()
+        || scene.getRectLightCount() != rectLightData_.size()
+        || scene.getDirectionalLightCount() != directionalLightData_.size()) {
+        uploadLights(scene);
+        return;
+    }
+    // Hiding or showing a light leaves its selection weight alone, so it
+    // patches the record without touching the light samplers' tables.
+    bool samplingChanged = false;
+    const auto patch = [this, &samplingChanged](auto& buffer, auto& mirror, const auto* records,
+        std::vector<uint32_t> indices) {
+        for (const uint32_t index : indices) {
+            const auto record = publishedRecord(records[index]);
+            auto shown = record;
+            shown.controls.visible = mirror[index].controls.visible;
+            samplingChanged |= std::memcmp(&shown, &mirror[index], sizeof(shown)) != 0;
+            mirror[index] = record;
+        }
+        std::ranges::sort(indices);
+        uploadEntries(buffer, mirror, indices);
+    };
+    patch(pointLights, pointLightData_, scene.getPointLights(), changed[LightInstance::TypePoint]);
+    patch(spotLights, spotLightData_, scene.getSpotLights(), changed[LightInstance::TypeSpot]);
+    patch(rectLights, rectLightData_, scene.getRectLights(), changed[LightInstance::TypeRect]);
+    patch(directionalLights, directionalLightData_, scene.getDirectionalLights(),
+        changed[LightInstance::TypeDirectional]);
+    if (samplingChanged)
+        publishLightSampling();
 }
 
-void Raytracer::uploadLights(const Scene& scene)
+void RaytracerResources::uploadLights(const Scene& scene)
 {
     // This routine is called while the renderer is idle by uploadScene. Keep
     // each replacement immutable so a dispatch cannot observe a partially
@@ -503,39 +561,14 @@ void Raytracer::uploadLights(const Scene& scene)
     directionalRecords.reserve(scene.getDirectionalLightCount());
 
     for (uint32_t i = 0; i < scene.getPointLightCount(); ++i)
-    {
-        PointLight record = scene.getPointLights()[i];
-        record.intensity = localLightIntensity(record.falloff, record.units, record.intensity,
-            record.softRadius, record.sourceLength, 4.0f * LightPi);
-        record.selectionWeight = pointLightSelectionWeight(record);
-        pointRecords.push_back(record);
-    }
+        pointRecords.push_back(publishedRecord(scene.getPointLights()[i]));
     for (uint32_t i = 0; i < scene.getSpotLightCount(); ++i)
-    {
-        SpotLight record = scene.getSpotLights()[i];
-        record.intensity = localLightIntensity(record.falloff, record.units, record.intensity,
-            record.softRadius, record.sourceLength, spotSolidAngle(record));
-        record.selectionWeight = spotLightSelectionWeight(record);
-        spotRecords.push_back(record);
-    }
+        spotRecords.push_back(publishedRecord(scene.getSpotLights()[i]));
     for (uint32_t i = 0; i < scene.getRectLightCount(); ++i)
-    {
-        RectLight record = scene.getRectLights()[i];
-        record.intensity = rectLightIntensity(record);
-        record.twoSided = record.twoSided != 0 ? 1u : 0u;
-        record.selectionWeight = rectLightSelectionWeight(record);
-        rectRecords.push_back(record);
-    }
+        rectRecords.push_back(publishedRecord(scene.getRectLights()[i]));
     for (uint32_t i = 0; i < scene.getDirectionalLightCount(); ++i)
-    {
-        // Unreal directional light intensity is in lux. Keep its ELightUnits
-        // value intact in the record, as for every other light type.
-        DirectionalLight record = scene.getDirectionalLights()[i];
-        record.selectionWeight = directionalLightSelectionWeight(record);
-        directionalRecords.push_back(record);
-    }
+        directionalRecords.push_back(publishedRecord(scene.getDirectionalLights()[i]));
 
-    float finiteWeight = 0.0f;
     // Callers synchronize the device before scene mutations are applied, so
     // no dispatch still reads these buffers and they can be patched in place.
     const bool inPlace = lightBuffersValid_
@@ -565,16 +598,6 @@ void Raytracer::uploadLights(const Scene& scene)
         }
         mirror = std::move(records);
     };
-    auto accumulateWeight = [&finiteWeight](const auto& records) {
-        for (const auto& record : records)
-            finiteWeight += std::max(record.selectionWeight, 0.0f);
-    };
-    accumulateWeight(pointRecords);
-    accumulateWeight(spotRecords);
-    accumulateWeight(rectRecords);
-    accumulateWeight(directionalRecords);
-    accumulateWeight(meshRecords);
-
     upload(pointLights, pointLightData_, pointRecords);
     upload(spotLights, spotLightData_, spotRecords);
     upload(rectLights, rectLightData_, rectRecords);
@@ -591,11 +614,27 @@ void Raytracer::uploadLights(const Scene& scene)
     data.directionalLightCount = static_cast<std::uint32_t>(directionalLightData_.size());
     data.meshLights = meshLights.ptr().address;
     data.meshLightCount = static_cast<std::uint32_t>(meshLightData_.size());
-    data.lightFiniteWeight = finiteWeight;
-    onLightsUploaded();
+    publishLightSampling();
 }
 
-void Raytracer::uploadTextures(Scene& scene)
+void RaytracerResources::publishLightSampling()
+{
+    float finiteWeight = 0.0f;
+    auto accumulateWeight = [&finiteWeight](const auto& records) {
+        for (const auto& record : records)
+            finiteWeight += std::max(record.selectionWeight, 0.0f);
+    };
+    accumulateWeight(pointLightData_);
+    accumulateWeight(spotLightData_);
+    accumulateWeight(rectLightData_);
+    accumulateWeight(directionalLightData_);
+    accumulateWeight(meshLightData_);
+    data.lightFiniteWeight = finiteWeight;
+    if (callbacks_.lightsUploaded)
+        callbacks_.lightsUploaded();
+}
+
+void RaytracerResources::uploadTextures(Scene& scene)
 {
     // Textures are only ever appended, so the ones past the cursor are new.
     auto& textures = scene.getTextures();
@@ -613,7 +652,7 @@ void Raytracer::uploadTextures(Scene& scene)
     }
 }
 
-void Raytracer::uploadEnvironment(Scene& scene)
+void RaytracerResources::uploadEnvironment(Scene& scene)
 {
     // The Environment owns its HDRI and CDF images and uploads them when the
     // texture changes. Per-frame scalar edits only republish its small record.
@@ -631,7 +670,7 @@ void Raytracer::uploadEnvironment(Scene& scene)
     data.environment = environment.ptr().address;
 }
 
-void Raytracer::publishMaterials(Scene& scene, const std::vector<uint32_t>& changed)
+void RaytracerResources::publishMaterials(Scene& scene, const std::vector<uint32_t>& changed)
 {
     auto& sceneMaterials = scene.getMaterials();
     const auto resolveTexture = [this, &scene](const std::uint32_t index) -> std::uint32_t {
@@ -667,7 +706,8 @@ void Raytracer::publishMaterials(Scene& scene, const std::vector<uint32_t>& chan
             }
     }
     if (materialShaders_.size() != shaderCount)
-        onMaterialShadersChanged(materialShaders_);
+        if (callbacks_.materialShadersChanged)
+            callbacks_.materialShadersChanged(materialShaders_);
 
     std::vector<uint32_t> written = changed;
     std::ranges::sort(written);
@@ -679,9 +719,9 @@ void Raytracer::publishMaterials(Scene& scene, const std::vector<uint32_t>& chan
     data.materials = materials.ptr().address;
 }
 
-void Raytracer::publishMesh(const Scene& scene, Mesh& mesh)
+void RaytracerResources::publishMesh(const Scene& scene, Mesh& mesh)
 {
-    mesh.upload(*gpuDevice);
+    mesh.upload(*gpuDevice, splineMeshPass_);
     const auto found = meshBindings_.find(&mesh);
     if (found == meshBindings_.end())
         return;
@@ -703,19 +743,19 @@ void Raytracer::publishMesh(const Scene& scene, Mesh& mesh)
     bindingsMoved_ = true;
 }
 
-uint32_t Raytracer::sourceMesh(Mesh& mesh)
+uint32_t RaytracerResources::sourceMesh(Mesh& mesh)
 {
     const auto [found, inserted] = sourceMeshIndices_.try_emplace(&mesh,
         static_cast<uint32_t>(sourceMeshes_.size()));
     if (!inserted)
         return found->second;
-    mesh.upload(*gpuDevice);
+    mesh.upload(*gpuDevice, splineMeshPass_);
     sourceMeshes_.push_back(&mesh);
     meshRecordData_.push_back(mesh ? mesh.ptr().address : 0);
     return found->second;
 }
 
-uint32_t Raytracer::binding(const Scene& scene, const MeshInstance& instance)
+uint32_t RaytracerResources::binding(const Scene& scene, const MeshInstance& instance)
 {
     Mesh& mesh = *instance.getMeshPtr();
     std::vector<uint32_t> materials;
@@ -751,7 +791,7 @@ uint32_t Raytracer::binding(const Scene& scene, const MeshInstance& instance)
     return index;
 }
 
-bool Raytracer::updateBindingOpacity(const Scene& scene, const uint32_t index)
+bool RaytracerResources::updateBindingOpacity(const Scene& scene, const uint32_t index)
 {
     MaterialBinding& binding = bindings_[index];
     const auto& sections = binding.mesh->getSections();
@@ -764,13 +804,19 @@ bool Raytracer::updateBindingOpacity(const Scene& scene, const uint32_t index)
     std::vector<bool> opacity;
     opacity.reserve(sections.size());
     bool doubleSided = false;
+    for (const MeshSection& section : sections)
+        doubleSided |= (materials[binding.materials[section.slot]].getData().flags
+            & nr::graphics::MaterialFlagOneSided) == 0;
     for (const MeshSection& section : sections) {
         const Material& material = materials[binding.materials[section.slot]];
+        // TLAS facing flags cover the whole instance. Mixed-sided meshes
+        // need any-hit culling for their one-sided sections.
+        const bool needsFacingTest = doubleSided
+            && (material.getData().flags & nr::graphics::MaterialFlagOneSided) != 0;
         // Sections that cast no shadow among ones that do reach their shadow
         // any-hit stage, which ignores them.
-        opacity.push_back(!material.shaderProgram.transparent
+        opacity.push_back(!material.shaderProgram.transparent && !needsFacingTest
             && (sectionCastsShadow(scene, binding, section) || !castsShadow));
-        doubleSided |= (material.getData().flags & nr::graphics::MaterialFlagOneSided) == 0;
     }
     // Gaussian splat proxies take their own mask, which only the renderers
     // that draw splats trace against.
@@ -779,8 +825,9 @@ bool Raytracer::updateBindingOpacity(const Scene& scene, const uint32_t index)
     const auto mask = static_cast<uint8_t>(splat ? nr::graphics::RaytracingMaskGaussian
         : castsShadow ? nr::graphics::RaytracingMaskMesh
         : nr::graphics::RaytracingMaskMesh & ~nr::graphics::RaytracingMaskShadow);
+    const bool facingChanged = binding.doubleSided != doubleSided;
     binding.doubleSided = doubleSided;
-    if (binding.blas && opacity == binding.opacity && mask == binding.mask)
+    if (binding.blas && opacity == binding.opacity && mask == binding.mask && !facingChanged)
         return false;
     binding.opacity = std::move(opacity);
     binding.mask = mask;
@@ -788,21 +835,21 @@ bool Raytracer::updateBindingOpacity(const Scene& scene, const uint32_t index)
     return true;
 }
 
-bool Raytracer::sectionCastsShadow(const Scene& scene, const MaterialBinding& binding,
+bool RaytracerResources::sectionCastsShadow(const Scene& scene, const MaterialBinding& binding,
     const MeshSection& section)
 {
     return section.castsShadow && (scene.getMaterials()[binding.materials[section.slot]].getData().flags
         & nr::graphics::MaterialFlagNoShadows) == 0;
 }
 
-bool Raytracer::bindingCastsShadow(const Scene& scene, const MaterialBinding& binding)
+bool RaytracerResources::bindingCastsShadow(const Scene& scene, const MaterialBinding& binding)
 {
     return std::ranges::any_of(binding.mesh->getSections(), [&](const MeshSection& section) {
         return sectionCastsShadow(scene, binding, section);
     });
 }
 
-void Raytracer::writeBindingHitRecords(const Scene& scene, const uint32_t index)
+void RaytracerResources::writeBindingHitRecords(const Scene& scene, const uint32_t index)
 {
     const MaterialBinding& binding = bindings_[index];
     const bool castsShadow = bindingCastsShadow(scene, binding);
@@ -826,7 +873,7 @@ void Raytracer::writeBindingHitRecords(const Scene& scene, const uint32_t index)
     }
 }
 
-void Raytracer::layoutHitRecords(const Scene& scene)
+void RaytracerResources::layoutHitRecords(const Scene& scene)
 {
     hitRecords_.clear();
     for (uint32_t index = 0; index < bindings_.size(); ++index) {
@@ -840,7 +887,7 @@ void Raytracer::layoutHitRecords(const Scene& scene)
 }
 
 template <class T>
-std::uint64_t Raytracer::uploadSlotStream(SlotStream<T>& entry, const std::span<const T> data,
+std::uint64_t RaytracerResources::uploadSlotStream(SlotStream<T>& entry, const std::span<const T> data,
     const std::shared_ptr<const void>& owner)
 {
     if (data.empty()) {
@@ -856,7 +903,7 @@ std::uint64_t Raytracer::uploadSlotStream(SlotStream<T>& entry, const std::span<
     return entry.buffer.ptr().address;
 }
 
-std::uint64_t Raytracer::slotColors(const uint32_t slot, const MeshInstance& instance)
+std::uint64_t RaytracerResources::slotColors(const uint32_t slot, const MeshInstance& instance)
 {
     const std::span<const uint32_t> colors = instance.getColors();
     if (!colors.empty() && colors.size() != instance.getMesh().getVertexCount())
@@ -866,7 +913,7 @@ std::uint64_t Raytracer::slotColors(const uint32_t slot, const MeshInstance& ins
     return uploadSlotStream(slotColors_[slot], colors, instance.getColorOwner());
 }
 
-void Raytracer::publishInstances(const Scene& scene, std::vector<uint32_t> changedSlots,
+void RaytracerResources::publishInstances(const Scene& scene, std::vector<uint32_t> changedSlots,
     bool rewriteAll)
 {
     const auto& slots = scene.getMeshInstanceSlots();
@@ -909,9 +956,12 @@ void Raytracer::publishInstances(const Scene& scene, std::vector<uint32_t> chang
         instanceData_[slot] = {sourceMeshIndices_.at(drawn.mesh), instance.getMaterialEntry(),
             drawn.materialTable.ptr().address, slotColors(slot, instance),
             uploadSlotStream(slotCustomData_[slot], customData, instance.getCustomDataOwner()),
-            instance.getLightingChannels(), static_cast<uint32_t>(customData.size())};
+            instance.getLightingChannels(), static_cast<uint32_t>(customData.size()),
+            (instance.getRayTracingFlags().animated || instance.getMesh().isAnimated())
+                ? nr::graphics::InstanceFlagAnimated : 0u};
         const MeshInstance::RayTracingFlags rayTracing = instance.getRayTracingFlags();
-        uint8_t mask = drawn.mask;
+        // A hidden instance keeps its records, with a mask no ray matches.
+        uint8_t mask = instance.isVisible() ? drawn.mask : 0;
         if (mask != nr::graphics::RaytracingMaskGaussian) {
             if (!rayTracing.camera)
                 mask &= ~nr::graphics::RaytracingMaskCamera;
@@ -967,10 +1017,12 @@ void Raytracer::publishInstances(const Scene& scene, std::vector<uint32_t> chang
     data.scene = sceneBuffers();
     data.topLevelAS = tlas.handle().value;
     if (std::exchange(hitRecordsChanged_, false))
-        onHitRecordsChanged(hitRecords_);
+        if (callbacks_.hitRecordsChanged)
+            callbacks_.hitRecordsChanged(hitRecords_);
 }
 
-void Raytracer::render(const uint32_t frameIndex, const uint32_t sampleIndex)
+void RaytracerResources::dispatch(const uint32_t frameIndex, const uint32_t sampleIndex,
+    const std::function<void()>& record)
 {
     // Hosts that skip prepareFrameResources() (the offline path) have no
     // frame open, so waiting for the device here is harmless.
@@ -985,15 +1037,15 @@ void Raytracer::render(const uint32_t frameIndex, const uint32_t sampleIndex)
 
     // Inside a noorrhi::Frame this batches into the frame's command buffer; with
     // no frame open it is submitted on its own, which is the offline path.
-    gpuDevice->measure(dispatchTimestamp, [this] { renderImpl(); });
+    gpuDevice->measure(dispatchTimestamp, [&] { gpuDevice->label("NoorRay Frame", record); });
 }
 
-double Raytracer::lastDispatchMilliseconds()
+double RaytracerResources::lastDispatchMilliseconds()
 {
     return dispatchTimestamp.milliseconds();
 }
 
-std::vector<std::byte> Raytracer::readColor() {
+std::vector<std::byte> RaytracerResources::readColor() {
     const auto beauty = readBeauty();
     std::vector<std::byte> result(beauty.size() * 4u);
     for (std::size_t i = 0; i < beauty.size(); ++i) {
@@ -1010,7 +1062,7 @@ std::vector<std::byte> Raytracer::readColor() {
 }
 
 template<class T>
-std::vector<T> Raytracer::cropToRender(std::vector<T> pixels) const
+std::vector<T> RaytracerResources::cropToRender(std::vector<T> pixels) const
 {
     // Downloads cover the whole allocation, where texel (x, y) is at
     // y * imageWidth + x. Keep only the logical rectangle, row by row.
@@ -1023,7 +1075,7 @@ std::vector<T> Raytracer::cropToRender(std::vector<T> pixels) const
     return result;
 }
 
-std::vector<noorrhi::float4> Raytracer::readBeauty()
+std::vector<noorrhi::float4> RaytracerResources::readBeauty()
 {
     std::vector<noorrhi::float4> result(static_cast<std::size_t>(imageWidth_)
         * imageHeight_);
@@ -1031,7 +1083,7 @@ std::vector<noorrhi::float4> Raytracer::readBeauty()
     return cropToRender(std::move(result));
 }
 
-std::vector<std::uint32_t> Raytracer::readCryptomatte()
+std::vector<std::uint32_t> RaytracerResources::readCryptomatte()
 {
     std::vector<std::uint32_t> result(static_cast<std::size_t>(imageWidth_)
         * imageHeight_);
@@ -1041,7 +1093,7 @@ std::vector<std::uint32_t> Raytracer::readCryptomatte()
     return cropToRender(std::move(result));
 }
 
-std::vector<noorrhi::float4> Raytracer::readPosition()
+std::vector<noorrhi::float4> RaytracerResources::readPosition()
 {
     std::vector<noorrhi::float4> result(static_cast<std::size_t>(imageWidth_)
         * imageHeight_);
@@ -1051,7 +1103,7 @@ std::vector<noorrhi::float4> Raytracer::readPosition()
     return cropToRender(std::move(result));
 }
 
-std::uint32_t Raytracer::readCryptomatteAt(const uint32_t x, const uint32_t y)
+std::uint32_t RaytracerResources::readCryptomatteAt(const uint32_t x, const uint32_t y)
 {
     std::uint32_t id = ~0u;
     if (x >= renderWidth || y >= renderHeight)
@@ -1062,7 +1114,7 @@ std::uint32_t Raytracer::readCryptomatteAt(const uint32_t x, const uint32_t y)
     return id;
 }
 
-noorrhi::float4 Raytracer::readPositionAt(const uint32_t x, const uint32_t y)
+noorrhi::float4 RaytracerResources::readPositionAt(const uint32_t x, const uint32_t y)
 {
     noorrhi::float4 position{};
     if (x >= renderWidth || y >= renderHeight)
@@ -1073,7 +1125,7 @@ noorrhi::float4 Raytracer::readPositionAt(const uint32_t x, const uint32_t y)
     return position;
 }
 
-nr::graphics::Scene Raytracer::sceneBuffers() const
+nr::graphics::Scene RaytracerResources::sceneBuffers() const
 {
     const auto address = []<class T>(const noorrhi::Buffer<T>& buffer) {
         return buffer ? buffer.ptr().address : std::uint64_t{0};

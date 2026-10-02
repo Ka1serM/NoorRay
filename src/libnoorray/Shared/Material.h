@@ -17,6 +17,10 @@ static const uint MaterialFlagSky = 0x1u;
 static const uint MaterialFlagOneSided = 0x2u;
 // Transparent to shadow rays (Unreal's Cast Ray Traced Shadows off).
 static const uint MaterialFlagNoShadows = 0x4u;
+// The material's appearance changes without a scene publication (for example,
+// because it reads the host time). Realtime temporal histories must restart
+// while one of these materials is present.
+static const uint MaterialFlagAnimated = 0x8u;
 
 struct Material
 {

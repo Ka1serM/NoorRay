@@ -278,7 +278,7 @@ void HdNoorRayRenderPass::_Render(const HdRenderPassStateSharedPtr& state)
         session.initializeHeadlessRenderer(width, height, viewport);
         session.rebuildNativeScene();
     } else if (session.outputWidth() != width || session.outputHeight() != height)
-        session.resize(width, height);
+        session.resizeViewport(width, height);
 
     HdRenderDelegate* delegate = GetRenderIndex()->GetRenderDelegate();
     // Material compilation takes seconds on a large import, and rendering

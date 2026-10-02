@@ -67,6 +67,12 @@ public:
         data.lowerHemisphere = float4(color, blend);
         markChanged();
     }
+    // Zero scale lights with the environment texture instead.
+    void setCapturedScene(const glm::vec3& scale, bool captures)
+    {
+        data.capturedScene = float4(scale, captures ? 1.0f : 0.0f);
+        markChanged();
+    }
     void setLightControls(bool castShadows, float indirectLightingIntensity)
     {
         data.castShadows = castShadows ? 1u : 0u;

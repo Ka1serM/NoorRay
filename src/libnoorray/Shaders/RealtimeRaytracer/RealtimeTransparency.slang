@@ -33,21 +33,37 @@ struct TranslucentLayers
     float transmittance;
 };
 
-// An Unreal "Is Sky" surface found after a bounce: black and opaque, since
-// the sky light already carries its light (the path tracer ends such paths).
-void absorbSky(inout RealtimeHitPayload payload)
+// An Unreal "Is Sky" surface found after a bounce ends the path, as in Unreal's
+// path tracer, opaque and without a closure. Its light is the sky light's: a
+// specified cubemap carries it, so the surface is black; a captured scene is
+// what such surfaces emit, so the surface shows that light as the sky light
+// would cast it, from the direction it is seen in.
+void absorbSky(inout RealtimeHitPayload payload, float3 direction, float pathRoughness)
 {
     if ((payload.flags & RealtimeHitSky) == 0u || payload.instance == RealtimeMissInstance)
         return;
     const RealtimeHit hit = unpackRealtimeHit(payload);
+    float3 emission = float3(0.0);
+    Frame frame = realtimeArgs()->frame;
+    if (frame.environment != nullptr && frame.environment[0].capturedScene.a > 0.0)
+    {
+        const Environment environment = frame.environment[0];
+        emission = max(hit.emission, 0.0);
+        if (environment.lowerHemisphere.a > 0.0 && environmentHeight(environment, direction) < 0.0)
+            emission = lerp(emission, environment.lowerHemisphere.rgb, environment.lowerHemisphere.a);
+        emission *= environment.capturedScene.rgb * environment.lightingExposureScale
+            * lerp(1.0, environment.indirectLightingIntensity, saturate(4.0 * pathRoughness));
+    }
     packRealtimeHit(payload, hit.instance, hit.t, hit.position, hit.geometricNormal, hit.normal,
-        (RealtimeClosure)0, float3(0.0));
+        (RealtimeClosure)0, emission);
     payload.opacity = 1.0;
 }
 
-// The layers of a ray after a bounce. Every layer is found by the same ray,
-// so each sees its differential.
-TranslucentLayers traceTranslucentLayers(RayDesc ray, VertexDifferential differential)
+// The layers of a ray after a bounce from a surface reached with
+// `pathRoughness`. Every layer is found by the same ray, so each sees its
+// differential.
+TranslucentLayers traceTranslucentLayers(RayDesc ray, VertexDifferential differential,
+    float pathRoughness)
 {
     TranslucentLayers layers;
     layers.transmittance = 1.0;
@@ -56,7 +72,7 @@ TranslucentLayers traceTranslucentLayers(RayDesc ray, VertexDifferential differe
     {
         layers.surface = traceRealtimeHitPayload(ray, differential, RaytracingMaskIndirect,
             RAY_FLAG_NONE);
-        absorbSky(layers.surface);
+        absorbSky(layers.surface, ray.Direction, pathRoughness);
         if (realtimeLayerEndsRay(layers.surface, layer, layers.transmittance))
             return layers;
         layers.transmittance *= 1.0 - saturate(layers.surface.opacity);

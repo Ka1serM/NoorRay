@@ -15,7 +15,7 @@ struct LightControls
 #ifdef __cplusplus
     LightControls()
         : castShadows(1u), lightingChannels(1u), diffuseScale(1.0f),
-          specularScale(1.0f), indirectLightingIntensity(1.0f)
+          specularScale(1.0f), indirectLightingIntensity(1.0f), visible(1u)
     {
     }
 #endif
@@ -27,6 +27,8 @@ struct LightControls
     float specularScale;
     // Scales the light reaching a path after a rough bounce.
     float indirectLightingIntensity;
+    // A hidden light keeps its record and selection weight but lights nothing.
+    uint visible;
 };
 
 // How a local light fades with distance, as Unreal's local lights do: an
@@ -70,7 +72,7 @@ struct PointLight
     uint units;
     LightFalloff falloff;
     LightControls controls;
-    float padding[2];
+    float padding;
 };
 
 struct SpotLight
@@ -80,7 +82,7 @@ struct SpotLight
         : position{}, softRadius{}, direction{}, innerConeAngle(20.0f),
           color(1.0f), intensity(1.0f), axis(1.0f, 0.0f, 0.0f), sourceLength{},
           outerConeAngle(30.0f), selectionWeight{}, units(LightUnitsUnitless),
-          falloff{}, controls{}, padding{}
+          falloff{}, controls{}
     {
     }
 #endif
@@ -97,7 +99,6 @@ struct SpotLight
     uint units;
     LightFalloff falloff;
     LightControls controls;
-    float padding;
 };
 
 struct RectLight
@@ -107,7 +108,8 @@ struct RectLight
         : position{}, width(1.0f), direction{}, height(1.0f),
           tangent(1.0f, 0.0f, 0.0f), twoSided{}, color(1.0f),
           intensity(1.0f), barnDoorAngle(90.0f), barnDoorLength{},
-          selectionWeight{}, units(LightUnitsUnitless), falloff{}, controls{}
+          selectionWeight{}, units(LightUnitsUnitless), falloff{}, controls{},
+          padding{}
     {
     }
 #endif
@@ -125,6 +127,7 @@ struct RectLight
     uint units;
     LightFalloff falloff;
     LightControls controls;
+    float padding[3];
 };
 
 struct DirectionalLight
@@ -132,8 +135,7 @@ struct DirectionalLight
 #ifdef __cplusplus
     DirectionalLight()
         : direction(0.0f, -1.0f, 0.0f), softAngle(0.53f), color(1.0f),
-          intensity(1.0f), selectionWeight{}, units(LightUnitsUnitless), controls{},
-          padding{}
+          intensity(1.0f), selectionWeight{}, units(LightUnitsUnitless), controls{}
     {
     }
 #endif
@@ -145,7 +147,6 @@ struct DirectionalLight
     float selectionWeight;
     uint units;
     LightControls controls;
-    float padding;
 };
 
 struct MeshLight
@@ -161,7 +162,7 @@ struct MeshLight
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(PointLight) == 96 && sizeof(SpotLight) == 112 && sizeof(RectLight) == 112
+static_assert(sizeof(PointLight) == 96 && sizeof(SpotLight) == 112 && sizeof(RectLight) == 128
     && sizeof(DirectionalLight) == 64);
 
 namespace nr::graphics {

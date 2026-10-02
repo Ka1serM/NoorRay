@@ -39,11 +39,12 @@ public:
     std::string getType() const { return "Scene Object"; }
 
     bool isVisible() const { return visible; }
+    // Affects this object alone, at a cost independent of the scene's size.
     void setVisible(const bool v) {
         if (visible == v) return;
+        if (scene) scene->synchronizeBeforeMutation();
         visible = v;
-        if (scene) scene->setDirtyFlag(TLAS);
-        onTransformUpdated();
+        onVisibilityChanged();
     }
     void setSource(const std::string& type, const std::string& path) { sourceType = type; sourcePath = path; }
     const std::string& getSourceType() const { return sourceType; }
@@ -82,6 +83,7 @@ public:
     Transform getTransform() const { return transform; }
 
     virtual void onTransformUpdated();
+    virtual void onVisibilityChanged() {}
     // Called once Scene::add() has the object, so it may add objects of its own.
     virtual void onAdded() {}
     

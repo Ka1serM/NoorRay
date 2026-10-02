@@ -73,6 +73,8 @@ struct MaterialXSceneRuntime::Impl
     std::function<void()> onCompleted;
 
     std::vector<Ready> ready;
+    std::size_t importDepth{};
+    bool importPublicationPending{};
 
     std::shared_ptr<const nr::materialx::MaterialShader> compileShaderShape(
         nr::materialx::SlangMaterialCompiler& compiler,
@@ -302,6 +304,20 @@ bool MaterialXSceneRuntime::needsCompilation(const Scene& scene) const
     });
 }
 
+void MaterialXSceneRuntime::beginImport()
+{
+    ++impl_->importDepth;
+}
+
+void MaterialXSceneRuntime::endImport()
+{
+    if (impl_->importDepth == 0)
+        return;
+    --impl_->importDepth;
+    if (impl_->importDepth == 0)
+        impl_->importPublicationPending = true;
+}
+
 bool MaterialXSceneRuntime::processPending(Scene& scene, const std::string& sceneDirectory)
 {
     auto& materials = scene.getMaterials();
@@ -425,6 +441,21 @@ bool MaterialXSceneRuntime::processPending(Scene& scene, const std::string& scen
         std::lock_guard lock(impl_->mutex);
         backgroundWork = !impl_->jobs.empty() || impl_->active != 0
             || !impl_->completed.empty();
+    }
+    // While a map is being installed, publishing partial ready sets makes the
+    // driver rebuild and relink the ray-tracing pipeline repeatedly. Wait for
+    // the final install marker and all CPU shader jobs, then publish it once.
+    if (impl_->importDepth != 0 || (impl_->importPublicationPending && backgroundWork))
+        return false;
+    if (impl_->importPublicationPending && !backgroundWork) {
+        impl_->importPublicationPending = false;
+        const bool published = !impl_->ready.empty();
+        for (Impl::Ready& ready : impl_->ready) {
+            if (ready.materialIndex < materials.size() && !materials[ready.materialIndex].compiled)
+                scene.setMaterialProgram(ready.materialIndex, std::move(ready.shaderProgram));
+        }
+        impl_->ready.clear();
+        return published;
     }
     // Feed the driver a steady stream of small shader waves while imports are
     // still running. Waiting for every MaterialX job to finish produces one

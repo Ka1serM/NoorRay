@@ -24,6 +24,10 @@ public:
     // Processes completions, queues invalidated materials and publishes the
     // compiled programs. Returns true when it published any.
     bool processPending(Scene& scene, const std::string& sceneDirectory = {});
+    // Material publications inside an import are collected and published
+    // together once the import has installed its final scene batch.
+    void beginImport();
+    void endImport();
     // Synchronous entry point for CLI/startup code. Waiting is condition-
     // variable based; it never polls futures or sleeps between checks.
     void compileAndWait(Scene& scene, const std::string& sceneDirectory = {});

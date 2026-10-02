@@ -61,23 +61,31 @@ public:
     // the AOVs behind the beauty are.
     uint32_t traceWidth() const override;
     uint32_t traceHeight() const override;
+    RaytracerResources& resources() override { return common; }
+    const RaytracerResources& resources() const override { return common; }
     std::uint32_t readCryptomatteAtOutput(uint32_t x, uint32_t y) override;
     noorrhi::float4 readPositionAtOutput(uint32_t x, uint32_t y) override;
+    noorrhi::TextureHandle viewportDepthTexture() const { return targets ? noorrhi::TextureHandle{targets->handles().viewZ} : noorrhi::TextureHandle{}; }
+    glm::vec2 viewportDepthJitter() const { return {previousJitter[0], previousJitter[1]}; }
     void setSelectionAovRequired(bool required) { selectionAovRequired = required; }
 
     bool prepareFrameResources() override;
+    void render(uint32_t frameIndex = 0, uint32_t sampleIndex = 0) override;
+    void restartTemporalHistory() override;
     bool linkCompiledMaterialShaders() override;
+    MaterialShaderStage materialShaderStage() const override;
     void waitForMaterialShaders() override;
 
 protected:
-    void renderImpl() override;
-    void onImageAllocationChanged() override;
-    void onLightsUploaded() override;
-    void onRenderSettingsApplied(const RenderSettings& settings) override;
-    void onMaterialShadersChanged(std::span<const MaterialHitShaders> shaders) override;
-    void onHitRecordsChanged(std::span<const HitRecord> records) override;
+    void renderImpl();
+    void onImageAllocationChanged();
+    void onLightsUploaded();
+    void onRenderSettingsApplied(const RenderSettings& settings);
+    void onMaterialShadersChanged(std::span<const MaterialHitShaders> shaders);
+    void onHitRecordsChanged(std::span<const HitRecord> records);
 
 private:
+    RaytracerResources common;
     // Everything the stages' images and buffers are allocated for: the
     // largest rectangles the base class's image allocation admits, and the
     // settings that decide which exist. Frames render into smaller
@@ -136,6 +144,9 @@ private:
     Restir restir;
     Denoiser denoiser;
     Upscaler upscaler;
+    noorrhi::Buffer<nr::graphics::BeautyAccumulation> beautyAccumulation;
+    // Alternates every render(); see BeautyAccumulation.
+    std::uint32_t accumulationSlot{};
     Accumulator accumulator;
     // Allocated by ensureResources(), with the other stages' resources.
     std::optional<RenderTargets> targets;
@@ -184,7 +195,6 @@ private:
     std::array<float, 3> previousCameraPosition{};
     std::array<float, 3> previousPreviousCameraPosition{};
     std::chrono::steady_clock::time_point previousFrameStart{};
-    uint32_t frameIndex{};
     std::function<void()> onMaterialShadersCompiled;
     // Drivers take seconds to compile hit shaders and to link them, so both
     // run off the render thread. `done` is set as the work finishes, before
@@ -204,8 +214,8 @@ private:
         // Empty when the driver rejected the link.
         std::future<noorrhi::RayTracingPipeline> pipeline;
     };
-    // Batches compile concurrently and join materialLibraries in order. A
-    // deque keeps each batch in place while its compile refers to it.
+    // The batch compiling, at most one, which joins materialLibraries once
+    // done. A deque keeps it in place while its compile refers to it.
     std::deque<MaterialLibraryBatch> compilingMaterialLibraries;
     std::optional<PipelineLink> pipelineLink;
 };

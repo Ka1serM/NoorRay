@@ -24,12 +24,12 @@ struct RegularSurface
     uint materialIndex;
 };
 
-// Unreal's FPackedRGBA16N: four SNORM16 components in two words.
-float4 unpackSnorm16x4(uint2 packed)
+// Unreal's FPackedNormal: four SNORM8 components, x in the low byte.
+float4 unpackSnorm8x4(uint packed)
 {
-    const int4 values = int4(int(packed.x << 16u) >> 16, int(packed.x) >> 16,
-                             int(packed.y << 16u) >> 16, int(packed.y) >> 16);
-    return max(float4(values) / 32767.0, -1.0);
+    const int4 values = int4(int(packed << 24u) >> 24, int(packed << 16u) >> 24,
+                             int(packed << 8u) >> 24, int(packed) >> 24);
+    return max(float4(values) / 127.0, -1.0);
 }
 
 // Unreal's FColor, linear UNORM8: B | G << 8 | R << 16 | A << 24.
@@ -101,12 +101,12 @@ SurfaceTriangle loadSurfaceTriangle(Scene scene, uint instanceId, uint geometryI
     for (uint i = 0u; i < 3u; ++i)
     {
         const uint vertex = min(mesh.indices[result.triangle * 3u + i], mesh.vertexCount - 1u);
-        const uint4 tangentFrame = mesh.tangents[vertex];
-        const float4 tangentZ = unpackSnorm16x4(tangentFrame.zw);
+        const uint2 tangentFrame = mesh.tangents[vertex];
+        const float4 tangentZ = unpackSnorm8x4(tangentFrame.y);
         result.indices[i] = vertex;
         result.positions[i] = mul(objectToWorld, float4(mesh.positions[vertex], 1.0));
         result.normals[i] = mul(normalMatrix, tangentZ.xyz);
-        result.tangents[i] = mul(linear, unpackSnorm16x4(tangentFrame.xy).xyz);
+        result.tangents[i] = mul(linear, unpackSnorm8x4(tangentFrame.x).xyz);
         result.uvs[i] = mesh.uvs[vertex * mesh.uvCount];
         result.colors[i] = colors != nullptr ? unpackVertexColor(colors[vertex]) : float4(1.0);
         if (i == 0u)

@@ -39,7 +39,8 @@ void RAB_PathTrace(inout PT_CONTEXT context,
         // in the renderer; the layers' own light is left out.
         const TranslucentLayers layers = traceTranslucentLayers(ray,
             leaveSurface(previousSurface, ray.Direction,
-                context.GetBrdfRaySample().properties.IsSpecular()));
+                context.GetBrdfRaySample().properties.IsSpecular()),
+            previousSurface.pathRoughness);
         RAB_RayPayload traced;
         traced.committedRayT = layers.surface.t;
         context.SetTraceResult(traced);

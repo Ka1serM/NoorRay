@@ -119,6 +119,10 @@ class Scene {
     std::vector<bool> materialCompileListed_;
     // Light objects by light type, parallel to the typed light records.
     std::array<std::vector<LightInstance*>, 4> lightObjects_;
+    // Typed light records rewritten since the session last took them, by
+    // light type, each listed once.
+    std::array<std::vector<uint32_t>, 4> changedLights_;
+    std::array<std::vector<bool>, 4> lightListed_;
     // Every root, and objects that were roots since getRootObjects() last ran;
     // that call drops the stale entries, so each object is dropped once.
     mutable std::vector<SceneObjectHandle> rootCandidates_;
@@ -160,6 +164,7 @@ class Scene {
     void addMeshInstanceSlot(MeshInstance& instance);
     void removeMeshInstanceSlot(MeshInstance& instance);
     void markMeshInstanceChanged(uint32_t slot);
+    void markLightChanged(int lightType, uint32_t lightIndex);
     void markMeshChanged(Mesh& mesh);
     void markMaterialChanged(uint32_t materialIndex);
     void markMaterialForCompile(uint32_t materialIndex);
@@ -187,7 +192,10 @@ public:
     bool consumeGpuSync() { return gpuSyncPending_.exchange(false); }
 
     // Object lifetime
-    void clear();
+    // With preserveViewportState, remove all scene content while retaining
+    // render settings, the current camera view and the environment (including
+    // its HDRI). Importers use the default full reset before loading a file.
+    void clear(bool preserveViewportState = false);
     // With a parent, the object's transform is relative to that parent.
     SceneObjectHandle add(std::unique_ptr<SceneObject> sceneObject, SceneObjectHandle parent = {});
     bool removeObject(SceneObjectHandle handle);
@@ -251,6 +259,13 @@ public:
     // index a consumer holds.
     uint64_t getClearEpoch() const { return clearEpoch_; }
     std::vector<const LightInstance*> getLightObjects() const;
+    const LightInstance& getLightObject(int lightType, uint32_t lightIndex) const;
+    // Record indices by LightInstance light type.
+    using LightIndices = std::array<std::vector<uint32_t>, 4>;
+    // The typed light records rewritten since the last call, so consumers
+    // patch what changed rather than revisit every light. Taking them
+    // empties the lists.
+    LightIndices takeChangedLights();
     uint32_t getActiveCryptomatteId() const;
     // Inverse of getActiveCryptomatteId: the object a rendered id belongs to,
     // or nullptr for the background and stale ids.

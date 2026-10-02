@@ -28,6 +28,10 @@ struct Environment
     // Below the environment's horizon the texture's value blends toward rgb
     // by a, as Unreal's sky light does with Lower Hemisphere Is Solid Color.
     float4 lowerHemisphere;
+    // A sky light capturing the scene (a = 1): its light is what the captured
+    // Unreal "Is Sky" surfaces emit, scaled by rgb, the sky light's color and
+    // intensity. The environment itself is then black.
+    float4 capturedScene;
 };
 
 #ifdef __cplusplus

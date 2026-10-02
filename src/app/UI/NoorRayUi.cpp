@@ -136,7 +136,7 @@ void NoorRayUi::run()
                 const auto resolution = camera->getCamera()->getSensor().resolution();
                 if (session.outputWidth() != resolution.x
                     || session.outputHeight() != resolution.y) {
-                    session.resize(resolution.x, resolution.y);
+                    session.resizeViewport(resolution.x, resolution.y);
                     accumulatedSamples = 0;
                 }
             }

@@ -97,6 +97,19 @@ struct LightChoice
     float weight;
 };
 
+// A hidden light keeps its selection weight; choosing it yields no light.
+bool lightVisible(LightTable lights, LightChoice choice)
+{
+    switch (choice.kind)
+    {
+    case 0u: return lights.points[choice.index].controls.visible != 0u;
+    case 1u: return lights.spots[choice.index].controls.visible != 0u;
+    case 2u: return lights.rects[choice.index].controls.visible != 0u;
+    case 3u: return lights.directionals[choice.index].controls.visible != 0u;
+    default: return true;
+    }
+}
+
 LightChoice chooseLight(LightTable lights, float target)
 {
     LightChoice choice = {0u, 0u, 0.0};
@@ -234,7 +247,7 @@ AnalyticLightSampleRgb sampleAnalyticLightRgb(LightTable lights,
         return result;
     const LightChoice choice = chooseLight(lights, rng.nextFloat() * finiteWeight);
     const float selectedWeight = max(choice.weight, 0.0);
-    if (selectedWeight <= 0.0)
+    if (selectedWeight <= 0.0 || !lightVisible(lights, choice))
         return result;
     float3 estimatorRgb = float3(0.0);
 
@@ -492,6 +505,8 @@ AnalyticLightHitRgb intersectAnalyticLightsRgb(LightTable lights,
     for (uint i = 0u; i < lights.pointCount; ++i)
     {
         const PointLight light = lights.points[i];
+        if (light.controls.visible == 0u)
+            continue;
         float distance;
         float conditionalPdf;
         if (!intersectSphereLight(light.position, light.softRadius, origin,
@@ -508,6 +523,8 @@ AnalyticLightHitRgb intersectAnalyticLightsRgb(LightTable lights,
     for (uint i = 0u; i < lights.spotCount; ++i)
     {
         const SpotLight light = lights.spots[i];
+        if (light.controls.visible == 0u)
+            continue;
         float distance;
         float conditionalPdf;
         if (!intersectSphereLight(light.position, light.softRadius, origin,
@@ -531,6 +548,8 @@ AnalyticLightHitRgb intersectAnalyticLightsRgb(LightTable lights,
     for (uint i = 0u; i < lights.rectCount; ++i)
     {
         const RectLight light = lights.rects[i];
+        if (light.controls.visible == 0u)
+            continue;
         const float width = max(light.width, 0.0);
         const float height = max(light.height, 0.0);
         const float area = width * height;
@@ -561,6 +580,8 @@ AnalyticLightHitRgb intersectAnalyticLightsRgb(LightTable lights,
     for (uint i = 0u; i < lights.directionalCount; ++i)
     {
         const DirectionalLight light = lights.directionals[i];
+        if (light.controls.visible == 0u)
+            continue;
         if (result.distance < maximumDistance)
             continue;
         const float3 axis = -normalize(light.direction);

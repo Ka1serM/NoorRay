@@ -134,17 +134,15 @@ void NoorRaySession::resizeViewport(const uint32_t width, const uint32_t height)
     updateNativeCamera();
 }
 
-void NoorRaySession::reserveViewport(const uint32_t width, const uint32_t height)
+void NoorRaySession::setViewportExternalOutput(const bool enabled, const noorrhi::ImageFormat format)
 {
-    if (!raytracer_)
-        throw std::runtime_error("native raytracer is not initialized");
-    raytracer_->reserve(width, height);
-    prepareViewport();
-}
-
-void NoorRaySession::resize(const uint32_t width, const uint32_t height)
-{
-    resizeViewport(width, height);
+    if (viewportExternalOutput_ == enabled && viewportOutputFormat_ == format)
+        return;
+    if (device_)
+        device_->synchronize();
+    viewport_.reset();
+    viewportExternalOutput_ = enabled;
+    viewportOutputFormat_ = format;
 }
 
 void NoorRaySession::commit()
@@ -160,8 +158,6 @@ void NoorRaySession::render(const uint32_t frameIndex, const uint32_t sampleInde
         throw std::runtime_error("native raytracer is not initialized");
     raytracer_->render(frameIndex, sampleIndex);
     lastRender_ = device_->signal();
-    if (sampleIndex == 0)
-        accumulationRestarted_ = true;
 }
 
 double NoorRaySession::lastDispatchMilliseconds()
@@ -304,9 +300,11 @@ bool NoorRaySession::pollNativeScene()
         changed = true;
     }
 
+    Scene::LightIndices changedLights;
     if (isDirty(Lights))
     {
-        raytracer_->updateLights(scene_);
+        changedLights = scene_.takeChangedLights();
+        raytracer_->updateLights(scene_, changedLights);
         scene_.clearDirtyFlag(Lights);
         changed = true;
     }
@@ -327,11 +325,16 @@ bool NoorRaySession::pollNativeScene()
     if (changed || isDirty(Accumulation))
     {
         scene_.clearAccumulationDirtyFlag();
+        // Scene, camera, and animated-content changes invalidate only the
+        // beauty running average. ReSTIR and denoiser history remain intact.
+        accumulationRestarted_ = true;
         changed = true;
     }
     appliedSceneChanges_ = scene_.getChangeState();
     if (viewport_)
-        viewport_->updateBillboards(scene_);
+        viewport_->updateBillboards(scene_, changedLights);
+    if (changed)
+        outlineHistoryRestarted_ = true;
     return changed;
 }
 
@@ -340,6 +343,16 @@ void NoorRaySession::updateNativeCamera()
     if (!raytracer_)
         return;
     raytracer_->updateCamera(scene_);
+}
+
+void NoorRaySession::restartAccumulation()
+{
+    accumulationRestarted_ = true;
+}
+
+bool NoorRaySession::consumeAccumulationRestart()
+{
+    return std::exchange(accumulationRestarted_, false);
 }
 
 bool NoorRaySession::prepareViewport()
@@ -357,6 +370,10 @@ bool NoorRaySession::prepareViewport()
     // renderer's per-frame images, and it must happen before the trace size
     // below is read.
     const bool accumulationRestarts = raytracer_->prepareFrameResources();
+    if (accumulationRestarts) {
+        restartAccumulation();
+        outlineHistoryRestarted_ = true;
+    }
 
     const ViewportInputs inputs{
         raytracer_->outputTexture(), raytracer_->albedoTexture(),
@@ -366,7 +383,7 @@ bool NoorRaySession::prepareViewport()
         viewport_.emplace(*device_, raytracer_->width(), raytracer_->height(),
             raytracer_->traceWidth(), raytracer_->traceHeight(),
             raytracer_->imageWidth(), raytracer_->imageHeight(), inputs,
-            viewportOutputFormat_, exportViewportMemory_);
+            viewportOutputFormat_, exportViewportMemory_, viewportExternalOutput_);
     else
         viewport_->resize(raytracer_->width(), raytracer_->height(),
             raytracer_->traceWidth(), raytracer_->traceHeight(),
@@ -380,13 +397,35 @@ void NoorRaySession::renderViewport(const glm::mat4& viewProjection,
 {
     if (!viewport_)
         return;
+    if (const auto* camera = scene_.getRenderCamera())
+        viewport_->setBillboardCameraPosition(camera->getPosition());
+    else
+        viewport_->clearBillboardCameraPosition();
     const RenderSettings& settings = scene_.getRenderSettings();
-    const bool restartOutline = accumulationRestarted_;
-    accumulationRestarted_ = false;
+    const bool restartOutline = outlineHistoryRestarted_;
+    outlineHistoryRestarted_ = false;
     viewport_->dispatch(selectedCryptomatteId, restartOutline, viewProjection, 0.0f,
         static_cast<int>(settings.bufferVisualization),
         settings.gaussianProxyOverdrawMax, settings.tonemappingEnabled,
         showBillboards, scene_.getActiveObjectHandle());
+    lastViewport_ = device_->signal();
+}
+
+void NoorRaySession::renderViewport(const glm::mat4& viewProjection, const ViewportOutput& output,
+    const uint32_t selectedCryptomatteId, const bool showBillboards)
+{
+    if (!viewport_)
+        return;
+    if (const auto* camera = scene_.getRenderCamera())
+        viewport_->setBillboardCameraPosition(camera->getPosition());
+    else
+        viewport_->clearBillboardCameraPosition();
+    const RenderSettings& settings = scene_.getRenderSettings();
+    const bool restartOutline = outlineHistoryRestarted_;
+    outlineHistoryRestarted_ = false;
+    viewport_->dispatch(selectedCryptomatteId, restartOutline, viewProjection, 0.0f,
+        static_cast<int>(settings.bufferVisualization), settings.gaussianProxyOverdrawMax,
+        settings.tonemappingEnabled, showBillboards, scene_.getActiveObjectHandle(), output);
     lastViewport_ = device_->signal();
 }
 
@@ -468,6 +507,27 @@ bool NoorRaySession::processNativeMaterials()
     const bool linked = raytracer_->linkCompiledMaterialShaders();
     // Published programs reach the GPU with the next pollNativeScene().
     return materialRuntime_.processPending(scene_) || linked;
+}
+
+void NoorRaySession::beginNativeMaterialImport()
+{
+    materialRuntime_.beginImport();
+}
+
+void NoorRaySession::endNativeMaterialImport()
+{
+    materialRuntime_.endImport();
+}
+
+bool NoorRaySession::nativeMaterialImportReady() const
+{
+    return !materialRuntime_.needsCompilation(scene_)
+        && (!raytracer_ || raytracer_->materialShaderStage() == MaterialShaderStage::Idle);
+}
+
+MaterialShaderStage NoorRaySession::materialShaderStage() const
+{
+    return raytracer_ ? raytracer_->materialShaderStage() : MaterialShaderStage::Idle;
 }
 
 }

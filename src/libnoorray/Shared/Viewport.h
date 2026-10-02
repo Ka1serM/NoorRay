@@ -13,6 +13,7 @@ static const float3 ViewportSelectionColor = float3(1.0, 1.0, 0.0);
 struct ViewportBillboard
 {
     float4 positionType;
+    // Alpha 0 hides the icon of a hidden light.
     float4 color;
 };
 
@@ -61,15 +62,8 @@ struct ViewportBillboardPushConstants
     // Logical size / output image size. The render target has no viewport
     // field, so the shader maps NDC into the bottom-left logical rectangle.
     float2 targetScale;
-    // Icon half-size in pixels: maxRadius at nearDistance or closer, easing
-    // down to minRadius at farDistance and beyond (view-space distance).
-    float minRadius;
-    float maxRadius;
-    float nearDistance;
-    float farDistance;
-    // Multiplies the icon radius: 1 for the drawn icons, less for the pick
-    // circles stamped into the light-id buffer.
-    float radiusScale;
+    // Fixed half-size of each camera-facing plane, in world units.
+    float worldHalfSize;
     uint billboardCount;
     // One uint per output pixel, row stride lightIdStride: 0 where no light
     // icon covers the pixel, otherwise the billboard index + 1.
@@ -78,6 +72,11 @@ struct ViewportBillboardPushConstants
     // Billboard index of the selected light, drawn in the selection outline's
     // colour; ~0u when no light is selected.
     uint selectedBillboard;
+    // World-space camera position. w is one when it is valid; a manually
+    // supplied view-projection with no camera leaves distance fading disabled.
+    float4 cameraPosition;
+    // x/y: fade in from the camera; z/w: fade out at the local edit radius.
+    float4 distanceFade;
 };
 
 struct ViewportBillboardRoot

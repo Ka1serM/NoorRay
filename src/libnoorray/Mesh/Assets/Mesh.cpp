@@ -11,6 +11,7 @@
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
+#include "Mesh/SplineMeshPass.h"
 #include "Scene/Scene.h"
 
 using glm::normalize;
@@ -19,14 +20,14 @@ using glm::vec3;
 
 namespace {
 
-int16_t snorm16(const float value)
+int8_t snorm8(const float value)
 {
-    return static_cast<int16_t>(std::lround(std::clamp(value, -1.0f, 1.0f) * 32767.0f));
+    return static_cast<int8_t>(std::lround(std::clamp(value, -1.0f, 1.0f) * 127.0f));
 }
 
-float unsnorm16(const int16_t value)
+float unsnorm8(const int8_t value)
 {
-    return std::max(static_cast<float>(value) / 32767.0f, -1.0f);
+    return std::max(static_cast<float>(value) / 127.0f, -1.0f);
 }
 
 // One vertex of a generated shape, which has a single UV channel.
@@ -41,20 +42,20 @@ void addVertex(MeshStreams& streams, const vec3 position, const vec3 normal,
 }
 
 TangentFrame::TangentFrame(const vec3 tangent, const vec3 normal, const float bitangentSign)
-    : tangentX{snorm16(tangent.x), snorm16(tangent.y), snorm16(tangent.z), 0},
-      tangentZ{snorm16(normal.x), snorm16(normal.y), snorm16(normal.z),
-          bitangentSign < 0.0f ? int16_t{-32767} : int16_t{32767}}
+    : tangentX{snorm8(tangent.x), snorm8(tangent.y), snorm8(tangent.z), 0},
+      tangentZ{snorm8(normal.x), snorm8(normal.y), snorm8(normal.z),
+          bitangentSign < 0.0f ? int8_t{-127} : int8_t{127}}
 {
 }
 
 vec3 TangentFrame::tangent() const
 {
-    return {unsnorm16(tangentX[0]), unsnorm16(tangentX[1]), unsnorm16(tangentX[2])};
+    return {unsnorm8(tangentX[0]), unsnorm8(tangentX[1]), unsnorm8(tangentX[2])};
 }
 
 vec3 TangentFrame::normal() const
 {
-    return {unsnorm16(tangentZ[0]), unsnorm16(tangentZ[1]), unsnorm16(tangentZ[2])};
+    return {unsnorm8(tangentZ[0]), unsnorm8(tangentZ[1]), unsnorm8(tangentZ[2])};
 }
 
 float TangentFrame::bitangentSign() const
@@ -238,7 +239,7 @@ Mesh::Mesh(Scene& scene, std::string name, MeshGeometry value)
 Mesh::Mesh(Mesh&& other) noexcept
     : noorrhi::Shared<nr::graphics::Mesh>(std::move(other)),
       scene(other.scene), path(std::move(other.path)), index(other.index),
-      gpuDirty(other.gpuDirty), geometry(std::move(other.geometry)),
+      gpuDirty(other.gpuDirty), animated(other.animated), geometry(std::move(other.geometry)),
       slotCount(other.slotCount),
       positionBuffer(std::move(other.positionBuffer)),
       tangentBuffer(std::move(other.tangentBuffer)),
@@ -256,6 +257,17 @@ void Mesh::replaceGeometry(MeshGeometry value)
     geometry = std::move(value);
     validate();
     gpuDirty = true;
+    scene.markMeshChanged(*this);
+    scene.setDirtyFlag(Accumulation);
+}
+
+void Mesh::setAnimated(const bool value)
+{
+    if (animated == value)
+        return;
+    scene.synchronizeBeforeMutation();
+    animated = value;
+    blases.clear();
     scene.markMeshChanged(*this);
     scene.setDirtyFlag(Accumulation);
 }
@@ -301,12 +313,14 @@ std::uint64_t address(const auto& buffer)
 }
 }
 
-void Mesh::upload(noorrhi::Device& device)
+void Mesh::upload(noorrhi::Device& device, const SplineMeshPass& splineMeshPass)
 {
     if (!gpuDirty || geometry.positions.empty() || geometry.indices.empty())
         return;
     uploadStream(device, positionBuffer, geometry.positions);
     uploadStream(device, tangentBuffer, geometry.tangents);
+    if (geometry.spline)
+        splineMeshPass.record(positionBuffer, tangentBuffer, *geometry.spline);
     uploadStream(device, uvBuffer, geometry.uvs);
     uploadStream(device, colorBuffer, geometry.colors);
     uploadStream(device, indexBuffer, geometry.indices);
@@ -350,7 +364,10 @@ const noorrhi::AccelerationStructure& Mesh::blas(noorrhi::Device& device, const 
             noorrhi::GpuPtr<std::uint32_t>{indexBuffer.ptr().address
                 + std::uint64_t{geometry.sections[i].firstTriangle} * 3u * sizeof(std::uint32_t)},
             geometry.sections[i].triangleCount, sizeof(glm::vec3), opacity[i]});
-    return blases.emplace_back(opacity, device.build_blas(geometries)).second;
+    const noorrhi::AccelerationStructureBuildMode mode = animated
+        ? noorrhi::AccelerationStructureBuildMode::Dynamic
+        : noorrhi::AccelerationStructureBuildMode::Static;
+    return blases.emplace_back(opacity, device.build_blas(geometries, mode)).second;
 }
 
 void Mesh::releaseGpu()

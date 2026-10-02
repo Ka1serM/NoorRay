@@ -556,7 +556,8 @@ set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/V
     "${NR_SHADER_DIR}/Raytracer/Sampling.slang"
     ${NR_RAYTRACER_SHADER_INCLUDES}
     ${NR_REALTIME_SHADER_INCLUDES}
-    "${NR_SHADER_DIR}/Gaussian/Gaussian.slang")
+    "${NR_SHADER_DIR}/Gaussian/Gaussian.slang"
+    "${NR_SHADER_DIR}/Mesh/SplineMesh.slang")
 set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracer.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracerLayered.spv"
@@ -569,7 +570,8 @@ set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BU
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeCompositeLayered.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeOutputAovs.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimePick.spv"
-    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv")
+    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv"
+    "${NR_SHADER_BUILD_DIR}/Mesh/SplineMesh.spv")
 set(NR_SHADER_VALIDATE_COMMANDS)
 if(NR_SPIRV_VAL_EXECUTABLE)
     foreach(_spv IN LISTS NR_SHADER_OUT)
@@ -581,6 +583,7 @@ endif()
 add_custom_command(OUTPUT ${NR_SHADER_OUT}
     COMMAND "${CMAKE_COMMAND}" -E make_directory
         "${NR_SHADER_BUILD_DIR}/Viewport" "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer"
+        "${NR_SHADER_BUILD_DIR}/Mesh"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/Viewport.slang"
         -entry main -target spirv -profile spirv_1_5
         -capability spvDescriptorHeapEXT -emit-spirv-directly
@@ -674,6 +677,12 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Mesh/SplineMesh.slang"
+        -entry main -stage compute -target spirv
+        -profile spirv_1_5
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/Mesh/SplineMesh.spv"
     ${NR_SHADER_VALIDATE_COMMANDS}
     DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
         ${NR_RTXDI_HEADERS}

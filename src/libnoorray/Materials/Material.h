@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <noorrhi/noorrhi.hpp>
@@ -39,6 +40,8 @@ enum class MaterialKind { Surface, GaussianSplat };
 // buffer and the compiled realtime program that feeds it.
 struct Material : noorrhi::Shared<nr::graphics::Material>
 {
+    // Asset name for inspectors, independent of the editable MaterialX file.
+    std::string name;
     MaterialShaderProgram shaderProgram;
     MaterialKind kind{MaterialKind::Surface};
     // Set once the material runtime published its program.

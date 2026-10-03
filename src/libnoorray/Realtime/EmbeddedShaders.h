@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,6 +25,14 @@ inline std::vector<std::uint32_t> embeddedSpirv(const std::string& path)
     std::vector<std::uint32_t> words(file.size() / sizeof(std::uint32_t));
     std::memcpy(words.data(), file.begin(), file.size());
     return words;
+}
+
+// Any other embedded file, such as an icon texture, by its path under the
+// shader build directory or assets/.
+inline std::span<const std::byte> embeddedFile(const std::string& path)
+{
+    const cmrc::file file = cmrc::noorray_shaders::get_filesystem().open(path);
+    return {reinterpret_cast<const std::byte*>(file.begin()), file.size()};
 }
 
 // CMakeRC terminates every file with a NUL, so sources are C strings.

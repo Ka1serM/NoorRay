@@ -215,8 +215,7 @@ RealtimeBsdf makeRealtimeBsdf(float3 shadingNormal, float3 geometricNormal, floa
     float3 normal = shadingNormal;
     if (dot(normal, geometricNormal) < 0.0)
         normal = -normal;
-    if (dot(normal, view) <= 1.0e-4)
-        normal = geometricNormal;
+    normal = clampShadingNormal(geometricNormal, normal, view);
     bsdf.normal = normal;
     bsdf.geometricNormal = geometricNormal;
     bsdf.view = view;

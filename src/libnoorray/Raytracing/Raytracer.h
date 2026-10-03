@@ -22,6 +22,7 @@
 #include "Optics/KolbLens.h"
 #include "Mesh/Assets/Mesh.h"
 #include "Mesh/SplineMeshPass.h"
+#include "Mesh/LandscapePass.h"
 #include "Scene/Scene.h"
 // The CPU mesh asset, distinct from the nr::graphics::Mesh record.
 class Mesh;
@@ -57,6 +58,9 @@ struct HitRecord
     uint32_t materialShaders{~0u};
     // The material's opacity may be below one.
     bool transparent{};
+    // The instance contains a two-sided section, so this one-sided section
+    // needs its any-hit shader to reject back faces.
+    bool needsFacingTest{};
     // Shadow rays skip the section although other sections of its mesh cast
     // shadows: its shadow any-hit stage ignores every hit.
     bool shadowFiltered{};
@@ -88,10 +92,13 @@ public:
 
     // Sets the logical render size; the images follow in
     // prepareFrameResources(). Allocations are 150% of the size they are made
-    // for, so a larger size reallocates to 150% of itself, and a growing
-    // viewport reallocates a few times rather than on every step; the
-    // allocation shrinks to 150% of a size once it has settled.
+    // for, up to the allocation limit, so a growing viewport reallocates a few
+    // times rather than on every step; the allocation shrinks to that of a
+    // size once it has settled.
     void resize(uint32_t width, uint32_t height);
+    // The largest size the host will render, which no allocation exceeds
+    // unless the logical size does.
+    void setAllocationLimit(uint32_t width, uint32_t height);
     nr::graphics::Frame data{};
     noorrhi::Shared<nr::graphics::Lens> lens;
     // Publish changed resident records before recording a frame.
@@ -194,16 +201,20 @@ private:
 
     noorrhi::Device* gpuDevice{};
     SplineMeshPass splineMeshPass_;
+    LandscapePass landscapePass_;
     bool exportColorMemory{};
     bool allocateAccumulationBuffer{};
     uint32_t renderWidth{};
     uint32_t renderHeight{};
     uint32_t imageWidth_{};
     uint32_t imageHeight_{};
+    uint32_t allocationLimitWidth_{};
+    uint32_t allocationLimitHeight_{};
     // When the logical size last changed; the allocation shrinks only after
     // it has held for a while, so a drag never reallocates back and forth.
     std::chrono::steady_clock::time_point resized_{};
     FullOutputAovs fullOutputAovs_{};
+    uint32_t allocationExtent(uint32_t logical, uint32_t limit) const;
     void reallocate(uint32_t width, uint32_t height);
     template<class T>
     std::vector<T> cropToRender(std::vector<T> pixels) const;
@@ -354,6 +365,8 @@ public:
     { return resources().readPositionAt(x, y); }
 
     void resize(uint32_t width, uint32_t height) { resources().resize(width, height); }
+    void setAllocationLimit(uint32_t width, uint32_t height)
+    { resources().setAllocationLimit(width, height); }
     nr::graphics::Frame& data() { return resources().data; }
     void commit() { resources().commit(); }
     void uploadScene(Scene& scene) { resources().uploadScene(scene); }

@@ -65,6 +65,7 @@ void main(inout RayPayload payload)
     const float3x4 worldToObject = WorldToObject3x4();
     payload.normal = normalize(localPoint.x * worldToObject[0].xyz
         + localPoint.y * worldToObject[1].xyz + localPoint.z * worldToObject[2].xyz);
+    payload.geometricNormal = payload.normal;
     // Acceptance in the any-hit stage is stochastic and therefore already
     // carries the Gaussian's density in expectation, in both shading modes. A
     // path that reaches closest hit is fully covered; republishing the density

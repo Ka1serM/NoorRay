@@ -214,6 +214,5 @@ void main(uint3 threadId : SV_DispatchThreadID)
 #endif
     if (any(isnan(radiance)) || any(isinf(radiance)))
         radiance = float3(0.0);
-    color[pixel] = float4(clamp(radiance * exp2(args.frame.camera.exposure), 0.0,
-        RealtimeHalfMax), base.a);
+    color[pixel] = float4(clamp(radiance, 0.0, RealtimeHalfMax), base.a);
 }

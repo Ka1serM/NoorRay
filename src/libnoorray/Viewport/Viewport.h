@@ -3,6 +3,7 @@
 #include <noorrhi/noorrhi.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -13,18 +14,19 @@
 
 #include "Scene/Handle.h"
 #include "Scene/Scene.h"
+#include "Scene/VolumeInstance.h"
 #include "Shared/Viewport.h"
 
 class Scene;
 
-// Fixed-size screen-space gizmo drawn by the viewport shader for a scene object
-// (currently lights). Kept separate from the physics light structs (PointLight etc.)
-// so its GPU layout is simple and stable regardless of what kind of object it
-// represents.
+// Fixed-size screen-space icon drawn by the viewport shader for a scene object
+// that carries a Billboard. Kept separate from the physics light structs
+// (PointLight etc.) so its GPU layout is simple and stable regardless of what
+// kind of object it represents.
 using ViewportBillboard = nr::graphics::ViewportBillboard;
 
-// Fixed 60 cm longest side; each plane tightly fits its glyph bounds.
-constexpr float ViewportBillboardHalfSize = 30.0f;
+// Fixed 80 cm square; the icon fills about three quarters of its texture.
+constexpr float ViewportBillboardHalfSize = 40.0f;
 
 // The AOV images the composite pass reads. These are descriptor-heap handles of
 // images the raytracer created through noorrhi::Device, plus the device address of
@@ -39,6 +41,8 @@ struct ViewportInputs
     noorrhi::TextureHandle crypto{};
     noorrhi::TextureHandle position{};
     noorrhi::GpuPtr<std::uint32_t> overdraw{};
+    noorrhi::TextureHandle depth{};
+    glm::vec2 depthJitter{};
 
     // What every view needs.
     explicit operator bool() const noexcept
@@ -87,21 +91,23 @@ public:
         bool tonemappingEnabled,
         bool showBillboards = true,
         SceneObjectHandle selectedObject = {}, ViewportOutput output = {});
-    // Refreshes the persistent overlay buffer only after a light mutation.
-    // Calling this each frame is an O(1) revision check in the common case; a
-    // moved, edited or hidden light rewrites only the records `changedLights`
-    // names, and only adding or removing scene objects rebuilds the list.
-    void updateBillboards(const Scene& scene, const Scene::LightIndices& changedLights);
-    // Light icons are deliberately an always-on-top editing overlay. Keep
-    // their useful range local to the active camera instead of depth-testing
-    // them against scene geometry.
+    // Refreshes the overlay records the scene changed: billboard icons and
+    // volume outlines. Calling this each frame is cheap when nothing changed;
+    // a moved, edited or hidden icon rewrites only its own record. Call
+    // outside an open frame.
+    void updateOverlays(Scene& scene);
+    // Icons are deliberately an always-on-top editing overlay. Keep their
+    // useful range local to the active camera instead of depth-testing them
+    // against scene geometry.
     void setBillboardCameraPosition(glm::vec3 position) { billboardCameraPosition_ = position; hasBillboardCamera_ = true; }
     void clearBillboardCameraPosition() { hasBillboardCamera_ = false; }
-    // The light whose icon covers output pixel (x, y) (bottom-left origin),
-    // read back from the light-id buffer the last dispatch stamped. Invalid /
+    void setDepthJitter(glm::vec2 jitter) { inputs.depthJitter = jitter; }
+    // The object whose icon covers output pixel (x, y) (bottom-left origin),
+    // read back from the billboard-id buffer the last dispatch stamped. Invalid /
     // nothing where no icon was drawn, including while icons are hidden.
-    SceneObjectHandle lightAt(uint32_t x, uint32_t y) const;
-    std::optional<glm::vec3> lightPositionAt(uint32_t x, uint32_t y) const;
+    SceneObjectHandle billboardObjectAt(uint32_t x, uint32_t y) const;
+    SceneObjectHandle volumeObjectAt(uint32_t x, uint32_t y) const;
+    std::optional<glm::vec3> billboardPositionAt(uint32_t x, uint32_t y) const;
     // Replaces the output image only when the allocation or format changes;
     // a new logical size alone is free.
     void resize(uint32_t width, uint32_t height,
@@ -156,7 +162,11 @@ private:
     noorrhi::Shader billboardVertexShader;
     noorrhi::Shader billboardFragmentShader;
     noorrhi::GraphicsPipeline billboardPipeline;
-    // Light picking: one uint per output pixel, billboard index + 1 or 0,
+    // One distance-field texture per icon, and the heap indices the shader reads.
+    noorrhi::Sampler billboardSampler;
+    std::vector<noorrhi::Image<std::byte>> billboardTextures;
+    noorrhi::Buffer<std::uint32_t> billboardTextureHandles;
+    // Billboard picking: one uint per output pixel, billboard index + 1 or 0,
     // cleared and stamped by two compute passes after the icons are drawn.
     noorrhi::Buffer<std::uint32_t> lightIdBuffer;
     noorrhi::Shader lightIdClearShader;
@@ -165,21 +175,41 @@ private:
     noorrhi::ComputePipeline lightIdStampPipeline;
     noorrhi::Buffer<std::byte> billboardBuffer;
     std::vector<ViewportBillboard> billboardData;
-    // The light each billboard record was built from, by record index.
+    // The object each billboard record was built from, by record index.
     std::vector<SceneObjectHandle> billboardHandles;
     uint32_t billboardCapacity{};
     noorrhi::GpuPtr<std::byte> billboardEntry{};
     uint32_t billboardCount{};
     glm::vec3 billboardCameraPosition_{};
     bool hasBillboardCamera_{};
-    uint64_t observedLightRevision{};
-    uint64_t observedHierarchyRevision{};
+
+    // Volume outlines: one instanced draw per volume, sharing edge buffers.
+    struct VolumeDraw {
+        SceneObjectHandle handle;
+        std::shared_ptr<const VolumeOutline> outline;
+        glm::mat4 world;
+        glm::vec4 color;
+        noorrhi::GpuPtr<glm::vec3> segments;
+    };
+    noorrhi::Shader volumeVertexShader;
+    noorrhi::Shader volumeFragmentShader;
+    noorrhi::GraphicsPipeline volumePipeline;
+    std::vector<VolumeDraw> volumeDraws;
+    std::vector<uint32_t> volumeSlotToDraw;
+    noorrhi::Buffer<std::uint32_t> volumeIdBuffer;
+    uint64_t observedVolumeStructureRevision{};
 
     void createOutputResources(uint32_t width, uint32_t height, noorrhi::ImageFormat format);
     void createBillboardPipeline();
-    void reserveBillboards(uint32_t capacity);
-    void rebuildBillboards(const Scene& scene);
+    void createBillboardTextures();
+    void createVolumePipeline();
+    // Returns whether the buffer was replaced, which drops its contents.
+    bool reserveBillboards(uint32_t capacity);
+    void updateBillboards(Scene& scene);
+    void updateVolumes(Scene& scene);
     std::optional<uint32_t> billboardAt(uint32_t x, uint32_t y) const;
     void drawBillboards(const glm::mat4& viewProjection, SceneObjectHandle selectedObject,
+        const ViewportOutput& output);
+    void drawVolumes(const glm::mat4& viewProjection, SceneObjectHandle selectedObject,
         const ViewportOutput& output);
 };

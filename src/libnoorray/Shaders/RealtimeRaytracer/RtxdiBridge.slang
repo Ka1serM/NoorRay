@@ -27,6 +27,7 @@
 #define RTXDI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
 
 #include "RealtimeShading.slang"
+#include "../Raytracer/RayOrigin.slang"
 #include "RealtimeArgs.slang"
 
 #define RTXDI_RIS_BUFFER (realtimeArgs()->lighting.risBuffer)
@@ -335,8 +336,7 @@ RayDesc realtimeVisibilityRay(float3 position, float3 geometricNormal, float3 di
     float distance)
 {
     RayDesc ray;
-    ray.Origin = position + geometricNormal
-        * (dot(geometricNormal, direction) >= 0.0 ? 1.0e-2 : -1.0e-2);
+    ray.Origin = offsetRayOrigin(position, geometricNormal, direction);
     ray.Direction = direction;
     ray.TMin = 0.1;
     ray.TMax = distance < 1.0e17 ? max(distance - 2.0e-2, ray.TMin) : 1.0e30;

@@ -1,0 +1,13 @@
+{
+  "name": "noorray-billboard-icons",
+  "private": true,
+  "description": "Generates the viewport billboard MSDF textures from assets/billboards/*.svg",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {
+    "msdfgen-wasm": "1.0.0",
+    "opentype.js": "^1.3.4",
+    "svgpath": "^2.6.0"
+  }
+}

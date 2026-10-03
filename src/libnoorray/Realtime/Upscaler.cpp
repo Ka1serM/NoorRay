@@ -324,7 +324,7 @@ void Upscaler::record(const FrameContext& frame, const RenderTargets& targets,
     description.upscaleSize = {frame.output.width, frame.output.height};
     description.enableSharpening = false;
     description.frameTimeDelta = std::clamp(frame.frameTimeMilliseconds, 0.1f, 100.0f);
-    description.preExposure = 1.0f;
+    description.preExposure = frame.exposureScale;
     description.reset = frame.resetHistory;
     // With inverted depth FSR takes the planes swapped, as in AMD's sample.
     description.cameraNear = FLT_MAX;

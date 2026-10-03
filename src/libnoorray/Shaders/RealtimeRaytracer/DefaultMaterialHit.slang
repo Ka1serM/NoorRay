@@ -18,3 +18,17 @@ void main(inout RealtimeHitPayload payload,
 {
     materialClosestHit<DefaultMaterial>(payload, attributes.barycentrics);
 }
+
+[shader("anyhit")]
+void anyHit(RealtimeHitPayload payload,
+    in BuiltInTriangleIntersectionAttributes attributes)
+{
+    materialAnyHit<DefaultMaterial>(payload, attributes.barycentrics);
+}
+
+[shader("anyhit")]
+void shadowAnyHit(inout RealtimeShadowPayload payload,
+    in BuiltInTriangleIntersectionAttributes attributes)
+{
+    materialShadowAnyHit<DefaultMaterial>(payload, attributes.barycentrics);
+}

@@ -40,10 +40,11 @@ constexpr noorrhi::RayTracingInterface TraceInterface{sizeof(nr::graphics::Realt
 // Hit groups of the linked pipeline, counted library by library. The pass
 // library's come first; each material then adds MaterialGroupCount.
 constexpr uint32_t DefaultMaterialGroup = 0u;
+constexpr uint32_t DefaultFilteredShadowGroup = 1u;
 // No shaders: shadow rays pass opaque materials' records without any work,
 // and Gaussian records, which realtime rays never reach, need some group.
-constexpr uint32_t EmptyGroup = 1u;
-constexpr uint32_t FirstMaterialGroup = 2u;
+constexpr uint32_t EmptyGroup = 2u;
+constexpr uint32_t FirstMaterialGroup = 3u;
 enum MaterialGroup : uint32_t { TransparentSurface, OpaqueSurface, Shadow, MaterialGroupCount };
 constexpr uint32_t NoMaterialGroups = ~0u;
 
@@ -75,7 +76,10 @@ noorrhi::RayTracingLibrary buildPassLibrary(noorrhi::Device& device,
 {
     return device.ray_tracing_library({std::move(raygens),
         {loadShader(device, missSpv), loadShader(device, shadowMissSpv)},
-        {loadShader(device, defaultMaterialHitSpv), noorrhi::Shader{}}, {}, {}}, TraceInterface);
+        {loadShader(device, defaultMaterialHitSpv), noorrhi::Shader{}, noorrhi::Shader{}},
+        {loadShader(device, defaultMaterialHitSpv, "anyHit"),
+            loadShader(device, defaultMaterialHitSpv, "shadowAnyHit"), noorrhi::Shader{}},
+        {}}, TraceInterface);
 }
 
 long long millisecondsSince(const std::chrono::steady_clock::time_point started)
@@ -215,8 +219,8 @@ Extent RealtimeRaytracer::lightingExtent(const Extent render) const
 
 RealtimeRaytracer::ResourceLayout RealtimeRaytracer::requiredLayout() const
 {
-    // Both extents grow with the output, so every rectangle the image
-    // allocation admits fits inside the ones derived from it.
+    // The render targets are allocated at the render size the upscaler ratio
+    // asks for in the output allocation; a new ratio replaces them.
     const Extent output{imageWidth(), imageHeight()};
     const Extent render = upscaler.renderExtent(output);
     ResourceLayout layout;
@@ -228,7 +232,6 @@ RealtimeRaytracer::ResourceLayout RealtimeRaytracer::requiredLayout() const
     layout.targets.upscaled = upscaler.mode() != UpscalerMode::Off;
     layout.output = output;
     layout.denoiser = denoiserMode;
-    layout.upscaler = upscaler.mode();
     return layout;
 }
 
@@ -464,11 +467,14 @@ void RealtimeRaytracer::assignHitGroups()
         if (record.rayType == nr::graphics::RealtimeRayTypeSurface)
             hitGroups.push_back(!compiled ? (record.kind == HitRecord::Kind::Section
                     ? DefaultMaterialGroup : EmptyGroup)
-                : materialGroups + (record.transparent ? TransparentSurface : OpaqueSurface));
+                : materialGroups + ((record.transparent || record.needsFacingTest)
+                    ? TransparentSurface : OpaqueSurface));
         else
-            hitGroups.push_back(compiled && (record.transparent || record.shadowFiltered)
-                    ? materialGroups + Shadow
-                : EmptyGroup);
+            hitGroups.push_back(compiled && (record.transparent || record.shadowFiltered
+                    || record.needsFacingTest) ? materialGroups + Shadow
+                : !compiled && record.kind == HitRecord::Kind::Section
+                    && (record.shadowFiltered || record.needsFacingTest)
+                    ? DefaultFilteredShadowGroup : EmptyGroup);
     }
 }
 
@@ -532,7 +538,10 @@ FrameContext RealtimeRaytracer::beginFrame()
     frame.lightingScale = lightingScale(lightingResolution);
     // A viewport resize keeps history: every temporal stage reprojects from
     // the previous frame's rectangle into this one's.
+    // An exposure change keeps history: FSR rescales its own, and the
+    // denoiser and ReSTIR converge to the new scale within a few frames.
     frame.resetHistory = !hasHistory;
+    frame.exposureScale = std::exp2(common.data.camera.exposure);
     frame.previousLighting = frame.resetHistory ? frame.lighting : previousLighting;
     const auto now = std::chrono::steady_clock::now();
     frame.frameTimeMilliseconds = previousFrameStart.time_since_epoch().count() == 0 ? 16.7f

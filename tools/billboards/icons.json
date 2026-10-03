@@ -1,0 +1,23 @@
+{
+  "point_light": "Lightbulb",
+  "spot_light": "Flashlight",
+  "rect_light": "Rectangle Landscape",
+  "directional_light": "Weather Sunny",
+  "sky_light": "Weather Partly Cloudy Day",
+  "camera": "Camera",
+  "audio": "Speaker 2",
+  "player_start": "Person Walking",
+  "fog": "Weather Fog",
+  "atmosphere": "Globe",
+  "cloud": "Cloud",
+  "reflection_capture": "Target",
+  "decal": "Sticker",
+  "note": "Note",
+  "target_point": "Location",
+  "particles": "Sparkle",
+  "wind": "Weather Squalls",
+  "scene_capture": "Video",
+  "constraint": "Link",
+  "radial_force": "Arrow Maximize",
+  "marker": "Cube"
+}

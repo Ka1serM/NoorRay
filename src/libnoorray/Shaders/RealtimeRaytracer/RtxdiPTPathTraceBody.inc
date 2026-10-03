@@ -26,9 +26,8 @@ void RAB_PathTrace(inout PT_CONTEXT context,
             context.RecordRussianRouletteProbability(continuation);
         }
         RayDesc ray;
-        ray.Origin = previousSurface.worldPos + previousSurface.geoNormal
-            * (dot(previousSurface.geoNormal, context.GetBrdfRaySample().outDirection)
-                >= 0.0 ? 1.0e-2 : -1.0e-2);
+        ray.Origin = offsetRayOrigin(previousSurface.worldPos, previousSurface.geoNormal,
+            context.GetBrdfRaySample().outDirection);
         ray.Direction = context.GetBrdfRaySample().outDirection;
         ray.TMin = 1.0e-3;
         ray.TMax = 1.0e30;

@@ -39,6 +39,9 @@ public:
         bool camera = true;
         bool shadow = true;
         bool indirect = true;
+        // What a hidden instance still casts: shadows and indirect light, never camera rays.
+        bool shadowWhileHidden = false;
+        bool indirectWhileHidden = false;
         // Triangles wound clockwise face forward instead of counterclockwise.
         bool reverseCulling = false;
         // The mesh is animated independently of scene publication.

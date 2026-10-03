@@ -12,6 +12,7 @@
 #include <glm/geometric.hpp>
 
 #include "Mesh/SplineMeshPass.h"
+#include "Mesh/LandscapePass.h"
 #include "Scene/Scene.h"
 
 using glm::normalize;
@@ -313,7 +314,7 @@ std::uint64_t address(const auto& buffer)
 }
 }
 
-void Mesh::upload(noorrhi::Device& device, const SplineMeshPass& splineMeshPass)
+void Mesh::upload(noorrhi::Device& device, const SplineMeshPass& splineMeshPass, const LandscapePass& landscapePass)
 {
     if (!gpuDirty || geometry.positions.empty() || geometry.indices.empty())
         return;
@@ -321,6 +322,8 @@ void Mesh::upload(noorrhi::Device& device, const SplineMeshPass& splineMeshPass)
     uploadStream(device, tangentBuffer, geometry.tangents);
     if (geometry.spline)
         splineMeshPass.record(positionBuffer, tangentBuffer, *geometry.spline);
+    if (geometry.landscape)
+        landscapePass.record(positionBuffer);
     uploadStream(device, uvBuffer, geometry.uvs);
     uploadStream(device, colorBuffer, geometry.colors);
     uploadStream(device, indexBuffer, geometry.indices);

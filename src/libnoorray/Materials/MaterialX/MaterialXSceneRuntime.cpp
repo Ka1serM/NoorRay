@@ -299,9 +299,7 @@ void MaterialXSceneRuntime::shutdown()
 
 bool MaterialXSceneRuntime::needsCompilation(const Scene& scene) const
 {
-    return std::ranges::any_of(scene.getMaterials(), [](const Material& material) {
-        return !material.compiled && material.kind == MaterialKind::Surface;
-    });
+    return scene.compiledSurfaceMaterialCount() != scene.surfaceMaterialCount();
 }
 
 void MaterialXSceneRuntime::beginImport()
@@ -391,7 +389,8 @@ bool MaterialXSceneRuntime::processPending(Scene& scene, const std::string& scen
     std::unordered_set<std::size_t> readyIndices;
     for (const Impl::Ready& ready : impl_->ready)
         readyIndices.insert(ready.materialIndex);
-    const SceneTextureLookup textureLookup = makeSceneTextureLookup(scene);
+    // Every texture of the scene is indexed, so only when a material needs it.
+    std::optional<SceneTextureLookup> textureLookup;
     for (const std::size_t i : candidates) {
         // Splat materials are drawn by built-in stages and have nothing to compile.
         if (i >= materials.size() || materials[i].compiled || readyIndices.contains(i)
@@ -429,8 +428,10 @@ bool MaterialXSceneRuntime::processPending(Scene& scene, const std::string& scen
             NR_LOG_INFO("Compiling default MaterialX material " << i);
             document = nr::materialx::defaultMaterial();
         }
+        if (document && !textureLookup)
+            textureLookup = makeSceneTextureLookup(scene);
         auto resolvedTextures = document
-            ? resolveSceneTextures(document, textureLookup, sceneDirectory)
+            ? resolveSceneTextures(document, *textureLookup, sceneDirectory)
             : std::unordered_map<std::string, std::uint32_t>{};
         schedule(i, materials[i].revision, std::move(document),
             std::move(resolvedTextures));

@@ -22,7 +22,7 @@ SceneObject::SceneObject(const SceneObject& other)
     : handle(),
       name(other.name + " Copy"),
       scene(other.scene), visible(other.visible),
-      transform(other.transform)
+      transform(other.transform), billboard(other.billboard)
 {}
 
 std::unique_ptr<SceneObject> SceneObject::clone() const {
@@ -107,8 +107,19 @@ void SceneObject::transformChanged() {
     if (scene) scene->notifyObjectTransformChanged(*this);
 }
 
+void SceneObject::setBillboard(const Billboard& value) {
+    if (scene) scene->synchronizeBeforeMutation();
+    billboard = value;
+    notifyBillboardChanged();
+}
+
+void SceneObject::notifyBillboardChanged() {
+    if (billboard && scene) scene->billboardChanged(*this);
+}
+
 void SceneObject::onTransformUpdated() {
     if (scene) scene->setDirtyFlag(Accumulation);
+    notifyBillboardChanged();
     for (const auto& child : getChildren())
         child->onTransformUpdated();
 }

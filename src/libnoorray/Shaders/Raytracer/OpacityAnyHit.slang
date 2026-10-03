@@ -13,6 +13,14 @@ void main(inout RayPayload payload,
     const Frame frame = *root.arguments;
     const RegularSurface surface = loadRegularSurface(frame.scene, InstanceID(),
         GeometryIndex(), PrimitiveIndex(), attributes.barycentrics);
+    // A mixed-sided mesh disables facing culling for the whole TLAS instance.
+    // Reject back faces here for its one-sided sections in every ray type.
+    if (HitKind() == HIT_KIND_TRIANGLE_BACK_FACE
+        && (frame.materials[surface.materialIndex]->flags & MaterialFlagOneSided) != 0u)
+    {
+        IgnoreHit();
+        return;
+    }
     const float blockProbability = saturate(surface.vertexColor.a);
     if (blockProbability >= 1.0)
         return;

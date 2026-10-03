@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <optional>
+#include "Billboard.h"
 #include "Scene.h"
 #include "Mesh/Transform.h"
 
@@ -26,6 +28,9 @@ protected:
     bool rootCandidate{};
     std::string sourceType;
     std::string sourcePath;
+    std::optional<Billboard> billboard;
+    // Index into Scene's billboard slots, ~0u while outside a scene.
+    uint32_t billboardSlot{~0u};
 
 public:
     SceneObject(const std::string& name, const Transform& transform);
@@ -44,8 +49,11 @@ public:
         if (visible == v) return;
         if (scene) scene->synchronizeBeforeMutation();
         visible = v;
+        notifyBillboardChanged();
         onVisibilityChanged();
     }
+    const std::optional<Billboard>& getBillboard() const { return billboard; }
+    void setBillboard(const Billboard& value);
     void setSource(const std::string& type, const std::string& path) { sourceType = type; sourcePath = path; }
     const std::string& getSourceType() const { return sourceType; }
     const std::string& getSourcePath() const { return sourcePath; }
@@ -100,5 +108,9 @@ public:
 private:
     // Applies a change to this object's own transform and reports it to the scene.
     void transformChanged();
+protected:
+    // Tells the scene this object's icon record is stale.
+    void notifyBillboardChanged();
+private:
     void setHandle(const SceneObjectHandle newHandle) { handle = newHandle; }
 };

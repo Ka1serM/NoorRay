@@ -10,6 +10,7 @@
 #include "Lights/SpotLightInstance.h"
 #include "Scene/MeshInstance.h"
 #include "Scene/SceneObject.h"
+#include "Scene/VolumeInstance.h"
 
 using glm::inverse;
 using glm::mat4;
@@ -96,6 +97,7 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
     // array, so a handle never points at a gap.
     const uint32_t denseIndex = static_cast<uint32_t>(sceneObjects.size());
     sharedObject->setHandle(allocateObjectSlot(denseIndex));
+    attachOverlays(*sharedObject);
     if (auto* meshInstance = dynamic_cast<MeshInstance*>(sharedObject.get());
         meshInstance && meshInstance->hasMesh())
         addMeshInstanceSlot(*meshInstance);
@@ -108,7 +110,7 @@ uint32_t Scene::registerObject(std::unique_ptr<SceneObject> sceneObject) {
 
 // ── Public lifetime API ───────────────────────────────────────────────────────
 
-void Scene::clear(const bool preserveViewportState) {
+void Scene::clear(const bool preserveViewportState, const bool preserveEnvironmentTexture) {
     synchronizeBeforeMutation();
     std::optional<Texture> environmentTexture;
     if (preserveViewportState) {
@@ -120,7 +122,7 @@ void Scene::clear(const bool preserveViewportState) {
             viewportCamera->setWorldTransformFromMatrix(camera->getWorldTransform().getMatrix());
         }
         const int texture = environment->getTextureIndex();
-        if (texture >= 0 && static_cast<size_t>(texture) < textures.size())
+        if (preserveEnvironmentTexture && texture >= 0 && static_cast<size_t>(texture) < textures.size())
             environmentTexture.emplace(std::move(textures[texture]));
     }
     // Switch rendering to the persistent viewport camera before scene-owned
@@ -144,6 +146,13 @@ void Scene::clear(const bool preserveViewportState) {
     materialCompileListed_.clear();
     for (auto& lights : lightObjects_)
         lights.clear();
+    billboardObjects_.clear();
+    changedBillboardSlots_.clear();
+    billboardSlotListed_.clear();
+    volumeObjects_.clear();
+    changedVolumeSlots_.clear();
+    volumeSlotListed_.clear();
+    ++volumeStructureRevision_;
     rootCandidates_.clear();
     notifyHierarchyChanged();
     // Retire the slots rather than dropping the table, so handles that outlive
@@ -157,6 +166,9 @@ void Scene::clear(const bool preserveViewportState) {
     }
     meshes.clear();
     materials.clear();
+    surfaceMaterialCount_ = 0;
+    compiledSurfaceMaterialCount_ = 0;
+    pendingMaterialCursor_ = 0;
     textures.clear();
     meshesByPath_.clear();
     texturesByKey_.clear();
@@ -170,6 +182,28 @@ void Scene::clear(const bool preserveViewportState) {
     notifyMaterialChanged();
     importedFileRoots_.clear();
     assignActiveObject({});
+    // std::vector::clear leaves peak capacity allocated. A large preview should
+    // give its scene tables back when it is explicitly cleared.
+    sceneObjects.shrink_to_fit();
+    meshInstanceSlots_.shrink_to_fit();
+    changedMeshInstanceSlots_.shrink_to_fit();
+    meshInstanceSlotListed_.shrink_to_fit();
+    changedMeshes_.shrink_to_fit();
+    meshListed_.shrink_to_fit();
+    changedMaterials_.shrink_to_fit();
+    materialListed_.shrink_to_fit();
+    materialsToCompile_.shrink_to_fit();
+    materialCompileListed_.shrink_to_fit();
+    materialxSourcePaths.shrink_to_fit();
+    materialxDocuments.shrink_to_fit();
+    for (auto& lights : lightObjects_) lights.shrink_to_fit();
+    for (auto& lights : changedLights_) lights.shrink_to_fit();
+    for (auto& listed : lightListed_) listed.shrink_to_fit();
+    billboardObjects_.shrink_to_fit();
+    changedBillboardSlots_.shrink_to_fit();
+    billboardSlotListed_.shrink_to_fit();
+    volumeObjects_.shrink_to_fit();
+    rootCandidates_.shrink_to_fit();
     if (preserveViewportState) {
         if (environmentTexture)
             environment->setHdriTexture(*addTexture(std::move(*environmentTexture)));
@@ -222,6 +256,11 @@ Mesh* Scene::add(Mesh mesh, const bool reuseExisting) {
 Material* Scene::add(Material material) {
     synchronizeBeforeMutation();
     materials.push_back(std::move(material));
+    if (materials.back().kind == MaterialKind::Surface) {
+        ++surfaceMaterialCount_;
+        if (materials.back().compiled)
+            ++compiledSurfaceMaterialCount_;
+    }
     const auto index = static_cast<uint32_t>(materials.size() - 1);
     materials.back().sceneIndex = index;
     // Publish a record immediately so the renderer's pointer table never
@@ -357,6 +396,7 @@ bool Scene::remove(SceneObject* objToRemove) {
     for (const auto& object : subtree) {
         if (auto* light = dynamic_cast<LightInstance*>(object.get()))
             unregisterLight(*light);
+        detachOverlays(*object);
         if (auto* meshInstance = dynamic_cast<MeshInstance*>(object.get());
             meshInstance && meshInstance->slot != ~0u)
             removeMeshInstanceSlot(*meshInstance);
@@ -415,6 +455,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
         unregisterLight(*oldLight);
     if (auto* oldMesh = dynamic_cast<MeshInstance*>(oldObject); oldMesh && oldMesh->slot != ~0u)
         removeMeshInstanceSlot(*oldMesh);
+    detachOverlays(*oldObject);
     oldObject->clearParent();
     oldObject->children.clear();
     oldObject->scene = nullptr;
@@ -424,6 +465,7 @@ bool Scene::replaceObject(SceneObject* oldObject, std::unique_ptr<SceneObject> n
     // The replacement takes over the slot, so handles held elsewhere keep
     // resolving -- that is the point of replacing rather than remove + add.
     newShared->setHandle(oldObject->getHandle());
+    attachOverlays(*newShared);
 
     if (auto* newLight = dynamic_cast<LightInstance*>(newShared.get()))
         registerLight(*newLight);
@@ -759,6 +801,99 @@ void Scene::markLightChanged(const int lightType, const uint32_t lightIndex) {
     changedLights_[lightType].push_back(lightIndex);
 }
 
+void Scene::attachOverlays(SceneObject& object) {
+    if (object.billboard)
+        addBillboardSlot(object);
+    if (auto* volume = dynamic_cast<VolumeInstance*>(&object))
+        addVolumeSlot(*volume);
+}
+
+void Scene::detachOverlays(SceneObject& object) {
+    if (object.billboardSlot != ~0u)
+        removeBillboardSlot(object);
+    if (auto* volume = dynamic_cast<VolumeInstance*>(&object); volume && volume->slot != ~0u)
+        removeVolumeSlot(*volume);
+}
+
+void Scene::addBillboardSlot(SceneObject& object) {
+    object.billboardSlot = static_cast<uint32_t>(billboardObjects_.size());
+    billboardObjects_.push_back(&object);
+    markBillboardChanged(object.billboardSlot);
+}
+
+void Scene::removeBillboardSlot(SceneObject& object) {
+    const uint32_t slot = object.billboardSlot;
+    SceneObject* last = billboardObjects_.back();
+    billboardObjects_[slot] = last;
+    last->billboardSlot = slot;
+    billboardObjects_.pop_back();
+    object.billboardSlot = ~0u;
+    if (last != &object)
+        markBillboardChanged(slot);
+}
+
+void Scene::markBillboardChanged(const uint32_t slot) {
+    if (slot >= billboardSlotListed_.size())
+        billboardSlotListed_.resize(slot + 1);
+    if (billboardSlotListed_[slot])
+        return;
+    billboardSlotListed_[slot] = true;
+    changedBillboardSlots_.push_back(slot);
+}
+
+void Scene::billboardChanged(SceneObject& object) {
+    // An object outside the scene is attached with its billboard when added.
+    if (!object.handle.isValid())
+        return;
+    if (object.billboardSlot == ~0u)
+        addBillboardSlot(object);
+    else
+        markBillboardChanged(object.billboardSlot);
+}
+
+std::vector<uint32_t> Scene::takeChangedBillboardSlots() {
+    std::vector<uint32_t> changed = std::exchange(changedBillboardSlots_, {});
+    for (const uint32_t slot : changed)
+        billboardSlotListed_[slot] = false;
+    // A slot listed before a removal shrank the table no longer exists.
+    std::erase_if(changed, [this](const uint32_t slot) { return slot >= billboardObjects_.size(); });
+    return changed;
+}
+
+void Scene::addVolumeSlot(VolumeInstance& volume) {
+    volume.slot = static_cast<uint32_t>(volumeObjects_.size());
+    volumeObjects_.push_back(&volume);
+    ++volumeStructureRevision_;
+}
+
+void Scene::removeVolumeSlot(VolumeInstance& volume) {
+    VolumeInstance* last = volumeObjects_.back();
+    volumeObjects_[volume.slot] = last;
+    last->slot = volume.slot;
+    volumeObjects_.pop_back();
+    volume.slot = ~0u;
+    ++volumeStructureRevision_;
+}
+
+void Scene::markVolumeChanged(const uint32_t slot) {
+    if (slot == ~0u)
+        return;
+    if (slot >= volumeSlotListed_.size())
+        volumeSlotListed_.resize(slot + 1);
+    if (volumeSlotListed_[slot])
+        return;
+    volumeSlotListed_[slot] = true;
+    changedVolumeSlots_.push_back(slot);
+}
+
+std::vector<uint32_t> Scene::takeChangedVolumeSlots() {
+    std::vector<uint32_t> changed = std::exchange(changedVolumeSlots_, {});
+    for (const uint32_t slot : changed)
+        volumeSlotListed_[slot] = false;
+    std::erase_if(changed, [this](const uint32_t slot) { return slot >= volumeObjects_.size(); });
+    return changed;
+}
+
 Scene::LightIndices Scene::takeChangedLights() {
     LightIndices changed = std::exchange(changedLights_, {});
     for (size_t type = 0; type < changed.size(); ++type) {
@@ -848,6 +983,16 @@ std::shared_ptr<SceneObject> Scene::findObjectPtr(const SceneObjectHandle handle
     return sceneObjects[objectSlots[handle.index()].denseIndex];
 }
 
+const Material* Scene::firstPendingSurfaceMaterial() {
+    while (pendingMaterialCursor_ < materials.size()) {
+        const Material& material = materials[pendingMaterialCursor_];
+        if (material.kind == MaterialKind::Surface && !material.compiled)
+            return &material;
+        ++pendingMaterialCursor_;
+    }
+    return nullptr;
+}
+
 void Scene::setMaterialProgram(const std::size_t materialIndex,
     MaterialShaderProgram shaderProgram)
 {
@@ -855,6 +1000,8 @@ void Scene::setMaterialProgram(const std::size_t materialIndex,
     Material& material = materials[materialIndex];
     material.releaseGpu();
     material.shaderProgram = std::move(shaderProgram);
+    if (material.kind == MaterialKind::Surface && !material.compiled)
+        ++compiledSurfaceMaterialCount_;
     material.compiled = true;
     markMaterialChanged(static_cast<uint32_t>(materialIndex));
     setDirtyFlag(Accumulation);

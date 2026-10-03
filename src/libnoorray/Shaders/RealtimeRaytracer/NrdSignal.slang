@@ -82,15 +82,17 @@ float4 packNrdSignal(float3 radiance, float hitDistance, float viewZ, float roug
 {
     sh1 = float4(0.0);
     const DenoiserArgs denoiser = realtimeArgs()->denoiser;
+    const float3 exposed = radiance * realtimeExposureScale();
     if (denoiser.sphericalHarmonics == 0u)
-        return RELAX_FrontEnd_PackRadianceAndHitDist(radiance, hitDistance, true);
+        return RELAX_FrontEnd_PackRadianceAndHitDist(exposed, hitDistance, true);
     const float3 direction = directionSum / max(nrdLuminance(totalRadiance), 1.0e-6);
-    return RELAX_FrontEnd_PackSh(radiance, hitDistance, direction, sh1, true);
+    return RELAX_FrontEnd_PackSh(exposed, hitDistance, direction, sh1, true);
 }
 
 float4 packNrdPlainSignal(float3 radiance, float hitDistance, float viewZ, float roughness)
 {
-    return RELAX_FrontEnd_PackRadianceAndHitDist(radiance, hitDistance, true);
+    return RELAX_FrontEnd_PackRadianceAndHitDist(radiance * realtimeExposureScale(),
+        hitDistance, true);
 }
 
 // A lobe's radiance as the non-SH denoisers pack and output it.

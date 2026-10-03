@@ -15,6 +15,32 @@ float3 safeNormalize(float3 value, float3 fallback)
     return lengthSquared > 0.0 ? value * rsqrt(lengthSquared) : fallback;
 }
 
+// Rotate a shading normal minimally toward the geometric normal so that its
+// reflection stays above the geometric surface. This is the Blender/Cycles
+// grazing-angle correction a composite BSDF needs for normal-mapped surfaces.
+float3 clampShadingNormal(float3 geometricNormal, float3 shadingNormal, float3 view)
+{
+    const float3 reflected = reflect(-view, shadingNormal);
+    const float normalView = max(dot(geometricNormal, view), 0.0);
+    const float threshold = min(0.9 * normalView, 0.01);
+    if (dot(geometricNormal, reflected) >= threshold)
+        return shadingNormal;
+
+    const float3 rawTangent = geometricNormal * normalView - view;
+    const float tangentLengthSquared = dot(rawTangent, rawTangent);
+    if (tangentLengthSquared < 1.0e-8)
+        return shadingNormal;
+    const float3 tangent = rawTangent * (1.0 / sqrt(tangentLengthSquared));
+
+    const float thresholdSine = sqrt(max(1.0 - threshold * threshold, 0.0));
+    const float3 correctedReflection = geometricNormal * threshold + tangent * thresholdSine;
+    const float3 clamped = view + correctedReflection;
+    const float clampedLengthSquared = dot(clamped, clamped);
+    if (clampedLengthSquared < 1.0e-12)
+        return geometricNormal;
+    return clamped * (1.0 / sqrt(clampedLengthSquared));
+}
+
 float alphaFromPerceptualRoughness(float roughness)
 {
     return roughness * roughness;

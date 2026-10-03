@@ -30,6 +30,7 @@ void main(inout RayPayload payload)
     payload.radiance = float3(0.0);
     payload.albedo = float3(0.0);
     payload.normal = float3(0.0, 0.0, 1.0);
+    payload.geometricNormal = float3(0.0, 0.0, 1.0);
     payload.position = float3(0.0);
     payload.alpha = 1.0;
     payload.cryptomatte = 0xffffffffu;

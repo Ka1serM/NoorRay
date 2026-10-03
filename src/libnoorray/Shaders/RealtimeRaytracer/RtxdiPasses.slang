@@ -109,6 +109,7 @@ static const uint RtxdiPresampleGroupSize = 256u;
 static const uint RtxdiBoilingGroupSize = 16u;
 // Screen-space compute passes, as RTXDI_SCREEN_SPACE_GROUP_SIZE in its sample.
 static const uint RtxdiScreenSpaceGroupSize = 8u;
+static const float RealtimeDirectOnlyAmbient = 0.02;
 
 RealtimeLighting* rtxdiLighting()
 {
@@ -239,7 +240,7 @@ void main()
         lighting.restirDI.bufferIndices.initialSamplingOutputBufferIndex);
 
     RTXDI_PTReservoir path = RTXDI_EmptyPTReservoir();
-    if (valid)
+    if (valid && args.frame.maxBounces > 0u)
     {
         RTXDI_PathTracerRandomContext random = RTXDI_InitializePathTracerRandomContext(
             pixel, lighting.runtimeParams.frameIndex,
@@ -499,7 +500,7 @@ void main()
         }
     }
 
-    if (RAB_IsSurfaceValid(surface))
+    if (frame.maxBounces > 0u && RAB_IsSurfaceValid(surface))
     {
         const RTXDI_PTParameters pt = lighting.restirPT;
         const RTXDI_PTReservoir reservoir = RTXDI_LoadPTReservoir(
@@ -516,8 +517,8 @@ void main()
                 RTXDI_RandomSamplerState replay = RTXDI_GetRngForShading(reservoir);
                 RAB_SurfaceImportanceSampleBrdf(surface, replay, direction);
                 RayDesc firstRay;
-                firstRay.Origin = surface.worldPos + surface.geoNormal
-                    * (dot(surface.geoNormal, direction) >= 0.0 ? 1.0e-2 : -1.0e-2);
+                firstRay.Origin = offsetRayOrigin(surface.worldPos, surface.geoNormal,
+                    direction);
                 firstRay.Direction = direction;
                 firstRay.TMin = 1.0e-3;
                 firstRay.TMax = 1.0e30;
@@ -546,6 +547,16 @@ void main()
             diffuse.addIndirect(diffusePart, direction, distance, !specularLobe);
             specular.addIndirect(specularPart, direction, distance, specularLobe);
         }
+    }
+    if (frame.maxBounces == 0u && frame.environment != nullptr && RAB_IsSurfaceValid(surface))
+    {
+        // Stands in for the indirect light that is switched off: the
+        // environment's colour as an unoccluded ambient.
+        const Environment environment = frame.environment[0];
+        diffuse.add(bsdf.evaluateDiffuse(bsdf.normal)
+            * (EnvironmentPi * RealtimeDirectOnlyAmbient * environment.indirectLightingIntensity
+                * environment.lightingExposureScale)
+            * environment.color, bsdf.normal);
     }
     // The lighting pass's own material factors: the render-resolution ones
     // belong to different samples when lighting runs below that resolution.

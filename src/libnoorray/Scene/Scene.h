@@ -30,6 +30,7 @@ class SceneObject;
 class MeshInstance;
 class CameraInstance;
 class LightInstance;
+class VolumeInstance;
 enum DirtyFlag : uint8_t {
     TLAS         = 1 << 0,
     Meshes       = 1 << 1,
@@ -57,6 +58,7 @@ class Scene {
     friend class LightInstance;
     friend class SceneObject;
     friend class MeshInstance;
+    friend class VolumeInstance;
     friend class Mesh;
 
     std::deque<Texture> textures;
@@ -117,8 +119,23 @@ class Scene {
     // Materials the MaterialX runtime has yet to compile, each listed once.
     std::vector<uint32_t> materialsToCompile_;
     std::vector<bool> materialCompileListed_;
+    std::size_t surfaceMaterialCount_ = 0;
+    std::size_t compiledSurfaceMaterialCount_ = 0;
+    // Materials only ever gain programs, so the scan for the first pending
+    // one resumes where it stopped.
+    std::size_t pendingMaterialCursor_ = 0;
     // Light objects by light type, parallel to the typed light records.
     std::array<std::vector<LightInstance*>, 4> lightObjects_;
+    // Objects with a billboard, by the slot that is also the viewport's record
+    // index. Removal moves the last slot into the hole.
+    std::vector<SceneObject*> billboardObjects_;
+    // Billboard slots rewritten since the viewport last took them, each listed once.
+    std::vector<uint32_t> changedBillboardSlots_;
+    std::vector<bool> billboardSlotListed_;
+    std::vector<VolumeInstance*> volumeObjects_;
+    std::vector<uint32_t> changedVolumeSlots_;
+    std::vector<bool> volumeSlotListed_;
+    uint64_t volumeStructureRevision_{1};
     // Typed light records rewritten since the session last took them, by
     // light type, each listed once.
     std::array<std::vector<uint32_t>, 4> changedLights_;
@@ -165,6 +182,15 @@ class Scene {
     void removeMeshInstanceSlot(MeshInstance& instance);
     void markMeshInstanceChanged(uint32_t slot);
     void markLightChanged(int lightType, uint32_t lightIndex);
+    void attachOverlays(SceneObject& object);
+    void detachOverlays(SceneObject& object);
+    void addBillboardSlot(SceneObject& object);
+    void removeBillboardSlot(SceneObject& object);
+    void markBillboardChanged(uint32_t slot);
+    void billboardChanged(SceneObject& object);
+    void addVolumeSlot(VolumeInstance& volume);
+    void removeVolumeSlot(VolumeInstance& volume);
+    void markVolumeChanged(uint32_t slot);
     void markMeshChanged(Mesh& mesh);
     void markMaterialChanged(uint32_t materialIndex);
     void markMaterialForCompile(uint32_t materialIndex);
@@ -195,7 +221,7 @@ public:
     // With preserveViewportState, remove all scene content while retaining
     // render settings, the current camera view and the environment (including
     // its HDRI). Importers use the default full reset before loading a file.
-    void clear(bool preserveViewportState = false);
+    void clear(bool preserveViewportState = false, bool preserveEnvironmentTexture = true);
     // With a parent, the object's transform is relative to that parent.
     SceneObjectHandle add(std::unique_ptr<SceneObject> sceneObject, SceneObjectHandle parent = {});
     bool removeObject(SceneObjectHandle handle);
@@ -266,6 +292,14 @@ public:
     // patch what changed rather than revisit every light. Taking them
     // empties the lists.
     LightIndices takeChangedLights();
+    // The objects the viewport draws an icon for, by slot.
+    const std::vector<SceneObject*>& getBillboardObjects() const { return billboardObjects_; }
+    // The billboard slots rewritten since the last call, so the viewport
+    // patches what changed. Taking them empties the list.
+    std::vector<uint32_t> takeChangedBillboardSlots();
+    const std::vector<VolumeInstance*>& getVolumeObjects() const { return volumeObjects_; }
+    uint64_t getVolumeStructureRevision() const { return volumeStructureRevision_; }
+    std::vector<uint32_t> takeChangedVolumeSlots();
     uint32_t getActiveCryptomatteId() const;
     // Inverse of getActiveCryptomatteId: the object a rendered id belongs to,
     // or nullptr for the background and stale ids.
@@ -285,6 +319,12 @@ public:
     // Publishes a freshly compiled program for one material and uploads that
     // material's own GPU allocations. No other material is touched.
     void setMaterialProgram(std::size_t materialIndex, MaterialShaderProgram shaderProgram);
+    // Surface materials, and those among them that have a program; kept as
+    // counts because the UI and viewport ask every frame.
+    std::size_t surfaceMaterialCount() const { return surfaceMaterialCount_; }
+    std::size_t compiledSurfaceMaterialCount() const { return compiledSurfaceMaterialCount_; }
+    // The first surface material still without a program, or null.
+    const Material* firstPendingSurfaceMaterial();
     uint32_t getMaterialIndex(const Material* material) const;
     const Material& getMaterial(const Material* material) const { return *material; }
     Material& getMaterial(Material* material) { return *material; }

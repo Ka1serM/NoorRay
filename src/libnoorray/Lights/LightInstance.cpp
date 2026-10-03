@@ -15,6 +15,7 @@ LightInstance::LightInstance(Scene& scene, const std::string& name,
     : SceneObject(scene, name, transform)
     , lightType(type >= TypePoint && type <= TypeDirectional ? type : TypePoint)
 {
+    billboard = Billboard{static_cast<BillboardIcon>(lightType)};
 }
 
 void LightInstance::onTransformUpdated()
@@ -36,6 +37,8 @@ void LightInstance::updateSceneRecord()
     if (!scene || lightIndex == ~0u)
         return;
 
+    billboard->color = getColor();
+    notifyBillboardChanged();
     switch (lightType) {
     case TypePoint: {
         PointLight record = static_cast<PointLightInstance*>(this)->getData();

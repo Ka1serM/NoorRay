@@ -45,11 +45,8 @@ constexpr uint32_t AllocationStep = 64u;
 constexpr uint64_t MaxAllocatedAreaFactor = 2u;
 constexpr auto ShrinkDelay = std::chrono::seconds(1);
 
-// The allocation for a logical size: 150% of it per side, so a viewport
-// resized within half again its size never reallocates.
-uint32_t allocationExtent(const uint32_t logical)
+uint32_t roundUpToStep(const uint32_t extent)
 {
-    const uint32_t extent = logical + logical / 2u;
     return (extent + AllocationStep - 1u) / AllocationStep * AllocationStep;
 }
 
@@ -262,10 +259,11 @@ RaytracerResources::RaytracerResources(noorrhi::Device& device,
     const FullOutputAovs fullOutputAovs, const bool allocateAccumulationBuffer)
     : renderWidth(std::max(width, 1u))
     , renderHeight(std::max(height, 1u))
-    , imageWidth_(allocationExtent(renderWidth))
-    , imageHeight_(allocationExtent(renderHeight))
+    , imageWidth_(roundUpToStep(renderWidth))
+    , imageHeight_(roundUpToStep(renderHeight))
     , gpuDevice(&device)
     , splineMeshPass_(device)
+    , landscapePass_(device)
     , exportColorMemory(exportColorMemory)
     , allocateAccumulationBuffer(allocateAccumulationBuffer)
     , fullOutputAovs_(fullOutputAovs)
@@ -365,6 +363,19 @@ void RaytracerResources::updateRoot()
     data.meshLights = address(meshLights);
 }
 
+uint32_t RaytracerResources::allocationExtent(const uint32_t logical, const uint32_t limit) const
+{
+    // 150% of the size, but a size at the limit needs no more than itself.
+    const uint32_t bounded = std::min(logical + logical / 2u, std::max(limit, logical));
+    return roundUpToStep(bounded);
+}
+
+void RaytracerResources::setAllocationLimit(const uint32_t width, const uint32_t height)
+{
+    allocationLimitWidth_ = width;
+    allocationLimitHeight_ = height;
+}
+
 void RaytracerResources::resize(const uint32_t width, const uint32_t height)
 {
     if (width == 0 || height == 0
@@ -380,16 +391,17 @@ bool RaytracerResources::prepareFrameResources()
 {
     if (renderWidth > imageWidth_ || renderHeight > imageHeight_)
     {
-        const auto grown = [](const uint32_t allocated, const uint32_t logical) {
-            return logical <= allocated ? allocated : allocationExtent(logical);
+        const auto grown = [this](const uint32_t allocated, const uint32_t logical, const uint32_t limit) {
+            return logical <= allocated ? allocated : allocationExtent(logical, limit);
         };
-        reallocate(grown(imageWidth_, renderWidth), grown(imageHeight_, renderHeight));
+        reallocate(grown(imageWidth_, renderWidth, allocationLimitWidth_),
+            grown(imageHeight_, renderHeight, allocationLimitHeight_));
         return true;
     }
     // A settled size gives back an allocation it leaves mostly unused, such
     // as the one a maximized viewport left behind.
-    const uint32_t width = allocationExtent(renderWidth);
-    const uint32_t height = allocationExtent(renderHeight);
+    const uint32_t width = allocationExtent(renderWidth, allocationLimitWidth_);
+    const uint32_t height = allocationExtent(renderHeight, allocationLimitHeight_);
     if (static_cast<uint64_t>(imageWidth_) * imageHeight_
             <= MaxAllocatedAreaFactor * static_cast<uint64_t>(width) * height
         || std::chrono::steady_clock::now() - resized_ < ShrinkDelay)
@@ -454,7 +466,7 @@ void RaytracerResources::uploadScene(Scene& scene)
     std::iota(allMaterials.begin(), allMaterials.end(), 0u);
     publishMaterials(scene, allMaterials);
     for (Mesh& mesh : scene.getMeshes())
-        mesh.upload(*gpuDevice, splineMeshPass_);
+        mesh.upload(*gpuDevice, splineMeshPass_, landscapePass_);
     std::vector<uint32_t> allSlots(scene.getMeshInstanceSlots().size());
     std::iota(allSlots.begin(), allSlots.end(), 0u);
     publishInstances(scene, std::move(allSlots), true);
@@ -485,7 +497,7 @@ void RaytracerResources::applyRenderSettings(const RenderSettings& settings)
         | (settings.gaussianShadingMode == GaussianShadingMode::DirectColor
             ? 0x80000000u : 0u);
     data.maxBounces = static_cast<std::uint32_t>(std::max(
-        settings.maxBounces, 1));
+        settings.maxBounces, 0));
     data.indirectLightClamp = settings.indirectLightClamp;
     data.transparentBackground = settings.transparentBackground ? 1u : 0u;
     data.gaussianOverdrawEnabled = rendersProxyOverdraw(settings) ? 1u : 0u;
@@ -721,7 +733,7 @@ void RaytracerResources::publishMaterials(Scene& scene, const std::vector<uint32
 
 void RaytracerResources::publishMesh(const Scene& scene, Mesh& mesh)
 {
-    mesh.upload(*gpuDevice, splineMeshPass_);
+    mesh.upload(*gpuDevice, splineMeshPass_, landscapePass_);
     const auto found = meshBindings_.find(&mesh);
     if (found == meshBindings_.end())
         return;
@@ -749,7 +761,7 @@ uint32_t RaytracerResources::sourceMesh(Mesh& mesh)
         static_cast<uint32_t>(sourceMeshes_.size()));
     if (!inserted)
         return found->second;
-    mesh.upload(*gpuDevice, splineMeshPass_);
+    mesh.upload(*gpuDevice, splineMeshPass_, landscapePass_);
     sourceMeshes_.push_back(&mesh);
     meshRecordData_.push_back(mesh ? mesh.ptr().address : 0);
     return found->second;
@@ -864,7 +876,10 @@ void RaytracerResources::writeBindingHitRecords(const Scene& scene, const uint32
             ? HitRecord::Kind::Gaussian : HitRecord::Kind::Section;
         const bool shadowFiltered = castsShadow && !sectionCastsShadow(scene, binding, section);
         for (uint32_t rayType = 0; rayType < nr::graphics::RaytracingRayTypeCount; ++rayType, ++record) {
-            const HitRecord value{kind, rayType, shaders, program.transparent, shadowFiltered};
+            const bool needsFacingTest = binding.doubleSided
+                && (material.getData().flags & nr::graphics::MaterialFlagOneSided) != 0;
+            const HitRecord value{kind, rayType, shaders, program.transparent,
+                needsFacingTest, shadowFiltered};
             if (hitRecords_[record] == value)
                 continue;
             hitRecords_[record] = value;
@@ -960,8 +975,12 @@ void RaytracerResources::publishInstances(const Scene& scene, std::vector<uint32
             (instance.getRayTracingFlags().animated || instance.getMesh().isAnimated())
                 ? nr::graphics::InstanceFlagAnimated : 0u};
         const MeshInstance::RayTracingFlags rayTracing = instance.getRayTracingFlags();
-        // A hidden instance keeps its records, with a mask no ray matches.
-        uint8_t mask = instance.isVisible() ? drawn.mask : 0;
+        // A hidden instance keeps its records, with a mask only the rays it still
+        // casts for match.
+        uint8_t mask = drawn.mask;
+        if (!instance.isVisible())
+            mask &= (rayTracing.shadowWhileHidden ? nr::graphics::RaytracingMaskShadow : 0)
+                | (rayTracing.indirectWhileHidden ? nr::graphics::RaytracingMaskIndirect : 0);
         if (mask != nr::graphics::RaytracingMaskGaussian) {
             if (!rayTracing.camera)
                 mask &= ~nr::graphics::RaytracingMaskCamera;

@@ -4,11 +4,6 @@
 
 [[vk::push_constant]] ConstantBuffer<ViewportBillboardRoot> root;
 
-static const int BillboardTypePoint       = 0;
-static const int BillboardTypeSpot        = 1;
-static const int BillboardTypeRect        = 2;
-static const int BillboardTypeDirectional = 3;
-
 // The clean graphics API currently draws triangle lists. Emit two explicit
 // triangles; four strip-ordered vertices only rasterized the first half.
 static const float2 corners[6] = {
@@ -21,32 +16,17 @@ struct VertexOutput
     float4 clipPosition : SV_Position;
     float2 local         : LOCAL;
     float3 color          : COLOR;
-    nointerpolation int type : TYPE;
+    nointerpolation uint icon : ICON;
     nointerpolation float distanceFade : DISTANCEFADE;
 };
 
-// Exact bounds of the glyph strokes, including their 0.045 half-width.
-// xy is the centre and zw the half-extent in the glyph's native coordinates.
-float4 glyphBounds(int type)
-{
-    switch (type)
-    {
-    case BillboardTypePoint: return float4(0.0, 0.0, 0.725, 0.725);
-    case BillboardTypeSpot: return float4(0.0, -0.085, 0.695, 0.630);
-    case BillboardTypeRect: return float4(0.0, 0.0, 0.605, 0.625);
-    default: return float4(0.065, -0.020, 0.690, 0.645);
-    }
-}
-
-// Each instance is a fixed-size plane at the light's world position. The
+// Each instance is a fixed-size plane at the object's world position. The
 // projection's first two rows give camera right/up, including camera roll.
-float4 billboardCorner(ViewportBillboardPushConstants args, float3 center, int type, float2 corner)
+float4 billboardCorner(ViewportBillboardPushConstants args, float3 center, float2 corner)
 {
     const float3 right = normalize(args.viewProjection[0].xyz);
     const float3 up = normalize(args.viewProjection[1].xyz);
-    const float2 bounds = glyphBounds(type).zw;
-    const float2 extent = args.worldHalfSize * bounds / max(bounds.x, bounds.y);
-    const float3 world = center + right * (corner.x * extent.x) + up * (corner.y * extent.y);
+    const float3 world = center + (right * corner.x + up * corner.y) * args.worldHalfSize;
     return mul(args.viewProjection, float4(world, 1.0));
 }
 
@@ -74,7 +54,7 @@ VertexOutput vertMain(uint vertexId : SV_VertexID, uint instanceId : SV_Instance
     VertexOutput output;
     output.color = instanceId == pushConstants.selectedBillboard
         ? ViewportSelectionColor : billboard.color.rgb;
-    output.type = int(billboard.positionType.w);
+    output.icon = uint(billboard.positionType.w);
     output.distanceFade = billboardDistanceFade(pushConstants, billboard.positionType.xyz);
 
     if (clip.w <= 0.0 || billboard.color.a == 0.0)
@@ -87,7 +67,7 @@ VertexOutput vertMain(uint vertexId : SV_VertexID, uint instanceId : SV_Instance
     }
 
     const float2 corner = corners[vertexId];
-    const float4 planeClip = billboardCorner(pushConstants, billboard.positionType.xyz, int(billboard.positionType.w), corner);
+    const float4 planeClip = billboardCorner(pushConstants, billboard.positionType.xyz, corner);
     // Map the projected plane into the logical rectangle of the attachment.
     const float2 targetClip = (planeClip.xy + planeClip.w) * pushConstants.targetScale - planeClip.w;
     output.clipPosition = float4(targetClip, planeClip.z, planeClip.w);
@@ -100,127 +80,35 @@ float luminance(const float3 color)
     return dot(color, float3(0.2126, 0.7152, 0.0722));
 }
 
-float sdCircle(const float2 p, const float r)
+float msdfMedian(const float3 value)
 {
-    return length(p) - r;
+    return max(min(value.r, value.g), min(max(value.r, value.g), value.b));
 }
 
-float sdBox(const float2 p, const float2 b)
+// Coverage of the icon's multi-channel distance texture at local (-1..1 over
+// the plane, y up). screenPxRange is how many screen pixels the texture's
+// distance range spans, which sets the antialiasing width.
+float billboardAlpha(const ViewportBillboardPushConstants args, const float2 local,
+    const uint icon, const float screenPxRange)
 {
-    const float2 d = abs(p) - b;
-    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
-}
-
-float sdSegment(const float2 p, const float2 a, const float2 b)
-{
-    const float2 ab = b - a;
-    const float h = saturate(dot(p - a, ab) / dot(ab, ab));
-    return length(p - (a + ab * h));
-}
-
-float stroke(const float distanceToCenterline, const float width, const float aa)
-{
-    return 1.0 - smoothstep(width - aa, width + aa, distanceToCenterline);
-}
-
-float ringStroke(const float2 p, const float radius, const float width, const float aa)
-{
-    return stroke(abs(sdCircle(p, radius)), width, aa);
-}
-
-float boxStroke(const float2 p, const float2 halfSize, const float width, const float aa)
-{
-    return stroke(abs(sdBox(p, halfSize)), width, aa);
-}
-
-float segmentStroke(const float2 p, const float2 a, const float2 b, const float width, const float aa)
-{
-    return stroke(sdSegment(p, a, b), width, aa);
-}
-
-float pointLightAlpha(const float2 p, const float aa)
-{
-    const float w = 0.045;
-    float a = ringStroke(p, 0.34, w, aa);
-    a = max(a, stroke(length(p), 0.055, aa));
-    a = max(a, segmentStroke(p, float2(-0.68,  0.00), float2(-0.49,  0.00), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.49,  0.00), float2( 0.68,  0.00), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.00, -0.68), float2( 0.00, -0.49), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.00,  0.49), float2( 0.00,  0.68), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.48, -0.48), float2(-0.35, -0.35), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.35, -0.35), float2( 0.48, -0.48), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.48,  0.48), float2(-0.35,  0.35), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.35,  0.35), float2( 0.48,  0.48), w, aa));
-    return a;
-}
-
-float spotLightAlpha(const float2 p, const float aa)
-{
-    const float w = 0.045;
-    float a = ringStroke(p - float2(0.0, -0.55), 0.12, w, aa);
-    a = max(a, segmentStroke(p, float2(-0.06, -0.42), float2(-0.65, 0.50), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.06, -0.42), float2( 0.65, 0.50), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.65, 0.50), float2( 0.65, 0.50), w, aa));
-    return a;
-}
-
-float rectLightAlpha(const float2 p, const float aa)
-{
-    const float w = 0.045;
-    float a = boxStroke(p, float2(0.56, 0.40), w, aa);
-    a = max(a, segmentStroke(p, float2(-0.36, -0.58), float2( 0.36, -0.58), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.56, -0.40), float2(-0.36, -0.58), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.56, -0.40), float2( 0.36, -0.58), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.36,  0.58), float2( 0.36,  0.58), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.56,  0.40), float2(-0.36,  0.58), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.56,  0.40), float2( 0.36,  0.58), w, aa));
-    return a;
-}
-
-float directionalLightAlpha(const float2 p, const float aa)
-{
-    const float w = 0.045;
-    float a = ringStroke(p, 0.28, w, aa);
-    a = max(a, segmentStroke(p, float2(-0.58,  0.00), float2(-0.42,  0.00), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.42,  0.00), float2( 0.58,  0.00), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.00, -0.58), float2( 0.00, -0.42), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.00,  0.42), float2( 0.00,  0.58), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.41, -0.41), float2(-0.30, -0.30), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.30, -0.30), float2( 0.41, -0.41), w, aa));
-    a = max(a, segmentStroke(p, float2(-0.41,  0.41), float2(-0.30,  0.30), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.30,  0.30), float2( 0.41,  0.41), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.45, -0.62), float2( 0.71, -0.36), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.71, -0.36), float2( 0.62, -0.34), w, aa));
-    a = max(a, segmentStroke(p, float2( 0.71, -0.36), float2( 0.69, -0.45), w, aa));
-    return a;
-}
-
-float billboardAlpha(const float2 p, const int type, const float aa)
-{
-    // Map the complete plane to the tight glyph bounds, without extra padding.
-    const float4 bounds = glyphBounds(type);
-    const float2 glyph = bounds.xy + p * bounds.zw;
-    const float glyphAa = aa * min(bounds.z, bounds.w);
-    switch (type)
-    {
-    case BillboardTypePoint:
-        return pointLightAlpha(glyph, glyphAa);
-    case BillboardTypeSpot:
-        return spotLightAlpha(glyph, glyphAa);
-    case BillboardTypeRect:
-        return rectLightAlpha(glyph, glyphAa);
-    default:
-        return directionalLightAlpha(glyph, glyphAa);
-    }
+    const uint textureHandle = args.iconTextures[icon];
+    Texture2D<float4> image = ResourceDescriptorHeap[textureHandle];
+    SamplerState sampler = SamplerDescriptorHeap[args.iconSampler];
+    // Texture rows run top to bottom.
+    const float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+    const float distance = msdfMedian(image.SampleLevel(sampler, uv, 0.0).rgb) - 0.5;
+    return saturate(distance * max(screenPxRange, 1.0) + 0.5);
 }
 
 [shader("fragment")]
 float4 fragMain(VertexOutput input) : SV_Target
 {
-    // Antialias in local billboard units. The glyphs are strokes, not filled SDF
-    // blobs, which keeps them crisp and avoids a heavy outline.
-    const float aa = max(max(fwidth(input.local.x), fwidth(input.local.y)) * 0.575, 1.0e-5);
-    const float alpha = billboardAlpha(input.local, input.type, aa) * input.distanceFade;
+    const ViewportBillboardPushConstants pushConstants = *root.arguments;
+    const float2 unitsPerPixel = fwidth(input.local) * 0.5;
+    const float screenPxRange = 0.5 * (ViewportBillboardDistanceRange / ViewportBillboardTextureSize)
+        * (1.0 / max(unitsPerPixel.x, 1.0e-5) + 1.0 / max(unitsPerPixel.y, 1.0e-5));
+    const float alpha = billboardAlpha(pushConstants, input.local, input.icon, screenPxRange)
+        * input.distanceFade;
     if (alpha <= 0.003)
         discard;
 
@@ -263,7 +151,7 @@ void lightIdStamp(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
 
     // Same bottom-left pixel space the vertex stage draws the icon into.
     const float2 center = (clip.xy / clip.w * 0.5 + 0.5) * pushConstants.screenSize;
-    const float4 edge = billboardCorner(pushConstants, billboard.positionType.xyz, int(billboard.positionType.w), float2(1.0));
+    const float4 edge = billboardCorner(pushConstants, billboard.positionType.xyz, float2(1.0));
     const float2 edgePixel = (edge.xy / edge.w * 0.5 + 0.5) * pushConstants.screenSize;
     const float2 halfExtent = abs(edgePixel - center);
     if (any(halfExtent <= 0.0)) return;
@@ -283,8 +171,9 @@ void lightIdStamp(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
                 continue;
             const float2 delta = float2(pixel) + 0.5 - center;
             const float2 local = delta / halfExtent;
-            const float aa = 1.15 / max(min(halfExtent.x, halfExtent.y), 1.0e-4);
-            if (billboardAlpha(local, int(billboard.positionType.w), aa) <= 0.05)
+            const float screenPxRange = ViewportBillboardDistanceRange / ViewportBillboardTextureSize
+                * 2.0 * min(halfExtent.x, halfExtent.y);
+            if (billboardAlpha(pushConstants, local, uint(billboard.positionType.w), screenPxRange) <= 0.05)
                 continue;
             InterlockedMax(lightIds[uint(pixel.y) * pushConstants.lightIdStride + uint(pixel.x)],
                 index + 1u, previous);

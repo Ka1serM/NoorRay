@@ -149,7 +149,8 @@ void storeGBuffer(uint2 pixel, PrimaryGBuffer g)
     motion[pixel] = float4(g.motion, 0.0, 0.0);
     normalRoughness[pixel] = g.normalRoughness;
     viewZ[pixel] = float4(g.viewZ, 0.0, 0.0, 0.0);
-    emission[pixel] = float4(min(g.emission.rgb, RealtimeHalfMax), g.emission.a);
+    emission[pixel] = float4(min(g.emission.rgb * realtimeExposureScale(), RealtimeHalfMax),
+        g.emission.a);
     diffuseFactor[pixel] = float4(g.diffuseFactor, 0.0);
     specularFactor[pixel] = float4(g.specularFactor, 0.0);
 }

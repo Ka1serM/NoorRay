@@ -39,6 +39,8 @@ struct FrameContext
     float verticalFieldOfView{};
     // Wall time since the previous frame; a nominal 60 Hz frame for the first.
     float frameTimeMilliseconds{};
+    // Scale the shaders apply to radiance; every history holds exposed values.
+    float exposureScale{};
     // The first frame of a new history: every temporal stage restarts.
     bool resetHistory{};
 };

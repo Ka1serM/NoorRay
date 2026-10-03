@@ -29,6 +29,7 @@ struct RayPayload
     float3 radiance;
     float3 albedo;
     float3 normal;
+    float3 geometricNormal;
     float3 position;
     float alpha;
     uint cryptomatte;

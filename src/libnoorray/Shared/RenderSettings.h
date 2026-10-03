@@ -59,10 +59,10 @@ enum class UpscalerMode : int
 enum class LightingResolution : int
 {
     Full,
+    ThreeQuarter,
     Half,
     Third,
     Quarter,
-    ThreeQuarter,
 };
 
 // NRD's denoisers. Off composites the noisy radiance as it is.
@@ -107,7 +107,7 @@ struct RenderSettings
     RenderSettings()
         : samples(1)
         , maxSamples(3000)
-        , maxBounces(3)
+        , maxBounces(0)
         , indirectLightClamp(10.0f)
         , tonemappingEnabled(false)
         , transparentBackground(true)

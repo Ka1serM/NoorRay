@@ -5,6 +5,7 @@
 #include "Sampling.slang"
 #include "CameraRay.slang"
 #include "AnalyticLights.slang"
+#include "RayOrigin.slang"
 
 // Raygen owns only camera-ray construction, traversal, and output writes.
 // Surface decoding, Gaussian acceptance, and Gaussian shading
@@ -56,6 +57,10 @@ void main()
     float3 rayOrigin = cameraRay.origin;
     float3 rayDirection = cameraRay.direction;
     SampledSpectrum throughput = SampledSpectrum(cameraWeight);
+    // The clamp limits what reaches the screen, so it is expressed in exposed
+    // units: raising exposure must not let fireflies through it.
+    const float indirectLightClamp = frame.indirectLightClamp
+        * exp2(-frame.camera.exposure);
     SampledSpectrum pathRadiance = SampledSpectrum(0.0);
     float3 firstAlbedo = float3(0.0);
     float3 firstNormal = float3(0.0, 0.0, 1.0);
@@ -116,7 +121,7 @@ void main()
                         * rgbIlluminantToSpectrum(spectralTables, environment,
                             wavelengths) * misWeight;
                     pathRadiance += clampIndirectContribution(contribution,
-                        frame.indirectLightClamp, depth);
+                        indirectLightClamp, depth);
                 }
                 else
                     alpha = 0.0;
@@ -145,7 +150,7 @@ void main()
             }
             pathRadiance += clampIndirectContribution(throughput
                 * payload.emissionSpectrum * misWeight,
-                frame.indirectLightClamp, depth);
+                indirectLightClamp, depth);
             if (!recordedFirstHit)
             {
                 recordedFirstHit = true;
@@ -168,7 +173,7 @@ void main()
         {
             pathRadiance += clampIndirectContribution(throughput
                 * rgbIlluminantToSpectrum(spectralTables, payload.radiance,
-                    wavelengths), frame.indirectLightClamp, depth);
+                    wavelengths), indirectLightClamp, depth);
             break;
         }
 
@@ -191,14 +196,12 @@ void main()
         }
         pathRadiance += clampIndirectContribution(throughput
             * payload.emissionSpectrum * emissionMisWeight,
-            frame.indirectLightClamp, depth);
+            indirectLightClamp, depth);
         if (payload.shadowValid != 0u)
         {
             RayDesc shadowRay;
-            const float shadowOffsetSign = dot(payload.normal,
-                payload.shadowDirection) >= 0.0 ? 1.0 : -1.0;
-            shadowRay.Origin = payload.position + payload.normal
-                * (shadowOffsetSign * 1.0e-2);
+            shadowRay.Origin = offsetRayOrigin(payload.position, payload.geometricNormal,
+                payload.shadowDirection);
             shadowRay.Direction = normalize(payload.shadowDirection);
             shadowRay.TMin = 0.1;
             shadowRay.TMax = payload.shadowDistance < 1.0e15
@@ -225,10 +228,10 @@ void main()
             if (payload.shadowValid == 2u && shadowPayload.hit == 1u)
                 pathRadiance += clampIndirectContribution(throughput
                     * payload.directSpectrum * shadowPayload.emissionSpectrum,
-                    frame.indirectLightClamp, depth);
+                    indirectLightClamp, depth);
             else if (payload.shadowValid == 1u && shadowPayload.hit == 0u)
                 pathRadiance += clampIndirectContribution(throughput
-                    * payload.directSpectrum, frame.indirectLightClamp, depth);
+                    * payload.directSpectrum, indirectLightClamp, depth);
         }
         if (payload.sampleValid == 0u)
             break;
@@ -247,9 +250,7 @@ void main()
             throughput *= 1.0 / survival;
         }
         rayDirection = normalize(payload.nextDirection);
-        const float offsetSign = dot(payload.normal, rayDirection) >= 0.0
-            ? 1.0 : -1.0;
-        rayOrigin = payload.position + payload.normal * (offsetSign * 1.0e-2);
+        rayOrigin = offsetRayOrigin(payload.position, payload.geometricNormal, rayDirection);
     }
 
     const float3 beauty = max(xyzToLinearSRGB(spectrumToXYZ(

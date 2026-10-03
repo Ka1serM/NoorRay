@@ -105,4 +105,5 @@ private:
     uint32_t surfaceParity_{};
     // Temporal reuse also restarts when the lights change, or after a resize.
     bool historyValid_{};
+    bool previousFrameIndirect_{};
 };

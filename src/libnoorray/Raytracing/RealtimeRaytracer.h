@@ -65,7 +65,7 @@ public:
     const RaytracerResources& resources() const override { return common; }
     std::uint32_t readCryptomatteAtOutput(uint32_t x, uint32_t y) override;
     noorrhi::float4 readPositionAtOutput(uint32_t x, uint32_t y) override;
-    noorrhi::TextureHandle viewportDepthTexture() const { return targets ? noorrhi::TextureHandle{targets->handles().viewZ} : noorrhi::TextureHandle{}; }
+    noorrhi::TextureHandle viewportDepthTexture() const { return targets ? noorrhi::TextureHandle{targets->handles().depth} : noorrhi::TextureHandle{}; }
     glm::vec2 viewportDepthJitter() const { return {previousJitter[0], previousJitter[1]}; }
     void setSelectionAovRequired(bool required) { selectionAovRequired = required; }
 
@@ -96,7 +96,6 @@ private:
         RenderTargetLayout targets;
         Extent output;
         DenoiserMode denoiser{};
-        UpscalerMode upscaler{};
 
         bool operator==(const ResourceLayout&) const = default;
     };

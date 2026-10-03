@@ -23,6 +23,7 @@ void main(inout RayPayload payload,
     payload.cryptomatte = payload.instance;
     payload.position = WorldRayOrigin() + WorldRayDirection() * payload.t;
     payload.normal = float3(0.0, 0.0, 1.0);
+    payload.geometricNormal = float3(0.0, 0.0, 1.0);
     payload.albedo = float3(0.8);
     payload.radiance = float3(0.8);
     payload.alpha = 1.0;
@@ -66,6 +67,7 @@ void main(inout RayPayload payload,
     payload.albedo = max(kNeutralAlbedo * surface.vertexColor.rgb, 0.0);
     payload.radiance = payload.albedo;
     payload.normal = surface.shadingNormal;
+    payload.geometricNormal = surface.geometricNormal;
     payload.position = surface.position;
     DiffuseLobe lobe = makeDiffuseLobe();
     lobe.albedo = rgbAlbedoToSpectrum(spectralTables, payload.albedo, wavelengths);

@@ -18,6 +18,7 @@
 
 class Scene;
 class SplineMeshPass;
+class LandscapePass;
 
 // One vertex's tangent basis as Unreal stores it (FPackedNormal): TangentX,
 // then TangentZ, the normal, whose w is the bitangent sign. Each is SNORM8x4,
@@ -94,6 +95,9 @@ struct MeshGeometry
     std::shared_ptr<const void> owner;
     // Bends the uploaded positions and tangent frames on the GPU.
     std::optional<nr::graphics::SplineMesh> spline;
+    // The uploaded Z coordinate holds the original 16-bit landscape height until
+    // LandscapePass converts it to Unreal units on the GPU.
+    bool landscape = false;
 };
 
 // Geometry only: the materials belong to the instances that draw it. Each
@@ -140,7 +144,7 @@ public:
     // Uploads the streams when the geometry changed since the last upload,
     // bending them with `splineMeshPass` when the geometry has a spline;
     // scene publication calls this for every changed mesh.
-    void upload(noorrhi::Device& device, const SplineMeshPass& splineMeshPass);
+    void upload(noorrhi::Device& device, const SplineMeshPass& splineMeshPass, const LandscapePass& landscapePass);
     // The BLAS whose sections have the given opacity (opaque sections skip
     // any-hit stages), built on first use and kept until the geometry
     // changes. Instances whose materials agree on opacity share it.

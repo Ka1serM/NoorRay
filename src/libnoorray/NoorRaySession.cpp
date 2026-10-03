@@ -22,6 +22,11 @@ namespace {
 void requireRealtimeRayTracing(const noorrhi::Device& device)
 {
     const auto features = device.features();
+    if (!features.descriptor_heap)
+        throw std::runtime_error(
+            "Realtime NoorRay requires VK_EXT_descriptor_heap, VK_KHR_shader_untyped_pointers, "
+            "VK_KHR_maintenance5, shaderInt64, shaderDrawParameters and "
+            "scalarBlockLayout; the selected Vulkan driver does not expose all of them");
     if (!features.ray_query || !features.ray_tracing)
         throw std::runtime_error(
             "Realtime NoorRay requires VK_KHR_ray_query and VK_KHR_ray_tracing_pipeline; "
@@ -134,6 +139,11 @@ void NoorRaySession::resizeViewport(const uint32_t width, const uint32_t height)
     updateNativeCamera();
 }
 
+void NoorRaySession::setViewportAllocationLimit(const uint32_t width, const uint32_t height)
+{
+    raytracer().setAllocationLimit(width, height);
+}
+
 void NoorRaySession::setViewportExternalOutput(const bool enabled, const noorrhi::ImageFormat format)
 {
     if (viewportExternalOutput_ == enabled && viewportOutputFormat_ == format)
@@ -207,19 +217,24 @@ std::vector<noorrhi::float4> NoorRaySession::readPosition()
 }
 
 NoorRaySession::ViewportPick NoorRaySession::pick(const uint32_t x, const uint32_t y,
-    const bool includeLights)
+    const bool includeBillboards)
 {
     ViewportPick result;
     if (!raytracer_ || x >= outputWidth() || y >= outputHeight())
         return result;
 
-    // Light icons are drawn over the render, so where one covers the pixel it
-    // is what the user clicked. The viewport stamps them into its light-id
+    // Billboards are drawn over the render, so where one covers the pixel it
+    // is what the user clicked. The viewport stamps them into its billboard-id
     // buffer; one element read answers it.
-    if (includeLights && viewport_) {
-        if (const SceneObjectHandle light = viewport_->lightAt(x, y); light.isValid()) {
+    if (includeBillboards && viewport_) {
+        if (const SceneObjectHandle object = viewport_->billboardObjectAt(x, y); object.isValid()) {
             result.hit = true;
-            result.object = light;
+            result.object = object;
+            return result;
+        }
+        if (const SceneObjectHandle object = viewport_->volumeObjectAt(x, y); object.isValid()) {
+            result.hit = true;
+            result.object = object;
             return result;
         }
     }
@@ -238,10 +253,10 @@ std::optional<glm::vec3> NoorRaySession::pickPosition(const uint32_t x, const ui
 {
     if (!raytracer_ || x >= outputWidth() || y >= outputHeight())
         return std::nullopt;
-    // Over a light icon, pivot on the light itself.
+    // Over a billboard, pivot on its object.
     if (viewport_)
-        if (const auto light = viewport_->lightPositionAt(x, y))
-            return light;
+        if (const auto position = viewport_->billboardPositionAt(x, y))
+            return position;
     // The position AOV holds no meaningful value where the camera ray missed.
     if (raytracer_->readCryptomatteAtOutput(x, y) == ~0u)
         return std::nullopt;
@@ -332,7 +347,7 @@ bool NoorRaySession::pollNativeScene()
     }
     appliedSceneChanges_ = scene_.getChangeState();
     if (viewport_)
-        viewport_->updateBillboards(scene_, changedLights);
+        viewport_->updateOverlays(scene_);
     if (changed)
         outlineHistoryRestarted_ = true;
     return changed;
@@ -375,10 +390,13 @@ bool NoorRaySession::prepareViewport()
         outlineHistoryRestarted_ = true;
     }
 
+    auto* realtime = dynamic_cast<RealtimeRaytracer*>(raytracer_.get());
     const ViewportInputs inputs{
         raytracer_->outputTexture(), raytracer_->albedoTexture(),
         raytracer_->normalTexture(), raytracer_->cryptomatteTexture(),
-        raytracer_->positionTexture(), raytracer_->gaussianOverdrawPtr()};
+        raytracer_->positionTexture(), raytracer_->gaussianOverdrawPtr(),
+        realtime ? realtime->viewportDepthTexture() : noorrhi::TextureHandle{},
+        realtime ? realtime->viewportDepthJitter() : glm::vec2{}};
     if (!viewport_)
         viewport_.emplace(*device_, raytracer_->width(), raytracer_->height(),
             raytracer_->traceWidth(), raytracer_->traceHeight(),
@@ -397,6 +415,8 @@ void NoorRaySession::renderViewport(const glm::mat4& viewProjection,
 {
     if (!viewport_)
         return;
+    if (auto* realtime = dynamic_cast<RealtimeRaytracer*>(raytracer_.get()))
+        viewport_->setDepthJitter(realtime->viewportDepthJitter());
     if (const auto* camera = scene_.getRenderCamera())
         viewport_->setBillboardCameraPosition(camera->getPosition());
     else
@@ -416,6 +436,8 @@ void NoorRaySession::renderViewport(const glm::mat4& viewProjection, const Viewp
 {
     if (!viewport_)
         return;
+    if (auto* realtime = dynamic_cast<RealtimeRaytracer*>(raytracer_.get()))
+        viewport_->setDepthJitter(realtime->viewportDepthJitter());
     if (const auto* camera = scene_.getRenderCamera())
         viewport_->setBillboardCameraPosition(camera->getPosition());
     else
@@ -505,6 +527,10 @@ bool NoorRaySession::processNativeMaterials()
     if (!raytracer_)
         return false;
     const bool linked = raytracer_->linkCompiledMaterialShaders();
+    // Adopting a linked pipeline swaps default materials for shaded ones
+    // without any scene change, so the beauty average is stale from here.
+    if (linked)
+        restartAccumulation();
     // Published programs reach the GPU with the next pollNativeScene().
     return materialRuntime_.processPending(scene_) || linked;
 }

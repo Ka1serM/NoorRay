@@ -4,11 +4,14 @@
 #include <cstddef>
 #include <cstring>
 #include <span>
+#include <stdexcept>
+#include <string>
 
 #include "Logging/Log.h"
 #include "Realtime/ShaderLoading.h"
+#include "Scene/Billboard.h"
 #include "Scene/Scene.h"
-#include "Scene/LightInstance.h"
+#include "Scene/SceneObject.h"
 
 namespace
 {
@@ -17,6 +20,8 @@ constexpr uint32_t ViewportGroupSize = 16;
 // Scene coordinates are centimetres. Icons fade in from 25 to 50 cm, remain
 // fully visible to 20 m, then fade out over the next 5 m.
 constexpr glm::vec4 ViewportBillboardDistanceFade{25.0f, 50.0f, 2000.0f, 2500.0f};
+constexpr float ViewportVolumeLineWidth = 1.0f;
+constexpr float ViewportVolumeOpacity = 0.9f;
 
 }
 
@@ -33,6 +38,8 @@ Viewport::Viewport(noorrhi::Device& gpu_device, const uint32_t width, const uint
     shader = loadShader(gpuDevice, "Viewport/Viewport.spv");
     pipeline = gpuDevice.compute(shader);
     createBillboardPipeline();
+    createBillboardTextures();
+    createVolumePipeline();
     {
         lightIdClearShader = loadShader(gpuDevice, "Viewport/ViewportBillboards.spv", "lightIdClear");
         lightIdStampShader = loadShader(gpuDevice, "Viewport/ViewportBillboards.spv", "lightIdStamp");
@@ -69,6 +76,8 @@ void Viewport::createOutputResources(const uint32_t width, const uint32_t height
     // Indexed like the output image: row stride is its allocated width.
     lightIdBuffer = gpuDevice.buffer<std::uint32_t>(
         static_cast<std::size_t>(width) * height);
+    volumeIdBuffer = gpuDevice.buffer<std::uint32_t>(
+        static_cast<std::size_t>(width) * height);
 }
 
 void Viewport::createBillboardPipeline()
@@ -85,10 +94,45 @@ void Viewport::createBillboardPipeline()
 
 }
 
-void Viewport::reserveBillboards(const uint32_t capacity)
+void Viewport::createBillboardTextures()
+{
+    const uint32_t size = static_cast<uint32_t>(nr::graphics::ViewportBillboardTextureSize);
+    billboardSampler = gpuDevice.sampler({noorrhi::Filter::Linear, noorrhi::AddressMode::ClampToEdge,
+        noorrhi::AddressMode::ClampToEdge, noorrhi::AddressMode::ClampToEdge});
+    std::vector<std::uint32_t> handles;
+    for (const std::string_view name : BillboardIconNames)
+    {
+        const std::string path = "billboards/" + std::string(name) + ".msdf";
+        const std::span<const std::byte> texels = embeddedFile(path);
+        if (texels.size() != static_cast<std::size_t>(size) * size * 4)
+            throw std::runtime_error("billboard texture has the wrong size: " + path);
+        // Distances, not colors: no sRGB decoding.
+        noorrhi::Image<std::byte>& texture = billboardTextures.emplace_back(gpuDevice.image<std::byte>(
+            size, size, noorrhi::ImageUsage::Sampled, noorrhi::ImageFormat::Rgba8Unorm));
+        texture.upload(texels);
+        handles.push_back(texture.sampled_handle().value);
+    }
+    billboardTextureHandles = gpuDevice.buffer<std::uint32_t>(handles.size());
+    billboardTextureHandles.upload(std::span<const std::uint32_t>(handles));
+}
+
+void Viewport::createVolumePipeline()
+{
+    volumeVertexShader = loadShader(gpuDevice, "Viewport/ViewportVolumes.spv", "vertMain");
+    volumeFragmentShader = loadShader(gpuDevice, "Viewport/ViewportVolumes.spv", "fragMain");
+    noorrhi::GraphicsState state{};
+    state.cull = noorrhi::CullMode::None;
+    state.depth_test = false;
+    state.depth_write = false;
+    state.blend.enabled = true;
+    volumePipeline = gpuDevice.graphics({volumeVertexShader,
+        volumeFragmentShader, state, outputFormat_});
+}
+
+bool Viewport::reserveBillboards(const uint32_t capacity)
 {
     if (capacity <= billboardCapacity)
-        return;
+        return false;
 
     // The buffer may still be referenced by an in-flight command buffer from a
     // previous frame; growth is rare (only when the light count exceeds the
@@ -99,86 +143,114 @@ void Viewport::reserveBillboards(const uint32_t capacity)
         static_cast<std::size_t>(capacity) * sizeof(ViewportBillboard));
     billboardCapacity = capacity;
     billboardEntry = billboardBuffer.ptr();
+    return true;
 }
 
 namespace
 {
-ViewportBillboard makeBillboard(const LightInstance& light)
+ViewportBillboard makeBillboard(const SceneObject& object)
 {
+    const Billboard& billboard = *object.getBillboard();
     return ViewportBillboard{
-        glm::vec4(light.getWorldTransform().getPosition(),
-            static_cast<float>(light.getLightType())),
-        glm::vec4(light.getColor(), light.isVisible() ? 1.0f : 0.0f)};
+        glm::vec4(object.getWorldTransform().getPosition(),
+            static_cast<float>(billboard.icon)),
+        glm::vec4(billboard.color, object.isVisible() ? 1.0f : 0.0f)};
 }
 }
 
-void Viewport::updateBillboards(const Scene& scene, const Scene::LightIndices& changedLights)
+void Viewport::updateOverlays(Scene& scene)
 {
-    if (observedLightRevision == scene.getLightRevision()
-        && observedHierarchyRevision == scene.getHierarchyRevision())
+    updateBillboards(scene);
+    updateVolumes(scene);
+}
+
+void Viewport::updateBillboards(Scene& scene)
+{
+    const std::vector<SceneObject*>& objects = scene.getBillboardObjects();
+    std::vector<uint32_t> changed = scene.takeChangedBillboardSlots();
+    if (changed.empty() && objects.size() == billboardData.size())
         return;
 
-    const uint32_t lightCount = scene.getPointLightCount()
-        + scene.getSpotLightCount()
-        + scene.getRectLightCount()
-        + scene.getDirectionalLightCount();
-    bool rebuild = observedHierarchyRevision != scene.getHierarchyRevision()
-        || billboardHandles.size() != lightCount;
-    if (rebuild)
+    billboardData.resize(objects.size());
+    billboardHandles.resize(objects.size());
+    for (const uint32_t slot : changed)
     {
-        rebuildBillboards(scene);
+        billboardData[slot] = makeBillboard(*objects[slot]);
+        billboardHandles[slot] = objects[slot]->getHandle();
     }
-    else
-    {
-        // The set is unchanged, so only the named records are rewritten. The
-        // icons follow getLightObjects(): every light type's records in turn.
-        const uint32_t typeOffsets[] = {0u, scene.getPointLightCount(),
-            scene.getPointLightCount() + scene.getSpotLightCount(),
-            scene.getPointLightCount() + scene.getSpotLightCount() + scene.getRectLightCount()};
-        std::vector<uint32_t> changed;
-        for (int type = 0; type < static_cast<int>(changedLights.size()); ++type)
-            for (const uint32_t lightIndex : changedLights[type])
-            {
-                const uint32_t index = typeOffsets[type] + lightIndex;
-                billboardData[index] = makeBillboard(scene.getLightObject(type, lightIndex));
-                changed.push_back(index);
-            }
-        std::ranges::sort(changed);
-        // One upload per run of neighbours; past a few dozen runs a single
-        // covering upload is cheaper than that many submissions.
-        constexpr std::size_t MaxRuns = 32;
-        std::vector<std::pair<uint32_t, uint32_t>> runs;
-        for (const uint32_t index : changed)
-        {
-            if (!runs.empty() && index == runs.back().second + 1)
-                runs.back().second = index;
-            else
-                runs.emplace_back(index, index);
-        }
-        if (runs.size() > MaxRuns)
-            runs = {{runs.front().first, runs.back().second}};
-        for (const auto [first, last] : runs)
-            billboardBuffer.upload(std::as_bytes(std::span<const ViewportBillboard>(
-                billboardData.data() + first, last - first + 1)), first * sizeof(ViewportBillboard));
-    }
-    observedLightRevision = scene.getLightRevision();
-    observedHierarchyRevision = scene.getHierarchyRevision();
-}
+    billboardCount = static_cast<uint32_t>(objects.size());
 
-void Viewport::rebuildBillboards(const Scene& scene)
-{
-    billboardData.clear();
-    billboardHandles.clear();
-    for (const LightInstance* light : scene.getLightObjects())
+    // A replaced buffer is empty, so it takes every record again.
+    if (billboardCount > billboardCapacity
+        && reserveBillboards(std::max(billboardCount, billboardCapacity * 2)))
     {
-        billboardData.push_back(makeBillboard(*light));
-        billboardHandles.push_back(light->getHandle());
-    }
-    billboardCount = static_cast<uint32_t>(billboardData.size());
-    reserveBillboards(std::max(1u, billboardCount));
-    if (billboardCount > 0)
         billboardBuffer.upload(std::as_bytes(
             std::span<const ViewportBillboard>(billboardData.data(), billboardCount)));
+        return;
+    }
+
+    std::ranges::sort(changed);
+    // One upload per run of neighbours; past a few dozen runs a single
+    // covering upload is cheaper than that many submissions.
+    constexpr std::size_t MaxRuns = 32;
+    std::vector<std::pair<uint32_t, uint32_t>> runs;
+    for (const uint32_t index : changed)
+    {
+        if (!runs.empty() && index == runs.back().second + 1)
+            runs.back().second = index;
+        else
+            runs.emplace_back(index, index);
+    }
+    if (runs.size() > MaxRuns)
+        runs = {{runs.front().first, runs.back().second}};
+    for (const auto [first, last] : runs)
+        billboardBuffer.upload(std::as_bytes(std::span<const ViewportBillboard>(
+            billboardData.data() + first, last - first + 1)), first * sizeof(ViewportBillboard));
+}
+
+void Viewport::updateVolumes(Scene& scene)
+{
+    const auto& objects = scene.getVolumeObjects();
+    const std::vector<uint32_t> changed = scene.takeChangedVolumeSlots();
+    bool rebuild = observedVolumeStructureRevision != scene.getVolumeStructureRevision()
+        || volumeSlotToDraw.size() != objects.size();
+    if (!rebuild)
+        for (const uint32_t slot : changed) {
+            const uint32_t draw = volumeSlotToDraw[slot];
+            const bool drawable = objects[slot]->isVisible()
+                && objects[slot]->getOutline()->segmentCount() > 0;
+            if (drawable != (draw != ~0u)) {
+                rebuild = true;
+                break;
+            }
+        }
+    if (!rebuild && changed.empty())
+        return;
+    if (rebuild) {
+        volumeDraws.clear();
+        volumeSlotToDraw.assign(objects.size(), ~0u);
+        for (uint32_t slot = 0; slot < objects.size(); ++slot) {
+            const VolumeInstance& volume = *objects[slot];
+            if (!volume.isVisible() || volume.getOutline()->segmentCount() == 0)
+                continue;
+            const noorrhi::Buffer<glm::vec3>& edges = volume.getOutline()->upload(gpuDevice);
+            const uint32_t index = static_cast<uint32_t>(volumeDraws.size());
+            volumeSlotToDraw[slot] = index;
+            volumeDraws.push_back({volume.getHandle(), volume.getOutline(),
+                volume.getWorldTransform().getMatrix(),
+                glm::vec4(volume.getColor(), ViewportVolumeOpacity), edges.ptr()});
+        }
+        observedVolumeStructureRevision = scene.getVolumeStructureRevision();
+        return;
+    }
+    // Movement changes only the draw's transform; the shared edge buffer
+    // needs no upload.
+    for (const uint32_t slot : changed) {
+        const uint32_t draw = volumeSlotToDraw[slot];
+        if (draw == ~0u)
+            continue;
+        volumeDraws[draw].world = objects[slot]->getWorldTransform().getMatrix();
+    }
 }
 
 std::optional<uint32_t> Viewport::billboardAt(const uint32_t x, const uint32_t y) const
@@ -193,13 +265,24 @@ std::optional<uint32_t> Viewport::billboardAt(const uint32_t x, const uint32_t y
     return value - 1;
 }
 
-SceneObjectHandle Viewport::lightAt(const uint32_t x, const uint32_t y) const
+SceneObjectHandle Viewport::billboardObjectAt(const uint32_t x, const uint32_t y) const
 {
     const auto index = billboardAt(x, y);
     return index && *index < billboardHandles.size() ? billboardHandles[*index] : SceneObjectHandle{};
 }
 
-std::optional<glm::vec3> Viewport::lightPositionAt(const uint32_t x, const uint32_t y) const
+SceneObjectHandle Viewport::volumeObjectAt(const uint32_t x, const uint32_t y) const
+{
+    if (!volumeIdBuffer || x >= logicalWidth || y >= logicalHeight)
+        return {};
+    std::uint32_t value = 0;
+    volumeIdBuffer.download(std::span<std::uint32_t>(&value, 1),
+        static_cast<std::size_t>(y) * outputImageWidth_ + x);
+    return value > 0 && value <= volumeDraws.size()
+        ? volumeDraws[value - 1].handle : SceneObjectHandle{};
+}
+
+std::optional<glm::vec3> Viewport::billboardPositionAt(const uint32_t x, const uint32_t y) const
 {
     const auto index = billboardAt(x, y);
     if (!index)
@@ -236,13 +319,44 @@ void Viewport::drawBillboards(const glm::mat4& viewProjection,
         output.width,
         selectedBillboard,
         glm::vec4(billboardCameraPosition_, hasBillboardCamera_ ? 1.0f : 0.0f),
-        ViewportBillboardDistanceFade};
+        ViewportBillboardDistanceFade,
+        billboardTextureHandles.ptr().address,
+        billboardSampler.handle().value};
     gpuDevice.render({.color = output.image, .clear = false, .flip_y = false},
         [this, &arguments] {
             billboardPipeline.draw_instanced(6, billboardCount, arguments);
         });
 
     lightIdStampPipeline.launch({billboardCount, 1, 1}, arguments);
+}
+
+void Viewport::drawVolumes(const glm::mat4& viewProjection,
+    const SceneObjectHandle selectedObject, const ViewportOutput& output)
+{
+    gpuDevice.render({.color = output.image, .clear = false, .flip_y = false},
+        [&] {
+            for (uint32_t index = 0; index < volumeDraws.size(); ++index)
+            {
+                const VolumeDraw& volume = volumeDraws[index];
+                const nr::graphics::ViewportVolumePushConstants arguments{
+                    glm::transpose(viewProjection * volume.world),
+                    volume.segments.address,
+                    glm::vec2(static_cast<float>(logicalWidth),
+                              static_cast<float>(logicalHeight)),
+                    glm::vec2(static_cast<float>(logicalWidth) / static_cast<float>(output.width),
+                              static_cast<float>(logicalHeight) / static_cast<float>(output.height)),
+                    volume.handle == selectedObject
+                        ? glm::vec4(nr::graphics::ViewportSelectionColor, 1.0f) : volume.color,
+                    ViewportVolumeLineWidth,
+                    inputs.depth.value,
+                    glm::vec2(static_cast<float>(traceWidth_), static_cast<float>(traceHeight_)),
+                    inputs.depthJitter,
+                    volumeIdBuffer.ptr().address,
+                    output.width,
+                    index};
+                volumePipeline.draw_instanced(6, volume.outline->segmentCount(), arguments);
+            }
+        });
 }
 
 void Viewport::dispatch(
@@ -321,13 +435,24 @@ void Viewport::dispatch(
         lightIdClearPipeline.launch({(logicalWidth + ViewportGroupSize - 1) / ViewportGroupSize,
             (logicalHeight + ViewportGroupSize - 1) / ViewportGroupSize, 1}, clearArguments);
     });
+    clearArguments.lightIds = volumeIdBuffer.ptr().address;
+    gpuDevice.label("Viewport Volume ID Clear", [&] {
+        lightIdClearPipeline.launch({(logicalWidth + ViewportGroupSize - 1) / ViewportGroupSize,
+            (logicalHeight + ViewportGroupSize - 1) / ViewportGroupSize, 1}, clearArguments);
+    });
+    gpuDevice.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Fragment);
 
+    if (showBillboards && !volumeDraws.empty())
+        gpuDevice.label("Viewport Volume Outlines", [&] {
+            drawVolumes(viewProjection, selectedObject, output);
+        });
     if (showBillboards && billboardCount > 0)
-        gpuDevice.label("Viewport Light Billboards", [&] {
+        gpuDevice.label("Viewport Billboards", [&] {
             drawBillboards(viewProjection, selectedObject, output);
         });
     // Picking reads the buffer back with a copy after this frame.
     gpuDevice.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Copy);
+    gpuDevice.barrier(noorrhi::Stage::Fragment, noorrhi::Stage::Copy);
 }
 
 void Viewport::resize(const uint32_t width, const uint32_t height,
@@ -361,7 +486,10 @@ void Viewport::resize(const uint32_t width, const uint32_t height,
         // The billboard pipeline bakes in its color-attachment format, so it
         // only has to be rebuilt when that format actually changes.
         if (outputImageFormat != previousFormat)
+        {
             createBillboardPipeline();
+            createVolumePipeline();
+        }
     }
     inputs = newInputs;
 }

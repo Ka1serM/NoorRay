@@ -6,41 +6,170 @@ static const int GROUP_SIZE = 16;
 
 [[vk::push_constant]] ConstantBuffer<ViewportCompositeRoot> root;
 
-// Blender 5.2 "Raw" with the "Very Low Contrast" Filmic look.  The OCIO
-// config defines that look in Filmic Log as filmic_to_0-35_1-30.spi1d
-// followed by the inverse of filmic_to_0-70_1-03.spi1d.  These samples are
-// that exact LUT composition, resampled uniformly in Filmic-log space.
-static const float BlenderVeryLowContrast[65] = {
-    0.000000000, 0.056577142, 0.097656381, 0.130399487, 0.157937676, 0.181923780, 0.203337549, 0.222808383,
-    0.240764739, 0.257511610, 0.273274335, 0.288223848, 0.302493459, 0.316189037, 0.329396276, 0.342185631,
-    0.354615956, 0.366736906, 0.378591012, 0.390215104, 0.401641265, 0.412898023, 0.424010717, 0.435002284,
-    0.445893610, 0.456703839, 0.467450892, 0.478151559, 0.488821724, 0.499476748, 0.510131490, 0.520800442,
-    0.531498120, 0.542238995, 0.553037757, 0.563909461, 0.574869708, 0.585934819, 0.597122104, 0.608205789,
-    0.618567634, 0.629090756, 0.639786767, 0.650668375, 0.661749521, 0.673045596, 0.684573639, 0.696352601,
-    0.708403699, 0.720750912, 0.733421386, 0.746446325, 0.759861901, 0.773710598, 0.788043112, 0.802921234,
-    0.818421886, 0.834643622, 0.851717823, 0.869827411, 0.889243604, 0.910402333, 0.934093971, 0.962054729,
-    1.000000000
+/* Previous tonemapper: Unreal Engine FilmToneMap (TonemapCommon.ush) with the default post process
+// Film settings. Input is linear Rec.709, output is sRGB encoded.
+static const float3x3 sRGB_2_AP1 = {
+    0.6130974, 0.3395231, 0.0473795,
+    0.0701937, 0.9163539, 0.0134524,
+    0.0206156, 0.1095698, 0.8698146,
 };
+static const float3x3 AP1_2_sRGB = {
+    1.7050510, -0.6217920, -0.0832590,
+    -0.1302564, 1.1408047, -0.0105483,
+    -0.0240034, -0.1289690, 1.1529724,
+};
+static const float3x3 AP1_2_AP0 = {
+    0.6954522414, 0.1406786965, 0.1638690622,
+    0.0447945634, 0.8596711185, 0.0955343182,
+    -0.0055258826, 0.0040252103, 1.0015006723,
+};
+static const float3x3 AP0_2_AP1 = {
+    1.4514393161, -0.2365107469, -0.2149285693,
+    -0.0765537734, 1.1762296998, -0.0996759264,
+    0.0083161484, -0.0060324498, 0.9977163014,
+};
+static const float3 AP1_LUMINANCE = float3(0.2722287168, 0.6740817658, 0.0536895174);
 
-float blenderVeryLowContrast1(float value)
+static const float FilmSlope = 0.88;
+static const float FilmToe = 0.55;
+static const float FilmShoulder = 0.26;
+static const float FilmBlackClip = 0.0;
+static const float FilmWhiteClip = 0.04;
+
+float acesSaturation(float3 rgb)
 {
-    if (value <= 0.0) return 0.0;
-    // Filmic Log's effective scene-linear range from Blender's config: the
-    // uniform [0, 0.66] allocation maps the first 16.5 stops of the 25-stop
-    // lg2 allocation [-12.473931188, 12.526068812] onto [0, 1].
-    const float x = clamp((log2(value) + 12.473931188) / 16.5, 0.0, 1.0);
-    const float p = x * 64.0;
-    const uint i = min((uint)floor(p), 63u);
-    const float y = lerp(BlenderVeryLowContrast[i], BlenderVeryLowContrast[i + 1u], p - float(i));
-    return exp2(y * 16.5 - 12.473931188);
+    const float minRgb = min(rgb.r, min(rgb.g, rgb.b));
+    const float maxRgb = max(rgb.r, max(rgb.g, rgb.b));
+    return (max(maxRgb, 1e-10) - max(minRgb, 1e-10)) / max(maxRgb, 1e-2);
 }
 
-float3 blenderRawVeryLowContrast(float3 color)
+float acesHue(float3 rgb)
 {
-    return clamp(float3(
-        blenderVeryLowContrast1(color.r),
-        blenderVeryLowContrast1(color.g),
-        blenderVeryLowContrast1(color.b)), 0.0, 1.0);
+    if (rgb.r == rgb.g && rgb.g == rgb.b) return 0.0;
+    const float hue = degrees(atan2(sqrt(3.0) * (rgb.g - rgb.b), 2.0 * rgb.r - rgb.g - rgb.b));
+    return hue < 0.0 ? hue + 360.0 : hue;
+}
+
+float acesLuminanceChroma(float3 rgb)
+{
+    const float chroma = sqrt(rgb.b * (rgb.b - rgb.g) + rgb.g * (rgb.g - rgb.r) + rgb.r * (rgb.r - rgb.b));
+    return (rgb.r + rgb.g + rgb.b + 1.75 * chroma) / 3.0;
+}
+
+float acesSigmoidShaper(float x)
+{
+    const float t = max(1.0 - abs(0.5 * x), 0.0);
+    return 0.5 * (1.0 + sign(x) * (1.0 - t * t));
+}
+
+float acesGlowGain(float yc, float gain, float mid)
+{
+    if (yc <= 2.0 / 3.0 * mid) return gain;
+    if (yc >= 2.0 * mid) return 0.0;
+    return gain * (mid / yc - 0.5);
+}
+*/
+
+float3 linearToSrgb(float3 c)
+{
+    c = saturate(c);
+    return select(c <= 0.0031308, c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055);
+}
+
+/*
+float3 unrealFilmToneMap(float3 linearRec709)
+{
+    float3 ap0 = mul(AP1_2_AP0, mul(sRGB_2_AP1, linearRec709));
+
+    const float saturation = acesSaturation(ap0);
+    const float glowShape = acesSigmoidShaper((saturation - 0.4) / 0.2);
+    ap0 *= 1.0 + acesGlowGain(acesLuminanceChroma(ap0), 0.05 * glowShape, 0.08);
+
+    const float redScale = 0.82;
+    const float redPivot = 0.03;
+    const float redWidth = 135.0;
+    float centeredHue = acesHue(ap0);
+    if (centeredHue > 180.0) centeredHue -= 360.0;
+    const float hueWeight = pow(smoothstep(0.0, 1.0, 1.0 - abs(2.0 * centeredHue / redWidth)), 2.0);
+    ap0.r += hueWeight * saturation * (redPivot - ap0.r) * (1.0 - redScale);
+
+    float3 working = max(mul(AP0_2_AP1, ap0), 0.0);
+    working = lerp(dot(working, AP1_LUMINANCE), working, 0.96);
+
+    const float toeScale = 1.0 + FilmBlackClip - FilmToe;
+    const float shoulderScale = 1.0 + FilmWhiteClip - FilmShoulder;
+    const float middleGrey = 0.18;
+
+    // FilmToe <= 0.8, so middle grey lies on the toe segment.
+    const float bt = (middleGrey + FilmBlackClip) / toeScale - 1.0;
+    const float toeMatch = log10(middleGrey) - 0.5 * log((1.0 + bt) / (1.0 - bt)) * (toeScale / FilmSlope);
+    const float straightMatch = (1.0 - FilmToe) / FilmSlope - toeMatch;
+    const float shoulderMatch = FilmShoulder / FilmSlope - straightMatch;
+
+    const float3 logColor = log10(working);
+    const float3 straight = FilmSlope * (logColor + straightMatch);
+    float3 toe = -FilmBlackClip + 2.0 * toeScale / (1.0 + exp(-2.0 * FilmSlope / toeScale * (logColor - toeMatch)));
+    float3 shoulder = 1.0 + FilmWhiteClip - 2.0 * shoulderScale / (1.0 + exp(2.0 * FilmSlope / shoulderScale * (logColor - shoulderMatch)));
+    toe = select(logColor < toeMatch, toe, straight);
+    shoulder = select(logColor > shoulderMatch, shoulder, straight);
+
+    float3 t = saturate((logColor - toeMatch) / (shoulderMatch - toeMatch));
+    if (shoulderMatch < toeMatch) t = 1.0 - t;
+    t = (3.0 - 2.0 * t) * t * t;
+    float3 tone = lerp(toe, shoulder, t);
+
+    tone = lerp(dot(tone, AP1_LUMINANCE), tone, 0.93);
+    return linearToSrgb(mul(AP1_2_sRGB, tone));
+}
+*/
+
+/* Previous tonemapper: AgX Punchy
+// AgX (Troy Sobotka) with the "Punchy" look. Polynomial approximation of the
+// default contrast curve by Benjamin Wrensch. Input is linear Rec.709, output
+// is sRGB encoded.
+static const float3x3 AGX_INSET = {
+    0.842479062253094, 0.0784335999999992, 0.0792237451477643,
+    0.0423282422610123, 0.878468636469772, 0.0791661274605434,
+    0.0423756549057051, 0.0784336, 0.879142973793104,
+};
+static const float3x3 AGX_OUTSET = {
+    1.19687900512017, -0.0980208811401368, -0.0990297440797205,
+    -0.0528968517574562, 1.15190312990417, -0.0989611768448433,
+    -0.0529716355144438, -0.0980434501171241, 1.15107367264116,
+};
+static const float AGX_MIN_EV = -12.47393;
+static const float AGX_MAX_EV = 4.026069;
+static const float3 REC709_LUMINANCE = float3(0.2126, 0.7152, 0.0722);
+
+float3 agxContrast(float3 x)
+{
+    const float3 x2 = x * x;
+    const float3 x4 = x2 * x2;
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+
+float3 agxPunchyToneMap(float3 linearRec709)
+{
+    float3 value = mul(AGX_INSET, linearRec709);
+    value = clamp(log2(max(value, 1e-10)), AGX_MIN_EV, AGX_MAX_EV);
+    value = agxContrast((value - AGX_MIN_EV) / (AGX_MAX_EV - AGX_MIN_EV));
+
+    const float luma = dot(value, REC709_LUMINANCE);
+    value = pow(max(value, 0.0), 1.35);
+    value = luma + 1.4 * (value - luma);
+
+    return linearToSrgb(pow(max(mul(AGX_OUTSET, value), 0.0), 2.2));
+}
+*/
+
+// ACES filmic curve (Krzysztof Narkowicz 2015 fit of the ACES RRT+ODT), applied per
+// channel so highlights keep their saturation. Input is linear Rec.709,
+// output is sRGB encoded.
+float3 acesFilmicToneMap(float3 linearRec709)
+{
+    const float3 x = linearRec709 * 0.6;
+    const float3 mapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+    return linearToSrgb(mapped);
 }
 
 float3 hashIdToColor(uint id)
@@ -218,7 +347,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         const float3 straight = alpha > 0.0
             ? hdr.rgb / alpha * exp2(clamp(pushConstants.exposure, -20.0, 20.0))
             : float3(0.0);
-        color = pushConstants.tonemappingEnabled != 0 ? blenderRawVeryLowContrast(straight) : straight;
+        color = pushConstants.tonemappingEnabled != 0 ? acesFilmicToneMap(straight) : straight;
 
         if (pushConstants.selectedCryptomatteId != ~0u)
         {

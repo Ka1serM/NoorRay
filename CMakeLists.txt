@@ -542,6 +542,7 @@ target_link_libraries(NoorRayFsr PRIVATE NoorRayShaderResources)
 file(GLOB NR_SHARED_SHADER_ABI CONFIGURE_DEPENDS
     "${NR_CORE_DIR}/Shared/*.h")
 set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
+    "${NR_SHADER_DIR}/Viewport/ViewportVolumes.slang"
     "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
     "${NR_SHADER_DIR}/Raytracer/RaytracingAbi.slang"
     "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.slang"
@@ -557,8 +558,10 @@ set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/V
     ${NR_RAYTRACER_SHADER_INCLUDES}
     ${NR_REALTIME_SHADER_INCLUDES}
     "${NR_SHADER_DIR}/Gaussian/Gaussian.slang"
-    "${NR_SHADER_DIR}/Mesh/SplineMesh.slang")
+    "${NR_SHADER_DIR}/Mesh/SplineMesh.slang"
+    "${NR_SHADER_DIR}/Mesh/LandscapeMesh.slang")
 set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
+    "${NR_SHADER_BUILD_DIR}/Viewport/ViewportVolumes.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracer.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracerLayered.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeGBuffer.spv"
@@ -571,7 +574,8 @@ set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BU
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeOutputAovs.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimePick.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv"
-    "${NR_SHADER_BUILD_DIR}/Mesh/SplineMesh.spv")
+    "${NR_SHADER_BUILD_DIR}/Mesh/SplineMesh.spv"
+    "${NR_SHADER_BUILD_DIR}/Mesh/LandscapeMesh.spv")
 set(NR_SHADER_VALIDATE_COMMANDS)
 if(NR_SPIRV_VAL_EXECUTABLE)
     foreach(_spv IN LISTS NR_SHADER_OUT)
@@ -596,6 +600,12 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/ViewportVolumes.slang"
+        -entry vertMain -stage vertex -entry fragMain -stage fragment
+        -target spirv -profile spirv_1_5
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/Viewport/ViewportVolumes.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage raygeneration -target spirv
@@ -637,7 +647,8 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeShadowMiss.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/DefaultMaterialHit.slang"
-        -entry main -stage closesthit -target spirv
+        -entry main -stage closesthit -entry anyHit -stage anyhit
+        -entry shadowAnyHit -stage anyhit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
@@ -683,6 +694,12 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/Mesh/SplineMesh.spv"
+    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Mesh/LandscapeMesh.slang"
+        -entry main -stage compute -target spirv
+        -profile spirv_1_5
+        -capability spvDescriptorHeapEXT -emit-spirv-directly
+        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        -o "${NR_SHADER_BUILD_DIR}/Mesh/LandscapeMesh.spv"
     ${NR_SHADER_VALIDATE_COMMANDS}
     DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
         ${NR_RTXDI_HEADERS}
@@ -825,14 +842,19 @@ if(NR_BUILD_SPECTRAL)
     add_custom_target(NoorRaySpectralShaders DEPENDS ${NR_SPECTRAL_SHADER_OUT})
 endif()
 
-# Every compiled shader, and the Slang sources the material compiler builds on,
-# as the CMakeRC namespace noorray_shaders (Realtime/ShaderLoading.h).
+# Every compiled shader, the Slang sources the material compiler builds on, and
+# the billboard textures, as the CMakeRC namespace noorray_shaders
+# (Realtime/ShaderLoading.h).
 cmrc_add_resource_library(NoorRayShaderResources NAMESPACE noorray_shaders
     WHENCE "${NR_SHADER_BUILD_DIR}"
     ${NR_SHADER_OUT} ${NR_RTXDI_SHADER_OUT} ${NR_FSR_SHADER_OUT} ${NR_SPECTRAL_SHADER_OUT}
     "${NR_MATERIAL_HIT_SOURCE}")
 cmrc_add_resources(NoorRayShaderResources WHENCE "${NR_SHADER_DIR}"
     "${NR_SHADER_DIR}/RealtimeRaytracer/MaterialInterface.slang")
+# The viewport's billboard textures, generated by tools/billboards.
+file(GLOB NR_BILLBOARD_TEXTURES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/billboards/*.msdf")
+cmrc_add_resources(NoorRayShaderResources WHENCE "${PROJECT_SOURCE_DIR}/assets"
+    ${NR_BILLBOARD_TEXTURES})
 set_target_properties(NoorRayShaderResources PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # The shader commands belong to these targets; depending on them keeps a
 # Makefile build from running a command twice.

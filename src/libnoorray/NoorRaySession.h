@@ -109,6 +109,9 @@ public:
     // the output image and all AOV bindings together, so hosts never need to
     // rebuild ViewportInputs themselves.
     void resizeViewport(uint32_t width, uint32_t height);
+    // The largest size the host will render; images never allocate more than
+    // that unless a size exceeds it.
+    void setViewportAllocationLimit(uint32_t width, uint32_t height);
     // Use externally-owned frame images for the viewport composite instead of
     // allocating an intermediate presentation image in the session.
     void setViewportExternalOutput(bool enabled, noorrhi::ImageFormat format);
@@ -129,11 +132,11 @@ public:
         SceneObjectHandle object{};
     };
     // Picks the object at render pixel (x, y): origin at the bottom-left of the
-    // output, x < outputWidth(), y < outputHeight(). Light icons are drawn on
-    // top of the render, so they are tested first when includeLights is set
+    // output, x < outputWidth(), y < outputHeight(). Billboards are drawn on
+    // top of the render, so they are tested first when includeBillboards is set
     // (pass whether billboards are shown). Only the one id texel is read back.
     // Call outside an open frame.
-    ViewportPick pick(uint32_t x, uint32_t y, bool includeLights = true);
+    ViewportPick pick(uint32_t x, uint32_t y, bool includeBillboards = true);
     // World-space surface position at render pixel (x, y), or nothing where
     // the pixel shows the background.
     std::optional<glm::vec3> pickPosition(uint32_t x, uint32_t y);

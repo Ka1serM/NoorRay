@@ -229,15 +229,15 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
     di.SetFrameIndex(frameIndex_);
     ptContext_->SetFrameIndex(frameIndex_);
     auto ptInitial = ptContext_->GetInitialSamplingParameters();
-    // Max bounces counts indirect bounces. RTXDI's depth counts path
-    // vertices, the primary surface as 1: the light found after N indirect
-    // bounces is vertex N + 2. RTXDI packs the selected path length and
-    // reconnection length into bytes.
-    ptInitial.maxBounceDepth = std::clamp(args.frame.maxBounces + 2u, 3u, 253u);
-    ptInitial.maxRcVertexLength = ptInitial.maxBounceDepth + 2u;
+    // RTXDI limits the path vertex index of the light: the primary surface is
+    // vertex 1, direct light vertex 2, so N indirect bounces reach vertex N + 2.
+    // RTXDI packs the selected path length and reconnection length into bytes.
+    const uint32_t maxLightVertexIndex = std::clamp(args.frame.maxBounces + 2u, 3u, 253u);
+    ptInitial.maxBounceDepth = maxLightVertexIndex;
+    ptInitial.maxRcVertexLength = maxLightVertexIndex + 2u;
     ptContext_->SetInitialSamplingParameters(ptInitial);
     auto ptHybrid = ptContext_->GetHybridShiftParameters();
-    ptHybrid.maxBounceDepth = ptInitial.maxBounceDepth;
+    ptHybrid.maxBounceDepth = maxLightVertexIndex;
     ptHybrid.maxRcVertexLength = ptInitial.maxRcVertexLength;
     ptContext_->SetHybridShiftParameters(ptHybrid);
     ++frameIndex_;
@@ -347,7 +347,12 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
 
     // Temporal reuse needs last frame's G-buffer and light indices to still
     // describe last frame.
-    lighting.previousSurfacesValid = historyValid_ && !frame.resetHistory ? 1u : 0u;
+    // The path-tracing reservoirs are not written while there are no indirect
+    // bounces, so the first frame with indirect light has no history either.
+    const bool indirect = args.frame.maxBounces > 0u;
+    lighting.previousSurfacesValid =
+        historyValid_ && !frame.resetHistory && (previousFrameIndirect_ || !indirect) ? 1u : 0u;
+    previousFrameIndirect_ = indirect;
     lighting.reservoirBlockRowPitch =
         lighting.restirDI.reservoirBufferParams.reservoirBlockRowPitch;
     historyValid_ = true;
@@ -410,7 +415,8 @@ void Restir::resample(const nr::graphics::RealtimeArgs& args,
 {
     using noorrhi::Stage;
     const bool diBoiling = args.lighting.restirDI.boilingFilterParams.enableBoilingFilter != 0;
-    const bool ptBoiling = args.lighting.restirPT.boilingFilter.enableBoilingFilter != 0;
+    const bool indirect = args.frame.maxBounces > 0u;
+    const bool ptBoiling = indirect && args.lighting.restirPT.boilingFilter.enableBoilingFilter != 0;
     const noorrhi::DispatchSize pixels{divideRoundingUp(lighting.width, ScreenSpaceGroupSize),
         divideRoundingUp(lighting.height, ScreenSpaceGroupSize), 1};
     const noorrhi::DispatchSize tiles{divideRoundingUp(lighting.width, BoilingGroupSize),
@@ -442,7 +448,8 @@ void Restir::resample(const nr::graphics::RealtimeArgs& args,
     trace("Initial Samples", initialRaygen_);
     barrier({Stage::RayTracing}, {Stage::Compute, Stage::RayTracing});
     launch("DI Temporal", diTemporalPipeline_, pixels);
-    trace("PT Temporal", ptTemporalRaygen_);
+    if (indirect)
+        trace("PT Temporal", ptTemporalRaygen_);
     if (diBoiling || ptBoiling) {
         barrier({Stage::Compute, Stage::RayTracing}, {Stage::Compute});
         if (diBoiling)
@@ -454,7 +461,8 @@ void Restir::resample(const nr::graphics::RealtimeArgs& args,
         barrier({Stage::Compute, Stage::RayTracing}, {Stage::Compute, Stage::RayTracing});
     }
     launch("DI Spatial", diSpatialPipeline_, pixels);
-    trace("PT Spatial", ptSpatialRaygen_);
+    if (indirect)
+        trace("PT Spatial", ptSpatialRaygen_);
     barrier({Stage::Compute, Stage::RayTracing}, {Stage::RayTracing});
     trace("Shade", shadeRaygen_);
 }

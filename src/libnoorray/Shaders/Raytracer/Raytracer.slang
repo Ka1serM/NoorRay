@@ -23,12 +23,10 @@ void main()
     RWTexture2D<float4> normal = ResourceDescriptorHeap[frame.normalImage];
     RWTexture2D<float4> position = ResourceDescriptorHeap[frame.positionImage];
     RWTexture2D<uint> cryptomatte = ResourceDescriptorHeap[frame.cryptomatteImage];
-    uint* gaussianOverdraw = frame.gaussianOverdraw;
     float4* accumulation = frame.accumulation;
     ByteBuffer spectralTables = byteBuffer(frame.spectralTables);
 
     const uint pixel = dispatchId.y * frame.width + dispatchId.x;
-    gaussianOverdraw[pixel] = 0u;
     // Proxy overdraw is a diagnostic, not a beauty sample. Fix its primary
     // ray at the pixel and lens centres so the displayed counter is stable
     // across accumulation frames and independent of path-sampling noise.

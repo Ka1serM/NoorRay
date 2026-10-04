@@ -27,10 +27,9 @@ void main()
 
 #else
 
-// Resolves the output image's coverage, and resamples the render-resolution
-// cryptomatte to the output resolution the beauty is upscaled to, so the
-// selection outline and the cryptomatte view address the same pixels as the
-// beauty. Nearest sampling keeps the IDs exact.
+// Finishes the output image: resolves its coverage and folds the beauty into
+// the running average as the offline tracer does, so a still view converges
+// (sample 0 or an animated hit this frame restarts the average).
 [shader("compute")]
 [numthreads(RealtimeOutputAovsGroupSize, RealtimeOutputAovsGroupSize, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
@@ -43,12 +42,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
     const float2 renderSize = float2(args.frame.width, args.frame.height);
     const float2 sourcePosition = (float2(output) + 0.5) * renderSize / outputSize
         - 0.5 - args.view.jitter;
-    const uint2 source = uint2(clamp(round(sourcePosition), float2(0.0), renderSize - 1.0));
     // FSR reconstructs RGB but does not preserve the render target's coverage
     // channel. Resolve alpha separately at output resolution so the viewport
     // can composite transparent backgrounds over its own UI background.
     RWTexture2D<float4> outputColor = ResourceDescriptorHeap[args.frame.colorImage];
-    float alpha = 1.0;
+    float4 sum = outputColor[output];
+    sum.a = 1.0;
     if (args.frame.transparentBackground != 0u)
     {
         RWTexture2D<float4> renderColor = ResourceDescriptorHeap[args.targets.color];
@@ -60,17 +59,27 @@ void main(uint3 threadId : SV_DispatchThreadID)
         const float a10 = renderColor[int2(p1.x, p0.y)].a;
         const float a01 = renderColor[int2(p0.x, p1.y)].a;
         const float a11 = renderColor[p1].a;
-        alpha = lerp(lerp(a00, a10, f.x), lerp(a01, a11, f.x), f.y);
+        sum.a = lerp(lerp(a00, a10, f.x), lerp(a01, a11, f.x), f.y);
     }
-    float4 outputPixel = outputColor[output];
-    outputPixel.a = alpha;
-    outputColor[output] = outputPixel;
-    if (args.view.outputCryptomatte != 0u)
+
+    // Each frame's accumulation state is in one of two slots: its hit shaders
+    // mark the slot and this pass resets the other for the next frame, so no
+    // thread reads a slot that another resets.
+    BeautyAccumulation* state = args.frame.beautyAccumulation;
+    const uint slot = args.frame.accumulationSlot;
+    const bool restart = args.frame.sampleIndex == 0u || state->animatedHit[slot] != 0u;
+    const uint previousSamples = restart ? 0u : state->sampleCount[slot];
+    if (all(output == 0u))
     {
-        RWTexture2D<uint> dst = ResourceDescriptorHeap[args.frame.cryptomatteImage];
-        RWTexture2D<uint> src = ResourceDescriptorHeap[args.targets.cryptomatte];
-        dst[output] = src[source];
+        state->animatedHit[slot ^ 1u] = 0u;
+        state->sampleCount[slot ^ 1u] = previousSamples + 1u;
     }
+    float4* accumulation = args.frame.accumulation;
+    const uint pixel = output.y * args.view.outputWidth + output.x;
+    if (!restart)
+        sum += accumulation[pixel];
+    accumulation[pixel] = sum;
+    outputColor[output] = sum / float(previousSamples + 1u);
 }
 
 #endif

@@ -81,9 +81,8 @@ float4 packNrdSignal(float3 radiance, float hitDistance, float viewZ, float roug
     float3 directionSum, float3 totalRadiance, out float4 sh1)
 {
     sh1 = float4(0.0);
-    const DenoiserArgs denoiser = realtimeArgs()->denoiser;
     const float3 exposed = radiance * realtimeExposureScale();
-    if (denoiser.sphericalHarmonics == 0u)
+    if (realtimeArgs()->denoiser.sphericalHarmonics == 0u)
         return RELAX_FrontEnd_PackRadianceAndHitDist(exposed, hitDistance, true);
     const float3 direction = directionSum / max(nrdLuminance(totalRadiance), 1.0e-6);
     return RELAX_FrontEnd_PackSh(exposed, hitDistance, direction, sh1, true);

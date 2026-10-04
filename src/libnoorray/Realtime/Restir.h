@@ -31,6 +31,10 @@ public:
     // `lighting`, with the translucent layer set only when `layers`. The GPU
     // must be idle.
     void resize(Extent lighting, bool layers);
+    // Allocates what paths leaving the surfaces need: ReSTIR PT's reservoirs
+    // and the surfaces' differentials. They stay once allocated, so a frame
+    // without bounces never pays for them. The GPU need not be idle.
+    void enableIndirect();
     // Local lights are the point, spot and rect records in that order, as
     // RtxdiBridge.slang addresses them in place. The GPU must be idle.
     void uploadLights(std::span<const nr::graphics::PointLight> points,
@@ -68,12 +72,17 @@ private:
     {
         // RTXDI_PackedDIReservoir (24 bytes).
         noorrhi::Buffer<std::uint32_t> diReservoirs;
+        // Empty until enableIndirect().
         noorrhi::Buffer<std::uint32_t> ptReservoirs;
         // RealtimeSurface records, alternating between frames.
         std::array<noorrhi::Buffer<std::uint32_t>, 2> surfaces;
+        // RealtimeSurfaceDifferential records of `surfaces`; empty until
+        // enableIndirect().
+        std::array<noorrhi::Buffer<std::uint32_t>, 2> differentials;
     };
 
-    SurfaceSet surfaceSet(std::size_t pixels) const;
+    SurfaceSet surfaceSet() const;
+    void allocateIndirect(SurfaceSet& set) const;
 
     noorrhi::Device& device_;
     std::unique_ptr<rtxdi::ImportanceSamplingContext> context_;
@@ -82,6 +91,7 @@ private:
     noorrhi::ComputePipeline presampleReGIRPipeline_;
     noorrhi::ComputePipeline presampleEnvironmentPipeline_;
     noorrhi::Shader initialRaygen_;
+    noorrhi::Shader ptInitialRaygen_;
     noorrhi::ComputePipeline diTemporalPipeline_;
     noorrhi::ComputePipeline diBoilingPipeline_;
     noorrhi::ComputePipeline diSpatialPipeline_;
@@ -92,10 +102,16 @@ private:
     // uint2 entries: light index and inverse source pdf.
     noorrhi::Buffer<std::uint32_t> risBuffer_;
     noorrhi::Buffer<float> neighborOffsets_;
+    // Surfaces per set, which is the lighting rectangle's allocation.
+    std::size_t pixels_{};
+    bool indirect_{};
     SurfaceSet opaque_;
     std::optional<SurfaceSet> layers_;
     // RealtimeLightAlias records (3 words) over the local lights.
     noorrhi::Buffer<std::uint32_t> lightAlias_;
+    // Point, spot, rect and directional light counts, which decide the light
+    // indices the reservoirs hold.
+    std::array<std::size_t, 4> lightCounts_{};
     uint32_t localLightCount_{};
     uint32_t infiniteLightCount_{};
     // Largest extent of the local lights, which sizes the ReGIR cells.
@@ -103,7 +119,7 @@ private:
     uint32_t frameIndex_{};
     // Index of this frame's surfaces in each SurfaceSet.
     uint32_t surfaceParity_{};
-    // Temporal reuse also restarts when the lights change, or after a resize.
+    // Temporal reuse also restarts when the light counts change, or after a resize.
     bool historyValid_{};
     bool previousFrameIndirect_{};
 };

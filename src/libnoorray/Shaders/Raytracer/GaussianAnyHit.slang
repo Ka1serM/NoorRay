@@ -2,23 +2,11 @@
 
 // Gaussian proxy geometry is non-opaque. Any-hit normally performs stochastic
 // opacity/ellipsoid acceptance and rejects candidates before closest-hit,
-// avoiding a raygen-side brute-force scan over the splat array. The overdraw
-// diagnostic instead counts every proxy candidate from its canonical primary
-// ray, so it must not be affected by opacity roulette.
+// avoiding a raygen-side brute-force scan over the splat array.
 [shader("anyhit")]
 void main(inout RayPayload payload)
 {
     const Frame frame = *root.arguments;
-    if (frame.gaussianOverdrawEnabled != 0u
-        && frame.gaussianOverdraw != nullptr)
-    {
-        uint* overdraw = frame.gaussianOverdraw;
-        uint previous;
-        const uint2 pixel = DispatchRaysIndex().xy;
-        InterlockedAdd(overdraw[pixel.y * frame.width + pixel.x], 1u, previous);
-        IgnoreHit();
-        return;
-    }
     if (InstanceID() == payload.splatInstance)
     {
         IgnoreHit();

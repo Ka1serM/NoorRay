@@ -14,7 +14,8 @@
 //   PRESAMPLE_REGIR   RIS tiles -> ReGIR world-space cells (compute)
 //   ... the lighting pass writes the G-buffer and records the surfaces
 //   (RealtimeRaytracer.slang) ...
-//   INITIAL           draw DI's candidates and PT's initial paths
+//   INITIAL           draw DI's candidates
+//   PT_INITIAL        draw PT's initial paths (only with bounces)
 //   DI_TEMPORAL       reuse from the previous frame's reservoirs (compute)
 //   DI_BOILING        drop reservoirs far heavier than their neighbours (compute)
 //   DI_SPATIAL        reuse from screen-space neighbours (compute)
@@ -43,6 +44,9 @@
 #ifndef RTXDI_PASS_INITIAL
 #define RTXDI_PASS_INITIAL 0
 #endif
+#ifndef RTXDI_PASS_PT_INITIAL
+#define RTXDI_PASS_PT_INITIAL 0
+#endif
 #ifndef RTXDI_PASS_DI_TEMPORAL
 #define RTXDI_PASS_DI_TEMPORAL 0
 #endif
@@ -66,7 +70,7 @@
 #endif
 
 #include "RtxdiBridge.slang"
-#if RTXDI_PASS_INITIAL || RTXDI_PASS_PT_TEMPORAL || RTXDI_PASS_PT_SPATIAL
+#if RTXDI_PASS_INITIAL || RTXDI_PASS_PT_INITIAL || RTXDI_PASS_PT_TEMPORAL || RTXDI_PASS_PT_SPATIAL
 #include "RtxdiPTPathTrace.slang"
 #elif RTXDI_PASS_SHADE || RTXDI_PASS_PT_BOILING
 #include "RtxdiPTBridge.slang"
@@ -79,7 +83,7 @@
 #if RTXDI_PASS_PRESAMPLE_LIGHTS || RTXDI_PASS_PRESAMPLE_REGIR
 #include "Rtxdi/LightSampling/PresamplingFunctions.hlsli"
 #endif
-#if RTXDI_PASS_INITIAL
+#if RTXDI_PASS_PT_INITIAL
 #include "Rtxdi/PT/InitialSampling.hlsli"
 #endif
 #if RTXDI_PASS_DI_TEMPORAL
@@ -209,21 +213,18 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
 // The initial samples of the surface the lighting pass recorded: ReSTIR DI's
 // candidates (ReGIR-driven local lights, the directional and environment
-// lights and BRDF rays, the chosen one shadow-tested) and ReSTIR PT's
-// multi-bounce path, traced through RTXDI's context.
+// lights and BRDF rays, the chosen one shadow-tested).
 [shader("raygeneration")]
 void main()
 {
     const uint2 pixel = DispatchRaysIndex().xy;
     if (!realtimePixelInView(int2(pixel)))
         return;
-    RealtimeArgs* args = realtimeArgs();
     RealtimeLighting* lighting = rtxdiLighting();
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
-    const bool valid = RAB_IsSurfaceValid(surface);
 
     RTXDI_DIReservoir light = RTXDI_EmptyDIReservoir();
-    if (valid)
+    if (RAB_IsSurfaceValid(surface))
     {
         RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
             lighting.runtimeParams.frameIndex, RTXDI_DI_GENERATE_INITIAL_SAMPLES_RANDOM_SEED);
@@ -238,9 +239,24 @@ void main()
     }
     RTXDI_StoreDIReservoir(light, lighting.restirDI.reservoirBufferParams, pixel,
         lighting.restirDI.bufferIndices.initialSamplingOutputBufferIndex);
+}
+
+#elif RTXDI_PASS_PT_INITIAL
+
+// ReSTIR PT's multi-bounce path from the surface the lighting pass recorded,
+// traced through RTXDI's context. Launched only while there are bounces.
+[shader("raygeneration")]
+void main()
+{
+    const uint2 pixel = DispatchRaysIndex().xy;
+    if (!realtimePixelInView(int2(pixel)))
+        return;
+    RealtimeArgs* args = realtimeArgs();
+    RealtimeLighting* lighting = rtxdiLighting();
+    const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
 
     RTXDI_PTReservoir path = RTXDI_EmptyPTReservoir();
-    if (valid && args.frame.maxBounces > 0u)
+    if (RAB_IsSurfaceValid(surface))
     {
         RTXDI_PathTracerRandomContext random = RTXDI_InitializePathTracerRandomContext(
             pixel, lighting.runtimeParams.frameIndex,
@@ -274,7 +290,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
         lighting.runtimeParams.frameIndex, RTXDI_DI_TEMPORAL_RESAMPLING_RANDOM_SEED);
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
-    const RTXDI_Parameters restir = lighting.restirDI;
+    RTXDI_Parameters* restir = &lighting->restirDI;
     RTXDI_DIReservoir result = RTXDI_EmptyDIReservoir();
     if (RAB_IsSurfaceValid(surface))
     {
@@ -309,7 +325,7 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 localId : SV_GroupThreadID
     const uint2 pixel = threadId.xy;
     // Every thread joins the group reduction; outside threads carry nothing.
     const bool inView = realtimePixelInView(int2(pixel));
-    const RTXDI_Parameters restir = lighting.restirDI;
+    RTXDI_Parameters* restir = &lighting->restirDI;
     RTXDI_DIReservoir reservoir = inView
         ? RTXDI_LoadDIReservoir(restir.reservoirBufferParams, pixel,
             restir.bufferIndices.temporalResamplingOutputBufferIndex)
@@ -335,7 +351,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
         lighting.runtimeParams.frameIndex, RTXDI_DI_SPATIAL_RESAMPLING_RANDOM_SEED);
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
-    const RTXDI_Parameters restir = lighting.restirDI;
+    RTXDI_Parameters* restir = &lighting->restirDI;
     RTXDI_DIReservoir result = RTXDI_EmptyDIReservoir();
     if (RAB_IsSurfaceValid(surface))
     {
@@ -361,7 +377,7 @@ void main()
     if (!realtimePixelInView(int2(pixel)))
         return;
     RealtimeLighting* lighting = rtxdiLighting();
-    const RTXDI_PTParameters pt = lighting.restirPT;
+    RTXDI_PTParameters* pt = &lighting->restirPT;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
         lighting.runtimeParams.frameIndex, RTXDI_PT_TEMPORAL_RESAMPLING_RANDOM_SEED);
     const RAB_Surface surface = RAB_GetGBufferSurface(int2(pixel), false);
@@ -391,7 +407,7 @@ void main(uint3 threadId : SV_DispatchThreadID, uint3 localId : SV_GroupThreadID
 {
     RealtimeLighting* lighting = rtxdiLighting();
     const uint2 pixel = threadId.xy;
-    const RTXDI_PTParameters pt = lighting.restirPT;
+    RTXDI_PTParameters* pt = &lighting->restirPT;
     const bool inView = realtimePixelInView(int2(pixel));
     RTXDI_PTReservoir reservoir = inView
         ? RTXDI_LoadPTReservoir(pt.reservoirBuffer, pixel,
@@ -412,7 +428,7 @@ void main()
     if (!realtimePixelInView(int2(pixel)))
         return;
     RealtimeLighting* lighting = rtxdiLighting();
-    const RTXDI_PTParameters pt = lighting.restirPT;
+    RTXDI_PTParameters* pt = &lighting->restirPT;
     RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(pixel,
         lighting.runtimeParams.frameIndex, RTXDI_PT_SPATIAL_RESAMPLING_RANDOM_SEED);
     RTXDI_PTSpatialResamplingRuntimeParameters runtime =
@@ -468,7 +484,7 @@ void main()
     RealtimeLobe specular = {};
     const RealtimeBsdf bsdf = realtimeSurfaceBsdf(surface);
 
-    const RTXDI_Parameters restir = lighting.restirDI;
+    RTXDI_Parameters* restir = &lighting->restirDI;
     RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(restir.reservoirBufferParams,
         pixel, restir.bufferIndices.shadingInputBufferIndex);
     if (RAB_IsSurfaceValid(surface) && RTXDI_IsValidDIReservoir(reservoir))
@@ -502,7 +518,7 @@ void main()
 
     if (frame.maxBounces > 0u && RAB_IsSurfaceValid(surface))
     {
-        const RTXDI_PTParameters pt = lighting.restirPT;
+        RTXDI_PTParameters* pt = &lighting->restirPT;
         const RTXDI_PTReservoir reservoir = RTXDI_LoadPTReservoir(
             pt.reservoirBuffer, pixel, pt.bufferIndices.finalShadingInputBufferIndex);
         if (RTXDI_IsValidPTReservoir(reservoir) && reservoir.weightSum > 0.0

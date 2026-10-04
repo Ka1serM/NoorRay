@@ -29,8 +29,8 @@ using ViewportBillboard = nr::graphics::ViewportBillboard;
 constexpr float ViewportBillboardHalfSize = 40.0f;
 
 // The AOV images the composite pass reads. These are descriptor-heap handles of
-// images the raytracer created through noorrhi::Device, plus the device address of
-// the overdraw counter; nothing here is a descriptor or an index.
+// images the raytracer created through noorrhi::Device; nothing here is a
+// descriptor or an index.
 struct ViewportInputs
 {
     noorrhi::TextureHandle color{};
@@ -38,16 +38,17 @@ struct ViewportInputs
     // renderer does not write them (a zero handle).
     noorrhi::TextureHandle albedo{};
     noorrhi::TextureHandle normal{};
+    // At the render resolution, sampled with `depthJitter` like `depth`.
     noorrhi::TextureHandle crypto{};
     noorrhi::TextureHandle position{};
-    noorrhi::GpuPtr<std::uint32_t> overdraw{};
     noorrhi::TextureHandle depth{};
+    // The render samples' offset in render pixels, for `depth` and `crypto`.
     glm::vec2 depthJitter{};
 
     // What every view needs.
     explicit operator bool() const noexcept
     {
-        return color && crypto && overdraw.address;
+        return color && crypto;
     }
 };
 
@@ -87,7 +88,6 @@ public:
         const glm::mat4& viewProjection,
         float exposure,
         int bufferVisualization,
-        int gaussianOverdrawMax,
         bool tonemappingEnabled,
         bool showBillboards = true,
         SceneObjectHandle selectedObject = {}, ViewportOutput output = {});
@@ -197,6 +197,10 @@ private:
     std::vector<VolumeDraw> volumeDraws;
     std::vector<uint32_t> volumeSlotToDraw;
     noorrhi::Buffer<std::uint32_t> volumeIdBuffer;
+    // Whether the id buffers hold nothing, so a frame that draws into neither
+    // need not clear them.
+    bool lightIdsClear_{};
+    bool volumeIdsClear_{};
     uint64_t observedVolumeStructureRevision{};
 
     void createOutputResources(uint32_t width, uint32_t height, noorrhi::ImageFormat format);

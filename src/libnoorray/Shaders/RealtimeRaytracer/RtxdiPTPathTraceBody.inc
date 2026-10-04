@@ -50,10 +50,10 @@ void RAB_PathTrace(inout PT_CONTEXT context,
             // The ray leaving the primary surface carries the environment's
             // direct light there, which ReSTIR DI owns. Later rays share the
             // environment with light sampling.
-            Frame frame = realtimeArgs()->frame;
-            if (frame.environment != nullptr && context.GetBounceDepth() != 2u)
+            Frame* frame = &realtimeArgs()->frame;
+            if (frame->environment != nullptr && context.GetBounceDepth() != 2u)
                 context.RecordEnvironmentMapLightSample(environmentEscapedRadiance(
-                    frame.environment[0], ray.Direction, previousSurface.pathRoughness)
+                    frame->environment[0], ray.Direction, previousSurface.pathRoughness)
                     * (1.0 - realtimeEnvironmentLightWeight(ray.Direction)),
                     previousSurface, random.initialRandomSamplerState);
             break;

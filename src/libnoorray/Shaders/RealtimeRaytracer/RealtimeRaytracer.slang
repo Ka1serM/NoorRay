@@ -189,7 +189,7 @@ void storeLayerGBuffer(uint2 pixel, PrimaryVisibility visibility, CameraRay came
 // The nearest fractional layer as a lighting sample: the surface its ReSTIR
 // passes resample, and NRD's guides for its signal, which their shading pass
 // writes.
-RealtimeSurface storeLayerLightingSample(uint2 pixel, PrimaryVisibility visibility,
+RAB_Surface storeLayerLightingSample(uint2 pixel, PrimaryVisibility visibility,
     CameraRay cameraRay)
 {
     const RenderTargetHandles targets = realtimeArgs()->targets;
@@ -201,7 +201,7 @@ RealtimeSurface storeLayerLightingSample(uint2 pixel, PrimaryVisibility visibili
         normal[pixel] = NRD_FrontEnd_PackNormalAndRoughness(float3(0.0, 0.0, 1.0), 1.0, 0.0);
         viewZ[pixel] = float4(realtimeArgs()->denoiser.denoisingRange * 2.0, 0.0, 0.0, 0.0);
         motion[pixel] = float4(0.0);
-        return packRealtimeSurface(RAB_EmptySurface());
+        return RAB_EmptySurface();
     }
     const RealtimeHit hit = unpackRealtimeHit(visibility.front);
     const RealtimeBsdf bsdf = realtimeHitBsdf(hit, cameraRay.direction);
@@ -210,8 +210,8 @@ RealtimeSurface storeLayerLightingSample(uint2 pixel, PrimaryVisibility visibili
     normal[pixel] = NRD_FrontEnd_PackNormalAndRoughness(bsdf.normal, bsdf.roughness, 0.0);
     viewZ[pixel] = float4(depth, 0.0, 0.0, 0.0);
     motion[pixel] = float4(screenMotion(hit.position), 0.0, 0.0);
-    return packRealtimeSurface(makeRealtimeSurface(visibility.front, bsdf,
-        max(depth, realtimeArgs()->view.nearPlane)));
+    return makeRealtimeSurface(visibility.front, bsdf,
+        max(depth, realtimeArgs()->view.nearPlane));
 }
 
 
@@ -301,10 +301,11 @@ void main()
         surface = makeRealtimeSurface(visibility.surface, bsdf,
             max(g.viewZ, args.view.nearPlane));
     }
-    args.lighting.surfaces[realtimeSurfaceIndex(pixel)] = packRealtimeSurface(surface);
+    storeRealtimeSurface(args.lighting.surfaces, args.lighting.differentials,
+        realtimeSurfaceIndex(pixel), surface);
 #if REALTIME_LAYERS
-    args.lighting.layerSurfaces[realtimeSurfaceIndex(pixel)] =
-        storeLayerLightingSample(pixel, visibility, cameraRay);
+    storeRealtimeSurface(args.lighting.layerSurfaces, args.lighting.layerDifferentials,
+        realtimeSurfaceIndex(pixel), storeLayerLightingSample(pixel, visibility, cameraRay));
 #endif
 
     const RenderTargetHandles targets = args.targets;

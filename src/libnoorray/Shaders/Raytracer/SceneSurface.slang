@@ -64,11 +64,11 @@ struct SurfaceTriangle
 // both cast shadows.
 bool sectionCastsShadow(Scene scene, Material** materials, uint instanceId, uint geometryIndex)
 {
-    const Instance instance = scene.instances[min(instanceId, scene.instanceCount - 1u)];
-    const Mesh mesh = *scene.meshes[min(instance.meshIndex, scene.meshCount - 1u)];
-    const SectionRecord section = mesh.sections[min(geometryIndex, mesh.sectionCount - 1u)];
-    return section.castsShadow != 0u
-        && (materials[instance.materials[section.slot]]->flags & MaterialFlagNoShadows) == 0u;
+    Instance* instance = &scene.instances[min(instanceId, scene.instanceCount - 1u)];
+    Mesh* mesh = scene.meshes[min(instance->meshIndex, scene.meshCount - 1u)];
+    SectionRecord* section = &mesh->sections[min(geometryIndex, mesh->sectionCount - 1u)];
+    return section->castsShadow != 0u
+        && (materials[instance->materials[section->slot]]->flags & MaterialFlagNoShadows) == 0u;
 }
 
 // Must run in a hit stage: the transform is the hit TLAS record's.

@@ -247,11 +247,68 @@ float erfinv(float x)
     return p * x;
 }
 
-// This frame's estimate of the signed distance, in output pixels, from `pixel`
-// to the edge of the selection. Negative inside it.
+// The reach of the outline's distance field, in output pixels. A pixel with no
+// selection within the mask filter's window sits exactly here.
+float outlineReach(float upscaleRatio)
+{
+    return OutlineWidth + clamp(upscaleRatio, 1.0, 3.0) * 0.5;
+}
+
+// Where the output pixels' cryptomatte comes from: the render-resolution AOV,
+// nearest resampled. Render pixel p sampled the scene at p + 0.5 + jitter in
+// render pixels, so output pixel o looks up the render pixel nearest
+// (o + 0.5) * renderSize / outputSize - 0.5 - jitter. Keeping the IDs exact
+// is what the outline's mask filter relies on.
+struct CryptomatteMap
+{
+    float2 outputSize;
+    float2 renderSize;
+    float2 jitter;
+};
+
+uint cryptomatteAt(RWTexture2D<uint> idImage, CryptomatteMap map, int2 pixel)
+{
+    const float2 source = (float2(pixel) + 0.5) * map.renderSize / map.outputSize - 0.5
+        - map.jitter;
+    return idImage[uint2(clamp(round(source), float2(0.0), map.renderSize - 1.0))];
+}
+
+// The selection mask around a thread group: its pixels and OutlineSearch more
+// on every side, as 1 where the cryptomatte holds the selected ID. Outside the
+// render counts as unselected, so a selection running off the edge is outlined
+// along it rather than left open.
+static const int OutlineTile = GROUP_SIZE + 2 * OutlineSearch;
+groupshared uint outlineSelected[OutlineTile * OutlineTile];
+groupshared uint outlineAnySelected;
+
+// Fills the tile for the group `groupId`. Every thread of the group must call
+// it, outside the render included: it synchronizes the group.
+void loadOutlineTile(RWTexture2D<uint> idImage, CryptomatteMap map, uint2 groupId,
+    uint threadIndex, uint selectedId, int2 size)
+{
+    if (threadIndex == 0u)
+        outlineAnySelected = 0u;
+    GroupMemoryBarrierWithGroupSync();
+    const int2 origin = int2(groupId) * GROUP_SIZE - OutlineSearch;
+    [loop]
+    for (uint i = threadIndex; i < uint(OutlineTile * OutlineTile); i += GROUP_SIZE * GROUP_SIZE)
+    {
+        const int2 samplePixel = origin + int2(int(i) % OutlineTile, int(i) / OutlineTile);
+        const bool selected = all(samplePixel >= int2(0)) && all(samplePixel < size)
+            && cryptomatteAt(idImage, map, samplePixel) == selectedId;
+        outlineSelected[i] = selected ? 1u : 0u;
+        if (selected)
+            InterlockedOr(outlineAnySelected, 1u);
+    }
+    GroupMemoryBarrierWithGroupSync();
+}
+
+// This frame's estimate of the signed distance, in output pixels, from the
+// pixel at `local` in its group to the edge of the selection. Negative inside
+// it.
 //
-// The cryptomatte this reads is a nearest resample of the render-resolution
-// AOV, so on its own the selection mask is a staircase with steps of up to the
+// The cryptomatte is a nearest resample of the render-resolution AOV, so on its
+// own the selection mask is a staircase with steps of up to the
 // upscale ratio. Distances measured to that staircase inherit it. Instead the
 // mask is filtered with a Gaussian: across a straight edge the filtered value
 // is 0.5 * erfc(d / (sigma * sqrt(2))) of the distance d to the edge, which is
@@ -259,38 +316,34 @@ float erfinv(float x)
 // comes out near its sub-texel position on the first frame. What remains is a
 // small zero-mean error that moves with the jitter, which the caller's running
 // average removes.
-float outlineDistance(RWTexture2D<uint> idImage, int2 pixel, uint selectedId,
-    int2 size, float upscaleRatio)
+float outlineDistance(int2 local, float upscaleRatio)
 {
-    const float aa = clamp(upscaleRatio, 1.0, 3.0) * 0.5;
-    const float reach = OutlineWidth + aa;
+    const float reach = outlineReach(upscaleRatio);
+    // No selection near the group: the filtered mask is zero everywhere in it,
+    // which the clamp below turns into the reach.
+    if (outlineAnySelected == 0u)
+        return reach;
     const float window = 3.5 * OutlineSigma;
+    // The Gaussian is separable; only the disc it is cut to is not.
+    float gaussian[OutlineSearch + 1];
+    [unroll]
+    for (int i = 0; i <= OutlineSearch; ++i)
+        gaussian[i] = exp(-float(i * i) / (2.0 * OutlineSigma * OutlineSigma));
     float selectedWeight = 0.0;
     float totalWeight = 0.0;
-    // Kept as real loops. The bounds are compile-time constants with no early
-    // exit, so both would otherwise unroll into 121 inlined bindless image
-    // loads, and a body that size is what NVIDIA's SPIR-V compiler was
-    // crashing on. Rolled up it is also less instruction cache for no
-    // measurable difference: the cost here is the texture traffic.
     [loop]
     for (int y = -OutlineSearch; y <= OutlineSearch; ++y)
     {
         [loop]
         for (int x = -OutlineSearch; x <= OutlineSearch; ++x)
         {
-            const float distanceSquared = float(x * x + y * y);
-            if (distanceSquared > window * window)
+            if (float(x * x + y * y) > window * window)
                 continue;
-            const int2 samplePixel = pixel + int2(x, y);
-            // Outside the render counts as unselected, so a selection running
-            // off the edge is outlined along it rather than left open.
-            const bool selected = all(samplePixel >= int2(0))
-                && all(samplePixel < size)
-                && idImage[samplePixel] == selectedId;
-            const float weight = exp(-distanceSquared
-                / (2.0 * OutlineSigma * OutlineSigma));
+            const float weight = gaussian[abs(x)] * gaussian[abs(y)];
             totalWeight += weight;
-            selectedWeight += selected ? weight : 0.0;
+            if (outlineSelected[(local.y + OutlineSearch + y) * OutlineTile
+                    + local.x + OutlineSearch + x] != 0u)
+                selectedWeight += weight;
         }
     }
     // The clamp keeps a pixel far from any selection from producing an
@@ -312,7 +365,8 @@ float outlineCoverage(float signedDistance, float upscaleRatio)
 
 [shader("compute")]
 [numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
-void main(uint3 threadId : SV_DispatchThreadID)
+void main(uint3 threadId : SV_DispatchThreadID, uint3 groupId : SV_GroupID,
+    uint3 localId : SV_GroupThreadID, uint threadIndex : SV_GroupIndex)
 {
     const ViewportCompositePushConstants pushConstants = *root.arguments;
     RWTexture2D<float4> colorImage = ResourceDescriptorHeap[pushConstants.colorImage];
@@ -320,14 +374,26 @@ void main(uint3 threadId : SV_DispatchThreadID)
     RWTexture2D<uint> idImage = ResourceDescriptorHeap[pushConstants.idImage];
     // Not every renderer writes the albedo, normal and position images, so
     // only their own views fetch their descriptors.
-    uint* overdrawImage = pushConstants.overdraw;
     // The images may be allocated larger than the render. Only the logical
-    // rectangle is traced, and the overdraw buffer uses its width as stride.
+    // rectangle is traced.
     const uint width = pushConstants.width;
     const uint height = pushConstants.height;
     uint imageWidth;
     uint imageHeight;
     outputImage.GetDimensions(imageWidth, imageHeight);
+    // The selection outline of the beauty view reads the mask around the whole
+    // group, so every thread joins in filling it before any may leave.
+    CryptomatteMap cryptomatte;
+    cryptomatte.outputSize = float2(width, height);
+    cryptomatte.renderSize = float2(pushConstants.cryptomatteWidth,
+        pushConstants.cryptomatteHeight);
+    cryptomatte.jitter = float2(pushConstants.cryptomatteJitterX,
+        pushConstants.cryptomatteJitterY);
+    const bool outlined = pushConstants.bufferVisualization == 0
+        && pushConstants.selectedCryptomatteId != ~0u;
+    if (outlined)
+        loadOutlineTile(idImage, cryptomatte, groupId.xy, threadIndex,
+            pushConstants.selectedCryptomatteId, int2(width, height));
     // One extra column and row past the logical edge repeat the edge pixel,
     // so a linear sampler reading right at the edge does not blend in stale
     // texels from an earlier, larger render.
@@ -349,13 +415,13 @@ void main(uint3 threadId : SV_DispatchThreadID)
             : float3(0.0);
         color = pushConstants.tonemappingEnabled != 0 ? acesFilmicToneMap(straight) : straight;
 
-        if (pushConstants.selectedCryptomatteId != ~0u)
+        if (outlined)
         {
             RWTexture2D<float> selectionSdf =
                 ResourceDescriptorHeap[pushConstants.selectionSdfImage];
-            const float current = outlineDistance(idImage, pixel,
-                pushConstants.selectedCryptomatteId, int2(width, height),
-                pushConstants.upscaleRatio);
+            // The extra edge column measures from its own position; there the
+            // render counts as unselected, as it does past the edge pixel.
+            const float current = outlineDistance(int2(localId.xy), pushConstants.upscaleRatio);
             // Running average of every frame since the outline history
             // restarted, independent of beauty accumulation. Only this
             // thread's own texel is read and written here, while the
@@ -391,7 +457,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     }
     case 3: // Cryptomatte — hash ID to color
     {
-        color = hashIdToColor(idImage[pixel]);
+        color = hashIdToColor(cryptomatteAt(idImage, cryptomatte, pixel));
         break;
     }
     case 4: // Position — visualize as absolute world-space distance
@@ -399,13 +465,6 @@ void main(uint3 threadId : SV_DispatchThreadID)
         RWTexture2D<float4> positionImage = ResourceDescriptorHeap[pushConstants.positionImage];
         const float3 p = positionImage[pixel].xyz;
         color = abs(p) / (abs(p) + 1.0); // Reinhard-like to keep it in [0,1]
-        break;
-    }
-    case 5: // Gaussian proxy overdraw view.
-    {
-        const float count = float(overdrawImage[uint(pixel.y) * width + uint(pixel.x)]);
-        const float range = float(max(pushConstants.overdrawMax, 1u));
-        color = magma(log2(count + 1.0) / log2(range + 1.0));
         break;
     }
     default: // Beauty is handled above; keep invalid values black.

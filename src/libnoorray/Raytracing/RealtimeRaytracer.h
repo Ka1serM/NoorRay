@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "Raytracer.h"
-#include "Realtime/Accumulator.h"
 #include "Realtime/Denoiser.h"
 #include "Realtime/FrameContext.h"
 #include "Realtime/RenderTargets.h"
@@ -29,8 +28,8 @@ namespace nr::graphics { struct RealtimeArgs; }
 // which passes the frame through unchanged in its Off mode:
 //
 //   Restir::presample -> [G-buffer pass] -> lighting pass
-//   -> Restir::resample -> Denoiser -> composite and output AOVs -> Upscaler
-//   -> Accumulator
+//   -> Restir::resample -> Denoiser -> composite -> Upscaler -> output AOVs
+//   and the beauty average
 //
 // The lighting pass traces, resamples and denoises lighting at the lighting
 // resolution, drawing ReSTIR's initial samples on the surfaces it finds. At full lighting resolution it also writes the G-buffer; below
@@ -66,8 +65,9 @@ public:
     std::uint32_t readCryptomatteAtOutput(uint32_t x, uint32_t y) override;
     noorrhi::float4 readPositionAtOutput(uint32_t x, uint32_t y) override;
     noorrhi::TextureHandle viewportDepthTexture() const { return targets ? noorrhi::TextureHandle{targets->handles().depth} : noorrhi::TextureHandle{}; }
+    // The render-resolution cryptomatte, which the viewport resamples itself.
+    noorrhi::TextureHandle viewportCryptomatteTexture() const { return targets ? noorrhi::TextureHandle{targets->handles().cryptomatte} : noorrhi::TextureHandle{}; }
     glm::vec2 viewportDepthJitter() const { return {previousJitter[0], previousJitter[1]}; }
-    void setSelectionAovRequired(bool required) { selectionAovRequired = required; }
 
     bool prepareFrameResources() override;
     void render(uint32_t frameIndex = 0, uint32_t sampleIndex = 0) override;
@@ -137,16 +137,13 @@ private:
     noorrhi::Shader gBufferRaygen;
     noorrhi::Shader layeredGBufferRaygen;
     LightingResolution lightingResolution{RenderSettings{}.lightingResolution};
-    BufferVisualization bufferVisualization{RenderSettings{}.bufferVisualization};
     DenoiserMode denoiserMode{RenderSettings{}.denoiserMode};
-    bool selectionAovRequired{};
     Restir restir;
     Denoiser denoiser;
     Upscaler upscaler;
     noorrhi::Buffer<nr::graphics::BeautyAccumulation> beautyAccumulation;
     // Alternates every render(); see BeautyAccumulation.
     std::uint32_t accumulationSlot{};
-    Accumulator accumulator;
     // Allocated by ensureResources(), with the other stages' resources.
     std::optional<RenderTargets> targets;
     std::optional<ResourceLayout> allocatedLayout;

@@ -191,10 +191,10 @@ surfaceshader evaluateHit<M : IMaterial>(Frame* frame, MaterialHitSurface hit)
     geometry.uvVertices = surface.uvVertices;
     geometry.uvBarycentrics = surface.uvBarycentrics;
     geometry.color = surface.vertexColor;
-    const Instance instance = frame->scene.instances[min(InstanceID(), frame->scene.instanceCount - 1u)];
-    const Mesh mesh = *frame->scene.meshes[min(instance.meshIndex, frame->scene.meshCount - 1u)];
-    geometry.boundsMin = float3(mesh.boundsMin[0], mesh.boundsMin[1], mesh.boundsMin[2]);
-    geometry.boundsMax = float3(mesh.boundsMax[0], mesh.boundsMax[1], mesh.boundsMax[2]);
+    Instance* instance = &frame->scene.instances[min(InstanceID(), frame->scene.instanceCount - 1u)];
+    Mesh* mesh = frame->scene.meshes[min(instance->meshIndex, frame->scene.meshCount - 1u)];
+    geometry.boundsMin = float3(mesh->boundsMin[0], mesh->boundsMin[1], mesh->boundsMin[2]);
+    geometry.boundsMax = float3(mesh->boundsMax[0], mesh->boundsMax[1], mesh->boundsMax[2]);
     geometry.positionDx = differentials.vertex.positionDx;
     geometry.positionDy = differentials.vertex.positionDy;
     geometry.normalDx = differentials.vertex.normalDx;
@@ -219,9 +219,9 @@ void materialClosestHit<M : IMaterial>(inout RealtimeHitPayload payload, float2 
         unpackVertexDifferential(payload.differential));
     const RegularSurface surface = hit.surface;
     const uint materialFlags = frame->materials[surface.materialIndex]->flags;
-    const Instance instance = frame->scene.instances[min(InstanceID(), frame->scene.instanceCount - 1u)];
+    Instance* instance = &frame->scene.instances[min(InstanceID(), frame->scene.instanceCount - 1u)];
     if ((materialFlags & MaterialFlagAnimated) != 0u
-        || (instance.flags & InstanceFlagAnimated) != 0u)
+        || (instance->flags & InstanceFlagAnimated) != 0u)
         InterlockedExchange(frame->beautyAccumulation->animatedHit[frame->accumulationSlot], 1u);
     const surfaceshader shaded = evaluateHit<M>(frame, hit);
     // Unreal's one-sided materials emit nothing from their back.

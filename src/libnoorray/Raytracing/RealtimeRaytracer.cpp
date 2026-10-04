@@ -154,7 +154,6 @@ RealtimeRaytracer::RealtimeRaytracer(noorrhi::Device& device,
     , denoiser(device)
     , upscaler(device)
     , beautyAccumulation(device.buffer<nr::graphics::BeautyAccumulation>(1))
-    , accumulator(device)
     , compositePipeline(device.compute(loadShader(device, compositeSpv)))
     , layeredCompositePipeline(device.compute(loadShader(device, layeredCompositeSpv)))
     , outputAovsPipeline(device.compute(loadShader(device, outputAovsSpv)))
@@ -303,7 +302,6 @@ void RealtimeRaytracer::onLightsUploaded()
 void RealtimeRaytracer::onRenderSettingsApplied(const RenderSettings& settings)
 {
     lightingResolution = settings.lightingResolution;
-    bufferVisualization = settings.bufferVisualization;
     denoiserMode = settings.denoiserMode;
     upscaler.setMode(settings.upscalerMode);
 }
@@ -513,6 +511,8 @@ void RealtimeRaytracer::restartTemporalHistory()
 
 void RealtimeRaytracer::ensureResources()
 {
+    if (common.data.maxBounces > 0u)
+        restir.enableIndirect();
     // Viewport resizes inside the base class's image allocation only move
     // the rectangles; the settings and that allocation decide the layout.
     const ResourceLayout required = requiredLayout();
@@ -594,10 +594,6 @@ FrameContext RealtimeRaytracer::beginFrame()
     view.surfaceStride = targets->layout().lighting.width;
     view.previousLightingWidth = frame.previousLighting.width;
     view.previousLightingHeight = frame.previousLighting.height;
-    // Picking reads the render-resolution cryptomatte directly; the viewport
-    // composite reads the full-output one.
-    view.outputCryptomatte = selectionAovRequired
-        || bufferVisualization == BufferVisualization::Cryptomatte ? 1u : 0u;
 
     hasHistory = true;
     previousLighting = frame.lighting;
@@ -681,11 +677,10 @@ void RealtimeRaytracer::renderImpl()
     device.label("Upscale", [&] {
         upscaler.record(frame, *targets, outputImageHandle(), {imageWidth(), imageHeight()});
     });
-    // Resolve output AOVs and coverage after upscaling. The alpha resolve reads
-    // the render-resolution composite and restores coverage in the final image.
+    // Resolve coverage, output AOVs and the beauty average after upscaling. The
+    // alpha resolve reads the render-resolution composite and restores
+    // coverage in the final image.
     device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
     device.label("Output AOVs", [&] { outputAovsPipeline.launch(outputGroups, root); });
-    device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
-    device.label("Accumulate", [&] { accumulator.record(frameArgs, root); });
     device.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Compute);
 }

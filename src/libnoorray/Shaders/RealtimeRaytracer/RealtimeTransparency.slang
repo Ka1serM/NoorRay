@@ -44,10 +44,10 @@ void absorbSky(inout RealtimeHitPayload payload, float3 direction, float pathRou
         return;
     const RealtimeHit hit = unpackRealtimeHit(payload);
     float3 emission = float3(0.0);
-    Frame frame = realtimeArgs()->frame;
-    if (frame.environment != nullptr && frame.environment[0].capturedScene.a > 0.0)
+    Frame* frame = &realtimeArgs()->frame;
+    if (frame->environment != nullptr && frame->environment[0].capturedScene.a > 0.0)
     {
-        const Environment environment = frame.environment[0];
+        const Environment environment = frame->environment[0];
         emission = max(hit.emission, 0.0);
         if (environment.lowerHemisphere.a > 0.0 && environmentHeight(environment, direction) < 0.0)
             emission = lerp(emission, environment.lowerHemisphere.rgb, environment.lowerHemisphere.a);

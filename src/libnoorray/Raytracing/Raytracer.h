@@ -154,13 +154,13 @@ public:
     // Descriptor-heap handles for the AOV textures the viewport composite pass
     // reads. Heap handles the images already own, so consumers need no
     // descriptor allocation or renderer-specific presentation code. Albedo,
-    // normal and position are empty, with a zero handle, for a renderer that
-    // does not write them (FullOutputAovs::Omitted).
+    // normal, position and cryptomatte are empty, with a zero handle, for a
+    // renderer that does not write them at the output resolution
+    // (FullOutputAovs::Omitted).
     noorrhi::TextureHandle albedoTexture() const { return albedoImage.storage_handle(); }
     noorrhi::TextureHandle normalTexture() const { return normalImage.storage_handle(); }
     noorrhi::TextureHandle positionTexture() const { return positionImage.storage_handle(); }
     noorrhi::TextureHandle cryptomatteTexture() const { return cryptomatteImage.storage_handle(); }
-    noorrhi::GpuPtr<std::uint32_t> gaussianOverdrawPtr() const { return gaussianOverdrawBuffer.ptr(); }
     noorrhi::Device& device() const { return *gpuDevice; }
 
     std::vector<std::byte> readColor();
@@ -223,7 +223,6 @@ private:
     noorrhi::Image<std::byte> normalImage;
     noorrhi::Image<std::byte> positionImage;
     noorrhi::Image<std::byte> cryptomatteImage;
-    noorrhi::Buffer<std::uint32_t> gaussianOverdrawBuffer;
     noorrhi::Buffer<noorrhi::float4> accumulationBuffer;
     noorrhi::TimestampQuery dispatchTimestamp{};
     // One device pointer per scene material, pointing at that material's own
@@ -384,7 +383,6 @@ public:
     noorrhi::TextureHandle normalTexture() const { return resources().normalTexture(); }
     noorrhi::TextureHandle positionTexture() const { return resources().positionTexture(); }
     noorrhi::TextureHandle cryptomatteTexture() const { return resources().cryptomatteTexture(); }
-    noorrhi::GpuPtr<std::uint32_t> gaussianOverdrawPtr() const { return resources().gaussianOverdrawPtr(); }
     noorrhi::Device& device() const { return resources().device(); }
     std::vector<std::byte> readColor() { return resources().readColor(); }
     std::vector<noorrhi::float4> readBeauty() { return resources().readBeauty(); }

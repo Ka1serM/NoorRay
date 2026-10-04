@@ -48,7 +48,6 @@ struct Frame
     GpuPtr(uint) spectralTables;
     GpuPtr(Environment) environment;
     GpuPtr(float4) accumulation;
-    GpuPtr(uint) gaussianOverdraw;
     GpuPtr(BeautyAccumulation) beautyAccumulation;
     uint64_t topLevelAS;
     // Resource-descriptor-heap indices of the output images.

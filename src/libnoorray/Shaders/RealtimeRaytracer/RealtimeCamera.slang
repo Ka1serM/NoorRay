@@ -19,8 +19,8 @@ CameraRay realtimeCameraRay(uint2 pixel)
 // forward axis.
 float3 realtimeRayPoint(CameraRay ray, float viewZ)
 {
-    const RealtimeView view = realtimeArgs()->view;
-    const float start = dot(ray.origin - view.cameraPosition, view.cameraForward);
+    RealtimeView* view = &realtimeArgs()->view;
+    const float start = dot(ray.origin - view->cameraPosition, view->cameraForward);
     return ray.origin + ray.direction
-        * ((viewZ - start) / dot(ray.direction, view.cameraForward));
+        * ((viewZ - start) / dot(ray.direction, view->cameraForward));
 }

@@ -31,13 +31,11 @@ struct ViewportCompositePushConstants
     uint albedoImage;
     uint normalImage;
     uint positionImage;
-    GpuPtr(uint) overdraw;
 
     uint selectedCryptomatteId;
     float exposure;
     int bufferVisualization;
     int tonemappingEnabled;
-    uint overdrawMax;
     // Logical size of the render inside the (possibly larger) images.
     uint width;
     uint height;
@@ -51,6 +49,13 @@ struct ViewportCompositePushConstants
     uint selectionSdfImage;
     // How many frames the field already averages; 0 restarts it.
     uint selectionSampleCount;
+    // The cryptomatte image is at the render resolution, whose pixel p sampled
+    // the scene at p + 0.5 + jitter in render pixels. The composite resamples
+    // it to the output pixels by nearest.
+    float cryptomatteWidth;
+    float cryptomatteHeight;
+    float cryptomatteJitterX;
+    float cryptomatteJitterY;
 };
 
 struct ViewportCompositeRoot

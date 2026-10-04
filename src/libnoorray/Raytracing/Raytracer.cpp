@@ -21,6 +21,7 @@
 #include <type_traits>
 
 #include <glm/geometric.hpp>
+#include <glm/gtc/packing.hpp>
 
 #include "Logging/Log.h"
 #include "Mesh/Assets/Mesh.h"
@@ -304,16 +305,16 @@ RaytracerResources::~RaytracerResources() = default;
 void RaytracerResources::createImages()
 {
     const auto storage = noorrhi::ImageUsage::Storage | noorrhi::ImageUsage::Sampled;
-    // Beauty is the authoritative scene-linear HDR image.  Presentation to an
-    // 8-bit swapchain is a graphics API blit; offline integrations retain all
-    // radiance and alpha values through readBeauty().
+    // Beauty is the scene-linear HDR image, in half floats.  Presentation to an
+    // 8-bit swapchain is a graphics API blit; offline integrations read it
+    // through readBeauty().
     const auto color_usage = exportColorMemory
         ? storage | noorrhi::ImageUsage::ExternalMemory : storage;
     colorImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, color_usage,
-        noorrhi::ImageFormat::Rgba32Float);
-    cryptomatteImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
-        noorrhi::ImageFormat::R32Uint);
+        noorrhi::ImageFormat::Rgba16Float);
     if (fullOutputAovs_ == FullOutputAovs::Written) {
+        cryptomatteImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
+            noorrhi::ImageFormat::R32Uint);
         albedoImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
             noorrhi::ImageFormat::Rgba32Float);
         normalImage = gpuDevice->image<std::byte>(imageWidth_, imageHeight_, storage,
@@ -324,7 +325,6 @@ void RaytracerResources::createImages()
     // Per-pixel buffers are indexed with the logical width as the stride, so
     // any logical size up to the image allocation fits inside them.
     const std::size_t pixelCount = static_cast<std::size_t>(imageWidth_) * imageHeight_;
-    gaussianOverdrawBuffer = gpuDevice->buffer<std::uint32_t>(pixelCount);
     if (allocateAccumulationBuffer)
         accumulationBuffer = gpuDevice->buffer<noorrhi::float4>(pixelCount);
     else
@@ -346,7 +346,6 @@ void RaytracerResources::updateRoot()
     data.normalImage = normalImage.storage_handle().value;
     data.positionImage = positionImage.storage_handle().value;
     data.cryptomatteImage = cryptomatteImage.storage_handle().value;
-    data.gaussianOverdraw = address(gaussianOverdrawBuffer);
     data.lens = lens.ptr().address;
     data.scene = sceneBuffers();
     data.materials = address(materials);
@@ -1096,9 +1095,13 @@ std::vector<T> RaytracerResources::cropToRender(std::vector<T> pixels) const
 
 std::vector<noorrhi::float4> RaytracerResources::readBeauty()
 {
-    std::vector<noorrhi::float4> result(static_cast<std::size_t>(imageWidth_)
-        * imageHeight_);
-    colorImage.download(std::as_writable_bytes(std::span(result)));
+    const std::size_t pixelCount = static_cast<std::size_t>(imageWidth_) * imageHeight_;
+    std::vector<std::uint16_t> halves(pixelCount * 4u);
+    colorImage.download(std::as_writable_bytes(std::span(halves)));
+    std::vector<noorrhi::float4> result(pixelCount);
+    for (std::size_t i = 0; i < pixelCount; ++i)
+        result[i] = {glm::unpackHalf1x16(halves[4u * i]), glm::unpackHalf1x16(halves[4u * i + 1u]),
+            glm::unpackHalf1x16(halves[4u * i + 2u]), glm::unpackHalf1x16(halves[4u * i + 3u])};
     return cropToRender(std::move(result));
 }
 

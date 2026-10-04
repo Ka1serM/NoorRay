@@ -375,12 +375,6 @@ bool NoorRaySession::prepareViewport()
     if (!raytracer_)
         return false;
 
-    // The viewport composite computes selection outlines from the full-output
-    // cryptomatte image. Realtime picking reads the render-resolution target
-    // directly, so keep this AOV refreshed even while showing beauty.
-    if (auto* realtime = dynamic_cast<RealtimeRaytracer*>(raytracer_.get()))
-        realtime->setSelectionAovRequired(true);
-
     // Outside any recorded frame: this may wait for the device and replace the
     // renderer's per-frame images, and it must happen before the trace size
     // below is read.
@@ -393,8 +387,9 @@ bool NoorRaySession::prepareViewport()
     auto* realtime = dynamic_cast<RealtimeRaytracer*>(raytracer_.get());
     const ViewportInputs inputs{
         raytracer_->outputTexture(), raytracer_->albedoTexture(),
-        raytracer_->normalTexture(), raytracer_->cryptomatteTexture(),
-        raytracer_->positionTexture(), raytracer_->gaussianOverdrawPtr(),
+        raytracer_->normalTexture(),
+        realtime ? realtime->viewportCryptomatteTexture() : raytracer_->cryptomatteTexture(),
+        raytracer_->positionTexture(),
         realtime ? realtime->viewportDepthTexture() : noorrhi::TextureHandle{},
         realtime ? realtime->viewportDepthJitter() : glm::vec2{}};
     if (!viewport_)
@@ -425,8 +420,7 @@ void NoorRaySession::renderViewport(const glm::mat4& viewProjection,
     const bool restartOutline = outlineHistoryRestarted_;
     outlineHistoryRestarted_ = false;
     viewport_->dispatch(selectedCryptomatteId, restartOutline, viewProjection, 0.0f,
-        static_cast<int>(settings.bufferVisualization),
-        settings.gaussianProxyOverdrawMax, settings.tonemappingEnabled,
+        static_cast<int>(settings.bufferVisualization), settings.tonemappingEnabled,
         showBillboards, scene_.getActiveObjectHandle());
     lastViewport_ = device_->signal();
 }
@@ -446,8 +440,8 @@ void NoorRaySession::renderViewport(const glm::mat4& viewProjection, const Viewp
     const bool restartOutline = outlineHistoryRestarted_;
     outlineHistoryRestarted_ = false;
     viewport_->dispatch(selectedCryptomatteId, restartOutline, viewProjection, 0.0f,
-        static_cast<int>(settings.bufferVisualization), settings.gaussianProxyOverdrawMax,
-        settings.tonemappingEnabled, showBillboards, scene_.getActiveObjectHandle(), output);
+        static_cast<int>(settings.bufferVisualization), settings.tonemappingEnabled,
+        showBillboards, scene_.getActiveObjectHandle(), output);
     lastViewport_ = device_->signal();
 }
 

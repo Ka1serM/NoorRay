@@ -199,13 +199,21 @@ RealtimeSurface packRealtimeSurface(RAB_Surface surface)
     record.geometricNormal = RTXDI_EncodeNormalizedVectorToSnorm2x16(surface.geoNormal);
     record.view = RTXDI_EncodeNormalizedVectorToSnorm2x16(surface.viewDir);
     record.closure = surface.closure;
-    record.differential = surface.differential;
     record.lightingChannels = surface.lightingChannels;
     return record;
 }
 
+// Records `surface` and, while paths leave surfaces, its differential.
+void storeRealtimeSurface(RealtimeSurface* surfaces, RealtimeSurfaceDifferential* differentials,
+    uint index, RAB_Surface surface)
+{
+    surfaces[index] = packRealtimeSurface(surface);
+    if (realtimeArgs()->frame.maxBounces > 0u)
+        differentials[index].words = surface.differential;
+}
+
 // G-buffer surfaces are primary surfaces, whose sampler picks lobes with
-// realtimePrimaryDiffuseProbability().
+// realtimePrimaryDiffuseProbability(). Their differential is the caller's.
 RAB_Surface unpackRealtimeSurface(RealtimeSurface record)
 {
     RAB_Surface surface;
@@ -215,7 +223,9 @@ RAB_Surface unpackRealtimeSurface(RealtimeSurface record)
     surface.geoNormal = RTXDI_DecodeNormalizedVectorFromSnorm2x16(record.geometricNormal);
     surface.viewDir = RTXDI_DecodeNormalizedVectorFromSnorm2x16(record.view);
     surface.closure = record.closure;
-    surface.differential = record.differential;
+    [unroll]
+    for (uint i = 0u; i < 9u; ++i)
+        surface.differential[i] = 0u;
     surface.pathRoughness = 0.0;
     surface.lightingChannels = record.lightingChannels;
     const RAB_Material material = RAB_GetMaterial(surface);
@@ -251,9 +261,9 @@ uint2 realtimeLightingSize()
 
 uint2 realtimeLightingSize(bool prevFrame)
 {
-    const RealtimeView view = realtimeArgs()->view;
-    return prevFrame ? uint2(view.previousLightingWidth, view.previousLightingHeight)
-        : uint2(view.lightingWidth, view.lightingHeight);
+    RealtimeView* view = &realtimeArgs()->view;
+    return prevFrame ? uint2(view->previousLightingWidth, view->previousLightingHeight)
+        : uint2(view->lightingWidth, view->lightingHeight);
 }
 
 bool realtimePixelInView(int2 pixel)
@@ -274,7 +284,15 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool prevFrame)
     if (prevFrame && lighting.previousSurfacesValid == 0u)
         return RAB_EmptySurface();
     RealtimeSurface* surfaces = prevFrame ? lighting.previousSurfaces : lighting.surfaces;
-    return unpackRealtimeSurface(surfaces[realtimeSurfaceIndex(uint2(pixelPosition))]);
+    const uint index = realtimeSurfaceIndex(uint2(pixelPosition));
+    RAB_Surface surface = unpackRealtimeSurface(surfaces[index]);
+    if (realtimeArgs()->frame.maxBounces > 0u)
+    {
+        RealtimeSurfaceDifferential* differentials = prevFrame
+            ? lighting.previousDifferentials : lighting.differentials;
+        surface.differential = differentials[index].words;
+    }
+    return surface;
 }
 
 RAB_Material RAB_GetGBufferMaterial(int2 pixelPosition, bool prevFrame)

@@ -26,10 +26,16 @@ struct RealtimeSurface
     uint view;
     // The material's closure, packed as in RealtimeHitPayload.
     uint closure[5];
-    // The surface's ray differential, packed as in RealtimeHitPayload.
-    uint differential[9];
     // The Unreal lighting channels of the surface's instance.
     uint lightingChannels;
+};
+
+// The surface's ray differential, packed as in RealtimeHitPayload. Only the
+// paths that leave the surface read it, so it lives apart from the surfaces
+// every resampling pass loads, and exists only while there are bounces.
+struct RealtimeSurfaceDifferential
+{
+    uint words[9];
 };
 
 // Vose alias table over the local lights, weighted by power, from which the
@@ -57,6 +63,11 @@ struct RealtimeLighting
     // This frame's surfaces of the translucent layer set, which the lighting
     // pass records alongside `surfaces`.
     GpuPtr(RealtimeSurface) layerSurfaces;
+    // The differentials of `surfaces`, `previousSurfaces` and `layerSurfaces`,
+    // null while there are no bounces.
+    GpuPtr(RealtimeSurfaceDifferential) differentials;
+    GpuPtr(RealtimeSurfaceDifferential) previousDifferentials;
+    GpuPtr(RealtimeSurfaceDifferential) layerDifferentials;
     GpuPtr(RealtimeLightAlias) localLightAlias;
 
     RTXDI_LightBufferParameters lightBufferParams;

@@ -38,9 +38,6 @@ struct RealtimeView
     float lightingScale;
     uint lightingWidth;
     uint lightingHeight;
-    // Nonzero when RealtimeOutputAovs refreshes the full-output cryptomatte,
-    // the only first-hit AOV the realtime renderer stores.
-    uint outputCryptomatte;
     // Row pitch of the per-lighting-pixel buffers: their allocated width,
     // which stays fixed while the rectangle inside it changes size, so this
     // and the previous frame index them alike.

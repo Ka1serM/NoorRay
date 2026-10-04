@@ -291,7 +291,7 @@ void Upscaler::record(const FrameContext& frame, const RenderTargets& targets,
     const FfxResource motion = registered({targets.motion(), allocation,
         VK_FORMAT_R16G16_SFLOAT}, L"FSR3_InputMotionVectors");
     const FfxResource upscaled = registered({output, outputAllocation,
-        VK_FORMAT_R32G32B32A32_SFLOAT}, L"FSR3_Output");
+        VK_FORMAT_R16G16B16A16_SFLOAT}, L"FSR3_Output");
     FfxResourceDescription noneDescription{};
     noneDescription.type = FFX_RESOURCE_TYPE_TEXTURE2D;
     const FfxResource none = ffxGetResourceVK(nullptr, noneDescription, L"None",

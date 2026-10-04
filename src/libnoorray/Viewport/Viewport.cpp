@@ -78,6 +78,8 @@ void Viewport::createOutputResources(const uint32_t width, const uint32_t height
         static_cast<std::size_t>(width) * height);
     volumeIdBuffer = gpuDevice.buffer<std::uint32_t>(
         static_cast<std::size_t>(width) * height);
+    lightIdsClear_ = false;
+    volumeIdsClear_ = false;
 }
 
 void Viewport::createBillboardPipeline()
@@ -365,7 +367,6 @@ void Viewport::dispatch(
     const glm::mat4& viewProjection,
     const float exposure,
     const int bufferVisualization,
-    const int gaussianOverdrawMax,
     const bool tonemappingEnabled,
     const bool showBillboards,
     const SceneObjectHandle selectedObject, const ViewportOutput suppliedOutput)
@@ -401,16 +402,16 @@ void Viewport::dispatch(
         inputs.albedo.value,
         inputs.normal.value,
         inputs.position.value,
-        inputs.overdraw.address,
         selectedCryptomatteId, exposure, shownVisualization, tonemappingEnabled ? 1 : 0,
-        static_cast<uint32_t>(std::max(gaussianOverdrawMax, 1)),
         logicalWidth, logicalHeight,
         // Both are the logical size until a renderer reports otherwise, which
         // leaves the ratio at 1 for every non-upscaling path.
         traceWidth_ > 0 ? static_cast<float>(logicalWidth) / static_cast<float>(traceWidth_)
                         : 1.0f,
         selectionSdfImage.storage_handle().value,
-        outlineSampleCount_};
+        outlineSampleCount_,
+        static_cast<float>(traceWidth_), static_cast<float>(traceHeight_),
+        inputs.depthJitter.x, inputs.depthJitter.y};
     if (selectedCryptomatteId != ~0u)
         ++outlineSampleCount_;
     // One texel past the logical edge carries a copy of the edge; see the shader.
@@ -424,29 +425,35 @@ void Viewport::dispatch(
         pipeline.launch({groupCountX, groupCountY, 1}, arguments);
     });
 
-    // The light-id buffer is reset every frame, so hidden icons are never
-    // pickable and nothing stale survives a camera move.
+    // The id buffers are reset every frame something draws into them, so hidden
+    // icons are never pickable and nothing stale survives a camera move. Once
+    // clear they stay so until something draws again.
+    const bool drawsVolumes = showBillboards && !volumeDraws.empty();
+    const bool drawsBillboards = showBillboards && billboardCount > 0;
     nr::graphics::ViewportBillboardPushConstants clearArguments{};
     clearArguments.screenSize = glm::vec2(static_cast<float>(logicalWidth),
         static_cast<float>(logicalHeight));
-    clearArguments.lightIds = lightIdBuffer.ptr().address;
     clearArguments.lightIdStride = output.width;
-    gpuDevice.label("Viewport Light ID Clear", [&] {
-        lightIdClearPipeline.launch({(logicalWidth + ViewportGroupSize - 1) / ViewportGroupSize,
-            (logicalHeight + ViewportGroupSize - 1) / ViewportGroupSize, 1}, clearArguments);
-    });
-    clearArguments.lightIds = volumeIdBuffer.ptr().address;
-    gpuDevice.label("Viewport Volume ID Clear", [&] {
-        lightIdClearPipeline.launch({(logicalWidth + ViewportGroupSize - 1) / ViewportGroupSize,
-            (logicalHeight + ViewportGroupSize - 1) / ViewportGroupSize, 1}, clearArguments);
-    });
+    const auto clearIds = [&](const char* name, const noorrhi::Buffer<std::uint32_t>& ids,
+                              const bool draws, bool& clear) {
+        if (!draws && clear)
+            return;
+        clearArguments.lightIds = ids.ptr().address;
+        gpuDevice.label(name, [&] {
+            lightIdClearPipeline.launch({(logicalWidth + ViewportGroupSize - 1) / ViewportGroupSize,
+                (logicalHeight + ViewportGroupSize - 1) / ViewportGroupSize, 1}, clearArguments);
+        });
+        clear = !draws;
+    };
+    clearIds("Viewport Light ID Clear", lightIdBuffer, drawsBillboards, lightIdsClear_);
+    clearIds("Viewport Volume ID Clear", volumeIdBuffer, drawsVolumes, volumeIdsClear_);
     gpuDevice.barrier(noorrhi::Stage::Compute, noorrhi::Stage::Fragment);
 
-    if (showBillboards && !volumeDraws.empty())
+    if (drawsVolumes)
         gpuDevice.label("Viewport Volume Outlines", [&] {
             drawVolumes(viewProjection, selectedObject, output);
         });
-    if (showBillboards && billboardCount > 0)
+    if (drawsBillboards)
         gpuDevice.label("Viewport Billboards", [&] {
             drawBillboards(viewProjection, selectedObject, output);
         });

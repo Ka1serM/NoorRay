@@ -5,9 +5,9 @@ static const uint RealtimeCompositeGroupSize = 8u;
 
 // Upsampling rejects lighting samples whose view Z differs from the render
 // pixel's by more than this fraction of it (widened at grazing angles, as
-// NRD's re-jittering does), or whose normal turns away.
+// NRD's re-jittering does), or whose normal turns away: the cosine to the
+// eighth power.
 static const float UpsampleDepthSigma = 0.03;
-static const float UpsampleNormalPower = 8.0;
 // Weight of the depth-closest sample regardless of the others, so a pixel no
 // sample matches fades into it instead of switching to it.
 static const float UpsampleFallbackWeight = 1.0e-3;
@@ -86,8 +86,11 @@ LightingSample upsampleLighting(uint2 pixel, float viewZ, float3 normal, float n
             }
             const float3 sourceNormal =
                 NRD_FrontEnd_UnpackNormalAndRoughness(lightingNormalRoughness[source]).xyz;
+            const float normalAlignment = saturate(dot(sourceNormal, normal));
+            const float normalAlignment2 = normalAlignment * normalAlignment;
+            const float normalAlignment4 = normalAlignment2 * normalAlignment2;
             const float weight = tent.x * tent.y * exp(-depthError / depthTolerance)
-                * pow(saturate(dot(sourceNormal, normal)), UpsampleNormalPower);
+                * normalAlignment4 * normalAlignment4;
             if (!(weight > 0.0))
                 continue;
             weightSum += weight;

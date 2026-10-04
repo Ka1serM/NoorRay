@@ -573,7 +573,6 @@ set(NR_SHADER_OUT "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv" "${NR_SHADER_BU
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeCompositeLayered.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeOutputAovs.spv"
     "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimePick.spv"
-    "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv"
     "${NR_SHADER_BUILD_DIR}/Mesh/SplineMesh.spv"
     "${NR_SHADER_BUILD_DIR}/Mesh/LandscapeMesh.spv")
 set(NR_SHADER_VALIDATE_COMMANDS)
@@ -681,13 +680,6 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         -capability spvDescriptorHeapEXT -emit-spirv-directly
         -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimePick.spv"
-    COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/Accumulate.slang"
-        ${NR_RTXDI_SHADER_FLAGS}
-        -entry main -stage compute -target spirv
-        -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
-        -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/Accumulate.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Mesh/SplineMesh.slang"
         -entry main -stage compute -target spirv
         -profile spirv_1_5
@@ -754,6 +746,7 @@ nr_rtxdi_pass(PRESAMPLE_LIGHTS RtxdiPresampleLights compute)
 nr_rtxdi_pass(PRESAMPLE_REGIR RtxdiPresampleReGIR compute)
 nr_rtxdi_pass(PRESAMPLE_ENVIRONMENT RtxdiPresampleEnvironment compute)
 nr_rtxdi_pass(INITIAL RtxdiInitial raygeneration)
+nr_rtxdi_pass(PT_INITIAL RtxdiPTInitial raygeneration)
 nr_rtxdi_pass(DI_TEMPORAL RtxdiDITemporal compute)
 nr_rtxdi_pass(DI_BOILING RtxdiDIBoiling compute)
 nr_rtxdi_pass(DI_SPATIAL RtxdiDISpatial compute)

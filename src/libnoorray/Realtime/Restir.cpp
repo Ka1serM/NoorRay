@@ -21,6 +21,7 @@ constexpr const char* presampleLightsSpv = "RealtimeRaytracer/RtxdiPresampleLigh
 constexpr const char* presampleReGIRSpv = "RealtimeRaytracer/RtxdiPresampleReGIR.spv";
 constexpr const char* presampleEnvironmentSpv = "RealtimeRaytracer/RtxdiPresampleEnvironment.spv";
 constexpr const char* initialSpv = "RealtimeRaytracer/RtxdiInitial.spv";
+constexpr const char* ptInitialSpv = "RealtimeRaytracer/RtxdiPTInitial.spv";
 constexpr const char* diTemporalSpv = "RealtimeRaytracer/RtxdiDITemporal.spv";
 constexpr const char* diBoilingSpv = "RealtimeRaytracer/RtxdiDIBoiling.spv";
 constexpr const char* diSpatialSpv = "RealtimeRaytracer/RtxdiDISpatial.spv";
@@ -56,6 +57,7 @@ Restir::Restir(noorrhi::Device& device)
     , presampleReGIRPipeline_(device.compute(loadShader(device, presampleReGIRSpv)))
     , presampleEnvironmentPipeline_(device.compute(loadShader(device, presampleEnvironmentSpv)))
     , initialRaygen_(loadShader(device, initialSpv))
+    , ptInitialRaygen_(loadShader(device, ptInitialSpv))
     , diTemporalPipeline_(device.compute(loadShader(device, diTemporalSpv)))
     , diBoilingPipeline_(device.compute(loadShader(device, diBoilingSpv)))
     , diSpatialPipeline_(device.compute(loadShader(device, diSpatialSpv)))
@@ -125,30 +127,52 @@ void Restir::resize(const Extent lighting, const bool layers)
         context_->GetRISBufferSegmentAllocator().GetTotalSizeInElements(), 1u));
     const std::size_t pixels =
         std::max<std::size_t>(std::size_t(lighting.width) * lighting.height, 1u);
-    opaque_ = surfaceSet(pixels);
+    pixels_ = pixels;
+    opaque_ = surfaceSet();
     layers_.reset();
     if (layers)
-        layers_ = surfaceSet(pixels);
+        layers_ = surfaceSet();
     frameIndex_ = 0;
     surfaceParity_ = 0;
     historyValid_ = false;
 }
 
-Restir::SurfaceSet Restir::surfaceSet(const std::size_t pixels) const
+Restir::SurfaceSet Restir::surfaceSet() const
 {
     constexpr std::size_t diReservoirWords = sizeof(RTXDI_PackedDIReservoir) / 4u;
-    constexpr std::size_t ptReservoirWords = sizeof(RTXDI_PackedPTReservoir) / 4u;
     constexpr std::size_t surfaceWords = sizeof(nr::graphics::RealtimeSurface) / 4u;
     SurfaceSet set;
     set.diReservoirs = device_.buffer<std::uint32_t>(diReservoirWords
         * context_->GetReSTIRDIContext().GetReservoirBufferParameters().reservoirArrayPitch
         * rtxdi::c_NumReSTIRDIReservoirBuffers);
+    for (auto& surfaces : set.surfaces)
+        surfaces = device_.buffer<std::uint32_t>(surfaceWords * pixels_);
+    if (indirect_)
+        allocateIndirect(set);
+    return set;
+}
+
+void Restir::allocateIndirect(SurfaceSet& set) const
+{
+    constexpr std::size_t ptReservoirWords = sizeof(RTXDI_PackedPTReservoir) / 4u;
+    constexpr std::size_t differentialWords = sizeof(nr::graphics::RealtimeSurfaceDifferential) / 4u;
     set.ptReservoirs = device_.buffer<std::uint32_t>(ptReservoirWords
         * ptContext_->GetReservoirBufferParameters().reservoirArrayPitch
         * rtxdi::c_NumReSTIRPTReservoirBuffers);
-    for (auto& surfaces : set.surfaces)
-        surfaces = device_.buffer<std::uint32_t>(surfaceWords * pixels);
-    return set;
+    for (auto& differentials : set.differentials)
+        differentials = device_.buffer<std::uint32_t>(differentialWords * pixels_);
+}
+
+void Restir::enableIndirect()
+{
+    if (indirect_)
+        return;
+    indirect_ = true;
+    if (!context_)
+        return;
+    allocateIndirect(opaque_);
+    if (layers_)
+        allocateIndirect(*layers_);
 }
 
 void Restir::uploadLights(const std::span<const nr::graphics::PointLight> points,
@@ -218,7 +242,12 @@ void Restir::uploadLights(const std::span<const nr::graphics::PointLight> points
     localLightCount_ = count;
     infiniteLightCount_ = static_cast<uint32_t>(directionals.size());
     lightExtent_ = count != 0 ? std::max(glm::length(upper - lower), 1.0e-3f) : 1.0f;
-    historyValid_ = false;
+    const std::array<std::size_t, 4> counts{points.size(), spots.size(), rects.size(),
+        directionals.size()};
+    if (counts != lightCounts_) {
+        lightCounts_ = counts;
+        historyValid_ = false;
+    }
 }
 
 void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args)
@@ -269,6 +298,9 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
     lighting.surfaces = opaque_.surfaces[surfaceParity_].ptr().address;
     lighting.previousSurfaces = opaque_.surfaces[surfaceParity_ ^ 1u].ptr().address;
     lighting.layerSurfaces = layers_ ? layers_->surfaces[surfaceParity_].ptr().address : 0;
+    lighting.differentials = address(opaque_.differentials[surfaceParity_]);
+    lighting.previousDifferentials = address(opaque_.differentials[surfaceParity_ ^ 1u]);
+    lighting.layerDifferentials = layers_ ? address(layers_->differentials[surfaceParity_]) : 0;
     lighting.localLightAlias = lightAlias_.ptr().address;
 
     lighting.lightBufferParams = context_->GetLightBufferParameters();
@@ -367,6 +399,8 @@ nr::graphics::RealtimeLighting Restir::layerLighting(
     result.ptReservoirs = address(layers.ptReservoirs);
     result.surfaces = layers.surfaces[surfaceParity_].ptr().address;
     result.previousSurfaces = layers.surfaces[surfaceParity_ ^ 1u].ptr().address;
+    result.differentials = address(layers.differentials[surfaceParity_]);
+    result.previousDifferentials = address(layers.differentials[surfaceParity_ ^ 1u]);
     return result;
 }
 
@@ -406,7 +440,8 @@ void Restir::presample(const nr::graphics::RealtimeArgs& args,
 
 std::vector<noorrhi::Shader> Restir::raygens() const
 {
-    return {initialRaygen_, ptTemporalRaygen_, ptSpatialRaygen_, shadeRaygen_};
+    return {initialRaygen_, ptInitialRaygen_, ptTemporalRaygen_, ptSpatialRaygen_,
+        shadeRaygen_};
 }
 
 void Restir::resample(const nr::graphics::RealtimeArgs& args,
@@ -446,6 +481,8 @@ void Restir::resample(const nr::graphics::RealtimeArgs& args,
 
     barrier({Stage::RayTracing}, {Stage::RayTracing});
     trace("Initial Samples", initialRaygen_);
+    if (indirect)
+        trace("PT Initial Samples", ptInitialRaygen_);
     barrier({Stage::RayTracing}, {Stage::Compute, Stage::RayTracing});
     launch("DI Temporal", diTemporalPipeline_, pixels);
     if (indirect)

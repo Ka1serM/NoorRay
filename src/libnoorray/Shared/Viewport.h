@@ -24,7 +24,7 @@ struct ViewportBillboard
 
 struct ViewportCompositePushConstants
 {
-    // Resource-descriptor-heap indices.
+    // Bindless texture slots.
     uint colorImage;
     uint outputImage;
     uint idImage;
@@ -87,8 +87,8 @@ struct ViewportBillboardPushConstants
     float4 cameraPosition;
     // x/y: fade in from the camera; z/w: fade out at the local edit radius.
     float4 distanceFade;
-    // Resource-descriptor-heap index of each icon's texture, by icon id, and
-    // the sampler-heap index they are read with.
+    // Bindless texture slot of each icon's texture, by icon id, and the
+    // sampler slot they are read with.
     GpuPtr(uint) iconTextures;
     uint iconSampler;
 };

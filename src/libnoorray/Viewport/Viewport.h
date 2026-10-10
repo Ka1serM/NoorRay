@@ -28,7 +28,7 @@ using ViewportBillboard = nr::graphics::ViewportBillboard;
 // Fixed 80 cm square; the icon fills about three quarters of its texture.
 constexpr float ViewportBillboardHalfSize = 40.0f;
 
-// The AOV images the composite pass reads. These are descriptor-heap handles of
+// The AOV images the composite pass reads. These are bindless handles of
 // images the raytracer created through noorrhi::Device; nothing here is a
 // descriptor or an index.
 struct ViewportInputs
@@ -162,7 +162,7 @@ private:
     noorrhi::Shader billboardVertexShader;
     noorrhi::Shader billboardFragmentShader;
     noorrhi::GraphicsPipeline billboardPipeline;
-    // One distance-field texture per icon, and the heap indices the shader reads.
+    // One distance-field texture per icon, and the bindless slots the shader reads.
     noorrhi::Sampler billboardSampler;
     std::vector<noorrhi::Image<std::byte>> billboardTextures;
     noorrhi::Buffer<std::uint32_t> billboardTextureHandles;

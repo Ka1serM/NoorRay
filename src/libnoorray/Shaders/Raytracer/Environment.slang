@@ -1,5 +1,7 @@
 #pragma once
 
+import noorrhi;
+
 #include "../../Shared/Environment.h"
 
 // Environment lighting for the graphics API path-tracing path.
@@ -7,7 +9,7 @@
 // A direct port of Environment/Environment.h. The mapping, radiance and
 // PDF must agree with the CPU implementation, so the polynomial constants and
 // branch structure are carried over verbatim. Textures are reached through
-// resource-descriptor-heap indices, and slot 0 is never written, so absence is
+// bindless texture slots, and slot 0 is never written, so absence is
 // a zero index.
 
 static const float EnvironmentPi = 3.14159265358979323846;

@@ -214,6 +214,12 @@ set(NOORRHI_BUILD_EXAMPLES ${NR_BUILD_EXAMPLES} CACHE BOOL "" FORCE)
 set(NOORRHI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/NoorRHI)
 
+# Every NoorRay shader is built for NoorRHI's bindless set; the rest matches
+# the C++ side's row-major, C-layout records.
+set(NR_SLANG_FLAGS ${NOORRHI_SLANG_FLAGS}
+    -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081)
+set(NR_SPIRV_VAL_FLAGS --target-env vulkan1.3 --scalar-block-layout)
+
 # ---------------------------------------------------------------------------
 # NRD (NVIDIA Real-time Denoisers) for the realtime renderer
 # ---------------------------------------------------------------------------
@@ -541,7 +547,8 @@ add_custom_target(NoorRayFsrShaders DEPENDS ${NR_FSR_SHADER_OUT})
 target_link_libraries(NoorRayFsr PRIVATE NoorRayShaderResources)
 file(GLOB NR_SHARED_SHADER_ABI CONFIGURE_DEPENDS
     "${NR_CORE_DIR}/Shared/*.h")
-set(NR_SHADER_SRC "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
+set(NR_SHADER_SRC "${NOORRHI_SHADER_DIR}/noorrhi.slang"
+    "${NR_SHADER_DIR}/Viewport/Viewport.slang" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
     "${NR_SHADER_DIR}/Viewport/ViewportVolumes.slang"
     "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
     "${NR_SHADER_DIR}/Raytracer/RaytracingAbi.slang"
@@ -579,8 +586,7 @@ set(NR_SHADER_VALIDATE_COMMANDS)
 if(NR_SPIRV_VAL_EXECUTABLE)
     foreach(_spv IN LISTS NR_SHADER_OUT)
         list(APPEND NR_SHADER_VALIDATE_COMMANDS
-            COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.4
-                --scalar-block-layout "${_spv}")
+            COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" ${NR_SPIRV_VAL_FLAGS} "${_spv}")
     endforeach()
 endif()
 add_custom_command(OUTPUT ${NR_SHADER_OUT}
@@ -589,108 +595,92 @@ add_custom_command(OUTPUT ${NR_SHADER_OUT}
         "${NR_SHADER_BUILD_DIR}/Mesh"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/Viewport.slang"
         -entry main -target spirv -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/Viewport/Viewport.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/ViewportBillboards.slang"
         -entry vertMain -stage vertex -entry fragMain -stage fragment
         -entry lightIdClear -stage compute -entry lightIdStamp -stage compute
         -target spirv -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/Viewport/ViewportBillboards.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Viewport/ViewportVolumes.slang"
         -entry vertMain -stage vertex -entry fragMain -stage fragment
         -target spirv -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/Viewport/ViewportVolumes.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage raygeneration -target spirv
         -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracer.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_LAYERS=1
         -entry main -stage raygeneration -target spirv
         -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeRaytracerLayered.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_GBUFFER=1
         -entry main -stage raygeneration -target spirv
         -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeGBuffer.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeRaytracer.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_GBUFFER=1 -DREALTIME_LAYERS=1
         -entry main -stage raygeneration -target spirv
         -profile spirv_1_5+spvRayTracingKHR+spvRayQueryKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeGBufferLayered.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeMiss.slang"
         -entry main -stage miss -target spirv
         -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeMiss.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeShadowMiss.slang"
         -entry main -stage miss -target spirv
         -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeShadowMiss.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/DefaultMaterialHit.slang"
         -entry main -stage closesthit -entry anyHit -stage anyhit
         -entry shadowAnyHit -stage anyhit -target spirv
         -profile spirv_1_5+spvRayTracingKHR
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/DefaultMaterialHit.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeComposite.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage compute -target spirv
         -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeComposite.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeComposite.slang"
         ${NR_NRD_SHADER_FLAGS} ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_LAYERED=1
         -entry main -stage compute -target spirv
         -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeCompositeLayered.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeOutputAovs.slang"
         ${NR_RTXDI_SHADER_FLAGS}
         -entry main -stage compute -target spirv
         -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimeOutputAovs.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/RealtimeRaytracer/RealtimeOutputAovs.slang"
         ${NR_RTXDI_SHADER_FLAGS} -DREALTIME_PICK=1
         -entry main -stage compute -target spirv
         -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/RealtimePick.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Mesh/SplineMesh.slang"
         -entry main -stage compute -target spirv
         -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/Mesh/SplineMesh.spv"
     COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Mesh/LandscapeMesh.slang"
         -entry main -stage compute -target spirv
         -profile spirv_1_5
-        -capability spvDescriptorHeapEXT -emit-spirv-directly
-        -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+        ${NR_SLANG_FLAGS}
         -o "${NR_SHADER_BUILD_DIR}/Mesh/LandscapeMesh.spv"
     ${NR_SHADER_VALIDATE_COMMANDS}
     DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
@@ -724,8 +714,7 @@ function(nr_rtxdi_pass pass output stage)
     set(spv "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer/${output}.spv")
     set(validate)
     if(NR_SPIRV_VAL_EXECUTABLE)
-        set(validate COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.4
-            --scalar-block-layout "${spv}")
+        set(validate COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" ${NR_SPIRV_VAL_FLAGS} "${spv}")
     endif()
     add_custom_command(OUTPUT "${spv}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${NR_SHADER_BUILD_DIR}/RealtimeRaytracer"
@@ -733,8 +722,7 @@ function(nr_rtxdi_pass pass output stage)
             ${pt_flags} ${NR_RTXDI_SHADER_FLAGS} ${NR_NRD_SHADER_FLAGS}
             -DRTXDI_PASS_${pass}=1
             -entry main -stage ${stage} -target spirv -profile ${profile}
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${spv}"
         ${validate}
         DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI} ${NR_RTXDI_HEADERS} ${pt_depends}
@@ -781,8 +769,7 @@ if(NR_BUILD_SPECTRAL)
     if(NR_SPIRV_VAL_EXECUTABLE)
         foreach(_spv IN LISTS NR_SPECTRAL_SHADER_OUT)
             list(APPEND NR_SPECTRAL_SHADER_VALIDATE_COMMANDS
-                COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.4
-                    --scalar-block-layout "${_spv}")
+                COMMAND "${NR_SPIRV_VAL_EXECUTABLE}" ${NR_SPIRV_VAL_FLAGS} "${_spv}")
         endforeach()
     endif()
     add_custom_command(OUTPUT ${NR_SPECTRAL_SHADER_OUT}
@@ -790,44 +777,37 @@ if(NR_BUILD_SPECTRAL)
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/Raytracer.slang"
             -entry main -stage raygeneration -target spirv
             -profile spirv_1_5+spvRayTracingKHR
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/Raytracer.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingMiss.slang"
             -entry main -stage miss -target spirv
             -profile spirv_1_5+spvRayTracingKHR
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingMiss.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/RaytracingHit.slang"
             -entry main -stage closesthit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/RaytracingHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/EmissionHit.slang"
             -entry main -stage closesthit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/EmissionHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/OpacityAnyHit.slang"
             -entry main -stage anyhit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/OpacityAnyHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianAnyHit.slang"
             -entry main -stage anyhit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianAnyHit.spv"
         COMMAND "${NR_SLANGC_EXECUTABLE}" "${NR_SHADER_DIR}/Raytracer/GaussianHit.slang"
             -entry main -stage closesthit -target spirv
             -profile spirv_1_5+spvRayTracingKHR
-            -capability spvDescriptorHeapEXT -emit-spirv-directly
-            -matrix-layout-row-major -fvk-use-entrypoint-name -fvk-use-c-layout -Wno-30081
+            ${NR_SLANG_FLAGS}
             -o "${NR_SHADER_BUILD_DIR}/Raytracer/GaussianHit.spv"
         ${NR_SPECTRAL_SHADER_VALIDATE_COMMANDS}
         DEPENDS ${NR_SHADER_SRC} ${NR_SHARED_SHADER_ABI}
@@ -844,6 +824,8 @@ cmrc_add_resource_library(NoorRayShaderResources NAMESPACE noorray_shaders
     "${NR_MATERIAL_HIT_SOURCE}")
 cmrc_add_resources(NoorRayShaderResources WHENCE "${NR_SHADER_DIR}"
     "${NR_SHADER_DIR}/RealtimeRaytracer/MaterialInterface.slang")
+cmrc_add_resources(NoorRayShaderResources WHENCE "${NOORRHI_SHADER_DIR}"
+    "${NOORRHI_SHADER_DIR}/noorrhi.slang")
 # The viewport's billboard textures, generated by tools/billboards.
 file(GLOB NR_BILLBOARD_TEXTURES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/billboards/*.msdf")
 cmrc_add_resources(NoorRayShaderResources WHENCE "${PROJECT_SOURCE_DIR}/assets"

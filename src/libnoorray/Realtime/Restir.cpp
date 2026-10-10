@@ -1,4 +1,6 @@
 #include "Realtime/Restir.h"
+#include "Logging/Log.h" // DIAG
+#include <cstdlib> // DIAG
 
 #include <algorithm>
 #include <cmath>
@@ -247,6 +249,7 @@ void Restir::uploadLights(const std::span<const nr::graphics::PointLight> points
     if (counts != lightCounts_) {
         lightCounts_ = counts;
         historyValid_ = false;
+        NR_LOG_INFO("DIAG restir light counts changed"); // DIAG
     }
 }
 
@@ -384,6 +387,9 @@ void Restir::prepare(const FrameContext& frame, nr::graphics::RealtimeArgs& args
     const bool indirect = args.frame.maxBounces > 0u;
     lighting.previousSurfacesValid =
         historyValid_ && !frame.resetHistory && (previousFrameIndirect_ || !indirect) ? 1u : 0u;
+    if (std::getenv("UUMAP_DIAG_NOTEMPORAL")) lighting.previousSurfacesValid = 0u; // DIAG
+    else if (lighting.previousSurfacesValid == 0u) // DIAG
+        NR_LOG_INFO("DIAG restir history off: historyValid=" << historyValid_ << " resetHistory=" << frame.resetHistory << " indirectStarted=" << (indirect && !previousFrameIndirect_) << " frame=" << frameIndex_); // DIAG
     previousFrameIndirect_ = indirect;
     lighting.reservoirBlockRowPitch =
         lighting.restirDI.reservoirBufferParams.reservoirBlockRowPitch;

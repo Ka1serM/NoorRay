@@ -1,3 +1,5 @@
+import noorrhi;
+
 #include "RealtimeCamera.slang"
 
 static const uint RealtimeOutputAovsGroupSize = 8u;
@@ -27,9 +29,32 @@ void main()
 
 #else
 
+// Whether an animated instance can reach the output pixel whose unjittered
+// render-space position is `position`. The upscaler's jitter moves its
+// bilinear taps by up to half a render pixel either way, so the 3x3 render
+// pixels around it cover every frame's taps and the answer does not flicker
+// with the jitter.
+bool showsAnimatedInstance(float2 position, float2 renderSize)
+{
+    RealtimeArgs* args = realtimeArgs();
+    RWTexture2D<uint> cryptomatte = ResourceDescriptorHeap[args.targets.cryptomatte];
+    const Scene scene = args.frame.scene;
+    const int2 center = int2(floor(position + 0.5));
+    const int2 last = int2(renderSize) - 1;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+        {
+            const uint instance = cryptomatte[clamp(center + int2(x, y), int2(0), last)];
+            if (instance < scene.instanceCount
+                && (scene.instances[instance].flags & InstanceFlagAnimated) != 0u)
+                return true;
+        }
+    return false;
+}
+
 // Finishes the output image: resolves its coverage and folds the beauty into
 // the running average as the offline tracer does, so a still view converges
-// (sample 0 or an animated hit this frame restarts the average).
+// (sample 0 restarts the average; animated instances stay out of it).
 [shader("compute")]
 [numthreads(RealtimeOutputAovsGroupSize, RealtimeOutputAovsGroupSize, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
@@ -62,24 +87,31 @@ void main(uint3 threadId : SV_DispatchThreadID)
         sum.a = lerp(lerp(a00, a10, f.x), lerp(a01, a11, f.x), f.y);
     }
 
-    // Each frame's accumulation state is in one of two slots: its hit shaders
-    // mark the slot and this pass resets the other for the next frame, so no
-    // thread reads a slot that another resets.
-    BeautyAccumulation* state = args.frame.beautyAccumulation;
-    const uint slot = args.frame.accumulationSlot;
-    const bool restart = args.frame.sampleIndex == 0u || state->animatedHit[slot] != 0u;
-    const uint previousSamples = restart ? 0u : state->sampleCount[slot];
-    if (all(output == 0u))
-    {
-        state->animatedHit[slot ^ 1u] = 0u;
-        state->sampleCount[slot ^ 1u] = previousSamples + 1u;
-    }
+    // Pixels showing animated instances keep the upscaler's own temporal
+    // result; the others average every sample since the camera or scene last
+    // changed. Only those changes move the animated pixels, and they restart
+    // the whole average, so a pixel that has averaged every sample since then
+    // is divided by the frame's sample count.
     float4* accumulation = args.frame.accumulation;
     const uint pixel = output.y * args.view.outputWidth + output.x;
-    if (!restart)
-        sum += accumulation[pixel];
+    const uint sampleIndex = args.frame.sampleIndex;
+    // An animated pixel's entry holds a negative marker, never a sum of
+    // non-negative coverage, until the average restarts.
+    const float4 average = sampleIndex == 0u ? float4(0.0) : accumulation[pixel];
+    bool animated = average.a < 0.0;
+    if (!animated && showsAnimatedInstance(sourcePosition + args.view.jitter, renderSize))
+    {
+        accumulation[pixel] = float4(-1.0);
+        animated = true;
+    }
+    if (animated)
+    {
+        outputColor[output] = sum;
+        return;
+    }
+    sum += average;
     accumulation[pixel] = sum;
-    outputColor[output] = sum / float(previousSamples + 1u);
+    outputColor[output] = sum / float(sampleIndex + 1u);
 }
 
 #endif

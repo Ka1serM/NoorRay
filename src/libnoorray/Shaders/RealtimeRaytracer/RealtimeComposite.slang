@@ -1,3 +1,5 @@
+import noorrhi;
+
 #include "NrdSignal.slang"
 #include "RealtimeCamera.slang"
 

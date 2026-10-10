@@ -22,11 +22,6 @@ namespace {
 void requireRealtimeRayTracing(const noorrhi::Device& device)
 {
     const auto features = device.features();
-    if (!features.descriptor_heap)
-        throw std::runtime_error(
-            "Realtime NoorRay requires VK_EXT_descriptor_heap, VK_KHR_shader_untyped_pointers, "
-            "VK_KHR_maintenance5, shaderInt64, shaderDrawParameters and "
-            "scalarBlockLayout; the selected Vulkan driver does not expose all of them");
     if (!features.ray_query || !features.ray_tracing)
         throw std::runtime_error(
             "Realtime NoorRay requires VK_KHR_ray_query and VK_KHR_ray_tracing_pipeline; "

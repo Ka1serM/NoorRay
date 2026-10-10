@@ -50,7 +50,7 @@ struct RealtimeView
     uint padding2;
 };
 
-// Images the primary passes write and the stages read, as descriptor-heap
+// Images the primary passes write and the stages read, as bindless
 // storage indices. Named by meaning, not by consumer.
 struct RenderTargetHandles
 {

@@ -121,7 +121,7 @@ public:
     void updateLights(const Scene& scene, const Scene::LightIndices& changed);
     void updateCamera(const Scene& scene);
     // Publishes the scene environment (colour, rotation, exposure, HDRI and
-    // its importance CDF) as an immutable descriptor-heap record.
+    // its importance CDF) as an immutable bindless record.
     void uploadEnvironment(Scene& scene);
     // Brings renderer-owned resources in line with the current settings and
     // size, and releases image allocation a settled size no longer uses.
@@ -151,8 +151,8 @@ public:
     // Sampled view for NoorRHI shader pipelines that only read the output.
     noorrhi::TextureHandle outputSampledTexture() const { return colorImage.sampled_handle(); }
 
-    // Descriptor-heap handles for the AOV textures the viewport composite pass
-    // reads. Heap handles the images already own, so consumers need no
+    // Bindless handles for the AOV textures the viewport composite pass
+    // reads. Handles the images already own, so consumers need no
     // descriptor allocation or renderer-specific presentation code. Albedo,
     // normal, position and cryptomatte are empty, with a zero handle, for a
     // renderer that does not write them at the output resolution
@@ -259,6 +259,9 @@ private:
         uint8_t mask{};
         // Some material's back faces are seen: camera rays cull no face.
         bool doubleSided{};
+        // Some section's material is animated: the viewport keeps its pixels
+        // out of the beauty average.
+        bool animated{};
     };
     std::vector<MaterialBinding> bindings_;
     std::map<std::pair<const ::Mesh*, std::vector<uint32_t>>, uint32_t> bindingIndices_;

@@ -13,7 +13,7 @@ std::vector<std::uint16_t> packEnergyLutTables();
 
 // CIE X/Y/Z colour matching functions, CIE D65, and the Jakob-Hanika 64^3
 // sRGB-to-spectrum scale/coefficient tables, matching Spectrum.slang and
-// RgbToSpectrum.slang. Keeping them contiguous costs one immutable heap slot.
+// RgbToSpectrum.slang. Keeping them contiguous costs one immutable buffer.
 std::vector<float> packSpectralTables();
 
 } // namespace nr::shading

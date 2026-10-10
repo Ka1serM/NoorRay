@@ -39,12 +39,12 @@ void check(SlangResult result, slang::IBlob* diagnostics, const std::string& wha
     throw std::runtime_error(message);
 }
 
-slang::CompilerOptionEntry flag(const slang::CompilerOptionName name)
+slang::CompilerOptionEntry option(const slang::CompilerOptionName name, const int value = 1)
 {
     slang::CompilerOptionEntry entry{};
     entry.name = name;
     entry.value.kind = slang::CompilerOptionValueKind::Int;
-    entry.value.intValue0 = 1;
+    entry.value.intValue0 = value;
     return entry;
 }
 
@@ -60,7 +60,7 @@ slang::CompilerOptionEntry capability(slang::IGlobalSession& global, const char*
 // Matches the spirv-val flags that check the prebuilt shaders.
 void validate(const std::vector<std::uint32_t>& spirv, const char* entryPoint)
 {
-    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_4);
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_3);
     std::string messages;
     tools.SetMessageConsumer([&messages](spv_message_level_t, const char*,
         const spv_position_t& position, const char* message) {
@@ -87,13 +87,14 @@ SlangMaterialCompiler::SlangMaterialCompiler()
     check(slang::createGlobalSession(impl_->global.writeRef()), nullptr,
         "Slang global session creation failed");
 
-    // Mirrors the slangc flags of the prebuilt ray-tracing shaders.
+    // Mirrors the slangc flags of the prebuilt ray-tracing shaders
+    // (NR_SLANG_FLAGS), the bindless set included.
     const slang::CompilerOptionEntry options[] = {
-        flag(slang::CompilerOptionName::EmitSpirvDirectly),
-        flag(slang::CompilerOptionName::MatrixLayoutRow),
-        flag(slang::CompilerOptionName::VulkanUseEntryPointName),
-        flag(slang::CompilerOptionName::ForceCLayout),
-        capability(*impl_->global, "spvDescriptorHeapEXT"),
+        option(slang::CompilerOptionName::EmitSpirvDirectly),
+        option(slang::CompilerOptionName::MatrixLayoutRow),
+        option(slang::CompilerOptionName::VulkanUseEntryPointName),
+        option(slang::CompilerOptionName::ForceCLayout),
+        option(slang::CompilerOptionName::BindlessSpaceIndex, 0),
         capability(*impl_->global, "spvRayTracingKHR"),
     };
     slang::TargetDesc target{};
@@ -107,8 +108,12 @@ SlangMaterialCompiler::SlangMaterialCompiler()
     check(impl_->global->createSession(description, impl_->session.writeRef()), nullptr,
         "Slang session creation failed");
 
+    // Loaded first, so the imports of the modules below resolve to it.
     Slang::ComPtr<slang::IBlob> diagnostics;
-    slang::IModule* module = impl_->session->loadModuleFromSourceString("MaterialInterface",
+    slang::IModule* module = impl_->session->loadModuleFromSourceString("noorrhi",
+        "noorrhi.slang", embeddedShaderSource("noorrhi.slang"), diagnostics.writeRef());
+    check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "noorrhi.slang does not compile");
+    module = impl_->session->loadModuleFromSourceString("MaterialInterface",
         "MaterialInterface.slang", embeddedShaderSource("RealtimeRaytracer/MaterialInterface.slang"), diagnostics.writeRef());
     check(module ? SLANG_OK : SLANG_FAIL, diagnostics, "MaterialInterface.slang does not compile");
     module = impl_->session->loadModuleFromSourceString("MaterialHit",

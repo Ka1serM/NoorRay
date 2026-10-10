@@ -1,5 +1,7 @@
 #pragma once
 
+import noorrhi;
+
 #include "../../Shared/Viewport.h"
 
 [[vk::push_constant]] ConstantBuffer<ViewportVolumeRoot> root;

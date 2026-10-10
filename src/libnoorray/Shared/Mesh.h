@@ -28,6 +28,8 @@ struct Instance
     uint flags;
 };
 
+// Its mesh, its placement or the material of one of its sections changes
+// over time.
 static const uint InstanceFlagAnimated = 0x1u;
 
 // A mesh section as the hit stages see it. Each section is one BLAS

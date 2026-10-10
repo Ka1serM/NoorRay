@@ -1,3 +1,5 @@
+import noorrhi;
+
 #include "RealtimeHitShading.slang"
 #include "../Raytracer/Sampling.slang"
 #include "../Raytracer/CameraRay.slang"

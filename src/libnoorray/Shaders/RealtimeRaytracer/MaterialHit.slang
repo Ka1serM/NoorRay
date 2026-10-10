@@ -219,10 +219,6 @@ void materialClosestHit<M : IMaterial>(inout RealtimeHitPayload payload, float2 
         unpackVertexDifferential(payload.differential));
     const RegularSurface surface = hit.surface;
     const uint materialFlags = frame->materials[surface.materialIndex]->flags;
-    Instance* instance = &frame->scene.instances[min(InstanceID(), frame->scene.instanceCount - 1u)];
-    if ((materialFlags & MaterialFlagAnimated) != 0u
-        || (instance->flags & InstanceFlagAnimated) != 0u)
-        InterlockedExchange(frame->beautyAccumulation->animatedHit[frame->accumulationSlot], 1u);
     const surfaceshader shaded = evaluateHit<M>(frame, hit);
     // Unreal's one-sided materials emit nothing from their back.
     const bool emits = (materialFlags & MaterialFlagOneSided) == 0u

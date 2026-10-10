@@ -153,7 +153,6 @@ RealtimeRaytracer::RealtimeRaytracer(noorrhi::Device& device,
     , restir(device)
     , denoiser(device)
     , upscaler(device)
-    , beautyAccumulation(device.buffer<nr::graphics::BeautyAccumulation>(1))
     , compositePipeline(device.compute(loadShader(device, compositeSpv)))
     , layeredCompositePipeline(device.compute(loadShader(device, layeredCompositeSpv)))
     , outputAovsPipeline(device.compute(loadShader(device, outputAovsSpv)))
@@ -164,9 +163,6 @@ RealtimeRaytracer::RealtimeRaytracer(noorrhi::Device& device,
     , nextMaterialGroup(FirstMaterialGroup)
     , onMaterialShadersCompiled(std::move(onMaterialShadersCompiled))
 {
-    const nr::graphics::BeautyAccumulation cleared{};
-    beautyAccumulation.upload(std::span<const nr::graphics::BeautyAccumulation>(&cleared, 1));
-    common.data.beautyAccumulation = beautyAccumulation.ptr().address;
     RaytracerResources::Callbacks callbacks;
     callbacks.imageAllocationChanged = [this] { onImageAllocationChanged(); };
     callbacks.renderSettingsApplied = [this](const RenderSettings& settings) {
@@ -499,8 +495,6 @@ void RealtimeRaytracer::render(const uint32_t frameIndex, const uint32_t sampleI
         prepareFrameResources();
     else
         ensureResources();
-    common.data.accumulationSlot = accumulationSlot;
-    accumulationSlot ^= 1u;
     common.dispatch(frameIndex, sampleIndex, [this] { renderImpl(); });
 }
 
@@ -518,6 +512,7 @@ void RealtimeRaytracer::ensureResources()
     const ResourceLayout required = requiredLayout();
     if (allocatedLayout == required)
         return;
+    NR_LOG_INFO("DIAG realtime resources reallocated: render " << required.targets.render.width << "x" << required.targets.render.height << " layers=" << required.targets.layers << " output " << required.output.width << "x" << required.output.height << " denoiser=" << int(required.denoiser) << " upscaler=" << int(upscaler.mode()) << " lightingRes=" << int(lightingResolution)); // DIAG
     common.device().synchronize();
     targets.reset();
     targets.emplace(common.device(), required.targets);

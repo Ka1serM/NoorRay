@@ -1,5 +1,7 @@
 #pragma once
 
+import noorrhi;
+
 #include "../../Shared/Viewport.h"
 
 static const int GROUP_SIZE = 16;

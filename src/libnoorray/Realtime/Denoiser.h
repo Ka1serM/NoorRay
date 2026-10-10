@@ -39,8 +39,8 @@ struct DenoiserLayout
 // composite reads the diffuse and specular targets directly.
 //
 // NRD describes compute pipelines built from its own SPIR-V, which binds
-// resources through classic descriptor sets rather than NoorRHI's descriptor
-// heap. This class is the host side NRD expects: it creates those pipelines,
+// resources through descriptor sets of its own rather than NoorRHI's
+// bindless set. This class is the host side NRD expects: it creates those pipelines,
 // its texture pools, samplers and constant buffer with Vulkan directly, and
 // records NRD's dispatches into NoorRHI's command stream through
 // noorrhi::interop::record.

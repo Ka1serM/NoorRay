@@ -32,6 +32,8 @@
 // point `lighting` at the set's surfaces and reservoirs and the shaded lobes
 // at the set's NRD inputs.
 
+import noorrhi;
+
 #ifndef RTXDI_PASS_PRESAMPLE_LIGHTS
 #define RTXDI_PASS_PRESAMPLE_LIGHTS 0
 #endif

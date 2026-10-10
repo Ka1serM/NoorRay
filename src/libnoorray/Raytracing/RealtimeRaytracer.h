@@ -141,9 +141,6 @@ private:
     Restir restir;
     Denoiser denoiser;
     Upscaler upscaler;
-    noorrhi::Buffer<nr::graphics::BeautyAccumulation> beautyAccumulation;
-    // Alternates every render(); see BeautyAccumulation.
-    std::uint32_t accumulationSlot{};
     // Allocated by ensureResources(), with the other stages' resources.
     std::optional<RenderTargets> targets;
     std::optional<ResourceLayout> allocatedLayout;

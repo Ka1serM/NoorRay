@@ -1,3 +1,5 @@
+import noorrhi;
+
 #include "ByteBuffer.slang"
 #include "RaytracingAbi.slang"
 #include "Environment.slang"

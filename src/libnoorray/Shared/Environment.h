@@ -14,7 +14,7 @@ struct Environment
     float visibleExposureScale;
     float lightingExposureScale;
     float importanceWeight;
-    // Resource-descriptor-heap indices; 0 means no texture.
+    // Bindless texture slots; 0 means no texture.
     uint texture;
     uint cdfTexture;
     // Unreal's sky light controls, as LightControls holds them for lights.

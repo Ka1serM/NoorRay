@@ -1,5 +1,7 @@
 #pragma once
 
+import noorrhi;
+
 #include "../../Shared/Viewport.h"
 
 [[vk::push_constant]] ConstantBuffer<ViewportBillboardRoot> root;
@@ -92,7 +94,8 @@ float billboardAlpha(const ViewportBillboardPushConstants args, const float2 loc
     const uint icon, const float screenPxRange)
 {
     const uint textureHandle = args.iconTextures[icon];
-    Texture2D<float4> image = ResourceDescriptorHeap[textureHandle];
+    // Icons differ between the instances one wave shades.
+    Texture2D<float4> image = ResourceDescriptorHeap[NonUniformResourceIndex(textureHandle)];
     SamplerState sampler = SamplerDescriptorHeap[args.iconSampler];
     // Texture rows run top to bottom.
     const float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);

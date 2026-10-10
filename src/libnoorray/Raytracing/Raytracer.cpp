@@ -174,7 +174,7 @@ DirectionalLight publishedRecord(DirectionalLight record)
     return record;
 }
 
-// Keep texture uploads bounded by the descriptor-heap budget.  The first
+// Keep texture uploads bounded by the bindless descriptor budget.  The first
 // entry is reserved for the white fallback, leaving room for render targets,
 // scene buffers, and repeated immutable material updates.
 
@@ -333,8 +333,8 @@ void RaytracerResources::createImages()
 
 void RaytracerResources::updateRoot()
 {
-    // Nothing is published to a heap here any more. Buffers contribute their
-    // device address and images their descriptor-heap index; both are plain
+    // Nothing is published to a descriptor table here. Buffers contribute their
+    // device address and images their bindless slot; both are plain
     // values copied into the frame record.
     const auto address = [](const auto& buffer) -> std::uint64_t {
         return buffer ? buffer.ptr().address : 0;
@@ -815,9 +815,12 @@ bool RaytracerResources::updateBindingOpacity(const Scene& scene, const uint32_t
     std::vector<bool> opacity;
     opacity.reserve(sections.size());
     bool doubleSided = false;
-    for (const MeshSection& section : sections)
-        doubleSided |= (materials[binding.materials[section.slot]].getData().flags
-            & nr::graphics::MaterialFlagOneSided) == 0;
+    bool animated = false;
+    for (const MeshSection& section : sections) {
+        const uint32_t flags = materials[binding.materials[section.slot]].getData().flags;
+        doubleSided |= (flags & nr::graphics::MaterialFlagOneSided) == 0;
+        animated |= (flags & nr::graphics::MaterialFlagAnimated) != 0;
+    }
     for (const MeshSection& section : sections) {
         const Material& material = materials[binding.materials[section.slot]];
         // TLAS facing flags cover the whole instance. Mixed-sided meshes
@@ -838,8 +841,11 @@ bool RaytracerResources::updateBindingOpacity(const Scene& scene, const uint32_t
         : nr::graphics::RaytracingMaskMesh & ~nr::graphics::RaytracingMaskShadow);
     const bool facingChanged = binding.doubleSided != doubleSided;
     binding.doubleSided = doubleSided;
+    // The instance records carry the animated flag, so a change rewrites them.
+    const bool animatedChanged = binding.animated != animated;
+    binding.animated = animated;
     if (binding.blas && opacity == binding.opacity && mask == binding.mask && !facingChanged)
-        return false;
+        return animatedChanged;
     binding.opacity = std::move(opacity);
     binding.mask = mask;
     binding.blas = binding.mesh->blas(*gpuDevice, binding.opacity);
@@ -971,8 +977,8 @@ void RaytracerResources::publishInstances(const Scene& scene, std::vector<uint32
             drawn.materialTable.ptr().address, slotColors(slot, instance),
             uploadSlotStream(slotCustomData_[slot], customData, instance.getCustomDataOwner()),
             instance.getLightingChannels(), static_cast<uint32_t>(customData.size()),
-            (instance.getRayTracingFlags().animated || instance.getMesh().isAnimated())
-                ? nr::graphics::InstanceFlagAnimated : 0u};
+            (instance.getRayTracingFlags().animated || instance.getMesh().isAnimated()
+                || drawn.animated) ? nr::graphics::InstanceFlagAnimated : 0u};
         const MeshInstance::RayTracingFlags rayTracing = instance.getRayTracingFlags();
         // A hidden instance keeps its records, with a mask only the rays it still
         // casts for match.

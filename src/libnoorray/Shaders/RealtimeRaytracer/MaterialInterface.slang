@@ -13,6 +13,8 @@
 // combine lobes linearly; each lobe's roughness and normal are averaged by
 // the weight the lobe contributes.
 
+import noorrhi;
+
 // Where a material is evaluated. World space; directions are normalized.
 struct MaterialGeometry
 {
@@ -295,7 +297,7 @@ surfaceshader mx_mix_surfaceshader(surfaceshader fg, surfaceshader bg, float mix
 }
 
 // ---------------------------------------------------------------------------
-// Textures. MaterialX filename parameters are resource-descriptor-heap
+// Textures. MaterialX filename parameters are bindless texture
 // indices; 0 means no texture and samples white.
 // ---------------------------------------------------------------------------
 
@@ -313,8 +315,8 @@ float4 sampleMaterialTexture(SamplerTexture2D tex, float2 uv, float lod)
 {
     if (tex.handle == 0u || materialSamplerHandle == 0u)
         return float4(1.0);
-    Texture2D<float4> image = ResourceDescriptorHeap[tex.handle];
-    SamplerState sampler = SamplerDescriptorHeap[materialSamplerHandle];
+    Texture2D<float4> image = ResourceDescriptorHeap[NonUniformResourceIndex(tex.handle)];
+    SamplerState sampler = SamplerDescriptorHeap[NonUniformResourceIndex(materialSamplerHandle)];
     return image.SampleLevel(sampler, uv, max(lod, 0.0));
 }
 
@@ -322,7 +324,7 @@ float4 texture(SamplerTexture2D tex, float2 uv)
 {
     if (tex.handle == 0u)
         return float4(1.0);
-    Texture2D<float4> image = ResourceDescriptorHeap[tex.handle];
+    Texture2D<float4> image = ResourceDescriptorHeap[NonUniformResourceIndex(tex.handle)];
     uint width = 0u;
     uint height = 0u;
     image.GetDimensions(width, height);
@@ -341,7 +343,7 @@ float4 textureGrad(SamplerTexture2D tex, float2 uv, float2 dx, float2 dy)
 {
     if (tex.handle == 0u)
         return float4(1.0);
-    Texture2D<float4> image = ResourceDescriptorHeap[tex.handle];
+    Texture2D<float4> image = ResourceDescriptorHeap[NonUniformResourceIndex(tex.handle)];
     uint width = 0u;
     uint height = 0u;
     image.GetDimensions(width, height);
@@ -355,7 +357,7 @@ int2 textureSize(SamplerTexture2D tex, int mipLevel)
 {
     if (tex.handle == 0u)
         return int2(1);
-    Texture2D<float4> image = ResourceDescriptorHeap[tex.handle];
+    Texture2D<float4> image = ResourceDescriptorHeap[NonUniformResourceIndex(tex.handle)];
     uint width = 0u;
     uint height = 0u;
     image.GetDimensions(width, height);

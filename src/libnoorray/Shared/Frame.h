@@ -11,18 +11,6 @@
 namespace nr::graphics {
 #endif
 
-// The beauty average's restart state, kept on the GPU in two slots picked by
-// Frame::accumulationSlot. A frame's hit shaders mark its slot and its
-// accumulate pass resets the other one for the next frame, so no pass reads a
-// slot that another of its threads resets.
-struct BeautyAccumulation
-{
-    // Set when a ray hits an animated material or instance.
-    uint animatedHit[2];
-    // Samples in the average before this frame's.
-    uint sampleCount[2];
-};
-
 struct Frame
 {
     Scene scene;
@@ -48,9 +36,8 @@ struct Frame
     GpuPtr(uint) spectralTables;
     GpuPtr(Environment) environment;
     GpuPtr(float4) accumulation;
-    GpuPtr(BeautyAccumulation) beautyAccumulation;
     uint64_t topLevelAS;
-    // Resource-descriptor-heap indices of the output images.
+    // Bindless texture slots of the output images.
     uint colorImage;
     uint albedoImage;
     uint normalImage;
@@ -69,7 +56,6 @@ struct Frame
     uint frameIndex;
     float gameTime;
     uint sampleIndex;
-    uint accumulationSlot;
     float shutterOpen;
     float shutterClose;
     uint gaussianShCoefficientCount;

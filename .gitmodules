@@ -91,3 +91,6 @@
 [submodule "external/MathLib"]
 	path = external/MathLib
 	url = https://github.com/NVIDIA-RTX/MathLib.git
+[submodule "external/Vulkan-Headers"]
+	path = external/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git

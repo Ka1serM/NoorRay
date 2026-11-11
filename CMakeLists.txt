@@ -154,6 +154,18 @@ endif()
 # ---------------------------------------------------------------------------
 # Vulkan + slangc
 # ---------------------------------------------------------------------------
+# The Vulkan headers come from external/Vulkan-Headers, not the SDK, and the
+# loader is found by its runtime name: distributions ship libvulkan.so.1 without
+# the libvulkan.so development link. A parent project that already found Vulkan
+# keeps its own headers and loader.
+if(NOT TARGET Vulkan::Vulkan)
+    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/Vulkan-Headers/include/vulkan/vulkan.h")
+        message(FATAL_ERROR "external/Vulkan-Headers is empty. Run: git submodule update --init external/Vulkan-Headers")
+    endif()
+    set(Vulkan_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/external/Vulkan-Headers/include" CACHE PATH "" FORCE)
+    find_library(Vulkan_LIBRARY NAMES vulkan-1 vulkan libvulkan.so.1
+        HINTS "$ENV{VULKAN_SDK}/Lib" "$ENV{VULKAN_SDK}/lib")
+endif()
 find_package(Vulkan REQUIRED)
 # An unset VULKAN_SDK must not turn into a "/bin" hint: that silently picks the
 # distribution's older tools over the SDK's (the system spirv-val takes tens of

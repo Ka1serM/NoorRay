@@ -1,0 +1,5 @@
+* text=auto
+*.exr binary
+*.png binary
+*.nrs binary
+*.ply binary

@@ -1,0 +1,28 @@
+<template name="inspector-statistics">
+<head>
+</head>
+<body>
+    <div class="attr-section">
+        <div class="attr-heading"><span>Frame</span><div class="attr-rule"></div></div>
+        <div class="attr-row"><p class="attr-label">Samples</p><div class="attr-control"><span class="text-secondary">{{ status.samples }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Resolution</p><div class="attr-control"><span class="text-secondary">{{ status.resolution }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Frame time</p><div class="attr-control"><span class="text-secondary">{{ status.frameTime }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Rate</p><div class="attr-control"><span class="text-secondary">{{ status.framesPerSecond }}</span></div></div>
+    </div>
+
+    <div class="attr-section">
+        <div class="attr-heading"><span>Scene</span><div class="attr-rule"></div></div>
+        <div class="attr-row"><p class="attr-label">Meshes</p><div class="attr-control"><span class="text-secondary">{{ status.meshes }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Instances</p><div class="attr-control"><span class="text-secondary">{{ status.instances }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Materials</p><div class="attr-control"><span class="text-secondary">{{ status.materials }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Lights</p><div class="attr-control"><span class="text-secondary">{{ status.lights }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Gaussians</p><div class="attr-control"><span class="text-secondary">{{ status.gaussians }}</span></div></div>
+    </div>
+
+    <div class="attr-section">
+        <div class="attr-heading"><span>Memory</span><div class="attr-rule"></div></div>
+        <div class="attr-row"><p class="attr-label">Mesh buffers</p><div class="attr-control"><span class="text-secondary">{{ status.meshMemory }}</span></div></div>
+        <div class="attr-row"><p class="attr-label">Textures</p><div class="attr-control"><span class="text-secondary">{{ status.textureMemory }}</span></div></div>
+    </div>
+</body>
+</template>

@@ -1,0 +1,34 @@
+Checks: >
+  -*,
+  readability-identifier-naming,
+  readability-else-after-return,
+  performance-unnecessary-copy-initialization,
+  performance-unnecessary-value-param,
+  performance-for-range-copy,
+  performance-move-const-arg,
+  performance-inefficient-vector-operation,
+  cppcoreguidelines-no-malloc,
+  modernize-make-unique,
+  modernize-make-shared
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*'
+ExcludeHeaderFilterRegex: '/(build-[^/]*|external)/'
+CheckOptions:
+  readability-identifier-naming.NamespaceCase: CamelCase
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: CamelCase
+  readability-identifier-naming.UnionCase: CamelCase
+  readability-identifier-naming.EnumCase: CamelCase
+  readability-identifier-naming.EnumConstantCase: CamelCase
+  readability-identifier-naming.TypeAliasCase: CamelCase
+  readability-identifier-naming.TypedefCase: CamelCase
+  readability-identifier-naming.TemplateParameterCase: CamelCase
+  readability-identifier-naming.ConceptCase: CamelCase
+  readability-identifier-naming.FunctionCase: camelBack
+  readability-identifier-naming.MethodCase: camelBack
+  readability-identifier-naming.VariableCase: camelBack
+  readability-identifier-naming.ParameterCase: camelBack
+  readability-identifier-naming.MemberCase: camelBack
+  readability-identifier-naming.TypeAliasIgnoredRegexp: '^(is_transparent|uint)$'
+  readability-identifier-naming.StructIgnoredRegexp: '^(half|(float|int|uint)[234](x[234])?)$'
+  performance-unnecessary-value-param.AllowedTypes: 'std::stop_token'

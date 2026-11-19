@@ -1,0 +1,227 @@
+namespace NoorRay.Schema;
+
+struct Float3 {
+    x: float;
+    y: float;
+    z: float;
+}
+
+//! Row-major 3x4: the rotation and scale in the first three columns, the translation in the last.
+struct Transform {
+    rows: [float:12];
+}
+
+struct Bounds {
+    min: Float3;
+    max: Float3;
+}
+
+struct MeshSubset {
+    first_index: uint;
+    index_count: uint;
+    material: uint;
+}
+
+table UvSet {
+    values: [uint];
+}
+
+table Mesh {
+    name: string;
+    positions: [Float3];
+    normals: [uint];
+    tangents: [uint];
+    uvs: [UvSet];
+    colors: [uint];
+    indices: [uint];
+    subsets: [MeshSubset];
+    bounds: Bounds;
+}
+
+enum InstanceFlags : uint (bit_flags) { Hidden, NoShadow, NoCameraRays, DoubleSided }
+
+struct Instance {
+    transform: Transform;
+    mesh: uint;
+    flags: InstanceFlags;
+    id: uint;
+    material: uint;
+}
+
+enum AlphaMode : ubyte { Opaque, Mask, Blend }
+
+enum TextureWrap : ubyte { Repeat, Extend, Clip, Mirror }
+
+enum TextureFilter : ubyte { Linear, Closest, Cubic }
+
+enum TextureSlot : ubyte { BaseColor, Alpha, Metallic, Roughness, Normal, Specular, Transmission, Coat, CoatRoughness, CoatNormal, Emission }
+
+struct MaterialParameters {
+    base_color: Float3;
+    alpha: float;
+    alpha_mode: AlphaMode;
+    use_vertex_color: bool;
+    roughness_is_glossiness: bool;
+    alpha_cutoff: float;
+    metallic: float;
+    roughness: float;
+    normal_scale: float;
+    ior: float;
+    specular_ior_level: float;
+    specular_tint: Float3;
+    transmission: float;
+    anisotropic: float;
+    anisotropic_rotation: float;
+    coat: float;
+    coat_roughness: float;
+    coat_normal_scale: float;
+    sheen_color: Float3;
+    sheen_roughness: float;
+    emission_color: Float3;
+    emission_strength: float;
+    thin_film_thickness: float;
+    thin_film_ior: float;
+    dispersion: float;
+}
+
+struct MaterialTexture {
+    texture: uint;
+    uv_set: uint;
+    channel: uint;
+    row0: Float3;
+    row1: Float3;
+    slot: TextureSlot;
+    wrap: TextureWrap;
+    filter: TextureFilter;
+}
+
+table Material {
+    name: string;
+    parameters: MaterialParameters;
+    textures: [MaterialTexture];
+}
+
+enum TextureFormat : ubyte { Rgba8Unorm, Rgba8Srgb, Rgba16Float, Bc4Unorm, Bc5Unorm, Bc6hUfloat, Bc7Unorm, Bc7Srgb }
+
+struct TextureLevel {
+    offset: ulong;
+    size: ulong;
+    width: uint;
+    height: uint;
+}
+
+table Texture {
+    name: string;
+    format: TextureFormat;
+    width: uint;
+    height: uint;
+    levels: [TextureLevel];
+    data: [ubyte] (force_align: 16);
+}
+
+table GaussianCloud {
+    name: string;
+    transform: Transform;
+    positions: [Float3];
+    scales: [Float3];
+    rotations: [float];
+    opacities: [float];
+    sh_degree: ubyte;
+    sh: [ushort];
+}
+
+enum VolumeKind : ubyte { Homogeneous, Grid }
+
+table Volume {
+    name: string;
+    kind: VolumeKind;
+    transform: Transform;
+    bounds: Bounds;
+    absorption: Float3;
+    scattering: Float3;
+    emission: Float3;
+    anisotropy: float;
+    density_scale: float = 1.0;
+    resolution: [uint];
+    density: [ushort];
+}
+
+enum LightType : ubyte { Point, Spot, Rect, Disk, Sphere, Directional }
+
+table Light {
+    name: string;
+    type: LightType;
+    transform: Transform;
+    color: Float3;
+    power: float;
+    radius: float;
+    width: float;
+    height: float;
+    spot_angle: float;
+    spot_blend: float;
+    angle: float;
+}
+
+enum CameraType : ubyte { Perspective, Orthographic, Fisheye, Realistic }
+
+struct LensElement {
+    curvature_radius: float;
+    thickness: float;
+    ior: float;
+    abbe: float;
+    aperture_radius: float;
+}
+
+table Camera {
+    name: string;
+    type: CameraType;
+    transform: Transform;
+    vertical_fov: float = 0.6981317;
+    orthographic_height: float = 10.0;
+    sensor_width: float = 0.036;
+    sensor_height: float = 0.024;
+    sensor_offset_x: float;
+    sensor_offset_y: float;
+    focus_distance: float = 10.0;
+    f_stop: float;
+    blades: ubyte;
+    near: float = 0.01;
+    far: float = 10000.0;
+    lens: [LensElement];
+}
+
+table Environment {
+    texture: int = -1;
+    color: Float3;
+    strength: float = 1.0;
+    rotation: float;
+    visible_to_camera: bool = false;
+}
+
+enum NodeObjectKind : ubyte { None, Instance, Light, GaussianCloud, Volume, Camera }
+
+table Node {
+    name: string;
+    transform: Transform;
+    parent: uint = 4294967295;
+    object_kind: NodeObjectKind;
+    object: uint;
+}
+
+table Scene {
+    meshes: [Mesh];
+    instances: [Instance];
+    materials: [Material];
+    textures: [Texture];
+    gaussian_clouds: [GaussianCloud];
+    volumes: [Volume];
+    lights: [Light];
+    cameras: [Camera];
+    environment: Environment;
+    active_camera: uint;
+    nodes: [Node];
+}
+
+root_type Scene;
+file_identifier "NRSC";
+file_extension "nrs";

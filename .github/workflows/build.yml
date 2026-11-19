@@ -1,0 +1,176 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CCACHE_MAX_SIZE: 1G
+  # Clang's precompiled headers need these.
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+  SITE_DIR: site
+
+jobs:
+  # The image of the builds, tagged with the hash of its Dockerfile. It is built only when no image of
+  # that hash exists.
+  image:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      name: ${{ steps.name.outputs.name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: name
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/build:${{ hashFiles('.github/docker/build.Dockerfile') }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build the image
+        env:
+          IMAGE: ${{ steps.name.outputs.name }}
+        run: |
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then exit 0; fi
+          docker build -t "$IMAGE" -f .github/docker/build.Dockerfile .github/docker
+          docker push "$IMAGE"
+
+  # Every platform builds with Clang in the image. The Windows executables are cross-compiled with llvm-mingw.
+  build:
+    name: ${{ matrix.platform }}
+    needs: image
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.image.outputs.name }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows, linux, web]
+    env:
+      PRESET: ${{ matrix.platform }}-release
+    steps:
+      - uses: actions/checkout@v5
+
+      # The submodule repositories are cached by the commits that the checkout names. A change fetches only the new
+      # commits into the cached repositories.
+      - name: Name the submodule commits
+        id: submodules
+        shell: bash
+        run: echo "hash=$(git ls-tree -r HEAD | grep '^160000' | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v5
+        with:
+          path: .git/modules
+          key: submodules-${{ runner.os }}-${{ steps.submodules.outputs.hash }}
+          restore-keys: submodules-${{ runner.os }}-
+
+      # Dawn names some 70 Chromium repositories as submodules, and cloning all of them fails on chromium.googlesource.com.
+      # The recursion skips every Dawn (NoorRHI's own and the one in RmlKit's NoorRHI), and only the web build, which uses
+      # the WebGPU backend, checks out what NoorRHI's Dawn needs under Emscripten.
+      - name: Check out the submodules
+        shell: bash
+        run: |
+          git submodule update --init --depth 1 --jobs 8
+          git submodule foreach --recursive --quiet '
+            case "$displaypath" in
+              */external/dawn) ;;
+              *) git submodule update --init --depth 1 --jobs 8 ;;
+            esac'
+
+      - name: Check out the submodules of Dawn
+        if: matrix.platform == 'web'
+        shell: bash
+        # chromium.googlesource.com refuses some of its GitHub mirrors to the runners, so those come from GitHub.
+        run: |
+          git config --global url.https://github.com/.insteadOf https://chromium.googlesource.com/external/github.com/
+          git -C external/NoorRHI/external/dawn submodule update --init --depth 1 --jobs 8 -- \
+            third_party/abseil-cpp third_party/jinja2 third_party/markupsafe \
+            third_party/spirv-headers/src third_party/spirv-tools/src third_party/webgpu-headers/src
+
+      # NoorRHI finds slangc and the Vulkan headers through VULKAN_SDK.
+      - uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.357.0
+          cache: true
+
+      - uses: lukka/get-cmake@latest
+
+      - uses: actions/cache@v5
+        if: matrix.platform == 'web'
+        with:
+          path: |
+            external/RmlKit/external/emsdk/upstream
+            external/RmlKit/external/emsdk/node
+            external/RmlKit/external/emsdk/.emscripten
+          key: emsdk-${{ hashFiles('external/RmlKit/cmake/Emsdk.cmake') }}
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.platform }}
+          max-size: ${{ env.CCACHE_MAX_SIZE }}
+
+      - name: Build
+        run: cmake --workflow --preset ${{ env.PRESET }}
+
+      # serve_web.py gives the headers that the web build needs to run locally.
+      - name: Collect the release files
+        shell: bash
+        run: |
+          build="build-$PRESET/src"
+          mkdir dist
+          case "${{ matrix.platform }}" in
+            windows) cp "$build/NoorRay.App/NoorRay.exe" "$build/NoorRay.Cli/noorray.exe" dist ;;
+            linux) cp "$build/NoorRay.App/NoorRay" "$build/NoorRay.Cli/noorray" dist ;;
+            web) cp "$build"/NoorRay.App/index.{html,js,wasm,data} "$build/NoorRay.App/favicon.svg" tools/serve_web.py dist ;;
+          esac
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.platform }}
+          path: dist
+
+      # nginx serves the brotli copies from br/ and the gzip copies next to the files.
+      - name: Compress the site
+        if: matrix.platform == 'web'
+        shell: bash
+        run: |
+          build="build-$PRESET/src/NoorRay.App"
+          mkdir -p "$SITE_DIR/br"
+          cp "$build"/index.{html,js,wasm,data} "$build/favicon.svg" "$SITE_DIR"
+          for file in index.js index.wasm index.data; do
+            gzip -9 -k "$SITE_DIR/$file"
+            brotli -q 11 -o "$SITE_DIR/br/$file" "$SITE_DIR/$file"
+          done
+
+      # The key of the VPS is restricted to rrsync in ~/srv/web/apps/noorray, which munges symlinks.
+      - name: Deploy
+        if: matrix.platform == 'web' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_TARGET: ${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+          rsync -rt --delete-delay --delay-updates --chmod=D755,F644 \
+            -e "ssh -i $RUNNER_TEMP/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes" \
+            "$SITE_DIR/" "$DEPLOY_TARGET:"

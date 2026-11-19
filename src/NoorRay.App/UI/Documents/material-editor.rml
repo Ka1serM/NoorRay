@@ -1,0 +1,60 @@
+<rml>
+<head>
+    <title>Material editor</title>
+    <link type="text/rcss" href="/UI/RmlKit/Styles/window-buttons.rcss"/>
+    <link type="text/rcss" href="/UI/RmlKit/Styles/color-picker.rcss"/>
+    <link type="text/rcss" href="../Styles/theme.rcss"/>
+    <link type="text/rcss" href="../Styles/noorray.rcss"/>
+    <link type="text/rcss" href="/UI/Platform/WindowButtons/style.rcss"/>
+</head>
+<body id="material-editor" class="tool-window-body" data-model="app">
+    <div class="tool-window">
+        <div class="float-header">
+            <div class="window-drag-region"></div>
+            <div class="window-buttons start" data-if="windowButtons &amp;&amp; windowButtonsStart.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                <button class="title-button" data-for="button : windowButtonsStart" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+            </div>
+            <div class="float-handle"><div class="grip"></div></div>
+            <span class="float-title clip">{{ material.sceneIndex &gt;= 0 ? material.name : 'Material editor' }}</span>
+            <div class="window-buttons end" data-if="windowButtons &amp;&amp; windowButtonsEnd.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                <button class="title-button" data-for="button : windowButtonsEnd" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+            </div>
+        </div>
+        <div class="float-body">
+            <div class="empty-state" data-if="material.sceneIndex &lt; 0">
+                <div class="preview-sphere large dim"></div>
+                <p class="empty-message">Click a material in the material manager to edit it.</p>
+            </div>
+            <div class="material-columns" data-if="material.sceneIndex &gt;= 0">
+                <div class="material-left">
+                    <div class="material-preview-frame"><materialpreview class="preview-sphere large" data-attr-material="material.sceneIndex"></materialpreview></div>
+                    <div class="input name-field"><input class="input-field" type="text" data-value="material.name" data-event-change="materialRename()"/></div>
+                    <div class="channel-list scroll-y">
+                        <div class="channel" data-for="parameter, p : material.parameters" data-class-selected="material.parameterIndex == p" data-event-click="material.parameterIndex = p; material.pickerParameter = -1"><div class="key-dot"></div><span class="clip">{{ parameter.name }}</span><svg class="channel-texture" data-if="parameter.texture != ''" src="/UI/RmlKit/Icons/icon-image.svg"/></div>
+                    </div>
+                </div>
+                <div class="material-right scroll-y">
+                    <div class="param" data-for="parameter, p : material.parameters" data-if="material.parameterIndex == p">
+                        <div class="param-head"><div class="key-dot"></div><span class="clip">{{ parameter.name }}</span><div class="swatch-button" data-if="parameter.components == 3" data-class-open="material.pickerParameter == p" tooltip="Pick a colour" data-event-click="material.pickerParameter = material.pickerParameter == p ? -1 : p"><div class="swatch" data-style-background-color="parameter.components == 3 ? parameter.color : 'transparent'"></div><svg class="swatch-arrow" src="/UI/Icons/combo.svg"/></div></div>
+                        <color-picker data-if="parameter.components == 3 &amp;&amp; material.pickerParameter == p" data-value="parameter.color" data-event-change="materialHex(p)"></color-picker>
+                        <div class="param-rows" data-if="parameter.components == 3"><div class="slider-row"><div class="num slider-num" step="1" speed="1"><input class="input-field" type="text" data-value="parameter.hue" data-event-change="materialColor(p)"/><span class="num-unit">°</span><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div><div class="slider hue" max="360"><div class="slider-thumb" data-style-left="(parameter.hue &lt; 0 ? 0 : (parameter.hue &gt; 360 ? 360 : parameter.hue)) / 360 * 100 + '%'"></div></div></div><div class="slider-row"><div class="num slider-num" step="1" speed="0.5"><input class="input-field" type="text" data-value="parameter.saturation" data-event-change="materialColor(p)"/><span class="num-unit">%</span><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div><div class="slider saturation" max="100" data-style-decorator="'horizontal-gradient(#ffffff ' + parameter.hueColor + ')'"><div class="slider-thumb" data-style-left="(parameter.saturation &lt; 0 ? 0 : (parameter.saturation &gt; 100 ? 100 : parameter.saturation)) / 100 * 100 + '%'"></div></div></div><div class="slider-row"><div class="num slider-num" step="1" speed="0.5"><input class="input-field" type="text" data-value="parameter.value" data-event-change="materialColor(p)"/><span class="num-unit">%</span><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div><div class="slider value" max="100"><div class="slider-thumb" data-style-left="(parameter.value &lt; 0 ? 0 : (parameter.value &gt; 100 ? 100 : parameter.value)) / 100 * 100 + '%'"></div></div></div></div>
+                        <div class="param-rows" data-if="parameter.components == 1"><div class="slider-row"><div class="num slider-num" step="0.01" speed="0.005"><input class="input-field" type="text" data-value="parameter.x" data-event-change="materialApply(p)"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div><div class="slider"><div class="slider-fill" data-style-width="(parameter.x &lt; 0 ? 0 : (parameter.x &gt; 1 ? 1 : parameter.x)) / 1 * 100 + '%'"></div></div></div></div>
+                        <div class="param-option" data-if="parameter.name == 'Alpha'"><p class="type-label">Mode</p><select data-value="material.alphaMode" data-event-change="materialAlphaMode()"><option value="opaque">Opaque</option><option value="mask">Mask</option><option value="blend">Blend</option></select></div>
+                        <div class="texture-block" data-if="parameter.textureSlot">
+                            <p class="type-label">Texture</p>
+                            <div class="texture-row"><button class="texture-pick" tooltip="Choose an image file" data-event-click="materialTexture(p)"><svg class="texture-icon" src="/UI/RmlKit/Icons/icon-image.svg"/><span class="clip">{{ parameter.texture == '' ? 'Load an image' : parameter.texture }}</span></button><button class="texture-clear" data-if="parameter.texture != ''" tooltip="Remove the texture" data-event-click="materialTextureClear(p)"><svg src="/UI/RmlKit/Icons/icon-x.svg"/></button></div>
+                            <div class="param-option" data-if="parameter.texture != '' &amp;&amp; parameter.components == 1 &amp;&amp; parameter.name != 'Normal' &amp;&amp; parameter.name != 'Coat Normal'"><p class="type-label">Channel</p><select data-value="parameter.channel" data-event-change="materialTextureChannel(p)"><option value="r">Red</option><option value="g">Green</option><option value="b">Blue</option><option value="a">Alpha</option></select></div>
+                            <p class="texture-hint" data-if="parameter.name == 'Normal' || parameter.name == 'Coat Normal'">A tangent-space normal map. The value is its strength.</p>
+                            <p class="texture-hint" data-if="parameter.name != 'Normal' &amp;&amp; parameter.name != 'Coat Normal'">The texture is multiplied by the {{ parameter.components == 3 ? 'colour' : 'value' }}.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="float-footer">
+            <button class="button node-editor" tooltip="Not available yet"><span>Node Editor</span></button>
+        </div>
+    </div>
+    <div id="tooltip" class="tooltip floating"></div>
+</body>
+</rml>

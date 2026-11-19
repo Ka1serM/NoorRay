@@ -1,0 +1,14 @@
+import NoorRHI;
+import Wavefront.Records;
+import Wavefront.Accumulate;
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void accumulate(uint3 id : SV_DispatchThreadID) {
+    const WavefrontArguments arguments = rootArguments<WavefrontArguments>();
+    const WavefrontFrame frame = arguments.frame[0];
+    //! The fixed grid strides over the pixels: one thread per pixel would pass the workgroup limit of a large canvas.
+    const uint pixels = frame.film.width * frame.film.height;
+    for (uint pixel = id.x; pixel < pixels; pixel += frame.queues.gridThreads)
+        accumulateFilm(frame, pixel);
+}

@@ -1,0 +1,39 @@
+<svg width="23" height="21" viewBox="0 0 23 21" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g>
+<circle cx="11.5" cy="4.5" r="1.5" fill="white"/>
+<circle cx="11.5" cy="4.5" r="1.5" fill="white"/>
+</g>
+<g>
+<circle cx="4.5" cy="16.5" r="1.5" fill="white"/>
+<circle cx="4.5" cy="16.5" r="1.5" fill="white"/>
+</g>
+<g>
+<circle cx="18.5" cy="16.5" r="1.5" fill="white"/>
+<circle cx="18.5" cy="16.5" r="1.5" fill="white"/>
+</g>
+<foreignObject x="0.503296" y="0.5" width="21.9934" height="20.25"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter:blur(1.75px);clip-path:url(#bgblur_0_56_60_clip_path);height:100%;width:100%"></div></foreignObject><g data-figma-bg-blur-radius="3.5">
+<path d="M10.634 4.5C11.0189 3.83333 11.9811 3.83333 12.366 4.5L18.8612 15.75C19.2461 16.4167 18.765 17.25 17.9952 17.25H5.00481C4.23501 17.25 3.75388 16.4167 4.13878 15.75L10.634 4.5Z" fill="white" fill-opacity="0.03"/>
+</g>
+<g>
+<circle cx="11.5" cy="4.5" r="1.5" fill="white"/>
+<circle cx="11.5" cy="4.5" r="1.5" fill="white"/>
+</g>
+<g>
+<circle cx="4.5" cy="16.5" r="1.5" fill="white"/>
+<circle cx="4.5" cy="16.5" r="1.5" fill="white"/>
+</g>
+<g>
+<circle cx="18.5" cy="16.5" r="1.5" fill="white"/>
+<circle cx="18.5" cy="16.5" r="1.5" fill="white"/>
+</g>
+<defs>
+
+
+
+
+<clipPath id="bgblur_0_56_60_clip_path" transform="translate(-0.503296 -0.5)"><path d="M10.634 4.5C11.0189 3.83333 11.9811 3.83333 12.366 4.5L18.8612 15.75C19.2461 16.4167 18.765 17.25 17.9952 17.25H5.00481C4.23501 17.25 3.75388 16.4167 4.13878 15.75L10.634 4.5Z"/>
+</clipPath>
+
+
+</defs>
+</svg>

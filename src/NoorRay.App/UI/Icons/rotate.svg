@@ -1,0 +1,21 @@
+<svg width="18" height="22" viewBox="0 0 18 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="4.50005" cy="17.4999" r="1.49999" fill="white"/>
+<circle cx="4.50005" cy="17.4999" r="1.49999" fill="white"/>
+<circle cx="13.5" cy="4.49998" r="1.49999" fill="white"/>
+<circle cx="13.5" cy="4.49998" r="1.49999" fill="white"/>
+<foreignObject x="-2.99999" y="-0.467039" width="15.4042" height="21.4932"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter:blur(1.5px);height:100%;width:100%"></div></foreignObject><g data-figma-bg-blur-radius="3">
+<path d="M8.40424 3.53295C3.54669 3.53292 -2.93008 10.0097 4.0864 17.0262" stroke-width="1.99999" stroke-linecap="round" stroke-linejoin="round" stroke="white" stroke-opacity="0.12"/>
+</g>
+<foreignObject x="6.13644" y="0.746351" width="14.6784" height="21.7106"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter:blur(1.5px);height:100%;width:100%"></div></foreignObject><g data-figma-bg-blur-radius="3">
+<path d="M10.3955 19.4227C9.86203 19.5656 9.31369 19.249 9.17075 18.7156C9.02781 18.1821 9.34439 17.6338 9.87786 17.4908L10.1367 18.4568L10.3955 19.4227ZM13.1439 4.61237L13.6439 3.74634C16.0761 5.15056 17.9012 8.31922 17.8117 11.5103C17.766 13.1383 17.2218 14.7872 15.9988 16.2049C14.7801 17.6176 12.9395 18.741 10.3955 19.4227L10.1367 18.4568L9.87786 17.4908C12.1262 16.8884 13.5836 15.9428 14.4845 14.8984C15.3813 13.859 15.7786 12.6627 15.8125 11.4542C15.8821 8.97235 14.4185 6.50292 12.6439 5.47839L13.1439 4.61237Z" fill="white" fill-opacity="0.12"/>
+</g>
+<g>
+<circle cx="13.5" cy="4.49998" r="1.49999" fill="white"/>
+<circle cx="13.5" cy="4.49998" r="1.49999" fill="white"/>
+</g>
+<g>
+<circle cx="4.50005" cy="17.4999" r="1.49999" fill="white"/>
+<circle cx="4.50005" cy="17.4999" r="1.49999" fill="white"/>
+</g>
+
+</svg>

@@ -1,0 +1,16 @@
+<template name="inspector-environment">
+<head>
+</head>
+<body>
+    <div class="attr-section">
+        <div class="attr-heading"><span>Environment</span><div class="attr-rule"></div></div>
+        <div class="attr-row"><p class="attr-label">Texture</p><div class="attr-control"><div class="input"><svg class="icon-14 icon-muted" src="/UI/RmlKit/Icons/icon-image.svg"/><span class="input-value clip" data-if="environment.textureName != ''">{{ environment.textureName }}</span><span class="input-value text-muted" data-if="environment.textureName == ''">Uniform color</span></div></div></div>
+        <div class="attr-row"><p class="attr-label"></p><button class="button wide" data-event-click="environmentImport()"><svg class="icon-14" src="/UI/RmlKit/Icons/icon-folder-open.svg"/><span>Import HDRI</span></button><button class="button" data-if="environment.textureName != ''" data-event-click="environmentClear()"><svg class="icon-14" src="/UI/RmlKit/Icons/icon-x.svg"/><span>Clear</span></button></div>
+        <div class="attr-row"><p class="attr-label">Color</p><div class="attr-control"><div class="vector-row"><div class="coord-row grow"><span class="axis-label r">R</span><div class="num" step="0.05" min="0"><input class="input-field" type="text" data-value="environment.colorR" data-event-change="environmentApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div><div class="coord-row grow"><span class="axis-label g">G</span><div class="num" step="0.05" min="0"><input class="input-field" type="text" data-value="environment.colorG" data-event-change="environmentApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div><div class="coord-row grow"><span class="axis-label b">B</span><div class="num" step="0.05" min="0"><input class="input-field" type="text" data-value="environment.colorB" data-event-change="environmentApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div></div></div></div>
+        <div class="attr-row"><p class="attr-label">Strength</p><div class="attr-control"><div class="num" step="0.1" min="0" speed="0.01"><input class="input-field" type="text" data-value="environment.strength" data-event-change="environmentApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div></div>
+        <div class="attr-row"><p class="attr-label">Rotation</p><div class="attr-control"><div class="num" step="1" speed="0.5"><input class="input-field" type="text" data-value="environment.rotation" data-event-change="environmentApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div><span class="num-unit">°</span></div></div>
+        <div class="attr-row"><p class="attr-label"></p><label class="toggle"><input type="checkbox" data-checked="environment.visibleToCamera" data-event-change="environmentApply()"/><span class="toggle-knob"></span><span>Visible to camera</span></label></div>
+        <div class="attr-row"><p class="attr-label"></p><p class="attr-note">When hidden, the background is black; the environment still lights the scene and shows in reflections.</p></div>
+    </div>
+</body>
+</template>

@@ -1,0 +1,5 @@
+add_executable(NoorRay.Cli Main.cpp)
+noorray_code_options(NoorRay.Cli)
+target_compile_features(NoorRay.Cli PRIVATE cxx_std_23)
+target_link_libraries(NoorRay.Cli PRIVATE NoorRay::NoorRay tinyexr)
+set_target_properties(NoorRay.Cli PROPERTIES OUTPUT_NAME noorray)

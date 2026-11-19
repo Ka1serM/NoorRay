@@ -1,0 +1,33 @@
+BasedOnStyle: LLVM
+Standard: Latest
+IndentWidth: 4
+ColumnLimit: 160
+AccessModifierOffset: -4
+NamespaceIndentation: None
+FixNamespaceComments: false
+PointerAlignment: Left
+BreakBeforeBinaryOperators: NonAssignment
+AlwaysBreakTemplateDeclarations: Yes
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: true
+AllowShortLambdasOnASingleLine: All
+RemoveBracesLLVM: true
+RemoveSemicolon: true
+InsertNewlineAtEOF: true
+MaxEmptyLinesToKeep: 1
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeIsMainRegex: '(Desktop|Web)?$'
+IncludeCategories:
+  - Regex: '\.generated\.h"$'
+    Priority: 5
+  - Regex: '^<[a-z_]+>$'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
+  - Regex: '^"'
+    Priority: 4

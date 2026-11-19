@@ -1,0 +1,162 @@
+<rml>
+<head>
+    <title>Main</title>
+    <link type="text/rcss" href="/UI/RmlKit/Styles/window-buttons.rcss"/>
+    <link type="text/rcss" href="/UI/RmlKit/Styles/color-picker.rcss"/>
+    <link type="text/rcss" href="../Styles/theme.rcss"/>
+    <link type="text/rcss" href="../Styles/noorray.rcss"/>
+    <link type="text/rcss" href="/UI/Platform/WindowButtons/style.rcss"/>
+    <link type="text/template" href="../Templates/inspector-object.rml"/>
+    <link type="text/template" href="../Templates/inspector-render.rml"/>
+    <link type="text/template" href="../Templates/inspector-environment.rml"/>
+    <link type="text/template" href="../Templates/inspector-statistics.rml"/>
+</head>
+<body id="main" data-model="app">
+    <!--! Keys of commands that live in menus, which are not in the document while closed. -->
+    <hotkey key="Ctrl+N" data-event-click="sceneNew()"/>
+    <hotkey key="Ctrl+O" data-event-click="sceneOpen()"/>
+    <hotkey key="Ctrl+Shift+O" data-event-click="sceneImport()"/>
+    <hotkey key="Ctrl+S" data-if="canSave" data-event-click="sceneSave()"/>
+    <hotkey key="Delete" data-event-click="outlinerRemove()"/>
+    <hotkey key="Mod+C" data-event-click="sceneCopy()"/>
+    <hotkey key="Mod+V" data-event-click="scenePaste()"/>
+    <hotkey key="Mod+D" data-event-click="sceneDuplicate()"/>
+    <header class="title-bar" data-class-raised="menu != ''">
+        <div class="window-drag-region"></div>
+        <div class="title-row">
+            <div class="window-buttons start" data-if="windowButtons &amp;&amp; windowButtonsStart.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                <button class="title-button" data-for="button : windowButtonsStart" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+            </div>
+            <div class="title-left">
+                <div class="wordmark"><svg class="wordmark-glow" src="../../assets/icon.svg"/><svg src="../../assets/icon.svg"/></div>
+                <div class="menu-bar">
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'file'" data-event-click="menu = menu == 'file' ? '' : 'file'"><span>File</span></div>
+                        <div class="menu" data-if="menu == 'file'">
+                            <div class="menu-item" data-event-click="menu = ''; sceneNew()"><span>New scene</span><span class="menu-hint">Ctrl+N</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneOpen()"><span>Open…</span><span class="menu-hint">Ctrl+O</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneImport()"><span>Import…</span><span class="menu-hint">Ctrl+Shift+O</span></div>
+                            <div class="menu-item" data-if="canSave" data-event-click="menu = ''; sceneSave()"><span>Save as…</span><span class="menu-hint">Ctrl+S</span></div>
+                            <div class="menu-separator" data-if="windowButtons"></div>
+                            <div class="menu-item" data-if="windowButtons" data-event-click="menu = ''; closeWindow()"><span>Quit</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'edit'" data-event-click="menu = menu == 'edit' ? '' : 'edit'"><span>Edit</span></div>
+                        <div class="menu" data-if="menu == 'edit'">
+                            <div class="menu-item" data-event-click="menu = ''; sceneCopy()"><span>Copy</span><span class="menu-hint">Ctrl+C</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; scenePaste()"><span>Paste</span><span class="menu-hint">Ctrl+V</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneDuplicate()"><span>Duplicate</span><span class="menu-hint">Ctrl+D</span></div>
+                            <div class="menu-separator"></div>
+                            <div class="menu-item" data-event-click="menu = ''; outlinerRemove()"><span>Delete selection</span><span class="menu-hint">Del</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; viewportFrame()"><span>Frame scene</span><span class="menu-hint">F</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'create'" data-event-click="menu = menu == 'create' ? '' : 'create'"><span>Create</span></div>
+                        <div class="menu" data-if="menu == 'create'">
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('cube')"><svg class="icon-14 keep" src="/UI/Icons/shape-cube.svg"/><span>Cube</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('sphere')"><svg class="icon-14 keep" src="/UI/Icons/shape-sphere.svg"/><span>Sphere</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('plane')"><svg class="icon-14 keep" src="/UI/Icons/shape-plane.svg"/><span>Plane</span></div>
+                            <div class="menu-separator"></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('point')"><svg class="icon-14 keep" src="/UI/Icons/light-point.svg"/><span>Point</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('spot')"><svg class="icon-14 keep" src="/UI/Icons/light-spot.svg"/><span>Spot</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('rect')"><svg class="icon-14 keep" src="/UI/Icons/light-area.svg"/><span>Area</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('directional')"><svg class="icon-14 keep" src="/UI/Icons/light-sun.svg"/><span>Sun</span></div>
+                            <div class="menu-separator"></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('camera')"><svg class="icon-14 keep" src="/UI/Icons/object-camera.svg"/><span>Camera</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('null')"><svg class="icon-14 keep" src="/UI/Icons/coord-system.svg"/><span>Null</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'select'" data-event-click="menu = menu == 'select' ? '' : 'select'"><span>Select</span></div>
+                        <div class="menu" data-if="menu == 'select'">
+                            <div class="menu-item" data-event-click="menu = ''; tool = 'select'"><svg class="icon-14 keep" src="/UI/Icons/select.svg"/><span>Live selection</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; outlinerRemove()"><span>Delete selection</span><span class="menu-hint">Del</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'tools'" data-event-click="menu = menu == 'tools' ? '' : 'tools'"><span>Tools</span></div>
+                        <div class="menu" data-if="menu == 'tools'">
+                            <div class="menu-item" data-event-click="menu = ''; tool = 'move'"><svg class="icon-14 keep" src="/UI/Icons/tool-move.svg"/><span>Move</span><span class="menu-hint">E</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; tool = 'scale'"><svg class="icon-14 keep" src="/UI/Icons/tool-scale.svg"/><span>Scale</span><span class="menu-hint">T</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; tool = 'rotate'"><svg class="icon-14 keep" src="/UI/Icons/tool-rotate.svg"/><span>Rotate</span><span class="menu-hint">R</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title accent" data-class-open="menu == 'render'" data-event-click="menu = menu == 'render' ? '' : 'render'"><span>Render</span></div>
+                        <div class="menu" data-if="menu == 'render'">
+                            <div class="menu-item" data-class-checked="renderSettings.mode == 'raster'" data-event-click="menu = ''; renderSettings.mode = 'raster'; renderMode()"><span>Raster</span></div>
+                            <div class="menu-item" data-class-checked="renderSettings.mode == 'pathTraced'" data-event-click="menu = ''; renderSettings.mode = 'pathTraced'; renderMode()"><span>Path traced</span></div>
+                            <div class="menu-separator"></div>
+                            <div class="menu-item" data-event-click="menu = ''; renderRestart()"><span>Restart accumulation</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; inspector.tab = 'render'"><span>Render settings</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'mesh'" data-event-click="menu = menu == 'mesh' ? '' : 'mesh'"><span>Mesh</span></div>
+                        <div class="menu" data-if="menu == 'mesh'">
+                            <div class="menu-item" data-event-click="menu = ''; sceneImport()"><span>Import mesh…</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'window'" data-event-click="menu = menu == 'window' ? '' : 'window'"><span>Windows</span></div>
+                        <div class="menu" data-if="menu == 'window'">
+                            <div class="menu-item" data-event-click="menu = ''; showView('editor')"><span>Editor</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; showView('training')"><span>Gaussian training</span></div>
+                            <div class="menu-separator"></div>
+                            <div class="menu-item" data-class-checked="materialEditorOpen" data-event-click="menu = ''; toggleMaterialEditor()"><span>Material editor</span></div>
+                            <div class="menu-separator"></div>
+                            <div class="menu-item" data-event-click="menu = ''; showView('logs')"><span>Logs</span><span class="menu-hint" data-if="logs.warningCount + logs.errorCount > 0">{{ logs.warningCount + logs.errorCount }}</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'help'" data-event-click="menu = menu == 'help' ? '' : 'help'"><span>Help</span></div>
+                        <div class="menu" data-if="menu == 'help'">
+                            <div class="menu-item menu-text"><span>Orbit</span><span class="menu-hint">Left drag</span></div>
+                            <div class="menu-item menu-text"><span>Pan</span><span class="menu-hint">Shift or middle drag</span></div>
+                            <div class="menu-item menu-text"><span>Look and fly</span><span class="menu-hint">Right drag, W A S D Q E</span></div>
+                            <div class="menu-item menu-text"><span>Zoom</span><span class="menu-hint">Scroll</span></div>
+                            <div class="menu-item menu-text"><span>Frame the scene</span><span class="menu-hint">F</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="title-right">
+                <div class="window-buttons end" data-if="windowButtons &amp;&amp; windowButtonsEnd.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                    <button class="title-button" data-for="button : windowButtonsEnd" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+                </div>
+            </div>
+        </div>
+        <nav class="shortcut-row">
+            <div class="fold"></div>
+            <button class="shortcut dim" tooltip="Undo"><svg class="arrow" src="/UI/Icons/undo.svg"/></button>
+            <button class="shortcut dim" tooltip="Redo"><svg class="arrow" src="/UI/Icons/redo.svg"/></button>
+            <!--! Hold a group to pick another object; a click adds the last one picked. -->
+            <div class="menu-anchor tool-group">
+                <button class="shortcut" hold-menu="add-shape" tooltip="Add an object, hold for more" data-event-click="sceneAdd(addShape)"><svg data-attr-src="'/UI/Icons/shape-' + addShape + '.svg'"/><div class="more-dot"></div></button>
+                <div class="menu flyout flyout-2" data-if="menu == 'add-shape'">
+                    <div class="menu-item flyout-item" data-if="addShape != 'cube'" tooltip="Cube" data-event-click="menu = ''; addShape = 'cube'; sceneAdd('cube')"><svg class="flyout-icon" src="/UI/Icons/shape-cube.svg"/></div>
+                    <div class="menu-item flyout-item" data-if="addShape != 'sphere'" tooltip="Sphere" data-event-click="menu = ''; addShape = 'sphere'; sceneAdd('sphere')"><svg class="flyout-icon" src="/UI/Icons/shape-sphere.svg"/></div>
+                    <div class="menu-item flyout-item" data-if="addShape != 'plane'" tooltip="Plane" data-event-click="menu = ''; addShape = 'plane'; sceneAdd('plane')"><svg class="flyout-icon" src="/UI/Icons/shape-plane.svg"/></div>
+                </div>
+            </div>
+            <div class="menu-anchor tool-group">
+                <button class="shortcut" hold-menu="add-light" tooltip="Add a light, hold for more" data-event-click="sceneAdd(addLight)"><svg data-attr-src="'/UI/Icons/light-' + (addLight == 'rect' ? 'area' : (addLight == 'directional' ? 'sun' : addLight)) + '.svg'"/><div class="more-dot"></div></button>
+                <div class="menu flyout flyout-3" data-if="menu == 'add-light'">
+                    <div class="menu-item flyout-item" data-if="addLight != 'point'" tooltip="Point" data-event-click="menu = ''; addLight = 'point'; sceneAdd('point')"><svg class="flyout-icon" src="/UI/Icons/light-point.svg"/></div>
+                    <div class="menu-item flyout-item" data-if="addLight != 'spot'" tooltip="Spot" data-event-click="menu = ''; addLight = 'spot'; sceneAdd('spot')"><svg class="flyout-icon" src="/UI/Icons/light-spot.svg"/></div>
+                    <div class="menu-item flyout-item" data-if="addLight != 'rect'" tooltip="Area" data-event-click="menu = ''; addLight = 'rect'; sceneAdd('rect')"><svg class="flyout-icon" src="/UI/Icons/light-area.svg"/></div>
+                    <div class="menu-item flyout-item" data-if="addLight != 'directional'" tooltip="Sun" data-event-click="menu = ''; addLight = 'directional'; sceneAdd('directional')"><svg class="flyout-icon" src="/UI/Icons/light-sun.svg"/></div>
+                </div>
+            </div>
+            <button class="shortcut" tooltip="Add a camera" data-event-click="sceneAdd('camera')"><svg src="/UI/Icons/object-camera.svg"/></button>
+        </nav>
+    </header>
+
+    <main class="content" id="views"></main>
+
+    <div class="menu-scrim" data-if="menu != ''" data-event-mousedown="menu = ''"></div>
+    <div id="tooltip" class="tooltip floating"></div>
+</body>
+</rml>

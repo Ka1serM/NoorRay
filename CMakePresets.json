@@ -1,0 +1,565 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 29,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-${presetName}"
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "inherits": "base",
+      "description": "llvm-mingw: Clang, libc++ and LLD for Windows, from a Windows or Linux host. Its bin folder is in PATH.",
+      "cacheVariables": {
+        "PLATFORM": "Windows",
+        "CMAKE_SYSTEM_NAME": "Windows",
+        "CMAKE_SYSTEM_PROCESSOR": "AMD64",
+        "CMAKE_C_COMPILER": "x86_64-w64-mingw32-clang",
+        "CMAKE_CXX_COMPILER": "x86_64-w64-mingw32-clang++",
+        "CMAKE_RC_COMPILER": "x86_64-w64-mingw32-windres"
+      }
+    },
+    {
+      "name": "linux",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Clang with libc++ and LLD.",
+      "cacheVariables": {
+        "PLATFORM": "Linux",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "web",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Emscripten for a browser. The first configure installs it into RmlKit's emsdk submodule.",
+      "cacheVariables": {
+        "PLATFORM": "Web"
+      }
+    },
+    {
+      "name": "webgpu",
+      "hidden": true,
+      "description": "Dawn on the desktop: the WebGPU path of the browser build.",
+      "cacheVariables": {
+        "NOORRHI_BACKEND": "WebGpu"
+      }
+    },
+    {
+      "name": "debug",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "release",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "inherits": [
+        "windows",
+        "debug"
+      ]
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "displayName": "Windows RelWithDebInfo",
+      "inherits": [
+        "windows",
+        "relwithdebinfo"
+      ]
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "inherits": [
+        "windows",
+        "release"
+      ]
+    },
+    {
+      "name": "windows-webgpu-debug",
+      "displayName": "Windows WebGPU Debug",
+      "inherits": [
+        "windows",
+        "webgpu",
+        "debug"
+      ]
+    },
+    {
+      "name": "windows-webgpu-relwithdebinfo",
+      "displayName": "Windows WebGPU RelWithDebInfo",
+      "inherits": [
+        "windows",
+        "webgpu",
+        "relwithdebinfo"
+      ]
+    },
+    {
+      "name": "windows-webgpu-release",
+      "displayName": "Windows WebGPU Release",
+      "inherits": [
+        "windows",
+        "webgpu",
+        "release"
+      ]
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "inherits": [
+        "linux",
+        "debug"
+      ]
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "displayName": "Linux RelWithDebInfo",
+      "inherits": [
+        "linux",
+        "relwithdebinfo"
+      ]
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "inherits": [
+        "linux",
+        "release"
+      ]
+    },
+    {
+      "name": "linux-webgpu-debug",
+      "displayName": "Linux WebGPU Debug",
+      "inherits": [
+        "linux",
+        "webgpu",
+        "debug"
+      ]
+    },
+    {
+      "name": "linux-webgpu-relwithdebinfo",
+      "displayName": "Linux WebGPU RelWithDebInfo",
+      "inherits": [
+        "linux",
+        "webgpu",
+        "relwithdebinfo"
+      ]
+    },
+    {
+      "name": "linux-webgpu-release",
+      "displayName": "Linux WebGPU Release",
+      "inherits": [
+        "linux",
+        "webgpu",
+        "release"
+      ]
+    },
+    {
+      "name": "web-debug",
+      "displayName": "Web Debug",
+      "inherits": [
+        "web",
+        "debug"
+      ]
+    },
+    {
+      "name": "web-relwithdebinfo",
+      "displayName": "Web RelWithDebInfo",
+      "inherits": [
+        "web",
+        "relwithdebinfo"
+      ]
+    },
+    {
+      "name": "web-release",
+      "displayName": "Web Release",
+      "inherits": [
+        "web",
+        "release"
+      ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug"
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "configurePreset": "windows-relwithdebinfo"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release"
+    },
+    {
+      "name": "windows-webgpu-debug",
+      "configurePreset": "windows-webgpu-debug"
+    },
+    {
+      "name": "windows-webgpu-relwithdebinfo",
+      "configurePreset": "windows-webgpu-relwithdebinfo"
+    },
+    {
+      "name": "windows-webgpu-release",
+      "configurePreset": "windows-webgpu-release"
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "configurePreset": "linux-relwithdebinfo"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "linux-webgpu-debug",
+      "configurePreset": "linux-webgpu-debug"
+    },
+    {
+      "name": "linux-webgpu-relwithdebinfo",
+      "configurePreset": "linux-webgpu-relwithdebinfo"
+    },
+    {
+      "name": "linux-webgpu-release",
+      "configurePreset": "linux-webgpu-release"
+    },
+    {
+      "name": "web-debug",
+      "configurePreset": "web-debug"
+    },
+    {
+      "name": "web-relwithdebinfo",
+      "configurePreset": "web-relwithdebinfo"
+    },
+    {
+      "name": "web-release",
+      "configurePreset": "web-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "configurePreset": "windows-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-webgpu-debug",
+      "configurePreset": "windows-webgpu-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-webgpu-relwithdebinfo",
+      "configurePreset": "windows-webgpu-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-webgpu-release",
+      "configurePreset": "windows-webgpu-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "configurePreset": "linux-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-webgpu-debug",
+      "configurePreset": "linux-webgpu-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-webgpu-relwithdebinfo",
+      "configurePreset": "linux-webgpu-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-webgpu-release",
+      "configurePreset": "linux-webgpu-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-debug"
+        },
+        {
+          "type": "build",
+          "name": "windows-debug"
+        }
+      ]
+    },
+    {
+      "name": "windows-relwithdebinfo",
+      "displayName": "Windows RelWithDebInfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-relwithdebinfo"
+        },
+        {
+          "type": "build",
+          "name": "windows-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-release"
+        },
+        {
+          "type": "build",
+          "name": "windows-release"
+        }
+      ]
+    },
+    {
+      "name": "windows-webgpu-debug",
+      "displayName": "Windows WebGPU Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-webgpu-debug"
+        },
+        {
+          "type": "build",
+          "name": "windows-webgpu-debug"
+        }
+      ]
+    },
+    {
+      "name": "windows-webgpu-relwithdebinfo",
+      "displayName": "Windows WebGPU RelWithDebInfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-webgpu-relwithdebinfo"
+        },
+        {
+          "type": "build",
+          "name": "windows-webgpu-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "windows-webgpu-release",
+      "displayName": "Windows WebGPU Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-webgpu-release"
+        },
+        {
+          "type": "build",
+          "name": "windows-webgpu-release"
+        }
+      ]
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-debug"
+        },
+        {
+          "type": "build",
+          "name": "linux-debug"
+        }
+      ]
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "displayName": "Linux RelWithDebInfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-relwithdebinfo"
+        },
+        {
+          "type": "build",
+          "name": "linux-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-release"
+        },
+        {
+          "type": "build",
+          "name": "linux-release"
+        }
+      ]
+    },
+    {
+      "name": "linux-webgpu-debug",
+      "displayName": "Linux WebGPU Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-webgpu-debug"
+        },
+        {
+          "type": "build",
+          "name": "linux-webgpu-debug"
+        }
+      ]
+    },
+    {
+      "name": "linux-webgpu-relwithdebinfo",
+      "displayName": "Linux WebGPU RelWithDebInfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-webgpu-relwithdebinfo"
+        },
+        {
+          "type": "build",
+          "name": "linux-webgpu-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "linux-webgpu-release",
+      "displayName": "Linux WebGPU Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-webgpu-release"
+        },
+        {
+          "type": "build",
+          "name": "linux-webgpu-release"
+        }
+      ]
+    },
+    {
+      "name": "web-debug",
+      "displayName": "Web Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "web-debug"
+        },
+        {
+          "type": "build",
+          "name": "web-debug"
+        }
+      ]
+    },
+    {
+      "name": "web-relwithdebinfo",
+      "displayName": "Web RelWithDebInfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "web-relwithdebinfo"
+        },
+        {
+          "type": "build",
+          "name": "web-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "web-release",
+      "displayName": "Web Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "web-release"
+        },
+        {
+          "type": "build",
+          "name": "web-release"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+    <div class="view" id="editor" nav="editor" crumb="Editor">
+        <div class="workspace">
+            <nav class="mode-strip">
+                <button class="mode" data-class-on="tool == 'move'" tooltip="Move" hotkey="E" data-event-click="tool = 'move'"><svg src="/UI/Icons/tool-move.svg"/></button>
+                <button class="mode" data-class-on="tool == 'rotate'" tooltip="Rotate" hotkey="R" data-event-click="tool = 'rotate'"><svg src="/UI/Icons/tool-rotate.svg"/></button>
+                <button class="mode" data-class-on="tool == 'scale'" tooltip="Scale" hotkey="T" data-event-click="tool = 'scale'"><svg src="/UI/Icons/tool-scale.svg"/></button>
+            </nav>
+
+            <div class="center-column">
+                <section class="viewport-panel">
+                    <div class="viewport-body">
+                        <viewport class="scene-viewport">
+                            <div class="view-gizmo">
+                                <div class="gizmo-center"></div>
+                                <div class="gizmo-rotor">
+                                    <div class="gizmo-spoke spoke-x"></div>
+                                    <div class="gizmo-spoke spoke-y"></div>
+                                    <div class="gizmo-spoke spoke-z"></div>
+                                    <div class="gizmo-axis gizmo-x" axis="0"><div class="gizmo-ring"></div><span class="gizmo-label">X</span></div>
+                                    <div class="gizmo-axis gizmo-x gizmo-neg" axis="1"><div class="gizmo-ring"></div></div>
+                                    <div class="gizmo-axis gizmo-y" axis="2"><div class="gizmo-ring"></div><span class="gizmo-label">Y</span></div>
+                                    <div class="gizmo-axis gizmo-y gizmo-neg" axis="3"><div class="gizmo-ring"></div></div>
+                                    <div class="gizmo-axis gizmo-z" axis="4"><div class="gizmo-ring"></div><span class="gizmo-label">Z</span></div>
+                                    <div class="gizmo-axis gizmo-z gizmo-neg" axis="5"><div class="gizmo-ring"></div></div>
+                                </div>
+                            </div>
+                            <div class="view-tools">
+                                <div class="view-tool tool-dolly" tooltip="Drag to zoom"><svg class="icon-16" src="/UI/RmlKit/Icons/icon-search.svg"/></div>
+                                <div class="view-tool tool-pan" tooltip="Drag to pan"><svg class="icon-16" src="/UI/RmlKit/Icons/icon-hand-grab.svg"/></div>
+                            </div>
+                        </viewport>
+                    </div>
+                </section>
+
+                <div class="transport">
+                    <div class="fold"></div>
+                    <div class="timeline-field current" tooltip="Current frame"><div class="num" step="1" speed="0.2" integer><input class="input-field" type="text" data-value="timeline.frame" data-event-change="timelineApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div>
+                    <div class="timeline-strip">
+                        <div class="timeline-ruler" tooltip="Drag to change the frame">
+                            <div class="timeline-tick" data-for="tick : timeline.ticks" data-class-major="tick.major" data-style-left="tick.position + '%'"><span class="timeline-tick-label" data-if="tick.major">{{ tick.frame }}</span><div class="timeline-tick-mark"></div></div>
+                            <div class="timeline-playhead" data-style-left="timeline.playhead + '%'"><div class="timeline-playhead-cap"></div><div class="timeline-playhead-line"></div></div>
+                        </div>
+                    </div>
+                    <div class="timeline-field" tooltip="First frame of the range"><span class="timeline-field-label">Start</span><div class="num" step="1" speed="0.2" integer min="0"><input class="input-field" type="text" data-value="timeline.start" data-event-change="timelineApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div>
+                    <div class="timeline-field" tooltip="Last frame of the range"><span class="timeline-field-label">End</span><div class="num" step="1" speed="0.2" integer min="1"><input class="input-field" type="text" data-value="timeline.end" data-event-change="timelineApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div>
+                    <div class="transport-buttons">
+                        <button class="play-button" tooltip="First frame" data-event-click="timelineFirst()"><svg src="/UI/Icons/transport-first.svg"/></button>
+                        <button class="play-button" tooltip="Previous frame" data-event-click="timelinePrevious()"><svg src="/UI/Icons/transport-previous.svg"/></button>
+                        <button class="play-button play" data-class-on="timeline.playing" data-attr-tooltip="timeline.playing ? 'Pause' : 'Play'" data-event-click="timelinePlay()"><svg src="/UI/Icons/transport-play.svg" data-if="!timeline.playing"/><svg src="/UI/Icons/transport-pause.svg" data-if="timeline.playing"/></button>
+                        <button class="play-button" tooltip="Next frame" data-event-click="timelineNext()"><svg src="/UI/Icons/transport-next.svg"/></button>
+                        <button class="play-button" tooltip="Last frame" data-event-click="timelineLast()"><svg src="/UI/Icons/transport-last.svg"/></button>
+                    </div>
+                    <div class="timeline-field fps" tooltip="Playback frame rate"><div class="num" step="1" speed="0.2" integer min="1"><input class="input-field" type="text" data-value="timeline.fps" data-event-change="timelineApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div><span class="num-unit">fps</span></div>
+                </div>
+                <splitter class="horizontal" min-size="110" max-size="520" default-size="180"></splitter>
+                <div class="bottom-panel">
+                <section class="material-manager">
+                    <div class="small-menu menu-bar">
+                        <div class="fold"></div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'm-create'" data-event-click="menu = menu == 'm-create' ? '' : 'm-create'"><span>Create</span></div>
+                        <div class="menu" data-if="menu == 'm-create'">
+                            <div class="menu-item" data-event-click="menu = ''; materialCreate()"><span>New Material</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('cube')"><span>Cube</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('sphere')"><span>Sphere</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('plane')"><span>Plane</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-anchor"><div class="menu-title dim"><span>Edit</span></div></div>
+                    <div class="menu-anchor"><div class="menu-title dim"><span>Function</span></div></div>
+                    <div class="menu-anchor"><div class="menu-title dim"><span>Texture</span></div></div>
+                    </div>
+                    <div class="material-tiles">
+                        <div class="material-tile" data-for="name, i : outliner.materials" data-class-editing="material.sceneIndex == i" data-attr-material-index="i" data-attr-tooltip="name" data-event-click="materialOpen(i)" data-event-dragend="outliner.dropRow = -1"><materialpreview class="preview-sphere" data-attr-material="i"></materialpreview><span class="clip">{{ name }}</span></div>
+                        <p class="tiles-empty" data-if="outliner.materials.size == 0">No materials. Create one, then drag it onto an object.</p>
+                    </div>
+                </section>
+                </div>
+            </div>
+
+            <splitter class="vertical" min-size="300" max-size="900" default-size="470"></splitter>
+            <section class="object-manager">
+                <div class="object-rows scroll-y" data-event-dragmove="outlinerDragMove()" data-event-dragout="outlinerDragOut()" data-event-dragdrop="outlinerDrop()">
+                    <div class="empty-state" data-if="outliner.rows.size == 0">
+                        <p class="empty-title">Empty scene</p>
+                        <p class="empty-message">Open a file, drop one on the viewport, or add an object from the toolbar.</p>
+                    </div>
+                    <button class="object-row" data-for="row, i : outliner.rows" data-attr-row="i" data-style-padding-left="(8 + row.depth * 16) + 'dp'" data-class-active="row.selected" data-class-drop="outliner.dropRow == i &amp;&amp; outliner.dropPlace == 'into'" data-class-drop-before="outliner.dropRow == i &amp;&amp; outliner.dropPlace == 'before'" data-class-drop-after="outliner.dropRow == i &amp;&amp; outliner.dropPlace == 'after'" data-attr-tooltip="row.kind" data-event-click="outlinerSelect(i)" data-event-dragend="outliner.dropRow = -1">
+                        <div class="object-fold"><svg data-if="row.parent" data-class-collapsed="!row.expanded" src="/UI/Icons/chevron-down.svg" data-event-click="outlinerToggle(i)"/></div>
+                        <div class="object-dot"></div>
+                        <svg class="object-icon" data-attr-src="'/UI/Icons/' + row.icon + '.svg'"/>
+                        <span class="object-name clip">{{ row.name }}</span>
+                        <span class="object-badge" data-if="row.active">active</span>
+                        <materialpreview class="preview-sphere material-tag" data-if="row.material &gt;= 0" data-attr-material="row.material" tooltip="Edit the material of this object" data-event-click="materialOpen(row.material)"></materialpreview>
+                        <svg class="object-more" src="/UI/Icons/show.svg"/>
+                    </button>
+                </div>
+
+                <splitter class="horizontal" min-size="200" max-size="1200" default-size="480"></splitter>
+                <div class="attribute-manager">
+                    <div class="attr-header">
+                        <div class="attr-title">
+                            <svg class="object-icon" src="/UI/Icons/shape-cube.svg" data-if="inspector.tab == 'object' &amp;&amp; inspector.kind == 'instance'"/>
+                            <svg class="object-icon" src="/UI/Icons/light-point.svg" data-if="inspector.tab == 'object' &amp;&amp; inspector.kind == 'light'"/>
+                            <svg class="object-icon" src="/UI/Icons/object-camera.svg" data-if="inspector.tab == 'object' &amp;&amp; inspector.kind == 'camera'"/>
+                            <svg class="object-icon" src="/UI/Icons/object-array.svg" data-if="inspector.tab == 'object' &amp;&amp; inspector.kind == 'gaussians'"/>
+                            <span class="clip" data-if="inspector.tab == 'object' &amp;&amp; inspector.kind != ''">{{ inspector.name }}</span>
+                            <span data-if="inspector.tab == 'object' &amp;&amp; inspector.kind == ''">Attributes</span>
+                            <span data-if="inspector.tab == 'render'">Render</span>
+                            <span data-if="inspector.tab == 'environment'">World</span>
+                            <span data-if="inspector.tab == 'statistics'">Statistics</span>
+                        </div>
+                        <div class="tabs">
+                            <button class="tab" data-class-on="inspector.tab == 'object'" data-event-click="inspector.tab = 'object'"><span>Object</span></button>
+                            <button class="tab" data-class-on="inspector.tab == 'render'" data-event-click="inspector.tab = 'render'"><span>Render</span></button>
+                            <button class="tab" data-class-on="inspector.tab == 'environment'" data-event-click="inspector.tab = 'environment'"><span>World</span></button>
+                            <button class="tab" data-class-on="inspector.tab == 'statistics'" data-event-click="inspector.tab = 'statistics'"><span>Stats</span></button>
+                        </div>
+                    </div>
+                    <div class="attributes-body scroll-y">
+                        <div data-if="inspector.tab == 'object'"><template src="inspector-object"/></div>
+                        <div data-if="inspector.tab == 'render'"><template src="inspector-render"/></div>
+                        <div data-if="inspector.tab == 'environment'"><template src="inspector-environment"/></div>
+                        <div data-if="inspector.tab == 'statistics'"><template src="inspector-statistics"/></div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </div>

@@ -1,0 +1,9 @@
+/build/
+/build-*/
+/cmake-build-*/
+/.cache/
+__pycache__/
+*.pyc
+*.spv
+compile_commands.json
+/external/blender-usd/

@@ -1,0 +1,7 @@
+add_subdirectory(NoorRay)
+if(NOT PLATFORM_WEB)
+    add_subdirectory(NoorRay.Cli)
+endif()
+if(NOORRAY_BUILD_APP)
+    add_subdirectory(NoorRay.App)
+endif()

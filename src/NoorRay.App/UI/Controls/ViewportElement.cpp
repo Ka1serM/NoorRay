@@ -328,7 +328,7 @@ void ViewportElement::showDisplay(Rml::RenderManager& renderManager) {
     texture = renderManager.MakeCallbackTexture(
         [&renderer, image = display,
          size = Rml::Vector2i(static_cast<int>(display.getWidth()), static_cast<int>(display.getHeight()))](const Rml::CallbackTextureInterface& callback) {
-            callback.SetTextureHandle(renderer.addTexture(image), size);
+            callback.SetTextureHandle(renderer.addTexture(image, RmlKit::UI::TextureMode::Premultiplied), size);
             return true;
         });
 }

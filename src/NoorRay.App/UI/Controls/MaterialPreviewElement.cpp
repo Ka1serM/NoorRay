@@ -56,7 +56,7 @@ void MaterialPreviewElement::OnUpdate() {
     shownImage = image->getBackend();
     const auto size = static_cast<int>(instancer.getPreviews().getSize());
     texture = GetRenderManager()->MakeCallbackTexture([renderer, image = *image, size](const Rml::CallbackTextureInterface& callback) {
-        callback.SetTextureHandle(renderer->addTexture(image), {size, size});
+        callback.SetTextureHandle(renderer->addTexture(image, RmlKit::UI::TextureMode::Premultiplied), {size, size});
         return true;
     });
 }

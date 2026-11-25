@@ -13,6 +13,8 @@ public:
     void frame(const Core::Bounds& bounds, float verticalFov);
     void follow(const Core::Transform& transform);
     void orbit(float yawRadians, float pitchRadians);
+    //! Moves the target along the view to what the camera looks at in the scene bounds, without moving the camera, so an orbit turns about a point ahead of it.
+    void pivotAhead(const Core::Bounds& bounds);
     void look(float yawRadians, float pitchRadians);
     void pan(float right, float up);
     void zoom(float steps);

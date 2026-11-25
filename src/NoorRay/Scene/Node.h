@@ -15,7 +15,8 @@ struct GaussianCloud;
 struct Volume;
 struct Camera;
 
-using NodeObject = std::variant<std::monostate, Core::Handle<Instance>, Core::Handle<Light>, Core::Handle<GaussianCloud>, Core::Handle<Volume>, Core::Handle<Camera>>;
+using NodeObject =
+    std::variant<std::monostate, Core::Handle<Instance>, Core::Handle<Light>, Core::Handle<GaussianCloud>, Core::Handle<Volume>, Core::Handle<Camera>>;
 
 //! A node without an object is a group. The scene keeps the world transform and the children, and writes the world transform into the object.
 struct Node {

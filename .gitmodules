@@ -19,6 +19,25 @@
 [submodule "external/RmlKit"]
 	path = external/RmlKit
 	url = https://github.com/Ka1serM/RmlKit.git
-[submodule "external/flatbuffers"]
-	path = external/flatbuffers
-	url = https://github.com/google/flatbuffers.git
+[submodule "external/NRD"]
+	path = external/NRD
+	url = https://github.com/NVIDIA-RTX/NRD.git
+[submodule "external/MathLib"]
+	path = external/MathLib
+	url = https://github.com/NVIDIA-RTX/MathLib.git
+[submodule "external/ShaderMake"]
+	path = external/ShaderMake
+	url = https://github.com/NVIDIA-RTX/ShaderMake.git
+[submodule "external/FidelityFX-SDK"]
+	path = external/FidelityFX-SDK
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
+	shallow = true
+[submodule "external/SHARC"]
+	path = external/SHARC
+	url = https://github.com/NVIDIA-RTX/SHARC.git
+[submodule "external/OpenDLSS-RR"]
+	path = external/OpenDLSS-RR
+	url = https://github.com/Ka1serM/OpenDLSS-RR.git
+[submodule "external/xatlas"]
+	path = external/xatlas
+	url = https://github.com/jpcy/xatlas.git

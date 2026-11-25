@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "noorray_blender"
+version = "0.1.0"
+name = "NoorRay"
+tagline = "The NoorRay spectral path tracer as a render engine"
+maintainer = "Marcel K."
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+platforms = ["linux-x64", "windows-x64"]
+
+[permissions]
+files = "Reads the images of materials and the world"

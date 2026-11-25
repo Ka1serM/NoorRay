@@ -104,8 +104,14 @@ float focusLens(const Scene::Lens& lens, const float focusDistance) {
 std::expected<void, Core::Error> CameraBuffers::update(NoorRHI::Device& device, const Scene::Camera& camera, const std::uint32_t width,
                                                        const std::uint32_t height) {
     const float aspect = height > 0 ? float(width) / float(height) : 1.0f;
-    const float sensorHeight = camera.sensor.height;
-    const float sensorWidth = sensorHeight * aspect;
+    const Core::float4 window = camera.window;
+    const float windowWidth = window.z - window.x;
+    const float windowHeight = window.w - window.y;
+    const float sensorHeight = camera.sensor.height * windowHeight;
+    const float sensorWidth = sensorHeight * aspect * camera.pixelAspect;
+    const float orthographicHeight = camera.orthographicHeight * windowHeight;
+    const float offsetX = camera.sensor.offset.x + (0.5f * (window.x + window.z) - 0.5f) * sensorWidth / windowWidth;
+    const float offsetY = camera.sensor.offset.y + (0.5f - 0.5f * (window.y + window.w)) * camera.sensor.height;
     const float focal = camera.getFocalLength();
 
     record = {};
@@ -113,11 +119,15 @@ std::expected<void, Core::Error> CameraBuffers::update(NoorRHI::Device& device, 
     writeRows(record.worldToCamera, camera.transform.inverse());
     writeRows(record.previousCameraToWorld, camera.previousTransform);
     writeRows(record.previousWorldToCamera, camera.previousTransform.inverse());
-    record.sensor = {sensorWidth, sensorHeight, camera.sensor.offset.x, camera.sensor.offset.y};
+    record.sensor = {sensorWidth, sensorHeight, offsetX, offsetY};
     const float spread = std::atan(sensorHeight / (focal * float(std::max(height, 1u))));
-    record.projection = {focal, camera.orthographicHeight, camera.focusDistance, spread};
-    record.aperture = {camera.type == Scene::CameraType::Orthographic ? 0.0f : camera.getApertureRadius(), float(camera.blades), 0.0f, 1.0f};
-    record.clip = {camera.near, camera.far, camera.orthographicHeight / float(std::max(height, 1u)), 0.0f};
+    record.projection = {focal, orthographicHeight, camera.focusDistance, spread};
+    record.aperture = {camera.type == Scene::CameraType::Orthographic ? 0.0f : camera.getApertureRadius(), float(camera.blades), camera.apertureRotation,
+                       1.0f / std::max(camera.apertureRatio, 1e-3f)};
+    record.clip = {camera.near, camera.far, orthographicHeight / float(std::max(height, 1u)), 0.0f};
+    record.panorama[0] = {camera.panorama[0], camera.panorama[1], camera.panorama[2], camera.panorama[3]};
+    record.panorama[1] = {camera.panorama[4], camera.panorama[5], camera.panorama[6], camera.panorama[7]};
+    record.window = {windowWidth, windowHeight, window.x, window.y};
     record.meta = {static_cast<std::uint32_t>(camera.type), 0, width, height};
 
     std::vector<Shaders::LensElementRecord> elements;

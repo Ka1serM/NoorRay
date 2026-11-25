@@ -2,6 +2,7 @@ import NoorRHI;
 import SceneRecords;
 import Common.Math;
 import Common.Random;
+__exported import Scene.GaussianKernel;
 
 struct Gaussian {
     float3 mean;
@@ -19,13 +20,7 @@ Gaussian loadGaussian(GaussianCloudRecord cloud, uint index, float4 positionOpac
     return gaussian;
 }
 
-float3 toGaussianSpace(Gaussian gaussian, float3 v) {
-    const float4 inverse = float4(-gaussian.rotation.xyz, gaussian.rotation.w);
-    return rotateQuaternion(inverse, v) / gaussian.scale;
-}
-
-//! The squared cutoff radius in standard deviations: the response ends at the alpha 1/255, as the proxy instances are scaled.
-float gaussianCutoffSquared(float opacity) { return 2.0 * log(max(opacity * 255.0, 1.0)); }
+float3 toGaussianSpace(Gaussian gaussian, float3 v) { return rotateByInverse(gaussian.rotation, v) / gaussian.scale; }
 
 //! The same Gaussian on the same ray gets the same number in every candidate test, so acceptance does not depend on traversal order.
 float gaussianRandom(uint raySeed, uint cloud, uint gaussian) { return float(hashCombine(hashCombine(raySeed, cloud), gaussian) >> 8) * (1.0 / 16777216.0); }
@@ -37,7 +32,7 @@ struct GaussianCandidate {
 };
 
 //! Stochastic sorting-free acceptance: the candidate wins with probability alpha at its peak inside [tMin, tMax]. The ray is in the space of the
-//! instance, where the Gaussian is the unit ball scaled by its cutoff, so only the opacity loads.
+//! instance, where the Gaussian is the unit ball of its cutoff radius, so only the opacity loads; scaled by that radius, it is in the unit normal space.
 GaussianCandidate testGaussian(SceneRecord scene, RayCandidate hit, float tMin, float tMax, uint raySeed) {
     const GaussianCloudRecord cloud = scene.gaussianClouds[hit.instanceId];
     GaussianCandidate candidate;
@@ -48,15 +43,12 @@ GaussianCandidate testGaussian(SceneRecord scene, RayCandidate hit, float tMin, 
     const float random = gaussianRandom(raySeed, hit.instanceId, candidate.gaussian);
     if (random >= opacity)
         return candidate;
-    const float3 o = hit.objectRayOrigin;
-    const float3 d = hit.objectRayDirection;
-    const float t = -dot(o, d) / dot(d, d);
-    if (!(t > tMin) || t >= tMax)
+    const float cutoff = sqrt(gaussianCutoffSquared(opacity));
+    const GaussianPeak peak = findGaussianPeak(opacity, hit.objectRayOrigin * cutoff, hit.objectRayDirection * cutoff);
+    if (!(peak.t > tMin) || peak.t >= tMax)
         return candidate;
-    const float3 closest = o + d * t;
-    const float alpha = min(opacity * exp(-0.5 * gaussianCutoffSquared(opacity) * dot(closest, closest)), 0.999);
-    candidate.t = t;
-    candidate.accepted = random < alpha;
+    candidate.t = peak.t;
+    candidate.accepted = random < peak.alpha && peak.alpha >= gaussianMinAlpha;
     return candidate;
 }
 
@@ -70,42 +62,16 @@ float3 shCoefficient(GaussianCloudRecord cloud, uint gaussian, uint coefficient)
     return float3(shHalf(cloud, base), shHalf(cloud, base + 1), shHalf(cloud, base + 2));
 }
 
-//! 3DGS convention: direction points from the camera to the Gaussian, in cloud space; the result is offset by 0.5 and clamped at zero.
+//! The SH sum of the 3DGS convention, before decodeGaussianColor; direction points from the camera to the Gaussian, in cloud space.
 float3 evaluateGaussianSh(GaussianCloudRecord cloud, uint gaussian, float3 direction) {
-    const float3 d = safeNormalize(direction);
-    const float x = d.x;
-    const float y = d.y;
-    const float z = d.z;
-    float3 result = 0.28209479177387814 * shCoefficient(cloud, gaussian, 0);
-    const uint degree = cloud.shDegree;
-    if (degree >= 1) {
-        const float c1 = 0.4886025119029199;
-        result += -c1 * y * shCoefficient(cloud, gaussian, 1) + c1 * z * shCoefficient(cloud, gaussian, 2) - c1 * x * shCoefficient(cloud, gaussian, 3);
-    }
-    if (degree >= 2) {
-        const float xx = x * x;
-        const float yy = y * y;
-        const float zz = z * z;
-        result += 1.0925484305920792 * x * y * shCoefficient(cloud, gaussian, 4) - 1.0925484305920792 * y * z * shCoefficient(cloud, gaussian, 5) +
-                  0.31539156525252005 * (2.0 * zz - xx - yy) * shCoefficient(cloud, gaussian, 6) -
-                  1.0925484305920792 * x * z * shCoefficient(cloud, gaussian, 7) + 0.5462742152960396 * (xx - yy) * shCoefficient(cloud, gaussian, 8);
-        if (degree >= 3)
-            result += -0.5900435899266435 * y * (3.0 * xx - yy) * shCoefficient(cloud, gaussian, 9) +
-                      2.890611442640554 * x * y * z * shCoefficient(cloud, gaussian, 10) -
-                      0.4570457994644658 * y * (4.0 * zz - xx - yy) * shCoefficient(cloud, gaussian, 11) +
-                      0.3731763325901154 * z * (2.0 * zz - 3.0 * xx - 3.0 * yy) * shCoefficient(cloud, gaussian, 12) -
-                      0.4570457994644658 * x * (4.0 * zz - xx - yy) * shCoefficient(cloud, gaussian, 13) +
-                      1.445305721320277 * z * (xx - yy) * shCoefficient(cloud, gaussian, 14) -
-                      0.5900435899266435 * x * (xx - 3.0 * yy) * shCoefficient(cloud, gaussian, 15);
-    }
-    return max(result + 0.5, float3(0.0, 0.0, 0.0));
-}
-
-//! 3DGS trains the SH on sRGB-encoded images, so its output is display-encoded and becomes linear radiance here.
-float3 srgbToLinear(float3 encoded) {
-    const float3 low = encoded / 12.92;
-    const float3 high = pow((encoded + 0.055) / 1.055, float3(2.4, 2.4, 2.4));
-    return float3(encoded.x <= 0.04045 ? low.x : high.x, encoded.y <= 0.04045 ? low.y : high.y, encoded.z <= 0.04045 ? low.z : high.z);
+    const float basis[16] = gaussianShBasis(safeNormalize(direction));
+    const uint count = (cloud.shDegree + 1) * (cloud.shDegree + 1);
+    float3 sum = float3(0.0, 0.0, 0.0);
+    [ForceUnroll]
+    for (uint coefficient = 0; coefficient < 16; ++coefficient)
+        if (coefficient < count)
+            sum += basis[coefficient] * shCoefficient(cloud, gaussian, coefficient);
+    return sum;
 }
 
 struct GaussianSurface {
@@ -130,6 +96,6 @@ GaussianSurface loadGaussianSurface(SceneRecord scene, uint cloudIndex, uint gau
     if (dot(normal, normal) == 0.0)
         normal = -worldDirection;
     surface.normal = dot(normal, worldDirection) > 0.0 ? -normal : normal;
-    surface.color = srgbToLinear(evaluateGaussianSh(cloud, gaussianIndex, objectDirection));
+    surface.color = decodeGaussianColor(evaluateGaussianSh(cloud, gaussianIndex, objectDirection));
     return surface;
 }

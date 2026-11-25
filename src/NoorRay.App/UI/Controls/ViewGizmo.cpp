@@ -61,8 +61,7 @@ void ViewGizmo::sync(Rml::Element& viewport, const Core::Transform& camera) {
     const Core::float3 up = Core::normalize(camera.getColumn(1));
     const Core::float3 back = Core::normalize(camera.getColumn(2));
     const std::array<float, 9> next{right.x, right.y, right.z, up.x, up.y, up.z, back.x, back.y, back.z};
-    if (valid && density == ratio
-        && std::equal(next.begin(), next.end(), basis.begin(), [](const float a, const float b) { return std::abs(a - b) <= 1e-6f; }))
+    if (valid && density == ratio && std::equal(next.begin(), next.end(), basis.begin(), [](const float a, const float b) { return std::abs(a - b) <= 1e-6f; }))
         return;
     const bool force = !valid;
     basis = next;
@@ -114,9 +113,10 @@ void ViewGizmo::sync(Rml::Element& viewport, const Core::Transform& camera) {
         across = acrossLength > 1e-4f ? across / acrossLength : Rml::Vector3f(right.x, right.y, right.z);
         const Rml::Vector3f normal = direction.CrossProduct(across);
         const Rml::Vector3f along = direction * lengthScale;
-        spokes[k]->SetProperty(Rml::PropertyId::Transform,
-                               Rml::Transform::MakeProperty({Rml::Transforms::Matrix3D(Rml::Matrix4f::FromColumns(
-                                   {along.x, along.y, along.z, 0.0f}, {across.x, across.y, across.z, 0.0f}, {normal.x, normal.y, normal.z, 0.0f}, {0, 0, 0, 1}))}));
+        spokes[k]->SetProperty(
+            Rml::PropertyId::Transform,
+            Rml::Transform::MakeProperty({Rml::Transforms::Matrix3D(Rml::Matrix4f::FromColumns(
+                {along.x, along.y, along.z, 0.0f}, {across.x, across.y, across.z, 0.0f}, {normal.x, normal.y, normal.z, 0.0f}, {0, 0, 0, 1}))}));
         setOrder(*spokes[k], rank[i], nextRank[i], force);
     }
     rank = nextRank;

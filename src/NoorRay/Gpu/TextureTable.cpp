@@ -1,10 +1,10 @@
 #include "NoorRay/Gpu/TextureTable.h"
 
-#include "NoorRHI/Device/Device.h"
-
 #include <algorithm>
 #include <bit>
 #include <unordered_set>
+
+#include "NoorRHI/Device/Device.h"
 
 namespace NoorRay::Gpu {
 

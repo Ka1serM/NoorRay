@@ -11,6 +11,7 @@ struct Sensor {
     Core::float2 offset;
 
     float getAspect() const { return width / height; }
+    bool operator==(const Sensor&) const = default;
 };
 
 }

@@ -8,6 +8,7 @@
         <div class="attr-row"><p class="attr-label">Resolution</p><div class="attr-control"><span class="text-secondary">{{ status.resolution }}</span></div></div>
         <div class="attr-row"><p class="attr-label">Frame time</p><div class="attr-control"><span class="text-secondary">{{ status.frameTime }}</span></div></div>
         <div class="attr-row"><p class="attr-label">Rate</p><div class="attr-control"><span class="text-secondary">{{ status.framesPerSecond }}</span></div></div>
+        <div class="attr-row" data-if="status.compiling != ''"><p class="attr-label"></p><p class="attr-note">{{ status.compiling }}</p></div>
     </div>
 
     <div class="attr-section">

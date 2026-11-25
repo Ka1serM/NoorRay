@@ -1,5 +1,6 @@
 #include "NoorRay/Materials/TextureCache.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -12,6 +13,10 @@
 #include <tinyexr.h>
 
 namespace NoorRay::Materials {
+
+float TextureCache::srgbToLinear(const float encoded) {
+    return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+}
 
 Scene::Texture TextureCache::fromRgba8(std::string name, const std::uint32_t width, const std::uint32_t height, const std::span<const std::uint8_t> pixels,
                                        const bool srgb) {
@@ -36,6 +41,14 @@ Scene::Texture TextureCache::fromRgbaFloat(std::string name, const std::uint32_t
 std::expected<Scene::Texture, Core::Error> TextureCache::decode(std::string name, const std::span<const std::byte> encoded, const ColorSpace colorSpace) {
     const auto* bytes = reinterpret_cast<const unsigned char*>(encoded.data());
     const int size = static_cast<int>(encoded.size());
+    //! The GPU decodes 8-bit sRGB texels; wider texels become linear here.
+    const auto linearize = [&](const std::span<float> values) {
+        if (colorSpace != ColorSpace::Srgb)
+            return;
+        for (std::size_t index = 0; index < values.size(); ++index)
+            if (index % 4 != 3)
+                values[index] = srgbToLinear(values[index]);
+    };
     if (IsEXRFromMemory(bytes, encoded.size()) == TINYEXR_SUCCESS) {
         float* pixels = nullptr;
         int width = 0, height = 0;
@@ -45,6 +58,7 @@ std::expected<Scene::Texture, Core::Error> TextureCache::decode(std::string name
             FreeEXRErrorMessage(message);
             return Core::fail(Core::ErrorCode::InvalidFile, std::format("{}: {}", name, reason));
         }
+        linearize(std::span(pixels, std::size_t(width) * height * 4));
         Scene::Texture texture = fromRgbaFloat(std::move(name), static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
                                                std::span(pixels, std::size_t(width) * height * 4));
         std::free(pixels);
@@ -55,10 +69,22 @@ std::expected<Scene::Texture, Core::Error> TextureCache::decode(std::string name
         float* pixels = stbi_loadf_from_memory(bytes, size, &width, &height, &channels, 4);
         if (!pixels)
             return Core::fail(Core::ErrorCode::InvalidFile, std::format("{}: {}", name, stbi_failure_reason()));
+        linearize(std::span(pixels, std::size_t(width) * height * 4));
         Scene::Texture texture = fromRgbaFloat(std::move(name), static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
                                                std::span(pixels, std::size_t(width) * height * 4));
         stbi_image_free(pixels);
         return texture;
+    }
+    if (stbi_is_16_bit_from_memory(bytes, size)) {
+        stbi_us* pixels = stbi_load_16_from_memory(bytes, size, &width, &height, &channels, 4);
+        if (!pixels)
+            return Core::fail(Core::ErrorCode::InvalidFile, std::format("{}: {}", name, stbi_failure_reason()));
+        std::vector<float> values(std::size_t(width) * height * 4);
+        for (std::size_t index = 0; index < values.size(); ++index)
+            values[index] = float(pixels[index]) / 65535.0f;
+        stbi_image_free(pixels);
+        linearize(values);
+        return fromRgbaFloat(std::move(name), static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), values);
     }
     stbi_uc* pixels = stbi_load_from_memory(bytes, size, &width, &height, &channels, 4);
     if (!pixels)

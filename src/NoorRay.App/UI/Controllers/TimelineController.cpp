@@ -3,39 +3,91 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <utility>
+
+#include <RmlUi/Core/Context.h>
 
 #include "NoorRay.App/UI/Controls/ViewportElement.h"
 #include "NoorRay.App/UI/Models/AppModel.h"
+#include "NoorRay/Session/Session.h"
 #include "RmlKit/UI/Models/Model.h"
 
 namespace NoorRay::App {
 
 namespace {
 
-constexpr int maxLabels = 12;
-constexpr int minorPerMajor = 5;
+//! The smallest space between two frame labels and between two ticks, in dp.
+constexpr float labelSpacing = 44.0f;
+constexpr float tickSpacing = 6.0f;
+//! Below this width in dp the transport hides the range labels and the first and last frame buttons.
+constexpr float narrowWidth = 600.0f;
 
 //! The smallest of 1, 2, 5, 10, 20, 50, ... frames that keeps the labels at most maxLabels.
-int labelStep(const int span) {
+int labelStep(const int span, const int maxLabels) {
     for (int scale = 1;; scale *= 10)
         for (const int base : std::array{1, 2, 5})
             if (span / (base * scale) <= maxLabels)
                 return base * scale;
 }
 
+//! The largest division of a label step whose ticks keep the tick spacing.
+int tickStep(const int major, const float pixelsPerFrame) {
+    for (const int parts : std::array{5, 2})
+        if (major % parts == 0 && static_cast<float>(major / parts) * pixelsPerFrame >= tickSpacing)
+            return major / parts;
+    return major;
 }
 
-TimelineController::TimelineController(RmlKit::UI::Model& model, AppModel& app, Rml::Element& root, ViewportElementInstancer& viewports)
-    : model(model), app(app), scrub(root, [this](const float fraction) { seek(fraction); }) {
+}
+
+TimelineController::TimelineController(RmlKit::UI::Model& model, AppModel& app, Rml::Element& root, Session::Session& session,
+                                       ViewportElementInstancer& viewports)
+    : model(model), app(app), root(root), session(session), viewports(viewports), scrub(root, [this](const float fraction) { seek(fraction); }) {
     model.bindEvent("timelinePlay", &TimelineController::onPlay, this);
     model.bindEvent("timelineFirst", &TimelineController::onFirst, this);
     model.bindEvent("timelineLast", &TimelineController::onLast, this);
     model.bindEvent("timelinePrevious", &TimelineController::onPrevious, this);
     model.bindEvent("timelineNext", &TimelineController::onNext, this);
     model.bindEvent("timelineApply", &TimelineController::onApply, this);
-    viewports.getEvents().tick = [this] { return tick(); };
+    viewports.getEvents().ticks.push_back([this] { return tick(); });
+    viewports.getEvents().opened = [this] { opened(); };
     show();
+}
+
+void TimelineController::opened() {
+    const Format::Animation& animation = session.getAnimation();
+    appliedFrame.reset();
+    if (animation.isEmpty())
+        return;
+    TimelineModel& timeline = app.timeline;
+    timeline.playing = false;
+    timeline.start = animation.getFirstFrame();
+    timeline.end = animation.getLastFrame();
+    timeline.fps = static_cast<int>(std::lround(animation.getFramesPerSecond()));
+    //! Importing applied the first frame.
+    timeline.frame = timeline.start;
+    appliedFrame = timeline.start;
+    show();
+}
+
+void TimelineController::applyFrame() {
+    TimelineModel& timeline = app.timeline;
+    if (session.getAnimation().isEmpty() || appliedFrame == timeline.frame)
+        return;
+    appliedFrame = timeline.frame;
+    const auto activeCamera = session.getScene().getActiveCamera();
+    if (auto applied = session.setFrame(timeline.frame); !applied) {
+        timeline.playing = false;
+        model.report(RmlKit::UI::ReportLevel::Error, "timeline", std::format("NoorRay cannot show frame {}: {}", timeline.frame, applied.error().message));
+    }
+    //! The view looks through the active camera, which the animation can move or switch; a switch is a cut for the temporal history.
+    if (session.getScene().getActiveCamera() != activeCamera)
+        session.getRenderer().resetHistory();
+    viewports.followActiveCamera();
+    viewports.invalidate();
+    if (viewports.getEvents().moved)
+        viewports.getEvents().moved();
 }
 
 void TimelineController::onPlay(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
@@ -76,6 +128,8 @@ void TimelineController::onApply(Rml::DataModelHandle, Rml::Event&, const Rml::V
 
 bool TimelineController::tick() {
     TimelineModel& timeline = app.timeline;
+    if (measure())
+        show();
     if (!timeline.playing)
         return false;
     const auto now = std::chrono::steady_clock::now();
@@ -110,12 +164,29 @@ void TimelineController::show() {
     const int span = timeline.end - timeline.start;
     const auto place = [&](const int frame) { return 100.0f * static_cast<float>(frame - timeline.start) / static_cast<float>(span); };
     timeline.playhead = place(timeline.frame);
-    const int major = labelStep(span);
-    const int minor = major >= minorPerMajor ? major / minorPerMajor : 1;
+    const int labels = std::max(1, static_cast<int>(rulerWidth / labelSpacing));
+    const int major = labelStep(span, labels);
+    const int minor = tickStep(major, rulerWidth / static_cast<float>(span));
     timeline.ticks.clear();
     for (int frame = (timeline.start + minor - 1) / minor * minor; frame <= timeline.end; frame += minor)
         timeline.ticks.push_back({frame, place(frame), frame % major == 0});
     model.dirty("timeline");
+    applyFrame();
+}
+
+bool TimelineController::measure() {
+    if (!ruler)
+        ruler = root.QuerySelector(".timeline-ruler");
+    if (!ruler)
+        return false;
+    const float ratio = ruler->GetContext()->GetDensityIndependentPixelRatio();
+    const float width = ruler->GetClientWidth() / ratio;
+    Rml::Element* transport = ruler->GetParentNode()->GetParentNode();
+    transport->SetClass("narrow", transport->GetClientWidth() / ratio < narrowWidth);
+    if (width == rulerWidth)
+        return false;
+    rulerWidth = width;
+    return true;
 }
 
 }

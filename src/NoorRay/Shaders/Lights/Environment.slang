@@ -19,7 +19,17 @@ float3 environmentRadiance(SceneRecord scene, float3 direction) {
 }
 
 //! What a camera ray that misses the scene sees: the environment, or black when it is hidden from the camera.
-float3 backgroundRadiance(SceneRecord scene, float3 direction) { return scene.sceneCenter.w != 0.0 ? environmentRadiance(scene, direction) : float3(0.0); }
+float3 backgroundRadiance(SceneRecord scene, float3 direction) {
+    if (scene.sceneCenter.w != environmentVisible)
+        return float3(0.0);
+    if (scene.environmentCamera.x == 0)
+        return environmentRadiance(scene, direction);
+    TextureHandle texture;
+    texture.value = scene.environmentCamera.x;
+    SamplerHandle sampler;
+    sampler.value = scene.environmentCamera.y;
+    return max(texture.SampleLevel(sampler, environmentUv(scene, direction), 0.0).xyz, 0.0) * scene.environmentColor.w;
+}
 
 bool hasEnvironmentTable(SceneRecord scene) { return scene.environment.z != 0 && scene.environment.w != 0; }
 

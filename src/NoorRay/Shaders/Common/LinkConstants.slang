@@ -4,3 +4,4 @@ extern static const bool hasVolumes;
 extern static const bool hasDispersion;
 extern static const bool hasAlphaTest;
 extern static const bool litGaussians;
+extern static const bool hasSubsurface;

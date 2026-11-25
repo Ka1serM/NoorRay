@@ -11,7 +11,7 @@
 
 namespace NoorRay::App {
 
-//! Cinema 4D's tool groups: a press held on an element with hold-menu="key" opens that menu, a quick click keeps the element's own click, and a release over a .flyout-item of the open menu clicks it.
+//! Cinema 4D's tool groups: holding an element with hold-menu="key" opens that menu, a click keeps its own click, a release on a .flyout-item clicks it.
 class HoldMenu final : public Rml::EventListener {
 public:
     HoldMenu(Rml::Element& root, std::function<void(const Rml::String&)> open);

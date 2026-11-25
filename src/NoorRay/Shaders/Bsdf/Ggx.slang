@@ -62,20 +62,22 @@ Ggx makeGgx(float roughness, float anisotropic) {
     return ggx;
 }
 
-//! Moves a shading normal just enough towards the geometric normal that the mirror direction of the view stays above the geometric surface (Cycles' ensure_valid_specular_reflection).
+//! Cycles' ensure_valid_specular_reflection: turns the shading normal towards Ng, in their plane, until the mirror of the view clears a threshold.
 float3 clampShadingNormal(float3 geometricNormal, float3 shadingNormal, float3 view) {
     const float3 reflected = reflect(-view, shadingNormal);
-    const float normalView = max(dot(geometricNormal, view), 0.0);
-    const float threshold = min(0.9 * normalView, 0.01);
+    const float iz = dot(view, geometricNormal);
+    const float threshold = min(0.9 * iz, 0.01);
     if (dot(geometricNormal, reflected) >= threshold)
         return shadingNormal;
-    const float3 rawTangent = geometricNormal * normalView - view;
-    const float tangentLengthSquared = dot(rawTangent, rawTangent);
-    if (tangentLengthSquared < 1e-8)
-        return shadingNormal;
-    const float3 tangent = rawTangent * rsqrt(tangentLengthSquared);
-    const float3 corrected = geometricNormal * threshold + tangent * safeSqrt(1.0 - threshold * threshold);
-    const float3 clamped = view + corrected;
-    const float clampedLengthSquared = dot(clamped, clamped);
-    return clampedLengthSquared < 1e-12 ? geometricNormal : clamped * rsqrt(clampedLengthSquared);
+    const float3 side = shadingNormal - dot(shadingNormal, geometricNormal) * geometricNormal;
+    const float sideLengthSquared = dot(side, side);
+    const float3 x = sideLengthSquared > 1e-20 ? side * rsqrt(sideLengthSquared) : shadingNormal;
+    const float ix = dot(view, x);
+    const float a = ix * ix + iz * iz;
+    const float b = 2.0 * (a + iz * threshold);
+    const float c = (threshold + iz) * (threshold + iz);
+    const float root = safeSqrt(b * b - 4.0 * a * c);
+    //! The root that solves the equation before squaring: ix and the right side keep their sign.
+    const float nz2 = 0.25 * (ix < 0.0 ? b + root : b - root) / max(a, 1e-20);
+    return safeSqrt(1.0 - nz2) * x + safeSqrt(nz2) * geometricNormal;
 }

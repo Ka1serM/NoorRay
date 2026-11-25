@@ -3,12 +3,13 @@ import SceneRecords;
 import Common.Math;
 import Common.Frame;
 import Common.RayCone;
+import Common.Random;
 
-//! A mesh hit as the shade kernels see it. context.normal and context.geometricNormal face the viewer; worldNormal keeps the winding of the world-space triangle.
+//! A mesh hit for the shade kernels: context.normal and context.geometricNormal face the viewer; worldNormal keeps the triangle winding.
 struct Surface {
     ShadingContext context;
     float3 worldNormal;
-    //! The hit lifted onto the smooth surface that the vertex normals describe, on the viewer side.
+    //! The hit lifted onto the smooth surface that the shading normals describe, on the viewer side.
     float3 liftedPosition;
     float3 previousPosition;
     uint instance;
@@ -43,6 +44,11 @@ uint triangleMaterial(SceneRecord scene, uint instanceIndex, uint primitive) {
 uint3 loadTriangle(MeshRecord mesh, uint primitive) {
     const Ptr<uint> indices = mesh.indices + primitive * 3;
     return uint3(indices[0], indices[1], indices[2]);
+}
+
+//! The stream elements of the three corners of a triangle: its corners for a corner stream, its vertices for a vertex stream.
+uint3 streamElements(MeshRecord mesh, uint stream, uint primitive, uint3 vertices) {
+    return (mesh.cornerStreams & stream) != 0 ? uint3(primitive * 3, primitive * 3 + 1, primitive * 3 + 2) : vertices;
 }
 
 //! The barycentric change for a world-space displacement d within the triangle plane spanned by e1 and e2.
@@ -99,13 +105,14 @@ Surface loadSurface(SceneRecord scene, uint instanceIndex, uint primitive, float
     float3 normal = worldNormal;
     surface.liftedPosition = position;
     if (!isNull(mesh.normals)) {
-        const float3 v0 = unpackOctahedral(mesh.normals[vertices.x]);
-        const float3 v1 = unpackOctahedral(mesh.normals[vertices.y]);
-        const float3 v2 = unpackOctahedral(mesh.normals[vertices.z]);
+        const uint3 elements = streamElements(mesh, meshCornerNormals, primitive, vertices);
+        const float3 v0 = unpackOctahedral(mesh.normals[elements.x]);
+        const float3 v1 = unpackOctahedral(mesh.normals[elements.y]);
+        const float3 v2 = unpackOctahedral(mesh.normals[elements.z]);
         normal = safeNormalize(transformNormal(instance.worldToObject, interpolate(v0, v1, v2, weights)));
         if (dot(normal, normal) == 0.0)
             normal = worldNormal;
-        //! Hanika 2021: each vertex normal spans a tangent plane, and a hit below a plane moves up to it, weighted like the vertex.
+        //! Hanika 2021: each corner normal spans a tangent plane, and a hit below a plane moves up to it, weighted like the vertex.
         const float side = backfacing ? -1.0 : 1.0;
         const float3 n0 = side * safeNormalize(transformNormal(instance.worldToObject, v0));
         const float3 n1 = side * safeNormalize(transformNormal(instance.worldToObject, v1));
@@ -114,21 +121,39 @@ Surface loadSurface(SceneRecord scene, uint instanceIndex, uint primitive, float
                                  weights.z * min(dot(position - p2, n2), 0.0) * n2;
     }
 
+    float3 restPosition = objectPosition;
+    if (!isNull(mesh.restPositions)) {
+        const float3 r0 = loadFloat3(mesh.restPositions, vertices.x);
+        const float3 r1 = loadFloat3(mesh.restPositions, vertices.y);
+        const float3 r2 = loadFloat3(mesh.restPositions, vertices.z);
+        restPosition = interpolate(r0, r1, r2, weights);
+        if ((surface.materialFlags & materialFlagRestNormal) != 0) {
+            float3 rest = cross(r1 - r0, r2 - r0);
+            if (!isNull(mesh.normals))
+                rest = interpolate(loadFloat3(mesh.restNormals, vertices.x), loadFloat3(mesh.restNormals, vertices.y), loadFloat3(mesh.restNormals, vertices.z), weights);
+            rest = safeNormalize(transformNormal(instance.worldToObject, rest));
+            normal = dot(rest, rest) > 0.0 ? rest : normal;
+        }
+    }
+
+    const uint3 uvElements = streamElements(mesh, meshCornerUvs, primitive, vertices);
     float4 tangent;
     if (!isNull(mesh.tangents)) {
-        const float4 t0 = unpackTangent(mesh.tangents[vertices.x]);
-        const float4 t1 = unpackTangent(mesh.tangents[vertices.y]);
-        const float4 t2 = unpackTangent(mesh.tangents[vertices.z]);
+        const uint3 elements = streamElements(mesh, meshCornerTangents, primitive, vertices);
+        const float4 t0 = unpackTangent(mesh.tangents[elements.x]);
+        const float4 t1 = unpackTangent(mesh.tangents[elements.y]);
+        const float4 t2 = unpackTangent(mesh.tangents[elements.z]);
         const float3 t = transformVector(instance.objectToWorld, interpolate(t0.xyz, t1.xyz, t2.xyz, weights));
         tangent = float4(safeNormalize(t - normal * dot(normal, t)), t0.w * mirror);
     } else {
-        const float2 uv0 = loadUv(mesh.uv0, vertices.x);
-        const float2 duv1 = loadUv(mesh.uv0, vertices.y) - uv0;
-        const float2 duv2 = loadUv(mesh.uv0, vertices.z) - uv0;
+        const float2 uv0 = loadUv(mesh.uv0, uvElements.x);
+        const float2 duv1 = loadUv(mesh.uv0, uvElements.y) - uv0;
+        const float2 duv2 = loadUv(mesh.uv0, uvElements.z) - uv0;
         const float uvDeterminant = duv1.x * duv2.y - duv1.y * duv2.x;
         float3 t = abs(uvDeterminant) > 1e-12 ? (e1 * duv2.y - e2 * duv1.y) / uvDeterminant : makeFrame(normal).tangent;
         t = t - normal * dot(normal, t);
-        tangent = float4(dot(t, t) > 1e-20 ? normalize(t) : makeFrame(normal).tangent, uvDeterminant < 0.0 ? -1.0 : 1.0);
+        //! The sign 0 tells a normal map that the mesh has no UV map.
+        tangent = float4(dot(t, t) > 1e-20 ? normalize(t) : makeFrame(normal).tangent, isNull(mesh.uv0) ? 0.0 : uvDeterminant < 0.0 ? -1.0 : 1.0);
     }
 
     float3 dPdx;
@@ -136,6 +161,10 @@ Surface loadSurface(SceneRecord scene, uint instanceIndex, uint primitive, float
     coneFootprint(cone, direction, worldNormal, dPdx, dPdy);
     const float2 bx = barycentricDelta(e1, e2, dPdx);
     const float2 by = barycentricDelta(e1, e2, dPdy);
+    if ((surface.materialFlags & materialFlagRestNormal) != 0) {
+        dPdx -= normal * dot(normal, dPdx);
+        dPdy -= normal * dot(normal, dPdy);
+    }
 
     ShadingContext context;
     context.position = float4(position, 1.0);
@@ -153,12 +182,12 @@ Surface loadSurface(SceneRecord scene, uint instanceIndex, uint primitive, float
     float2 uvGradientY = float2(0.0, 0.0);
     [unroll]
     for (uint set = 0; set < 4; ++set) {
-        if (set >= mesh.uvSetCount)
-            break;
         const Ptr<uint> stream = set == 0 ? mesh.uv0 : (set == 1 ? mesh.uv1 : (set == 2 ? mesh.uv2 : mesh.uv3));
-        const float2 a = loadUv(stream, vertices.x);
-        const float2 b = loadUv(stream, vertices.y);
-        const float2 c = loadUv(stream, vertices.z);
+        if (isNull(stream))
+            continue;
+        const float2 a = loadUv(stream, uvElements.x);
+        const float2 b = loadUv(stream, uvElements.y);
+        const float2 c = loadUv(stream, uvElements.z);
         uvs[set] = interpolate(a, b, c, weights);
         if (set == 0) {
             uvGradientX = (b - a) * bx.x + (c - a) * bx.y;
@@ -170,12 +199,35 @@ Surface loadSurface(SceneRecord scene, uint instanceIndex, uint primitive, float
     context.uvGradients = float4(uvGradientX, uvGradientY);
 
     context.color = float4(1.0, 1.0, 1.0, 1.0);
-    if (!isNull(mesh.colors))
-        context.color = interpolate(unpackUnorm4x8(mesh.colors[vertices.x]), unpackUnorm4x8(mesh.colors[vertices.y]), unpackUnorm4x8(mesh.colors[vertices.z]),
+    if (!isNull(mesh.colors)) {
+        const uint3 elements = streamElements(mesh, meshCornerColors, primitive, vertices);
+        context.color = interpolate(unpackUnorm4x8(mesh.colors[elements.x]), unpackUnorm4x8(mesh.colors[elements.y]), unpackUnorm4x8(mesh.colors[elements.z]),
                                     float4(weights, 0.0));
+    }
 
     context.dPdx = float4(dPdx, 0.0);
     context.dPdy = float4(dPdy, 0.0);
+    //! Blender's automatic texture space gives a flat axis a half size of 1 about its middle.
+    const float3 extent = mesh.boundsMax.xyz - mesh.boundsMin.xyz;
+    const bool3 flat = extent == 0.0;
+    const float3 generatedScale = 1.0 / select(flat, float3(2.0, 2.0, 2.0), extent);
+    const float3 generated = (restPosition - select(flat, mesh.boundsMin.xyz - 1.0, mesh.boundsMin.xyz)) * generatedScale;
+    const uint closureSeed = hashCombine(hashCombine(hashPcg(asuint(objectPosition.x)), asuint(objectPosition.y)), asuint(objectPosition.z) ^ primitive);
+    context.objectPosition = float4((surface.materialFlags & materialFlagRestNormal) != 0 ? restPosition : objectPosition, float(instance.info.z >> 16) / 65535.0);
+    context.generated = float4(generated, uintToFloat(closureSeed));
+    context.objectLocation = float4(instance.objectToWorld[0].w, instance.objectToWorld[1].w, instance.objectToWorld[2].w, 0.0);
+    context.objectDx = float4(transformVector(instance.worldToObject, dPdx), 0.0);
+    context.objectDy = float4(transformVector(instance.worldToObject, dPdy), 0.0);
+    context.generatedScale = float4(generatedScale, 0.0);
+    context.worldToObject0 = instance.worldToObject[0];
+    context.worldToObject1 = instance.worldToObject[1];
+    context.worldToObject2 = instance.worldToObject[2];
+    context.objectToWorld0 = instance.objectToWorld[0];
+    context.objectToWorld1 = instance.objectToWorld[1];
+    context.objectToWorld2 = instance.objectToWorld[2];
+    setCameraRay(context);
+    context.objectColor = float4(unpackHalf2(instance.info.x), unpackHalf2(instance.info.y));
+    context.objectInfo.x = float(instance.info.z & 0xffffu);
     surface.context = context;
     return surface;
 }

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <expected>
 #include <span>
-#include <vector>
 
 #include "NoorRHI/Resources/Buffer.h"
 #include "NoorRay/Core/Error.h"
@@ -27,12 +26,7 @@ template <class T>
 [[nodiscard]] std::expected<void, Core::Error> openZeroed(NoorRHI::Device& device, NoorRHI::Buffer<T>& buffer, const std::size_t count) {
     if (auto opened = buffer.open(device, count); !opened)
         return Core::fail(std::move(opened.error()));
-    const std::size_t chunk = std::clamp<std::size_t>((std::size_t{1} << 20) / sizeof(T), 1, count);
-    const std::vector<T> zeros(chunk);
-    for (std::size_t offset = 0; offset < count; offset += chunk)
-        if (auto uploaded = buffer.upload(std::span<const T>(zeros).first(std::min(chunk, count - offset)), offset); !uploaded)
-            return Core::fail(std::move(uploaded.error()));
-    return {};
+    return Core::check(buffer.clear());
 }
 
 }

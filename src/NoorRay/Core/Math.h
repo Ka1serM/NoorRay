@@ -45,6 +45,9 @@ constexpr float3 operator/(const float3 a, const float s) {
 constexpr float3& operator+=(float3& a, const float3 b) {
     return a = a + b;
 }
+constexpr bool operator==(const float2 a, const float2 b) {
+    return a.x == b.x && a.y == b.y;
+}
 constexpr bool operator==(const float3 a, const float3 b) {
     return a.x == b.x && a.y == b.y && a.z == b.z;
 }

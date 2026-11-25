@@ -1,9 +1,9 @@
     <div class="view" id="editor" nav="editor" crumb="Editor">
         <div class="workspace">
             <nav class="mode-strip">
-                <button class="mode" data-class-on="tool == 'move'" tooltip="Move" hotkey="E" data-event-click="tool = 'move'"><svg src="/UI/Icons/tool-move.svg"/></button>
-                <button class="mode" data-class-on="tool == 'rotate'" tooltip="Rotate" hotkey="R" data-event-click="tool = 'rotate'"><svg src="/UI/Icons/tool-rotate.svg"/></button>
-                <button class="mode" data-class-on="tool == 'scale'" tooltip="Scale" hotkey="T" data-event-click="tool = 'scale'"><svg src="/UI/Icons/tool-scale.svg"/></button>
+                <button class="mode" data-class-on="tool == 'translate'" tooltip="Translate" hotkey="W" data-event-click="tool = 'translate'"><svg src="/UI/Icons/tool-translate.svg"/></button>
+                <button class="mode" data-class-on="tool == 'rotate'" tooltip="Rotate" hotkey="E" data-event-click="tool = 'rotate'"><svg src="/UI/Icons/tool-rotate.svg"/></button>
+                <button class="mode" data-class-on="tool == 'scale'" tooltip="Scale" hotkey="R" data-event-click="tool = 'scale'"><svg src="/UI/Icons/tool-scale.svg"/></button>
             </nav>
 
             <div class="center-column">
@@ -29,6 +29,12 @@
                                 <div class="view-tool tool-pan" tooltip="Drag to pan"><svg class="icon-16" src="/UI/RmlKit/Icons/icon-hand-grab.svg"/></div>
                             </div>
                         </viewport>
+                        <div class="preview-frame" data-if="viewportSource.shown"></div>
+                        <div class="preview-banner" data-if="viewportSource.shown">
+                            <div class="preview-text"><p class="preview-title">{{ viewportSource.title }}</p><p class="preview-detail">{{ viewportSource.detail }}</p></div>
+                            <button class="preview-button" data-class-disabled="!viewportSource.actionEnabled" data-event-click="viewportSourceAction()"><span>{{ viewportSource.action }}</span></button>
+                            <button class="preview-button" data-event-click="viewportSourceLeave()"><span>Back to scene</span></button>
+                        </div>
                     </div>
                 </section>
 
@@ -44,13 +50,13 @@
                     <div class="timeline-field" tooltip="First frame of the range"><span class="timeline-field-label">Start</span><div class="num" step="1" speed="0.2" integer min="0"><input class="input-field" type="text" data-value="timeline.start" data-event-change="timelineApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div>
                     <div class="timeline-field" tooltip="Last frame of the range"><span class="timeline-field-label">End</span><div class="num" step="1" speed="0.2" integer min="1"><input class="input-field" type="text" data-value="timeline.end" data-event-change="timelineApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div>
                     <div class="transport-buttons">
-                        <button class="play-button" tooltip="First frame" data-event-click="timelineFirst()"><svg src="/UI/Icons/transport-first.svg"/></button>
+                        <button class="play-button edge" tooltip="First frame" data-event-click="timelineFirst()"><svg src="/UI/Icons/transport-first.svg"/></button>
                         <button class="play-button" tooltip="Previous frame" data-event-click="timelinePrevious()"><svg src="/UI/Icons/transport-previous.svg"/></button>
                         <button class="play-button play" data-class-on="timeline.playing" data-attr-tooltip="timeline.playing ? 'Pause' : 'Play'" data-event-click="timelinePlay()"><svg src="/UI/Icons/transport-play.svg" data-if="!timeline.playing"/><svg src="/UI/Icons/transport-pause.svg" data-if="timeline.playing"/></button>
                         <button class="play-button" tooltip="Next frame" data-event-click="timelineNext()"><svg src="/UI/Icons/transport-next.svg"/></button>
-                        <button class="play-button" tooltip="Last frame" data-event-click="timelineLast()"><svg src="/UI/Icons/transport-last.svg"/></button>
+                        <button class="play-button edge" tooltip="Last frame" data-event-click="timelineLast()"><svg src="/UI/Icons/transport-last.svg"/></button>
                     </div>
-                    <div class="timeline-field fps" tooltip="Playback frame rate"><div class="num" step="1" speed="0.2" integer min="1"><input class="input-field" type="text" data-value="timeline.fps" data-event-change="timelineApply()"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div><span class="num-unit">fps</span></div>
+                    <div class="timeline-field fps" tooltip="Playback frame rate"><div class="num" step="1" speed="0.2" integer min="1"><input class="input-field" type="text" data-value="timeline.fps" data-event-change="timelineApply()"/><span class="num-unit">fps</span><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div></div>
                 </div>
                 <splitter class="horizontal" min-size="110" max-size="520" default-size="180"></splitter>
                 <div class="bottom-panel">
@@ -60,20 +66,36 @@
                     <div class="menu-anchor">
                         <div class="menu-title" data-class-open="menu == 'm-create'" data-event-click="menu = menu == 'm-create' ? '' : 'm-create'"><span>Create</span></div>
                         <div class="menu" data-if="menu == 'm-create'">
-                            <div class="menu-item" data-event-click="menu = ''; materialCreate()"><span>New Material</span></div>
-                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('cube')"><span>Cube</span></div>
-                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('sphere')"><span>Sphere</span></div>
-                            <div class="menu-item" data-event-click="menu = ''; sceneAdd('plane')"><span>Plane</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; materialCreate(false)"><span>Material</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; materialCreate(true)"><span>Node material</span></div>
                         </div>
                     </div>
-                    <div class="menu-anchor"><div class="menu-title dim"><span>Edit</span></div></div>
-                    <div class="menu-anchor"><div class="menu-title dim"><span>Function</span></div></div>
-                    <div class="menu-anchor"><div class="menu-title dim"><span>Texture</span></div></div>
+                    <div class="menu-anchor">
+                        <div class="menu-title" data-class-open="menu == 'm-edit'" data-event-click="menu = menu == 'm-edit' ? '' : 'm-edit'"><span>Edit</span></div>
+                        <div class="menu" data-if="menu == 'm-edit'">
+                            <div class="menu-item" data-class-disabled="outliner.selectedMaterials == 0" data-event-click="menu = ''; materialEdit('cut')"><span>Cut</span><span class="menu-hint">Ctrl+X</span></div>
+                            <div class="menu-item" data-class-disabled="outliner.selectedMaterials == 0" data-event-click="menu = ''; materialEdit('copy')"><span>Copy</span><span class="menu-hint">Ctrl+C</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; materialEdit('paste')"><span>Paste</span><span class="menu-hint">Ctrl+V</span></div>
+                            <div class="menu-item" data-class-disabled="outliner.selectedMaterials == 0" data-event-click="menu = ''; materialEdit('duplicate')"><span>Duplicate</span><span class="menu-hint">Ctrl+D</span></div>
+                            <div class="menu-item" data-event-click="menu = ''; materialEdit('selectAll')"><span>Select all</span><span class="menu-hint">Ctrl+A</span></div>
+                            <div class="menu-separator"></div>
+                            <div class="menu-item" data-class-disabled="outliner.selectedMaterials == 0" data-event-click="menu = ''; materialEdit('delete')"><span>Delete</span><span class="menu-hint">Del</span></div>
+                        </div>
                     </div>
-                    <div class="material-tiles">
-                        <div class="material-tile" data-for="name, i : outliner.materials" data-class-editing="material.sceneIndex == i" data-attr-material-index="i" data-attr-tooltip="name" data-event-click="materialOpen(i)" data-event-dragend="outliner.dropRow = -1"><materialpreview class="preview-sphere" data-attr-material="i"></materialpreview><span class="clip">{{ name }}</span></div>
-                        <p class="tiles-empty" data-if="outliner.materials.size == 0">No materials. Create one, then drag it onto an object.</p>
                     </div>
+                    <virtual-grid class="material-tiles" data-event-viewport="materialGridViewport()" data-attr-scroll-to="outliner.materialGrid.scrollTo">
+                        <p class="tiles-empty" data-if="outliner.materialGrid.itemCount == 0">No materials. Create one, then drag it onto an object.</p>
+                        <div data-for="row : outliner.materialGrid.rows">
+                            <!--! RmlUi updates a data-for before deeper views, so the bindings that read an item are on a child of the data-for element. -->
+                            <div class="grid-spacer" data-if="row.items.size == 0" data-style-height="row.height + 'dp'"></div>
+                            <div class="grid-row" data-if="row.items.size > 0">
+                                <div class="grid-item" data-for="item : row.items">
+                                    <div class="material-tile" data-class-editing="material.sceneIndex == item.index" data-class-selected="item.selected" data-attr-material-index="item.index" data-attr-tooltip="item.name" data-event-click="materialSelect(item.index)" data-event-dblclick="materialOpen(item.index)" data-event-dragend="outliner.dropRow = -1"><materialpreview class="preview-sphere" data-attr-material="item.index"></materialpreview><svg class="material-nodes" data-if="item.nodes" src="/UI/Icons/nodes.svg"/><span class="clip">{{ item.name }}</span></div>
+                                </div>
+                                <div class="grid-filler" data-if="row.emptyColumns > 0" data-style-flex-grow="row.emptyColumns" data-style-margin-left="row.emptyGaps + 'dp'"></div>
+                            </div>
+                        </div>
+                    </virtual-grid>
                 </section>
                 </div>
             </div>
@@ -87,12 +109,12 @@
                     </div>
                     <button class="object-row" data-for="row, i : outliner.rows" data-attr-row="i" data-style-padding-left="(8 + row.depth * 16) + 'dp'" data-class-active="row.selected" data-class-drop="outliner.dropRow == i &amp;&amp; outliner.dropPlace == 'into'" data-class-drop-before="outliner.dropRow == i &amp;&amp; outliner.dropPlace == 'before'" data-class-drop-after="outliner.dropRow == i &amp;&amp; outliner.dropPlace == 'after'" data-attr-tooltip="row.kind" data-event-click="outlinerSelect(i)" data-event-dragend="outliner.dropRow = -1">
                         <div class="object-fold"><svg data-if="row.parent" data-class-collapsed="!row.expanded" src="/UI/Icons/chevron-down.svg" data-event-click="outlinerToggle(i)"/></div>
-                        <div class="object-dot"></div>
                         <svg class="object-icon" data-attr-src="'/UI/Icons/' + row.icon + '.svg'"/>
                         <span class="object-name clip">{{ row.name }}</span>
                         <span class="object-badge" data-if="row.active">active</span>
-                        <materialpreview class="preview-sphere material-tag" data-if="row.material &gt;= 0" data-attr-material="row.material" tooltip="Edit the material of this object" data-event-click="materialOpen(row.material)"></materialpreview>
-                        <svg class="object-more" src="/UI/Icons/show.svg"/>
+                        <div class="material-slots" data-if="row.slots.size &gt; 0">
+                            <div class="material-slot" data-for="slot, s : row.slots" data-attr-slot="s" data-class-drop="outliner.dropRow == i &amp;&amp; outliner.dropSlot == s"><materialpreview class="preview-sphere material-tag" data-if="slot &gt;= 0" data-attr-material="slot" data-attr-material-index="slot" data-attr-slot-row="i" tooltip="Edit this material; drag it away to empty the slot" data-event-click="materialOpen(slot)" data-event-dragend="outlinerSlotDragEnd(i, s)"></materialpreview><div class="material-tag empty" data-if="slot &lt; 0" tooltip="Empty slot: drop a material here"></div></div>
+                        </div>
                     </button>
                 </div>
 

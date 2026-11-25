@@ -9,6 +9,7 @@ void bind(Rml::DataModelConstructor& model, StatusModel& state) {
     fields.RegisterMember("complete", &StatusModel::complete);
     fields.RegisterMember("frameTime", &StatusModel::frameTime);
     fields.RegisterMember("framesPerSecond", &StatusModel::framesPerSecond);
+    fields.RegisterMember("compiling", &StatusModel::compiling);
     fields.RegisterMember("resolution", &StatusModel::resolution);
     fields.RegisterMember("loading", &StatusModel::loading);
     fields.RegisterMember("loadingText", &StatusModel::loadingText);

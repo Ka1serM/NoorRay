@@ -8,7 +8,8 @@ import Wavefront.Shade;
 void shadeSurface(uint3 id : SV_DispatchThreadID) {
     const WavefrontArguments arguments = rootArguments<WavefrontArguments>();
     const WavefrontFrame frame = arguments.frame[0];
-    const uint count = binnedCount(frame, arguments.bin);
+    const uint start = surfaceStart(frame);
+    const uint count = surfaceCount(frame);
     for (uint index = id.x; index < count; index += frame.queues.gridThreads)
-        shadeSurfacePath(frame, arguments.parity, arguments.bin, binnedSlot(frame, arguments.bin, index));
+        shadeSurfacePath<false>(frame, arguments.parity, surfaceSlot(frame, start, index));
 }

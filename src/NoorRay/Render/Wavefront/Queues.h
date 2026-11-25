@@ -18,6 +18,10 @@ public:
     const Shaders::QueueRecord& getRecord() const { return record; }
     std::uint32_t getBinCount() const { return record.binCount; }
     const NoorRHI::Buffer<NoorRHI::Atomic<std::uint32_t>>& getCounters() const { return counters; }
+    //! The thread groups of the material kernel of bin, which advanceBins writes.
+    NoorRHI::Ptr<NoorRHI::DispatchSize> getBinDispatch(const std::uint32_t bin) const { return binDispatch.getPtr() + bin; }
+    //! The thread groups of a grid stage slot, which the advance phases write.
+    NoorRHI::Ptr<NoorRHI::DispatchSize> getGridDispatch(const std::uint32_t slot) const { return gridDispatch.getPtr() + slot; }
 
 private:
     NoorRHI::Buffer<NoorRHI::Atomic<std::uint32_t>> counters;
@@ -30,6 +34,8 @@ private:
     NoorRHI::Buffer<std::uint32_t> shade;
     NoorRHI::Buffer<std::uint32_t> free;
     NoorRHI::Buffer<NoorRHI::uint2> samples;
+    NoorRHI::Buffer<NoorRHI::DispatchSize> binDispatch;
+    NoorRHI::Buffer<NoorRHI::DispatchSize> gridDispatch;
     Shaders::QueueRecord record{};
 };
 

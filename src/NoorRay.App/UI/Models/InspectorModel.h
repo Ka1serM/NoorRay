@@ -9,7 +9,9 @@
 
 namespace NoorRay::App {
 
+//! A material slot of the shown mesh; sceneIndex is the dense scene index, or -1 for an empty slot.
 struct MaterialLink {
+    Rml::String label;
     Rml::String name;
     int sceneIndex = -1;
 };
@@ -41,9 +43,9 @@ struct InspectorModel {
     bool materialOverride = false;
 
     Rml::String lightType;
-    NumberField colorR = 1.0f;
-    NumberField colorG = 1.0f;
-    NumberField colorB = 1.0f;
+    //! The light colour as #rrggbb for the colour picker.
+    Rml::String color = "#ffffff";
+    bool colorOpen = false;
     NumberField power = 100.0f;
     NumberField radius = 0.0f;
     NumberField width = 1.0f;
@@ -69,9 +71,8 @@ struct InspectorModel {
 
 struct EnvironmentModel {
     Rml::String textureName;
-    NumberField colorR = 0.0f;
-    NumberField colorG = 0.0f;
-    NumberField colorB = 0.0f;
+    Rml::String color = "#000000";
+    bool colorOpen = false;
     NumberField strength = 1.0f;
     NumberField rotation = 0.0f;
     bool visibleToCamera = false;

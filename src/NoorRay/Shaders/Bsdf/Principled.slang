@@ -9,6 +9,7 @@ import Bsdf.Fresnel;
 import Bsdf.Ggx;
 import Bsdf.EnergyLut;
 import Bsdf.Sheen;
+import Lights.SgLighting;
 
 static const uint bsdfFlagDelta = 1u;
 static const uint bsdfFlagTransmission = 2u;
@@ -56,11 +57,18 @@ BsdfSample unevaluatedSample(float3 direction, uint flags) {
 
 bool needsEvaluation(BsdfSample sample) { return sample.flags != 0 && (sample.flags & bsdfFlagDelta) == 0; }
 
-//! Blender's Principled BSDF as layers with albedo scaling: sheen over coat over a metal, glass and dielectric base. Colours are upsampled to the four wavelengths once at setup. Directions are world space; o is towards the viewer.
+//! Blender's Principled BSDF as layers with albedo scaling: sheen over coat over metal, glass and dielectric; world directions, o towards the viewer.
 struct PrincipledBsdf {
+    //! As in Cycles, the specular lobes use the normal that ensure_valid_specular_reflection turns; diffuse and sheen use the bent normal.
     Frame frame;
-    Frame coatFrame;
+    //! The coat, diffuse and sheen frames come from their normals when used, so that they take no registers.
+    float3 coatNormal;
+    float3 diffuseNormal;
+    float3 sheenNormal;
+    //! A translucent closure scatters diffuse light in the specular frame.
+    bool diffuseInFrame;
     float3 geometricNormal;
+    float3 smoothNormal;
     float3 o;
     float3 coatO;
     EnergyLut lut;
@@ -80,9 +88,21 @@ struct PrincipledBsdf {
     float thinFilmThickness;
     float thinFilmEta;
     bool dispersive;
+    //! The diffuse lobe scatters to the other side of the surface.
+    bool translucent;
+    //! The glass lobe only refracts.
+    bool refractive;
+    //! The Oren-Nayar roughness of the diffuse lobe.
+    float diffuseRoughness;
+    float4 diffuseColor;
     float4 albedoEstimate;
+    float4 diffuseAlbedoEstimate;
     float4 lobeWeights[lobeCount];
     float lobeProbabilities[lobeCount];
+
+    Frame coatFrame() { return makeFrame(coatNormal); }
+    Frame diffuseFrame() { return diffuseInFrame ? frame : makeFrame(diffuseNormal); }
+    Frame sheenFrame() { return makeFrame(sheenNormal); }
 
     float4 specularFresnel(float cosine) {
         float4 result;
@@ -111,10 +131,10 @@ struct PrincipledBsdf {
         return result;
     }
 
-    float4 glassFresnel(float cosine) { return fresnelDielectric(cosine, glassEta); }
+    float4 glassFresnel(float cosine) { return refractive ? float4(0.0, 0.0, 0.0, 0.0) : fresnelDielectric(cosine, glassEta); }
 
     float4 glassEnergyScale(float cosO) {
-        if (base.isDelta())
+        if (refractive || base.isDelta())
             return float4(1.0, 1.0, 1.0, 1.0);
         const float eta = glassEta.x;
         const float viewAlbedo = max(lut.glassDirectional(baseRoughness, cosO, eta), 0.05);
@@ -140,21 +160,89 @@ struct PrincipledBsdf {
         return float2(d * ggx.g2(lo, li) / (4.0 * lo.z), d * ggx.g1(lo) / (4.0 * lo.z));
     }
 
+    //! The directional albedo of the single scattering of the Oren-Nayar lobe without its colour, as Cycles' bsdf_oren_nayar_get_intensity.
+    static float orenNayarAlbedo(float a, float b, float cosine) {
+        float g = halfPi - 2.0 / 3.0 - cosine;
+        if (cosine >= 1e-6) {
+            const float sine = safeSqrt(1.0 - cosine * cosine);
+            g = sine * (acos(clamp(cosine, -1.0, 1.0)) - 2.0 / 3.0 - sine * cosine) + 2.0 / 3.0 * (sine / cosine) * (1.0 - sine * sine * sine);
+        }
+        return a * pi + b * g;
+    }
+
+    //! Cycles' Oren-Nayar with the energy of its multiple scattering, over the colour of the lobe.
+    float4 orenNayar(float cosO, float cosI, float cosOI) {
+        if (diffuseRoughness <= 0.0)
+            return float4(1.0, 1.0, 1.0, 1.0) * invPi;
+        const float a = 1.0 / (pi + diffuseRoughness * (halfPi - 2.0 / 3.0));
+        const float b = diffuseRoughness * a;
+        const float viewCosine = saturate(cosO);
+        float t = cosOI - cosI * viewCosine;
+        if (t > 0.0)
+            t /= max(max(cosI, viewCosine), 1e-6);
+        const float average = saturate(a * pi + (twoPi - 5.6) / 3.0 * b);
+        const float lost = (1.0 - orenNayarAlbedo(a, b, viewCosine)) * (1.0 - orenNayarAlbedo(a, b, cosI)) / max(1.0 - average, 1e-6);
+        return float4(1.0, 1.0, 1.0, 1.0) * (a + b * t) + diffuseColor * (average * invPi * max(lost, 0.0)) / max(1.0 - diffuseColor * (1.0 - average), 1e-6);
+    }
+
+    //! Cycles' bump_shadowing_term with bump map correction: drops light behind the smooth normal and fades diffuse light at the bump terminator.
+    float bumpShadowing(float3 normal, float3 wi, bool diffuse) {
+        if (all(normal == smoothNormal))
+            return 1.0;
+        const float cosSmoothLight = dot(smoothNormal, wi);
+        const float cosSmoothNormal = dot(smoothNormal, normal);
+        if (cosSmoothLight * cosSmoothNormal * dot(normal, wi) < 0.0)
+            return 0.0;
+        if (!diffuse)
+            return 1.0;
+        const float cosLight = abs(cosSmoothLight);
+        const float cosDeviation = abs(cosSmoothNormal);
+        if (cosDeviation >= 1.0 || cosLight >= 1.0)
+            return 1.0;
+        if (cosLight < 1e-6)
+            return 0.0;
+        const float alpha2 = saturate(0.125 * (1.0 / (cosDeviation * cosDeviation) - 1.0));
+        const float lambda = 0.5 * (sqrt(1.0 + alpha2 * max(1.0 / (cosLight * cosLight) - 1.0, 0.0)) - 1.0);
+        return 1.0 / (1.0 + lambda);
+    }
+
     float4 evaluateLobe(uint lobe, float3 wi, out float pdf) {
+        pdf = 0.0;
+        const float shadowing = bumpShadowing(lobeNormal(lobe), wi, lobe == lobeDiffuse || lobe == lobeSheen);
+        if (shadowing == 0.0)
+            return float4(0.0, 0.0, 0.0, 0.0);
+        return shadowing * evaluateUnshadowed(lobe, wi, pdf);
+    }
+
+    float3 lobeNormal(uint lobe) {
+        switch (lobe) {
+        case lobeSheen:
+            return sheenFrame().normal;
+        case lobeCoat:
+            return coatFrame().normal;
+        case lobeDiffuse:
+            return diffuseFrame().normal;
+        default:
+            return frame.normal;
+        }
+    }
+
+    float4 evaluateUnshadowed(uint lobe, float3 wi, out float pdf) {
         pdf = 0.0;
         const float3 li = frame.toLocal(wi);
         const float3 lo = frame.toLocal(o);
         const bool reflection = dot(geometricNormal, wi) > 0.0;
         switch (lobe) {
         case lobeSheen: {
-            if (!reflection || li.z <= 0.0)
+            const float3 si = sheenFrame().toLocal(wi);
+            if (si.z <= 0.0)
                 return float4(0.0, 0.0, 0.0, 0.0);
-            pdf = cosineHemispherePdf(li.z);
-            return float4(1.0, 1.0, 1.0, 1.0) * charlieSheen(lo, li, sheenRoughness) * sheenNormalization;
+            pdf = cosineHemispherePdf(si.z);
+            return float4(1.0, 1.0, 1.0, 1.0) * charlieSheen(sheenFrame().toLocal(o), si, sheenRoughness) * sheenNormalization;
         }
         case lobeCoat: {
-            const float3 ci = coatFrame.toLocal(wi);
-            const float3 co = coatFrame.toLocal(o);
+            const float3 ci = coatFrame().toLocal(wi);
+            const float3 co = coatFrame().toLocal(o);
             if (!reflection)
                 return float4(0.0, 0.0, 0.0, 0.0);
             const float2 ggx = ggxReflection(coat, co, ci);
@@ -238,28 +326,41 @@ struct PrincipledBsdf {
             return fresnel * ggx.x + multiple * lobe;
         }
         default: {
-            if (!reflection || li.z <= 0.0)
+            const float facing = dot(diffuseFrame().normal, wi);
+            const float cosine = translucent ? -facing : facing;
+            if (cosine <= 0.0)
                 return float4(0.0, 0.0, 0.0, 0.0);
-            pdf = cosineHemispherePdf(li.z);
-            return float4(1.0, 1.0, 1.0, 1.0) * (li.z * invPi);
+            pdf = cosineHemispherePdf(cosine);
+            return orenNayar(dot(diffuseFrame().normal, o), cosine, dot(o, wi)) * cosine;
         }
         }
     }
 
-    BsdfValue evaluate(float3 wi) {
+    //! diffuseFraction is the share of the diffuse and sheen lobes in the value, averaged over the wavelengths.
+    BsdfValue evaluate(float3 wi, out float diffuseFraction) {
         BsdfValue result;
         result.value = float4(0.0, 0.0, 0.0, 0.0);
         result.pdf = 0.0;
+        float4 diffuse = float4(0.0, 0.0, 0.0, 0.0);
         [unroll]
         for (uint lobe = 0; lobe < lobeCount; ++lobe) {
             if (all(lobeWeights[lobe] == 0.0))
                 continue;
             float pdf;
-            const float4 value = evaluateLobe(lobe, wi, pdf);
-            result.value += lobeWeights[lobe] * value;
+            const float4 value = lobeWeights[lobe] * evaluateLobe(lobe, wi, pdf);
+            result.value += value;
             result.pdf += lobeProbabilities[lobe] * pdf;
+            if (lobe == lobeDiffuse || lobe == lobeSheen)
+                diffuse += value;
         }
+        const float total = dot(result.value, float4(1.0, 1.0, 1.0, 1.0));
+        diffuseFraction = total > 0.0 ? saturate(dot(diffuse, float4(1.0, 1.0, 1.0, 1.0)) / total) : 0.0;
         return result;
+    }
+
+    BsdfValue evaluate(float3 wi) {
+        float diffuseFraction;
+        return evaluate(wi, diffuseFraction);
     }
 
     uint chooseLobe(inout float u) {
@@ -293,19 +394,28 @@ struct PrincipledBsdf {
         const uint lobe = chooseLobe(choice);
         const float3 lo = frame.toLocal(o);
         switch (lobe) {
-        case lobeSheen:
-        case lobeDiffuse:
-            return unevaluatedSample(frame.toWorld(sampleCosineHemisphere(u.xy)), lobe == lobeDiffuse ? bsdfFlagDiffuse : bsdfFlagGlossy);
+        case lobeSheen: {
+            //! Cycles' diffuse and sheen sampling drops a direction on the wrong side of Ng, though their evaluation takes it.
+            const float3 direction = sheenFrame().toWorld(sampleCosineHemisphere(u.xy));
+            return dot(geometricNormal, direction) > 0.0 ? unevaluatedSample(direction, bsdfFlagGlossy) : invalidSample();
+        }
+        case lobeDiffuse: {
+            const float3 local = sampleCosineHemisphere(u.xy);
+            const float3 direction = diffuseFrame().toWorld(translucent ? float3(local.xy, -local.z) : local);
+            if ((dot(geometricNormal, direction) > 0.0) == translucent)
+                return invalidSample();
+            return unevaluatedSample(direction, translucent ? bsdfFlagDiffuse | bsdfFlagTransmission : bsdfFlagDiffuse);
+        }
         case lobeCoat: {
-            const float3 co = coatFrame.toLocal(o);
+            const float3 co = coatFrame().toLocal(o);
             if (co.z <= 0.0)
                 return invalidSample();
             if (coat.isDelta()) {
-                const float3 direction = reflect(-o, coatFrame.normal);
-                return sampleDelta(lobe, direction, float4(1.0, 1.0, 1.0, 1.0) * fresnelDielectric(co.z, coatEta), 1.0, bsdfFlagGlossy);
+                const float3 direction = reflect(-o, coatFrame().normal);
+                return sampleDelta(lobeCoat, direction, float4(1.0, 1.0, 1.0, 1.0) * fresnelDielectric(co.z, coatEta), 1.0, bsdfFlagGlossy);
             }
             const float3 h = coat.sampleVisibleNormal(co, u.xy);
-            return unevaluatedSample(coatFrame.toWorld(reflect(-co, h)), bsdfFlagGlossy);
+            return unevaluatedSample(coatFrame().toWorld(reflect(-co, h)), bsdfFlagGlossy);
         }
         case lobeMetal:
         case lobeSpecular: {
@@ -313,8 +423,9 @@ struct PrincipledBsdf {
                 return invalidSample();
             if (base.isDelta()) {
                 const float3 direction = reflect(-o, frame.normal);
-                const float4 fresnel = lobe == lobeMetal ? metalFresnel(lo.z) : specularFresnel(lo.z);
-                return sampleDelta(lobe, direction, fresnel, 1.0, bsdfFlagGlossy);
+                if (lobe == lobeMetal)
+                    return sampleDelta(lobeMetal, direction, metalFresnel(lo.z), 1.0, bsdfFlagGlossy);
+                return sampleDelta(lobeSpecular, direction, specularFresnel(lo.z), 1.0, bsdfFlagGlossy);
             }
             const float3 h = base.sampleVisibleNormal(lo, u.xy);
             return unevaluatedSample(frame.toWorld(reflect(-lo, h)), bsdfFlagGlossy);
@@ -328,18 +439,20 @@ struct PrincipledBsdf {
             const float3 refracted = refract(-lo, h, 1.0 / glassEta.x);
             const bool totalInternal = dot(refracted, refracted) < 1e-10;
             const float reflectProbability = totalInternal ? 1.0 : fresnel.x;
+            if (totalInternal && refractive)
+                return invalidSample();
             const uint dispersiveFlag = dispersive ? bsdfFlagDispersive : 0u;
             if (choice < reflectProbability) {
                 const float3 direction = frame.toWorld(reflect(-lo, h));
                 if (base.isDelta())
-                    return sampleDelta(lobe, direction, specularTint * fresnel, reflectProbability, bsdfFlagGlossy);
+                    return sampleDelta(lobeGlass, direction, specularTint * fresnel, reflectProbability, bsdfFlagGlossy);
                 return unevaluatedSample(direction, bsdfFlagGlossy);
             }
             const float3 direction = frame.toWorld(normalize(refracted));
             if (dot(direction, geometricNormal) >= 0.0)
                 return invalidSample();
             if (base.isDelta())
-                return sampleDelta(lobe, direction, baseColor * (1.0 - fresnel) / (glassEta * glassEta), 1.0 - reflectProbability,
+                return sampleDelta(lobeGlass, direction, baseColor * (1.0 - fresnel) / (glassEta * glassEta), 1.0 - reflectProbability,
                                    bsdfFlagTransmission | dispersiveFlag);
             return unevaluatedSample(direction, bsdfFlagGlossy | bsdfFlagTransmission | dispersiveFlag);
         }
@@ -347,11 +460,13 @@ struct PrincipledBsdf {
     }
 
     //! The directional albedo estimate per wavelength at setup, for the albedo AOV and the denoiser.
-    BsdfSample sample(float3 u) {
+    //! diffuseFraction is the diffuse share of the sampled direction; the delta lobes are all specular.
+    BsdfSample sample(float3 u, out float diffuseFraction) {
+        diffuseFraction = 0.0;
         BsdfSample result = sampleLobe(u);
         if (!needsEvaluation(result))
             return result;
-        const BsdfValue value = evaluate(result.direction);
+        const BsdfValue value = evaluate(result.direction, diffuseFraction);
         if (value.pdf <= 0.0)
             return invalidSample();
         result.weight = value.value / value.pdf;
@@ -359,12 +474,50 @@ struct PrincipledBsdf {
         return result;
     }
 
+    BsdfSample sample(float3 u) {
+        float diffuseFraction;
+        return sample(u, diffuseFraction);
+    }
+
     float4 albedo() { return albedoEstimate; }
 
+    //! Moves part of the diffuse lobe to subsurface, as Cycles splits it by the subsurface weight; probability is the lobe chance that moves with it.
+    [mutating]
+    float4 splitSubsurface(float4 share, out float probability) {
+        const float4 diffuse = lobeWeights[lobeDiffuse];
+        const float4 moved = diffuse * share;
+        lobeWeights[lobeDiffuse] = diffuse - moved;
+        const float total = dot(diffuse, float4(1.0, 1.0, 1.0, 1.0));
+        probability = total > 0.0 ? lobeProbabilities[lobeDiffuse] * dot(moved, float4(1.0, 1.0, 1.0, 1.0)) / total : 0.0;
+        lobeProbabilities[lobeDiffuse] -= probability;
+        return moved;
+    }
+
+    //! The part of the albedo estimate from the diffuse and sheen lobes; the denoiser demodulates diffuse light by it.
+    float4 diffuseAlbedo() { return diffuseAlbedoEstimate; }
+
     float roughness() { return baseRoughness; }
+
+    //! The light tree receiver: coat, metal and specular are the glossy lobe with their mean alpha^2; glass and translucency also take light from behind.
+    LightReceiver lightReceiver(float3 view) {
+        const float coat = lobeProbabilities[lobeCoat];
+        const float base = lobeProbabilities[lobeMetal] + lobeProbabilities[lobeSpecular];
+        const float glass = lobeProbabilities[lobeGlass];
+        const float total = coat + base + glass + lobeProbabilities[lobeDiffuse] + lobeProbabilities[lobeSheen];
+        LightReceiver receiver;
+        receiver.normal = frame.normal;
+        receiver.view = view;
+        const float glossy = coat + base;
+        receiver.glossy = total > 0.0 ? glossy / total : 0.0;
+        const float baseAlpha2 = this.base.alpha.x * this.base.alpha.y;
+        const float coatAlpha2 = this.coat.alpha.x * this.coat.alpha.y;
+        receiver.alpha = glossy > 0.0 ? sqrt((coat * coatAlpha2 + base * baseAlpha2) / glossy) : 1.0;
+        receiver.transmits = glass > 0.0 || (translucent && lobeProbabilities[lobeDiffuse] > 0.0);
+        return receiver;
+    }
 };
 
-//! inputs come from evaluateMaterial; normals in it face the viewer. backfacing is set when the ray hit the back of the surface, so a ray inside a glass object sees the inverse IOR.
+//! inputs come from evaluateMaterial with normals to the viewer; backfacing marks a hit on the back, so a ray inside glass sees the inverse IOR.
 PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNormal, bool backfacing, Wavelengths wavelengths, EnergyLut lut,
                               bool allowDispersion) {
     PrincipledBsdf bsdf;
@@ -372,9 +525,9 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
     bsdf.lut = lut;
     bsdf.lambda = wavelengths.lambda;
     bsdf.geometricNormal = dot(geometricNormal, view) < 0.0 ? -geometricNormal : geometricNormal;
-    float3 normal = safeNormalize(inputs.normalRotation.xyz);
-    normal = dot(normal, bsdf.geometricNormal) < 0.0 ? -normal : normal;
-    normal = clampShadingNormal(bsdf.geometricNormal, normal, view);
+    bsdf.smoothNormal = safeNormalize(inputs.smoothNormal.xyz);
+    const float3 bent = safeNormalize(inputs.normalRotation.xyz);
+    const float3 normal = clampShadingNormal(bsdf.geometricNormal, bent, view);
     float3 tangent = inputs.tangentTransmission.xyz;
     const float rotation = inputs.normalRotation.w * twoPi;
     if (rotation != 0.0) {
@@ -382,10 +535,9 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
         tangent = unrotated.tangent * cos(rotation) + unrotated.bitangent * sin(rotation);
     }
     bsdf.frame = makeFrame(normal, tangent);
-    float3 coatNormal = safeNormalize(inputs.coatNormal.xyz);
-    coatNormal = dot(coatNormal, bsdf.geometricNormal) < 0.0 ? -coatNormal : coatNormal;
-    bsdf.coatFrame = makeFrame(clampShadingNormal(bsdf.geometricNormal, coatNormal, view));
-    bsdf.coatO = bsdf.coatFrame.toLocal(view);
+    const float3 coatNormal = safeNormalize(inputs.coatNormal.xyz);
+    bsdf.coatNormal = clampShadingNormal(bsdf.geometricNormal, coatNormal, view);
+    bsdf.coatO = bsdf.coatFrame().toLocal(view);
 
     const float3 baseRgb = saturate(inputs.baseColorAlpha.xyz);
     const float metallic = saturate(inputs.metallicRoughnessIorSpecular.x);
@@ -395,6 +547,9 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
     const float transmission = saturate(inputs.tangentTransmission.w);
     const float coatWeight = backfacing ? 0.0 : saturate(inputs.coat.x);
     const float sheenWeight = backfacing ? 0.0 : max(inputs.sheen.x, 0.0);
+    bsdf.diffuseInFrame = inputs.closure.w == float(closureTranslucent);
+    bsdf.diffuseNormal = bent;
+    bsdf.sheenNormal = safeNormalize(lerp(bent, coatNormal, saturate(inputs.coat.x)));
     const float dispersion = allowDispersion ? max(inputs.thinFilmDispersion.z, 0.0) : 0.0;
 
     bsdf.baseColor = saturate(wavelengths.upsample(baseRgb));
@@ -415,14 +570,15 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
     bsdf.specularEta = etaFromF0(bsdf.specularF0);
     const float4 spectralIor = dispersion > 0.0 ? cauchyIor(ior, dispersion, wavelengths.lambda) : float4(ior, ior, ior, ior);
     bsdf.glassEta = backfacing ? 1.0 / spectralIor : spectralIor;
+    bsdf.refractive = inputs.closure.w == float(closureRefractive);
     bsdf.dispersive = dispersion > 0.0 && transmission > 0.0;
 
     const float3 lo = bsdf.frame.toLocal(view);
     const float cosO = max(lo.z, 1e-4);
-    const float sheenAlbedoValue = sheenAlbedo(cosO, bsdf.sheenRoughness);
+    const float sheenAlbedoValue = sheenAlbedo(max(bsdf.sheenFrame().toLocal(view).z, 1e-4), bsdf.sheenRoughness);
     bsdf.sheenNormalization = 1.0 / max(sheenAlbedoValue, 1.0);
     const float sheenEnergy = sheenWeight * min(sheenAlbedoValue, 1.0);
-    const float4 sheenColor = saturate(wavelengths.upsample(saturate(inputs.sheenTint.xyz))) * sheenWeight;
+    float4 sheenColor = saturate(wavelengths.upsample(saturate(inputs.sheenTint.xyz))) * sheenWeight;
     float4 below = float4(1.0, 1.0, 1.0, 1.0) * saturate(1.0 - sheenEnergy * maxComponent(saturate(inputs.sheenTint.xyz)));
 
     const float coatCos = max(bsdf.coatO.z, 1e-4);
@@ -431,12 +587,12 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
     const float refractedCos = safeSqrt(1.0 - (1.0 - coatCos * coatCos) / (bsdf.coatEta * bsdf.coatEta));
     const float4 coatTint = saturate(wavelengths.upsample(saturate(inputs.coatTint.xyz)));
     const float4 absorption = pow(max(coatTint, 1e-6), float4(1.0, 1.0, 1.0, 1.0) * (1.0 / max(refractedCos, 1e-3)));
-    const float4 coatWeights = below * coatWeight;
+    float4 coatWeights = below * coatWeight;
     below = below * (1.0 - coatWeight * (1.0 - (1.0 - coatEnergy) * absorption));
 
-    const float4 metalWeights = below * metallic;
-    const float4 glassWeights = below * (1.0 - metallic) * transmission;
-    const float4 specularWeights = below * (1.0 - metallic) * (1.0 - transmission);
+    float4 metalWeights = below * metallic;
+    float4 glassWeights = below * (1.0 - metallic) * transmission;
+    float4 specularWeights = below * (1.0 - metallic) * (1.0 - transmission);
     float4 specularEnergy;
     [unroll]
     for (uint i = 0; i < 4; ++i) {
@@ -444,8 +600,19 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
         specularEnergy[i] = bsdf.base.isDelta() ? tintedF0 + (1.0 - tintedF0) * pow(1.0 - cosO, 5.0)
                                                 : lut.dielectricDirectional(bsdf.baseRoughness, cosO, tintedF0);
     }
-    const float4 diffuseWeights = specularWeights * saturate(1.0 - specularEnergy) * bsdf.baseColor;
+    float4 diffuseWeights = specularWeights * saturate(1.0 - specularEnergy) * bsdf.baseColor;
 
+    //! A graph picks one closure and weights it by its weight over its probability.
+    const float4 closure = wavelengths.upsample(max(inputs.closure.xyz, 0.0));
+    sheenColor *= closure;
+    coatWeights *= closure;
+    metalWeights *= closure;
+    glassWeights *= closure;
+    specularWeights *= closure;
+    diffuseWeights *= closure;
+    bsdf.translucent = inputs.closure.w == float(closureTranslucent);
+    bsdf.diffuseRoughness = saturate(inputs.sheen.z);
+    bsdf.diffuseColor = bsdf.baseColor;
     bsdf.lobeWeights[lobeSheen] = sheenColor;
     bsdf.lobeWeights[lobeCoat] = coatWeights;
     bsdf.lobeWeights[lobeMetal] = metalWeights;
@@ -454,6 +621,7 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
     bsdf.lobeWeights[lobeDiffuse] = diffuseWeights;
 
     const float4 metalEstimate = bsdf.metalFresnel(cosO);
+    bsdf.diffuseAlbedoEstimate = sheenColor * min(sheenAlbedoValue, 1.0) + diffuseWeights;
     bsdf.albedoEstimate = sheenColor * min(sheenAlbedoValue, 1.0) + coatWeights * coatEnergy + metalWeights * metalEstimate + glassWeights * bsdf.baseColor +
                           specularWeights * specularEnergy + diffuseWeights;
     float estimates[lobeCount];
@@ -473,6 +641,43 @@ PrincipledBsdf makePrincipled(BsdfInputs inputs, float3 view, float3 geometricNo
     for (uint lobe = 0; lobe < lobeCount; ++lobe)
         bsdf.lobeProbabilities[lobe] = total > 0.0 ? estimates[lobe] / total : (lobe == lobeDiffuse ? 1.0 : 0.0);
     return bsdf;
+}
+
+//! The diffuse and specular albedo in linear sRGB, free of hero wavelength noise, that the denoiser divides out and multiplies back.
+struct DemodulationAlbedo {
+    float3 diffuse;
+    float3 specular;
+    //! The specular albedo of the DLSS-RR guide: EnvBRDFApprox2 of the reflectance at normal incidence of the specular lobes.
+    float3 approximateSpecular;
+
+    float3 specularGuide(bool approximates) { return approximates ? approximateSpecular : specular; }
+};
+
+//! EnvBRDFApprox2 of the DLSS-RR integration guide: the split-sum GGX specular albedo for a reflectance f0, GGX alpha, and n.v.
+float3 envBrdfApprox(float3 f0, float alpha, float cosine) {
+    const float c = abs(cosine);
+    const float4 x = float4(1.0, c, c * c, c * c * c);
+    const float4 y = float4(1.0, alpha, alpha * alpha, alpha * alpha * alpha);
+    const float2x2 m1 = float2x2(0.99044, -1.28514, 1.29678, -0.755907);
+    const float3x3 m2 = float3x3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563, 626.13, 316.627);
+    const float2x2 m3 = float2x2(0.0365463, 3.32707, 9.0632, -9.04756);
+    const float3x3 m4 = float3x3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589, 19.7886, -20.2123);
+    float bias = dot(mul(m1, x.xy), y.xy) / dot(mul(m2, x.xyw), y.xyw);
+    const float scale = dot(mul(m3, x.xy), y.xy) / dot(mul(m4, x.xzw), y.xyw);
+    bias *= saturate(f0.g * 50.0);
+    return f0 * max(scale, 0.0) + max(bias, 0.0);
+}
+
+DemodulationAlbedo demodulationAlbedo(BsdfInputs inputs, float3 view, float3 geometricNormal, bool backfacing, EnergyLut lut) {
+    const Wavelengths rgb = rgbWavelengths();
+    PrincipledBsdf bsdf = makePrincipled(inputs, view, geometricNormal, backfacing, rgb, lut, false);
+    DemodulationAlbedo albedo;
+    albedo.diffuse = saturate(rgb.toFilm(bsdf.diffuseAlbedo()));
+    albedo.specular = max(saturate(rgb.toFilm(bsdf.albedo())) - albedo.diffuse, 0.0);
+    const float4 f0 = bsdf.lobeWeights[lobeCoat] * f0FromEta(bsdf.coatEta) + bsdf.lobeWeights[lobeMetal] * bsdf.baseColor +
+                      (bsdf.lobeWeights[lobeGlass] + bsdf.lobeWeights[lobeSpecular]) * bsdf.specularF0 * bsdf.specularTint;
+    albedo.approximateSpecular = saturate(envBrdfApprox(saturate(rgb.toFilm(f0)), square(bsdf.baseRoughness), bsdf.frame.toLocal(view).z));
+    return albedo;
 }
 
 float4 emittedRadiance(BsdfInputs inputs, Wavelengths wavelengths) {

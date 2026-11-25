@@ -4,7 +4,7 @@
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/Types.h>
 
-#include "NoorRay/Render/RendererSettings.h"
+#include "NoorRay/Render/RenderOptions.h"
 #include "NoorRay/Session/Session.h"
 
 namespace RmlKit::UI {
@@ -23,11 +23,10 @@ public:
     RenderSettingsController& operator=(const RenderSettingsController&) = delete;
 
 private:
-    void onMode(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
-    void onApply(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
+    void onApply(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments);
     void onRestart(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
 
-    void show(const Render::RendererSettings& settings);
+    Render::RenderOptions readOptions() const;
     Render::RendererSettings read() const;
     void apply(const Render::RendererSettings& settings);
 

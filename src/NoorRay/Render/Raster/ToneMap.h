@@ -19,14 +19,14 @@ struct DisplaySettings {
     bool operator==(const DisplaySettings&) const = default;
 };
 
-//! Maps the linear film, with the Gaussian splats over it when given, to the sRGB display image; exposure is in stops.
+//! Maps the linear film or the upscaled image, with optional Gaussian splats over it, to the sRGB display image; exposure is in stops.
 class ToneMap {
 public:
     static constexpr NoorRHI::ImageFormat displayFormat = NoorRHI::ImageFormat::Rgba8Unorm;
 
     [[nodiscard]] std::expected<void, Core::Error> record(NoorRHI::Device& device, NoorRHI::CommandList& list, const NoorRHI::Buffer<NoorRHI::float4>& film,
                                                           const NoorRHI::Image& display, const DisplaySettings& settings,
-                                                          const NoorRHI::Image* splats = nullptr);
+                                                          const NoorRHI::Image* splats = nullptr, const NoorRHI::Image* upscaled = nullptr);
 
 private:
     NoorRHI::GraphicsPipeline pipeline;

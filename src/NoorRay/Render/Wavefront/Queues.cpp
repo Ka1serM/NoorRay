@@ -13,11 +13,13 @@ std::expected<void, Core::Error> Queues::open(NoorRHI::Device& device, const std
     };
     if (auto opened = openAll(pathCapacity, active0, active1, shadow0, shadow1, shade, free); !opened)
         return opened;
-    if (auto opened = openAll(binCount, binCounts, binCursors); !opened)
+    if (auto opened = openAll(binCount, binCounts, binCursors, binDispatch); !opened)
         return opened;
     if (auto opened = openAll(sampleCapacity, samples); !opened)
         return opened;
     if (auto opened = openAll(Shaders::counterCount, counters); !opened)
+        return opened;
+    if (auto opened = openAll(Shaders::gridSlotCount, gridDispatch); !opened)
         return opened;
     record = {
         .counters = counters.getPtr(),
@@ -30,8 +32,10 @@ std::expected<void, Core::Error> Queues::open(NoorRHI::Device& device, const std
         .shade = shade.getPtr(),
         .free = free.getPtr(),
         .samples = samples.getPtr(),
+        .binDispatch = binDispatch.getPtr().as<std::uint32_t>(),
         .binCount = binCount,
         .sampleCapacity = sampleCapacity,
+        .gridDispatch = gridDispatch.getPtr().as<std::uint32_t>(),
     };
     return {};
 }

@@ -19,12 +19,14 @@ The whole plan is implemented first. The build and the tests come after the impl
 | Materials | No MaterialX. Blender node tree, USD PreviewSurface and glTF PBR become one material IR. The IR compiles to SPIR-V functions at runtime. Closure model: Principled BSDF + Emission + one Mix Shader of two Principled BSDFs. |
 | Renderer | One `Renderer`. Primary visibility (raster, traced), shading (raster RGB, path traced spectral), reuse, denoiser, accumulation and adaptive sampling are settings. Presets `Viewport` (raster) and `PathTraced` are setting values. `PathTraced` is used for preview and final frames: unbiased reuse, display-only denoising, converges. |
 | ReSTIR | RTXDI (own fork `Ka1serM/RTXDI-Library`), ReSTIR DI and ReSTIR PT, made spectral with an `RTXDI_COLOR` macro. Used for realtime and progressive rendering. |
-| Denoiser | Own Slang-only port of NRD RELAX with SH (diffuse + specular), as used in NoorRay before. No NRD library. |
-| Upscaler | None for now. No FSR3. |
+| Denoiser | NRD RELAX (diffuse + specular, no SH, and a second RELAX diffuse for fog light), unmodified upstream. The NRD C++ library plans the dispatches; the RELAX shaders compile offline with slangc to SPIR-V and WGSL through NoorRay wrappers that map the NRD resource macros to NoorRHI bindings. |
+| Upscaler | AMD FSR 3.1 upscaler, unmodified upstream FidelityFX SDK. The FidelityFX C++ library plans the passes through a NoorRHI backend; the shaders compile offline like RELAX. Realtime only (no accumulation). |
 | Gaussians | Ray-traced proxy geometry, stochastic sorting-free traversal (arXiv 2603.23637). Differentiable with Slang autodiff. |
 | UI | RmlKit app. No ImGui. Materials are authored in Blender, the app has no node editor. |
+| Blender | A native `bpy.types.RenderEngine` on `NoorRay.Python`. The C++ module reads the depsgraph through bpy and fills the session scene directly: no scene file, no USD, no Hydra. |
+| Python | CPython stable ABI (abi3, Python 3.11 and later) through the C API. One binary loads into every Blender from 4.2 on. No nanobind: it needs exceptions and RTTI. |
 | Unreal-type features | Landscape meshes, spline mesh deformation and similar go to UnrealKit/verylia. NoorRay has only the generic mesh API. |
-| Removed | MaterialX, SVM interpreter, runtime Slang, OptiX/CUDA, ImGui, ImGuizmo, ImNodeFlow, VMA, Vulkan-Headers, ShaderMake, CMakeRC, MathLib, NRD, FidelityFX, legacy `.nrscene`. |
+| Removed | MaterialX, SVM interpreter, runtime Slang, OptiX/CUDA, ImGui, ImGuizmo, ImNodeFlow, VMA, Vulkan-Headers, CMakeRC, legacy `.nrscene`, the Hydra delegate (`hdNoorRay`). |
 
 ## 2. Repository layout
 
@@ -33,18 +35,17 @@ NoorRay/
   AGENTS.md  README.md  LICENSE  CMakeLists.txt  CMakePresets.json
   cmake/            CompilerOptions.cmake, NoorRayShaders.cmake
   tools/            check_comments.py, pre_commit.py, githooks/, serve_web.py
-  external/         NoorRHI, RmlKit, RTXDI-Library (fork), tinygltf, tinyobjloader, stb, tinyexr, flatbuffers,
-                    oneTBB (from RmlKit). nanobind comes with NoorRay.Python. OpenUSD is a prebuilt tree that NOORRAY_USD_ROOT names.
-  schema/           NoorRayScene.fbs, MaterialProgram.fbs
+  external/         NoorRHI, RmlKit, RTXDI-Library (fork), NRD, MathLib and ShaderMake (for NRD), FidelityFX-SDK,
+                    Compat (Emscripten headers for NRD), tinygltf, tinyobjloader, stb, tinyexr,
+                    oneTBB (from RmlKit). OpenUSD is a prebuilt tree that NOORRAY_USD_ROOT names.
   web/              shell page, service worker, test page
   tests/            Test.h (NoorRHI style), unit tests, image tests, benchmarks, scenes/
   src/
     NoorRay/                    rendering library, no UI code
     NoorRay.App/                RmlKit app, desktop and web
     NoorRay.Cli/                headless renderer (scene in, EXR out); the image-test driver
-    NoorRay.Hydra/              Hydra render delegate (desktop only)
-    NoorRay.Blender/            Blender addon (Python): node tree to material IR, Hydra engine glue
-    NoorRay.Python/             nanobind module
+    NoorRay.Python/             Python module `noorray` (CPython stable ABI, desktop only)
+    NoorRay.Blender/            Blender addon (Python render engine) and the standalone .nrs exporter
 ```
 
 Presets: `linux-release`, `linux-relwithdebinfo`, `linux-webgpu-release`, `windows-release`, `windows-webgpu-release`,
@@ -66,7 +67,7 @@ Materials/   MaterialProgram (IR), MaterialLibrary, Texture, TextureCache,
              Spirv/Linker (patches the stub function through NoorRHI SpirvModule)
 Import/      UsdImporter (desktop), GltfImporter, ObjImporter, PlyGaussianImporter, PbrtImporter,
              PreviewSurface (USD -> IR), GltfMaterial (glTF -> IR)
-Format/      SceneFile (flatbuffers NoorRayScene, read in place, memory-mapped on desktop), SceneWriter
+Format/      SceneFile, SceneWriter (the binary .nrs format of SceneCodec.h, memory-mapped on desktop), Animation
 Gpu/         GpuScene (owns all GPU data of a Scene), MeshBuffers, GaussianBuffers, VolumeBuffers,
              LightBuffers (alias table, light BVH later), EnvironmentBuffers (importance CDF),
              TextureTable, MaterialKernels (compiled shade kernels per material),
@@ -80,10 +81,11 @@ Render/      Renderer, RendererSettings (+ presets), FrameGraph (passes, transie
   Raster/      VisibilityBuffer, RasterShading (RGB PBR), GaussianSplatting (sorted raster splats), Sky, ToneMap,
                Bloom, AmbientOcclusion
   Reuse/       Restir (RTXDI DI + PT host side, temporal and spatial passes, validation)
-  Denoise/     Relax (RELAX SH denoiser passes), Composite (display blend, TAA while moving)
+  Denoise/     Relax (NRD instance, pools and RELAX dispatches)
+  Upscale/     Fsr (FidelityFX FSR 3.1 context on a NoorRHI backend)
   Training/    GaussianTrainer, Dataset (COLMAP, transforms.json), Loss (L1 + D-SSIM), Adam, Densify
 Shaders/     Slang modules and entry files (section 6)
-Session/     Session (device + scene + renderer, the API that App, Cli, Hydra and Python use)
+Session/     Session (device + scene + renderer, the API that App, Cli and Python use)
 ```
 
 ### 3.1 Scene
@@ -95,53 +97,81 @@ Session/     Session (device + scene + renderer, the API that App, Cli, Hydra an
 - Cameras: perspective, orthographic, thin lens, fisheye, realistic lens (Kolb, lens snapshot from the old branch),
   rectangular sensor with configurable origin. Port from `src/libnoorray/Camera` and `Optics`.
 - Lights: point, spot, rect, disk, sphere, directional, mesh emitters, environment. Port analytic intersection from
-  `gaussians`.
+  `gaussians`. A spot with a radius is an area light: a disk of that radius that faces the receiver, radiance
+  `I / (pi r^2)` with the spot mask, so BSDF rays hit it and NEE gets an MIS weight. Before, it was a delta light,
+  and its reflections on the sharp metal bevels of the hero shot were the largest fireflies (pixel values up to 2700).
 - Volumes: homogeneous media and dense grids. Delta tracking and ratio tracking.
 
 ### 3.2 Scene file
 
-- `schema/NoorRayScene.fbs`: meshes (quantized positions optional, octahedral normals, half UVs), instances,
-  materials (IR blobs), textures (BC7/BC6H plus mip chain), Gaussian clouds (compact: position, scale, rotation,
-  opacity, SH), volumes, lights, cameras, environment.
-- The desktop writes it from any importer. The web reads only this file. It is read in place without copies.
+- `.nrs` is a little-endian binary file, read through `Core::MappedFile`. Sizes have 64 bits. Arrays start at 16-byte
+  file offsets and copy with `memcpy`. `Format/SceneCodec.h` lists the fields of every object once, for the writer
+  (`SceneEncoder`) and for the bounds-checked reader (`SceneDecoder`).
+- Layout: a 32-byte header (`NRSC`, version, file size, offset of the shared objects, offset of the animation
+  directory), the scene, the frame area, the shared objects, the animation directory.
+- The scene is lossless: textures as GPU texels, materials, meshes with their topology, instances, Gaussian clouds,
+  volumes, lights, cameras, the active camera, the environment and the node hierarchy. Handles are dense indices.
+- Shared objects are the graphs, programs and node trees (with their groups). Each distinct one is in the file once,
+  and the reader gives one `shared_ptr` for it, so materials share pipelines.
+- The animation directory holds the key channels and the place of each key frame. The frame area holds the key frames
+  of object keys and mesh sequences. `Animation::apply` decodes a key frame only when it shows it.
+- The desktop writes the file from any importer. The web reads only this file.
 - Textures need `texture-compression-bc` on WebGPU. A device without it gets a clear error at scene load.
 
 ## 4. Materials
 
 ### 4.1 IR
 
-- `schema/MaterialProgram.fbs`: a flat SSA list of instructions, constants, parameters (editable values), textures
-  and outputs.
-- Ops: constants, parameters, Math (all Blender Math modes), VectorMath, Mix (float/vector/color), MapRange, Clamp,
-  ColorRamp (baked to a 1D table), RGBCurves (baked), ImageTexture (wrap, filter, color space), TexCoord (UV0-3,
-  generated, object), Geometry (position, normal, tangent, incoming), Attribute (vertex color, instance attributes),
-  NormalMap, Bump, Fresnel, LayerWeight, SeparateXYZ/CombineXYZ, HueSaturationValue, Invert, Gamma, BrightContrast,
-  noise later.
-- Outputs: the Principled BSDF inputs (base color, metallic, roughness, IOR, transmission, coat, sheen, specular
-  tint, anisotropy, normal, alpha, emission color and strength, thin film thickness and IOR), plus an optional
-  second Principled set with a mix factor.
-- `Validator` rejects unknown ops, cycles, and type errors with a clear message. Unsupported Blender nodes fail at
-  export in the addon.
-- `ConstantFolding` folds constant subgraphs. Constant colors become spectral basis coefficients at compile time.
+- `Materials::Graph` (done): a flat SSA list of float vector values (width 1 to 4). Each instruction is a constant,
+  a hit input (`GraphInput`), a parameter slot, a texture sample, a call of a host function in
+  `Shaders/Materials/Graph.slang` (noise, voronoi, wave, magic, checker, brick, gradient, white noise, HSV, blackbody,
+  wavelength, Fresnel, layer weight), an extract or combine, or a math op. `Graph::open` validates widths, operand
+  order, slots and outputs. `GraphBuilder` folds constants and merges equal values.
+- Outputs (`GraphOutput`): the members of `BsdfInputs` (the Principled inputs), the emission, the chosen closure
+  weight over its probability with a translucent flag, and the transparency. `BsdfInputs.smoothNormal` is not a graph
+  output: the material kernel sets it to the interpolated normal before bump and normal maps.
+- Bent normals as in Cycles (bump map correction on): the specular, metal, glass and coat lobes use the normal that
+  `ensure_valid_specular_reflection` turns towards Ng (`clampShadingNormal`); diffuse and sheen use the bent normal.
+  `bump_shadowing_term` drops a light on the other side of the smooth normal and softens diffuse light at the bump
+  terminator. Diffuse and sheen samples below Ng are dropped, but their evaluation takes such light.
+- Tangents as in Cycles: an unlinked Tangent input of an anisotropic BSDF is the radial tangent about Z, and a
+  Tangent node can be radial about X, Y or Z. The radial tangent comes from the generated coordinates. It turns to
+  world space like a normal through the `worldToObject` rows of `ShadingContext`, and is then made normal to N.
+- Closures: the translator flattens Mix and Add Shader into weighted leaves. The graph selects one leaf per hit with
+  `ClosureRandom` in proportion to the luminance of its weight. Emission and transparency sum over all leaves.
+- Unlinked inputs become parameters, so materials with the same node setup share one graph, and value edits do not
+  recompile. Inputs that decide if a material is transparent or emissive stay constants at 0 and 1, so the material
+  flags fold.
+- `Materials::Program` stays the interpreted register program for displacement
+  (`docs/BlenderAnimationPlan.md`, phase 2c).
+- `.nrs`: a material references its shared graph and holds the current parameter values, the graph textures, the fixed
+  parameters and the node tree.
 
-### 4.2 SPIR-V compilation
+### 4.2 Shader compilation
 
-- Each shade kernel template (`Shaders/Wavefront/Shade.slang`, `Shaders/Reuse/...`, `Shaders/Raster/...`) calls a
-  stub `[noinline] BsdfInputs evaluateMaterial(ShadingContext context)` and `[noinline] float evaluateOpacity(...)`.
-  The stubs are compiled with names kept.
-- `Spirv/Emitter` writes the function body for one material: instructions, texture handles from `TextureTable`,
-  parameters from a per-material constant block (value edits need no recompile).
-- `Spirv/Linker` replaces the stub body in the template module through NoorRHI `SpirvModule::replaceFunction`
-  (section 7). The result opens as a normal `ComputePipeline` with `openAsync`. On WebGPU NoorRHI translates it to
-  WGSL at open, so the same path works in the browser.
-- `MaterialKernels` caches kernels by IR hash and variant key. The pipeline cache persists them on disk.
-- While a kernel compiles, the material shades with the previous kernel of that material, or with a neutral grey
-  kernel on first load. This is a visible state in the UI, not a hidden substitution.
+- `Shaders/Materials/Graph.slang` declares `[noinline] evaluateMaterialGraph(ShadingContext, uint4 material)`. The
+  helpers `graphParameter` and `graphTexture` get the parameter and texture addresses from `material`; the graph code
+  has no static variables.
+- `Materials::writeGraphCode` writes the body of one graph: SPIR-V in `GraphSpirv.cpp`, WGSL in `GraphWgsl.cpp`.
+  `PipelineCache` splices it into `Entries/EvaluateMaterials.slang` and compiles one compute kernel per distinct
+  graph in the background (0.5 to 1.5 s uncached on Vulkan). `evaluateFixedMaterials` evaluates the materials
+  without a graph.
+- A material kernel only evaluates the material: it writes a packed closure (`PackedClosure`) per path slot. All
+  other kernels are plain compute kernels without material code, so each compiles once, independent of the scene.
+- `binPaths` puts the surface hits in one bin per material program (bin 0 holds the Gaussian and volume hits).
+  `advanceBins` writes the thread groups of each bin, and the material kernels run concurrently with
+  `dispatchIndirect`. Then the shade kernels read the closures.
+- `PipelineCache` keeps the material kernels of the last four graph sets. Value edits do not compile again.
+- WebGPU uses the same kernels. Uncached Dawn compile of the ReSTIR kernels: 60 s in total (`restirResample` 45 s),
+  before 519 s with the old callable link (ReSTIR temporal and spatial about 210 s each).
+- The raster visibility pass does not run graphs: its alpha test uses the fixed parameters.
 
 ### 4.3 Sources
 
-- Blender addon: walks the node tree, writes the IR, stores it on the USD material prim as `noorray:program`
-  (binary asset). The Hydra delegate and the USD importer read it.
+- Blender addon: `NoorRay.Python` walks the node tree through bpy (`Blender/GraphCompiler` for the surface,
+  `Blender/MaterialReader` for the fixed fallback, `Blender/ProgramCompiler` for displacement) and sets the material in
+  the session scene. `noorray.export_scene` writes the same scene as a `.nrs` file.
+  `export_scene.py` is the older Python exporter; it stays for frame-range export until the C++ export writes animation.
 - USD importer: `noorray:program` if present, else `UsdPreviewSurface` through `PreviewSurface`.
 - glTF importer: metallic-roughness PBR, KHR_materials_transmission, ior, emissive_strength, clearcoat, sheen.
 
@@ -157,6 +187,7 @@ There is one `Renderer`. Raster, hybrid, realtime and progressive rendering are 
 | Shading | `Raster`, `PathTraced` | `Raster`: RGB PBR, environment map, AO, splatted Gaussians, no secondary rays. `PathTraced`: spectral wavefront path tracing. |
 | Reuse | `Off`, `Di`, `DiPt` | `PathTraced` only. |
 | Denoiser | `Off`, `Relax` | `PathTraced` only. Display only, never written into the accumulation (5.6). |
+| Upscaler | `Off`, `Fsr` | `PathTraced` without accumulation only. Render scale and sharpness are settings. |
 | Accumulation | on, off | Resets on camera, scene or setting changes. |
 | Adaptive sampling | on, off | `PathTraced` only. Per-pixel candidate rate from reuse confidence and, with accumulation, the error (5.4). |
 | Path budget | paths per frame | Default: one per pixel. Adaptive sampling moves it, it does not add to it. |
@@ -193,13 +224,13 @@ unbiased:
   reads and writes. The graph orders the passes, places the NoorRHI barriers, and aliases transient targets. A
   pass that a setting does not use is not recorded, and its pipelines and targets are not opened. Settings change
   only the frame graph, targets and pipelines. The scene and the GPU data stay.
-- Temporal resources (film half-buffers, reservoirs, RELAX history, TAA history, previous depth and normal) live in
+- Temporal resources (film half-buffers, reservoirs, RELAX history, FSR history, previous depth and normal) live in
   the graph under a fixed key and survive between frames. A resize or a setting that changes their format drops
   only the affected keys.
 - Debug view: the app can show any graph resource of the last frame (pass name and resource name), with a value
   range. This replaces separate debug AOV code.
 - One `Reprojection` pass per frame writes the reprojection map (motion vector + validity from depth and normal
-  tests). RTXDI temporal reuse, RELAX and TAA all read it. No pass computes its own reprojection.
+  tests). RTXDI temporal reuse, RELAX and FSR all read it. No pass computes its own reprojection.
 - Acceleration structures are built on first use. With `Raster` shading and no traced primary, no BLAS or TLAS is
   built, so the `Viewport` preset has no ray tracing cost.
 - Reuse off is plain wavefront path tracing: the resampling passes are not recorded, and the link constant
@@ -242,12 +273,17 @@ generate -> extend -> sort/bin -> shade[material] -> shadow -> accumulate
    +------------- regenerate finished paths into the pool -------+
 ```
 
-- `PathPool`: packed SoA path state (about 64-96 B per path). The size is fixed (default 1M, lower when the heap is
-  small) and does not depend on the resolution.
-- `Queues`: `AtomicPtr<uint>` counters. No indirect dispatch: every stage is a direct dispatch of one fixed grid
-  (`gridGroups` workgroups, sized to fill the GPU, at most the pool) whose threads stride over the stage's GPU count.
-  An empty stage costs one grid of threads that exit at once, and Dawn validates no indirect arguments. Each
-  kernel reads its exact work count (for example `Regenerate` reads 0 when regeneration is off).
+- `PathPool`: SoA path state, about 256 B per slot with the queues and the packed closure. The default is 2M slots
+  (512 MB): one path per pixel of 1080p, so a real-time frame needs one round. The loop runs
+  `maxDepth * ceil(budget / pool)` iterations; regeneration stays on while the sample list can pass the pool.
+- `Queues`: `AtomicPtr<uint>` counters. Each `advance` phase writes the indirect dispatch of the next grid stages
+  (`gridDispatch`: active, bin source, surface, medium, shadow, free, binned) from their counts, at most the fixed
+  grid (`gridGroups` workgroups), whose threads stride over the rest. An empty stage launches no group. Measured on
+  the heavy test scene against direct dispatch of the full grid: 26.3 to 22.3 ms at 1080p on Vulkan, and faster on
+  WebGPU too (46 to 43 ms, ReSTIR 62 to 53 ms at 540p) in spite of Dawn's indirect validation. The alpha shadow
+  layers and the ReSTIR resampling still dispatch the full grid.
+- `GpuProfiler`: timestamp pairs per kernel and pass (`noorray --profile`); `--timings` measures only whole frames,
+  as each pair waits for the work before it.
 - `Extend`: only traversal and the hit filter (stochastic opacity via `evaluateOpacity`, stochastic Gaussian
   acceptance). Writes the hit record.
 - Texture filtering: ray cones (Akenine-Möller et al. 2021) give the mip level at each hit. The cone starts from the
@@ -256,10 +292,11 @@ generate -> extend -> sort/bin -> shade[material] -> shadow -> accumulate
 - `Shade[material]`: one compiled kernel per material with work in the queue. BSDF sampling, NEE (light alias table,
   environment CDF), MIS, Russian roulette, writes the shadow ray and the next ray.
 - `Shadow`: any-hit traversal, first hit ends the search.
-- With reuse on (`writesReservoirs`), the path state records the ReSTIR PT reconnection data while it traces:
-  reconnection vertex, partial Jacobian, `rcWiPdf`, suffix radiance, path flags and the hero `u`. At path end,
-  `Accumulate` builds the initial reservoir with the RTXDI functions (`RTXDI_MakePTReservoir`, streaming). The DI
-  initial samples come from `Shade` in the same way.
+- ReSTIR PT is not a separate renderer: it uses the same pool, queues, bins and material kernels. The ReSTIR
+  frame (`recordRestir`) runs the wavefront steps with `restirExtend` and `restirBounce` in place of `extend` and
+  `shadeSurface`. `restirBounce` runs the RTXDI initial path context per bounce (`RTXDI_PathTracerContextInitial`,
+  packed into a 96-byte `RestirPathRecord` per slot between the steps) and stores the initial reservoir at the end of
+  the path. Then `restirResample` runs temporal and spatial reuse, and `restirShade` writes the film.
 - `Accumulate`: film (RGB float) as two half-buffers (odd and even frames), AOVs (albedo, normal, depth, position,
   cryptomatte, Gaussian overdraw).
 - `SampleRate` (one pass, replaces separate adaptive sampling masks): writes a per-pixel candidate rate `r` in
@@ -281,8 +318,22 @@ generate -> extend -> sort/bin -> shade[material] -> shadow -> accumulate
   weight is unchanged, so GRIS stays unbiased. `rMin` limits the `1/r` weight and the fireflies it would cause. The
   image test "reuse on versus off" covers this.
 - Progressive PT submits in bounded chunks of samples, never one long dispatch (browser and OS watchdogs).
-- Volumes: medium tracking in the path state under `hasVolumes`, free-flight and ratio tracking in `Extend` and
-  `Shadow`.
+- Volumes: medium tracking in the path state under `hasVolumes`, in `Extend` and `Shadow`. `settings.x` holds the
+  bounce limit (bits 0 to 7) and the volume bounce limit (bits 8 to 11) of Cycles; 0 volume bounces is single
+  scattering. Homogeneous volumes attenuate in closed form. Only grid volumes use ratio tracking.
+- Volume direct light as in Cycles: on each ray segment through a volume, `Extend` lights one point. One-sample MIS
+  picks equiangular sampling (toward a light sampled from the segment middle) or distance sampling, 50/50, with the
+  power heuristic. The point traces its own shadow ray. When the volume bounces are used up, the segment only
+  attenuates (no delta-tracking scatter), as in Cycles. Scenes with alpha test keep delta tracking with direct light
+  at the scatter in `ShadeMedium`, because the shadow ray in `Extend` has no material passes.
+- Sobol patterns: the scramble seed (`settings.w`) is fixed for one accumulation, so the samples of a pixel stay
+  stratified across frames. It changes every frame when the film does not accumulate. `settings.z` is the frame seed
+  for hashed decisions and ReSTIR. Each depth has 4 patterns: light, BSDF and roulette, volume point and strategy,
+  volume light. `raySeed` salts are `depth * 16 + salt`.
+- Light linking as in Cycles: a receiver has one of up to 64 light sets (instance flags bits 24 to 31, volume kind
+  bits 24 to 31, path flags bits 20 to 25 for the last scattering vertex). Each light record has a 64-bit mask of the
+  sets it reaches, and `LightBuffers` writes one alias table per set. Shadow linking is not supported. ReSTIR uses the
+  set of the surface for light sampling; its BSDF hits on emitters still use set 0.
 
 ### 5.5 Gaussians
 
@@ -303,8 +354,58 @@ generate -> extend -> sort/bin -> shade[material] -> shadow -> accumulate
   has and NoorRay uses: footprint-based reconnection criteria (`RTXDI_RESTIRPT_RECONNECTION_MODE_FOOTPRINT`),
   duplication maps and decorrelation (they also shorten the correlation between accumulated frames, and give the
   duplication score for `SampleRate`), and the heuristic spatial neighbor selection.
-- Resampling kernels that replay path prefixes need material evaluation. They use one switch kernel over the
-  scene's material functions, with inputs sorted by material.
+- The resampling kernel has no material code. The hybrid shift calls `RAB_RandomReplay` (RTXDI fork hook), which
+  starts a replay path in the wavefront pool instead of tracing it. Each pixel resamples in three stages: the forward
+  shifts emit their replays, the inverse shifts emit theirs, then the pixel stores its reservoir. Between the stages
+  the replays run through `restirExtend`, the bins, the material kernels and `restirReplay`, which writes a 48-byte
+  `RestirReplayRecord`. The pixels that wait are in three pending lists. A sweep resamples as many pixels as the pool
+  has slots for their replays (`poolCapacity / forward shifts`).
+- Memory at 1920x1080 with one path slot per pixel: about 1.0 to 1.2 GB for the reservoirs, surfaces, closures, path
+  and replay records (295 MB at 960x540).
+- One reservoir for direct and indirect light (the unified reservoir of ReSTIR PT Enhanced): the light sample of the
+  primary vertex is a path of length 2 whose reconnection vertex is the light (fork hook
+  `RecordPrimaryNeeLightSample`), so `restirShade` adds only the light that the camera sees and the reservoir. A
+  replay result keeps the BSDF pdf and the light set of its last vertex, for the NEE MIS weight of the shift. The fork
+  evaluates that MIS weight with the BSDF pdf in every reconnection mode; before, the fixed threshold mode used weight
+  1 there, which made the shifted target differ from the initial one.
+- Analytic area lights (rect, disk, sphere, spot with a radius) get two NEE candidates per vertex in the ReSTIR
+  initial path, because the path never hits them: the light sample, and a BSDF sample that hits a light and becomes a
+  light sample with its uv (`sampleRestirBsdfLight`, bit 30 of the RTXDI light index). Each takes the power heuristic
+  of its own strategy. Hero shot, 16 frames, 960x540, against Cycles: relMSE 2.20 to 0.50, largest pixel 2680 to 347,
+  spikes (pixel > 3 where Cycles < 0.5) 172 to 113; 10.9 ms per frame (10.5 before). The rest are sub-pixel
+  reflections of the small spot disks (4 cm, radiance about 4000) on the bevels; PT has as many (108). They are true
+  signal; only more samples remove them without bias. RELAX anti-firefly was measured and stays off: it darkened the
+  image by 5% and the highlights by 25%. Delta BSDF lobes take no BSDF candidate, so a mirror still shows no analytic
+  area light; where two analytic lights overlap along a ray, only the nearest one is a BSDF candidate.
+- No age-based rejection in temporal reuse: it drops the bright samples that live longest. Measured on the hero shot at
+  512 spp: ReSTIR/Cycles 1.013 with it, 1.004 without it; the history cap of 8 limits the life of a sample.
+- SHaRC radiance cache (`external/SHARC`, upstream v1.8.3, `Restir/RadianceCache.slang`), only in frames that are not
+  accumulated (realtime; CLI `--no-cache` turns it off). An initial path ends in the cache at the first vertex of bounce
+  depth >= 3 (after one indirect bounce) that has a cache entry and was not reached by a delta bounce; that vertex
+  records its MIS-weighted emission plus the cached radiance as one emissive sample. The rule depends only on the path
+  and the cache, so a replay that finds an entry before its path length fails, and one that ends there adds the cache.
+  Update: the initial paths of one pixel per 5x5 block (offset per frame) feed the cache with the NEE and emission of
+  each vertex (`SHARC_SEPARATE_EMISSIVE`), with RGB weights from the spectral throughput; a resolve kernel runs after
+  shading. 2^22 entries, 64-bit keys, 160 MB. WebGPU has no buffer pointers for the atomics, so the cache is off there.
+  Hero shot, 960x540: 9.6 ms against 11.2 ms per frame without denoising (10.9 against 12.5 with RELAX); 256 frames
+  accumulated with the cache forced on: 0.992 of Cycles (1.002 without), relMSE at 16 frames unchanged (0.50).
+  Ending at depth 2 was 8.6 ms but 0.978 of Cycles.
+- Alpha-tested graph materials are opaque in the ReSTIR visibility rays; materials without a graph test their alpha.
+- ReSTIR PT follows the path depth setting up to 15 bounces (the replay flags keep the bounce count in 4 bits).
+- ReSTIR PT and RELAX are the defaults (CLI `--no-restir` and `--no-denoise` turn them off; Python `restir` and
+  `denoise` are on). Scenes with Gaussians use the wavefront path tracer, as Gaussian vertices cannot reconnect.
+- Volumes in ReSTIR PT: the resampled paths are surface paths. Every segment multiplies the throughput by the closed
+  form transmittance (ratio tracking for grid volumes), so the shift is deterministic; the shift and replay segments
+  and the light samples of the primary vertex do the same. On each fog segment of an initial path, the volume direct
+  light of one point (5.5) goes to the film unresampled. Delta tracking on the segment offers its scatters as forks;
+  each pixel keeps one by reservoir selection and continues it with probability 1/4 (weight 4 times the count) in
+  the wavefront kernels after the ReSTIR frame (`restirFork`, then shade and extend). Forks add light but are not
+  samples. Measured on the hero shot with fog at 512 spp: ReSTIR/PT 1.000, both 1.026 against Cycles; 17.7 ms per
+  frame against 20.9 ms for PT at 960x540.
+- The `temporal` setting (off: CLI `--no-temporal`, app "Temporal reuse", Python `temporal`) keeps each frame apart,
+  so nothing smears. ReSTIR PT runs in the RTXDI `Spatial` mode with two neighbors per pixel, RELAX restarts its
+  history every frame, and FSR is off. More neighbors cost much time and remove little noise (measured: the same
+  denoised error with 2, 3 and 4). The frame cost is about the same as with temporal reuse.
 - With accumulation, frames are correlated by the temporal reuse. Each frame is unbiased, so the average converges.
   The M-cap and random spatial neighbors keep the correlation short. With a still camera the temporal reprojection
   is the identity, so no reprojection error enters the history.
@@ -320,13 +421,31 @@ generate -> extend -> sort/bin -> shade[material] -> shadow -> accumulate
   same estimator in the new scene, so the reuse stays unbiased. A camera-only change needs no validation.
 - For animation renders, each frame validates, then starts with the reservoirs of the previous animation frame
   (temporal reuse through the reprojection map), then accumulates to the error target.
-- `Composite` TAA: while `w > 0`, the denoised image goes through a TAA pass (reprojection map, color box
-  clamping) that resolves the per-frame sub-pixel jitter. The raw accumulation never goes through TAA.
-- `Relax`: RELAX diffuse + specular with SH, ported pass by pass to Slang (pre-pass, temporal accumulation, history
-  fix, history clamping, a-trous spatial filter, anti-firefly, split screen debug). Inputs: diffuse and specular
-  radiance + hit distance as SH (RGB after the film conversion), normal + roughness, view Z, motion vectors.
-  Settings and pass order port from `Realtime/Denoiser.cpp`.
-- `Composite`: denoised lighting times albedo plus emission, display blend, TAA, exposure, tone map, output.
+- No own TAA: without accumulation, FSR resolves the sub-pixel jitter (its own jitter sequence). With accumulation,
+  the denoised image blends into the accumulated mean with weight `samples / (samples + denoiseBlend)`.
+- `Relax`: the NRD library plans the RELAX dispatches; NoorRay runs the unmodified shaders with NoorRHI pools.
+  Inputs from the `denoisePrepare` kernel: diffuse and specular radiance divided by an RGB demodulation albedo
+  (from the rgb wavelengths, so free of hero wavelength noise) + the primary-to-secondary hit distance, normal +
+  roughness, view Z, and 2D motion in pixels with the view Z change. The diffuse prepass is off: the diffuse
+  signal is never zeroed by a lobe choice, and the prepass blurs contact and cast shadows away. Unused NRD passes
+  (split screen) fail only when they are dispatched.
+- RELAX settings: luminance edge stopping 4 (default 2 and 1), fast history clamp 3 sigma (default 2), anti-firefly
+  off. The defaults reject the rare bright paths of a few samples: on the hero shot without fog the 16-frame
+  realtime image was 0.72 of the reference (metal highlights lost up to 30%); now 0.97 (PT) and 0.96 (ReSTIR).
+- Fog light in front of the primary vertex (the camera segment light and the forks of the camera segment) goes to
+  its own lighting bucket and a second denoiser, RELAX diffuse with the same guides and no demodulation. In the
+  diffuse bucket, the surface albedo divides it (metal: 0.01) and the blur multiplies it by the neighbors' albedo,
+  which made the card 5x too bright. The fog denoiser has the prepass on, luminance stopping 8 and no fast history:
+  fog changes slowly and its multiple scattering comes from few bright forks. A miss through fog writes fog guides
+  (albedo 1, the depth of the middle of the fog). Hero shot with fog, 16 realtime frames, ReSTIR + RELAX: ratio
+  1.004, median relative error 0.11 (raw ReSTIR 0.90). The wavefront path tracer with RELAX stays noisy in fog: a
+  scatter on the camera segment is its primary vertex, so the guides change from pixel to pixel.
+- `Fsr`: FSR 3.1 reads the colour, depth and motion that the denoise kernels write at render resolution and writes
+  the display image, which tone mapping reads. On WGSL, `Shaders/Upscale/Overrides/spd/ffx_spd.h` shadows the SPD
+  include to load the SPD counter with `workgroupUniformLoad`, which WGSL uniformity analysis needs.
+- `Composite` (`denoiseComposite`): denoised lighting times albedo plus denoised fog plus primary emission (a pixel
+  without guides takes all its light from its raw frame), the display blend, then FSR or tone mapping. Browsers need the WebGPU `texture-formats-tier2`
+  feature for the storage images: Chrome 140 does not have it, Chrome 156 does.
 
 ### 5.7 Raster
 
@@ -356,7 +475,8 @@ Lights/      AliasTable, Analytic, Environment, Emitters
 Scene/       SceneSurface (hit record to surface), Gaussians, Volumes, Camera, Lens
 Wavefront/   SampleRate, Generate, Extend, Shade (template), Shadow, Accumulate, Regenerate, Sort
 Reuse/       RtxdiBridge, RestirDi, RestirPt, Validate
-Denoise/     Relax/*, Composite, Taa
+Denoise/     Denoise (prepare and composite), NrdPass and the RELAX entry wrappers
+Upscale/     FsrPass, FsrCallbacks, the FSR entry wrappers, Overrides/spd
 Render/      Reprojection, Histogram, RayCone
 Raster/      VisibilityBuffer, Shade (template), GaussianSplat, Sky, ToneMap, Bloom, Ao, Overlays
 Training/    Forward, Backward, Adam, Loss, Densify
@@ -387,6 +507,12 @@ Entries/     generated entry files per kernel and variant
    with the same name and type. Host stubs and helpers are `[noinline]`. Test: patch a compute stub, run it on both
    backends.
 5. Runtime `Shader` from SPIR-V words: no NoorRHI change. NoorRay owns the words and fills `Shader::code` with spans.
+6. Callable shaders (NoorRay no longer uses them, see 4.2): `RayTracingPipelineDesc::callable` and
+   `callShader(index, payload)`, with the index counted
+   across the libraries of a pipeline. The software fallback links each callable into the kernel as a donor function
+   behind a switch (`SpirvModule`, `WgslModule`), with one payload type per source. Vulkan callable modules get the
+   bindless heap back in set 0 (slangc counts the payload in space 0) and lose DontInline. Test: `callShader` on
+   hardware, on the fallback and on WebGPU.
 
 ### RmlKit
 
@@ -405,6 +531,9 @@ Branch `spectral` in `external/RTXDI`.
   `RTXDI_PT_BEGIN_SHIFT(reservoir)` sets the wavelengths before a shift evaluates the sample.
 - `RTXDI_BrdfRaySampleProperties::SetNotReconnectible()`: dispersive and Gaussian vertices get a zero footprint, so
   they are never reconnection vertices. In fixed-threshold mode `RAB_GetSurfaceRoughness` returns 0 for them.
+- `RTXDI_PT_APPLICATION_PATH_TRACER`: the application runs the path loop (the wavefront). It removes
+  `RTXDI_GenerateInitialSamples` and RTXDI's random replay loop; the hybrid shift calls
+  `RAB_RandomReplay(neighborSample, inout surfaceForResampling, inout targetFunction, inout ptud)` instead.
 - The RGB default packs and behaves like upstream.
 
 ## 8. Integrations
@@ -422,17 +551,91 @@ Branch `spectral` in `external/RTXDI`.
 - `noorray render scene --spp 1024 --error 0.01 --out image.exr` (single settings override the preset), `noorray convert in.usd out.nrs`,
   `noorray train dataset --out cloud.ply`. Image tests and benchmarks use it.
 
-### NoorRay.Hydra and NoorRay.Blender
-
-- Render delegate: meshes, instancers, lights, cameras, render settings, Gaussian splats, materials from
-  `noorray:program`, render buffers (beauty, AOVs). Export to Blender through external memory and semaphore
-  (NoorRHI `Interop`, Vulkan only).
-- Addon: node tree to IR exporter (replaces `materialx_export.py`), Hydra engine registration, render settings UI.
-
 ### NoorRay.Python
 
-- nanobind: Session, Scene (create, edit, import), Renderer (settings, presets, render, read beauty and AOVs as numpy),
-  Trainer.
+- Module `noorray`, built as `noorray.abi3.so` against the stable ABI of Python 3.11 (`Py_LIMITED_API`). The C API keeps
+  the module free of exceptions and RTTI. `CMAKE_POSITION_INDEPENDENT_CODE` is on for desktop builds, because the
+  module links the static libraries.
+- `Engine(width, height)`: one NoorRHI device and one `Session`. Methods: `sync(depsgraph, approximate=False)`,
+  `resize`, `configure(samples, restir, denoise, compile_in_background)`, `set_camera(transform, orthographic,
+  vertical_fov, orthographic_height, shift_x, shift_y, near, far, focus_distance, f_stop)`, `render()` (one frame,
+  waits), `read(buffer)` (linear RGBA floats, top row first). Properties: `complete`, `samples`, `width`, `height`,
+  `warnings` (of the last sync). `render` and `read` release the GIL; `sync` holds it.
+- `Blender/SceneSync` brings the scene to the depsgraph:
+  - It walks `depsgraph.object_instances` and takes MESH and LIGHT instances, which include curves, text and
+    Geometry Nodes instances. An instance key is the object, or the instancer and its `persistent_id`. A mesh key is
+    the evaluated mesh and the materials of its slots, so Geometry Nodes instances share one mesh.
+  - The state of each object is read once per sync. Blender reuses one temporary object for every dupli, so a dupli
+    is cached by its original, its data and its instancer, not by the evaluated object.
+  - Meshes are read again when `depsgraph.updates` names the object or its data with a geometry update; materials
+    when they or any node tree update; an image update reads the whole scene again. Lights, the camera and the world
+    are read on every sync. What a sync does not see leaves the scene. A failed sync clears the scene, so the next
+    one starts from nothing.
+  - `Blender/MeshReader` reads the bulk arrays with `foreach_get` into C++ memory through a memoryview (`position`,
+    `.corner_vert`, the normals of `normals_domain` (`vertex_normals` or `corner_normals`), UV maps, the render colour
+    attribute). It splits triangles and quads itself as Blender does and takes `loop_triangles` only for n-gons.
+  - The mesh has the Cycles layout: positions are the Blender vertices, there is no weld, and each stream has a
+    domain. POINT normals and colours are per vertex; CORNER normals, UVs, CORNER colours and tangents are per
+    triangle corner, at the index of the corner in `indices`. FACE normals give a mesh without normals, which shades
+    with the geometric normal. Corner tangents sum over corners with the same vertex, normal and UV, as MikkTSpace
+    does. `MeshRecord.cornerStreams` tells the shaders which streams are per corner.
+  - Triangulation, the index sort and the stream output run on all cores (`Blender/Parallel.h`); scratch arrays stay
+    uninitialised. When only positions and normals change, `MeshReader::fill` writes them into the mesh in place
+    (`Scene::updateMesh`); a quad whose split diagonal flips patches its six corners and uploads the mesh again.
+  - Light linking: `readEmitters` reads `light_linking.receiver_collection` (objects and child collections with
+    INCLUDE or EXCLUDE) and `visible_volume_scatter` of the lights in `depsgraph.objects`. Receivers that the same
+    linked emitters reach share a light set; set 0 holds the receivers outside every collection. The masks are set
+    after the instance walk. The scene file does not store the sets yet.
+  - `Blender/Reader` keeps the first error; unsupported nodes fail the sync unless `approximate` is set.
+    The addon renders always with `approximate` and reports the deduplicated warnings once per sync; its .nrs export
+    has a Strict Materials option (off by default) that fails on unsupported nodes.
+- `export_scene(depsgraph, path, approximate=False)` runs a `SceneSync` into a new scene and writes it with
+  `Format::SceneWriter` (current frame; no device). It returns the warnings. `SceneWriter` writes material programs,
+  mesh topology and mesh attributes, so displacement survives the round trip.
+- Later: scene edits per object (meshes from numpy arrays, lights, materials), AOVs, Gaussian training.
+
+### NoorRay.Blender
+
+- Blender extension `noorray_blender` (`blender_manifest.toml`), staged by CMake into
+  `build-*/NoorRay.Blender/noorray_blender` with the module (`noorray.abi3.so` on Linux, `noorray.pyd` on Windows) and
+  no other dependency: the Linux module links libc++ statically and exports only `PyInit_noorray`; the Windows module
+  links python3.dll against the headers of the official Python 3.11 NuGet package (FetchContent).
+- `cmake --workflow --preset blender-addon` writes `build-linux-release/noorray_blender-<version>.zip`, one extension
+  for linux-x64 and windows-x64 with both stripped modules; it builds `windows-release` through llvm-mingw itself and
+  validates the zip with Blender when Blender is in PATH. The command line exporter
+  `export_scene.py` is staged next to it and calls the `noorray` module.
+- Export: the operator `noorray.export_scene` (3D view sidebar, tab NoorRay, and File > Export) writes the current frame
+  of the viewport depsgraph as a `.nrs` file through `noorray.export_scene`.
+- `NoorRayRenderEngine` (`bl_idname = "NOORRAY"`), Cycles shader nodes (`bl_use_shading_nodes_custom = False`),
+  EEVEE for Material Preview.
+  - `render`: syncs the render depsgraph, renders to the sample count or the time limit of Cycles, shows the film every
+    second and writes the Combined, Depth, Mist, Normal and Diffuse Color passes. A scene without an active camera is
+    an error. With Persistent Data the engine stays for the next frame, whose sync reads only what changed.
+  - Motion blur: `motion_steps` sub-frames at equal shares of the area of the shutter curve. Each step syncs with
+    `accumulates=True`, which keeps the film across the scene change (`Renderer::setAccumulatesChanges`), and gets an
+    equal share of the samples and of the time limit. All animation blurs: cameras, deformation, materials, lights.
+  - `view_update`: syncs the depsgraph when an update changes more than the selection.
+  - `view_draw`: reads the camera from the view and projection matrices, renders one frame while the film is not
+    complete and draws it with the display space shader, through a shared OpenGL texture where the backend has one.
+- A sync without a scene camera adds a default camera, which the viewport replaces with its view.
+- Settings (`scene.noorray`) tag the scene when they change, so a change from Python or an animation redraws too. Light
+  paths, seed, time limit and exposure are the settings of Cycles. The engine adds itself to the built-in panels that
+  list `BLENDER_RENDER`.
+- Memory: the path pool takes the capacity that suits the VRAM; allocator blocks grow by an eighth; one upload is at
+  most 128 MB; the host copy of the texels goes after the upload; textures over the limit of Simplify shrink; unused
+  textures and shaders nothing reads are pruned; the fog RELAX denoiser opens only with volumes.
+- Displacement: a program that the register interpreter knows runs as before; every other graph compiles to the
+  `DisplaceGraph` kernel. A displaced mesh keeps its rest positions and normals for Generated coordinates and for the
+  bump of Displacement and Bump.
+- Voronoi uses the PCG hash of Blender 5; colour ramps other than RGB linear, ease and constant are sampled, with 8
+  pieces for each span.
+- Not supported: shadow catchers, shadow linking, transparent glass film, light group, cryptomatte and index passes,
+  stereo, colour grids of VDB files, noise textures in grid volume shaders, pixel-size Wireframe, material previews.
+- Next steps, in order:
+  1. Deforming meshes through `setMeshVertices` when only the positions change.
+  2. Zero-copy display with Blender's Vulkan backend.
+  3. Light passes, viewport resolution scale.
+  4. macOS in the extension zip.
 
 ## 9. Tests
 
@@ -453,7 +656,7 @@ Everything is written before the first build. The order follows the dependencies
 
 1. NoorRHI changes (section 7) and their tests.
 2. RmlKit and RTXDI fork changes.
-3. Orphan branch skeleton: CMake, presets, AGENTS.md, tools, hooks, external submodules, schemas.
+3. Orphan branch skeleton: CMake, presets, AGENTS.md, tools, hooks, external submodules.
 4. `Core`, `Scene`, `Spectral`.
 5. `Materials` (IR, folding, emitter, linker), `Format`, `Import`.
 6. `Gpu` (GpuScene and all buffers, acceleration structures, texture table, material kernels).
@@ -463,11 +666,11 @@ Everything is written before the first build. The order follows the dependencies
 10. `Reuse` (RTXDI bridge, reservoir recording in the wavefront kernels, ReSTIR DI and PT) and `Denoise` (RELAX SH,
     composite), the presets.
 11. `Training`.
-12. `Session`, `NoorRay.Cli`, `NoorRay.App`, `NoorRay.Python`, `NoorRay.Hydra`, `NoorRay.Blender`.
+12. `Session`, `NoorRay.Cli`, `NoorRay.App`, `NoorRay.Python`, `NoorRay.Blender`.
 13. Tests and reference scenes.
 
 Build order after the implementation: NoorRHI tests on both backends, then the library on Vulkan, the CLI image tests
-on Vulkan, the same on Dawn, the web build in Chrome, the app, then Hydra, Python and Blender.
+on Vulkan, the same on Dawn, the web build in Chrome, the app, then Python and Blender.
 
 ## 11. Ported code sources
 
@@ -484,8 +687,8 @@ on Vulkan, the same on Dawn, the web build in Chrome, the app, then Hydra, Pytho
 | Raster | verylia `src/Verylia/UI/Viewport` |
 | Training | `origin/gaussians:src/libnoorray/Training` |
 | Adaptive sampling | `origin/gpgpu:src/Kernels/Finalize.cu`, `Generate.cu`, `KernelHelpers.h` |
-| Hydra, addon | `src/hdnoorray` |
-| Python | `src/pynoorray` |
+| Addon | `src/hdnoorray` (node tree export only; the Hydra delegate is not ported) |
+| Python | `src/pynoorray` (API ideas only; the module is new) |
 
 ### 11.1 Inspiration: Adaptive ReSTIR (Xiao yi Hu, 2026 thesis)
 
@@ -522,7 +725,7 @@ Not taken, because it does not converge to the reference or the plan already cov
 
 ## 12. Open points
 
-- RELAX is derived from NRD, and NRD and RTXDI use the NVIDIA RTX SDK license. All 58 RTXDI headers in the fork
+- NRD (library and RELAX shaders) and RTXDI use the NVIDIA RTX SDK license; FidelityFX uses MIT. All 58 RTXDI headers in the fork
   carry `LicenseRef-NvidiaProprietary`. The license allows distribution only "in object code format" inside an
   application, with the notice "This software contains source code provided by NVIDIA Corporation." The web build
   ships WGSL text, which is close to source. Check this before a public web build. Fallback: an own ReSTIR PT in

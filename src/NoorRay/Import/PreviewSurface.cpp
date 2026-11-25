@@ -84,7 +84,8 @@ std::uint32_t toChannel(const pxr::TfToken& output) {
     return 0;
 }
 
-std::optional<Scene::MaterialTexture> resolveTexture(const TextureSource& source, const Materials::ColorSpace fallbackSpace, const UsdTextureResolver& resolver) {
+std::optional<Scene::MaterialTexture> resolveTexture(const TextureSource& source, const Materials::ColorSpace fallbackSpace,
+                                                     const UsdTextureResolver& resolver) {
     pxr::SdfAssetPath file;
     if (const pxr::UsdShadeInput input = source.shader.GetInput(pxr::TfToken("file")))
         input.Get(&file);

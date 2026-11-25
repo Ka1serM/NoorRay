@@ -20,7 +20,7 @@ namespace NoorRay::App {
 
 class MaterialPreviewInstancer;
 
-//! <materialpreview material="index"> shows the rendered preview of the scene material at that index; until it is ready the element's own style shows.
+//! <materialpreview material="index"> shows the rendered preview of the scene material at that index; until it is ready it shows nothing.
 class MaterialPreviewElement final : public Rml::Element {
 public:
     MaterialPreviewElement(const Rml::String& tag, MaterialPreviewInstancer& instancer);

@@ -9,6 +9,7 @@
 #include "NoorRHI/Commands/CommandList.h"
 #include "NoorRHI/Resources/Readback.h"
 #include "NoorRay/Core/Error.h"
+#include "NoorRay/Format/Animation.h"
 #include "NoorRay/Gpu/GpuScene.h"
 #include "NoorRay/Render/Renderer.h"
 #include "NoorRay/Scene/Scene.h"
@@ -17,13 +18,15 @@ namespace NoorRay::Session {
 
 using PickResult = std::variant<std::monostate, Scene::InstanceHandle, Scene::GaussianCloudHandle>;
 
-//! The scene, its GPU data and the renderer on one device: the API of the app, the command line tool, Hydra and Python.
+//! The scene, its GPU data and the renderer on one device: the API of the app, the command line tool and the Python module.
 class Session {
 public:
     //! A session can share the pipelines of another session on the device, as the material previews do.
     [[nodiscard]] std::expected<void, Core::Error> open(NoorRHI::Device& device, std::uint32_t width, std::uint32_t height,
                                                         std::shared_ptr<Render::PipelineCache> pipelines = nullptr);
+    //! A session holds the animation of one file; importing a second animated file fails.
     [[nodiscard]] std::expected<void, Core::Error> importFile(const std::filesystem::path& path);
+    [[nodiscard]] std::expected<void, Core::Error> setFrame(int frame);
     [[nodiscard]] std::expected<void, Core::Error> saveFile(const std::filesystem::path& path) const;
     [[nodiscard]] std::expected<void, Core::Error> resize(std::uint32_t width, std::uint32_t height);
     void clear();
@@ -46,6 +49,8 @@ public:
     Render::Renderer& getRenderer() { return renderer; }
     const Render::Renderer& getRenderer() const { return renderer; }
     const Gpu::GpuScene& getGpuScene() const { return gpuScene; }
+    void setExactVolumeDensity(const bool exact) { gpuScene.setExactVolumeDensity(exact); }
+    const Format::Animation& getAnimation() const { return animation; }
     NoorRHI::Device& getDevice() const { return *device; }
 
 private:
@@ -53,6 +58,7 @@ private:
 
     NoorRHI::Device* device = nullptr;
     Scene::Scene scene;
+    Format::Animation animation;
     Gpu::GpuScene gpuScene;
     Render::Renderer renderer;
     NoorRHI::Readback<std::uint32_t> pickReadback;

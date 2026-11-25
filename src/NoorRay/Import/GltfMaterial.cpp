@@ -50,7 +50,7 @@ Scene::UvTransform readTransform(const tinygltf::ExtensionMap& extensions, int& 
 }
 
 std::optional<Scene::MaterialTexture> resolve(const GltfTextureResolver& resolver, const int index, int texCoord, const tinygltf::ExtensionMap& extensions,
-                                  const ColorSpace colorSpace) {
+                                              const ColorSpace colorSpace) {
     if (index < 0)
         return std::nullopt;
     std::optional<Scene::MaterialTexture> texture = resolver(index, colorSpace);
@@ -66,7 +66,8 @@ void setChannel(std::optional<Scene::MaterialTexture>& texture, const std::uint3
         texture->channel = channel;
 }
 
-std::optional<Scene::MaterialTexture> resolveInfo(const GltfTextureResolver& resolver, const tinygltf::Value& object, const char* key, const ColorSpace colorSpace) {
+std::optional<Scene::MaterialTexture> resolveInfo(const GltfTextureResolver& resolver, const tinygltf::Value& object, const char* key,
+                                                  const ColorSpace colorSpace) {
     if (!object.Has(key))
         return std::nullopt;
     const tinygltf::Value& info = object.Get(key);
@@ -87,11 +88,12 @@ Scene::Material GltfMaterial::convert(const tinygltf::Material& material, const 
     const tinygltf::PbrMetallicRoughness& pbr = material.pbrMetallicRoughness;
     result.baseColor = {static_cast<float>(pbr.baseColorFactor[0]), static_cast<float>(pbr.baseColorFactor[1]), static_cast<float>(pbr.baseColorFactor[2])};
     result.alpha = static_cast<float>(pbr.baseColorFactor[3]);
-    result.texture(Scene::TextureSlot::BaseColor) = resolve(resolver, pbr.baseColorTexture.index, pbr.baseColorTexture.texCoord, pbr.baseColorTexture.extensions, ColorSpace::Srgb);
+    result.texture(Scene::TextureSlot::BaseColor) =
+        resolve(resolver, pbr.baseColorTexture.index, pbr.baseColorTexture.texCoord, pbr.baseColorTexture.extensions, ColorSpace::Srgb);
     result.metallic = static_cast<float>(pbr.metallicFactor);
     result.roughness = static_cast<float>(pbr.roughnessFactor);
     result.texture(Scene::TextureSlot::Metallic) = resolve(resolver, pbr.metallicRoughnessTexture.index, pbr.metallicRoughnessTexture.texCoord,
-                                     pbr.metallicRoughnessTexture.extensions, ColorSpace::NonColor);
+                                                           pbr.metallicRoughnessTexture.extensions, ColorSpace::NonColor);
     result.texture(Scene::TextureSlot::Roughness) = result.texture(Scene::TextureSlot::Metallic);
     setChannel(result.texture(Scene::TextureSlot::Metallic), 2);
     setChannel(result.texture(Scene::TextureSlot::Roughness), 1);

@@ -24,10 +24,14 @@ IncludeBlocks: Regroup
 IncludeIsMainRegex: '(Desktop|Web)?$'
 IncludeCategories:
   - Regex: '\.generated\.h"$'
-    Priority: 5
+    Priority: 6
+  - Regex: '^"NoorRay/Render/Upscale/FfxPlatform\.h"$'
+    Priority: 1
   - Regex: '^<[a-z_]+>$'
     Priority: 2
+  - Regex: '^<FidelityFX/gpu/'
+    Priority: 4
   - Regex: '^<'
     Priority: 3
   - Regex: '^"'
-    Priority: 4
+    Priority: 5

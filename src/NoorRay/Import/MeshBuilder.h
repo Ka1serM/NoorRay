@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -29,7 +30,10 @@ public:
     //! Fills missing normals with area-weighted normals and missing tangents from UV set 0, then packs the streams.
     static Scene::Mesh build(MeshData data);
     static std::vector<Core::float3> computeNormals(const std::vector<Core::float3>& positions, const std::vector<std::uint32_t>& indices);
-    static std::vector<Core::float4> computeTangents(const MeshData& data);
+    //! Tangents of UV set 0 with the bitangent sign in w; empty normals are flat, and corners with one vertex, normal and UV share a tangent like MikkTSpace.
+    static std::vector<Core::float4> computeTangents(std::span<const Core::float3> positions, std::span<const std::uint32_t> indices,
+                                                     std::span<const Core::float3> normals, Scene::MeshDomain normalDomain, std::span<const Core::float2> uvs,
+                                                     Scene::MeshDomain uvDomain, Scene::MeshDomain tangentDomain);
 };
 
 }

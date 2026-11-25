@@ -45,10 +45,10 @@ private:
     Rml::Vector2f size;
 };
 
-//! The transform the gizmo edits: move along world axes, scale along the object's own axes, or rotate about world axes.
-enum class GizmoMode { Move, Scale, Rotate };
+//! The transform the gizmo edits: translate along world axes, scale along the object's own axes, or rotate about world axes.
+enum class GizmoMode { Translate, Scale, Rotate };
 
-//! The part of the gizmo under the mouse: an axis, the plane normal to an axis, the centre, which moves in the view plane or scales evenly, or the ring about an axis.
+//! The gizmo part under the mouse: an axis, the plane normal to an axis, the centre (moves in the view plane or scales evenly), or the ring about an axis.
 struct GizmoPart {
     enum class Kind { Axis, Plane, Center, Ring };
     Kind kind;
@@ -61,7 +61,7 @@ class ViewportOverlay {
 public:
     static constexpr int iconCount = 5;
     static int iconCell(float density);
-    //! The icons of the lights and the camera in one row of cells, as premultiplied RGBA.
+    //! The icons of the lights and the camera in one row of cells, as premultiplied RGBA: the neutral body, then a row with the glow.
     static std::vector<Rml::byte> paintIconAtlas(int cell);
     //! The textured quads of the light and camera icons, the farthest first, tinted by the colour of the light.
     Rml::Mesh buildIcons(const Scene::Scene& scene, const OverlayView& view, float density) const;
@@ -98,7 +98,7 @@ private:
     std::optional<Core::float3> pointOnDrag(const OverlayView& view, Rml::Vector2f mouse) const;
 
     std::optional<GizmoPart> dragged;
-    GizmoMode dragMode = GizmoMode::Move;
+    GizmoMode dragMode = GizmoMode::Translate;
     Core::Transform dragTransform;
     std::array<Core::float3, 3> dragAxes{};
     Core::float3 dragOrigin{};
@@ -111,5 +111,7 @@ private:
 //! The world transform of a light, a camera other than the active one, an instance or a Gaussian cloud.
 std::optional<Core::Transform> transformOf(const Scene::Scene& scene, const Selection& selection);
 void setTransform(Scene::Scene& scene, const Selection& selection, const Core::Transform& transform);
+//! Places a node in world space below its parent; its children and object follow.
+void setNodeWorldTransform(Scene::Scene& scene, Scene::NodeHandle handle, const Core::Transform& world);
 
 }

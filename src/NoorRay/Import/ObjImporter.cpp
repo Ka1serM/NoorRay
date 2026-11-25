@@ -11,8 +11,8 @@
 #include "NoorRay/Core/Hash.h"
 #include "NoorRay/Core/Log.h"
 #include "NoorRay/Import/MeshBuilder.h"
-#include "NoorRay/Scene/Scene.h"
 #include "NoorRay/Materials/TextureCache.h"
+#include "NoorRay/Scene/Scene.h"
 
 namespace NoorRay::Import {
 
@@ -37,7 +37,8 @@ class Importer {
 public:
     Importer(const std::filesystem::path& path, Scene::Scene& scene) : directory(path.parent_path()), scene(scene), textureCache(scene) {}
 
-    std::optional<Scene::MaterialTexture> resolveTexture(const std::string& name, const tinyobj::texture_option_t& option, const Materials::ColorSpace colorSpace) {
+    std::optional<Scene::MaterialTexture> resolveTexture(const std::string& name, const tinyobj::texture_option_t& option,
+                                                         const Materials::ColorSpace colorSpace) {
         if (name.empty())
             return std::nullopt;
         std::string relative = name;
@@ -79,7 +80,8 @@ public:
         if (physical) {
             material.roughness = static_cast<float>(source.roughness);
             material.metallic = static_cast<float>(source.metallic);
-            material.texture(Scene::TextureSlot::Roughness) = resolveTexture(source.roughness_texname, source.roughness_texopt, Materials::ColorSpace::NonColor);
+            material.texture(Scene::TextureSlot::Roughness) =
+                resolveTexture(source.roughness_texname, source.roughness_texopt, Materials::ColorSpace::NonColor);
             material.texture(Scene::TextureSlot::Metallic) = resolveTexture(source.metallic_texname, source.metallic_texopt, Materials::ColorSpace::NonColor);
             material.sheenColor = Core::float3{1.0f, 1.0f, 1.0f} * static_cast<float>(source.sheen);
             material.coat = static_cast<float>(source.clearcoat_thickness);

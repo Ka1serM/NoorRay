@@ -4,6 +4,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "NoorRay/Materials/Graph.h"
+
 namespace NoorRay::Scene {
 
 namespace {
@@ -93,9 +95,17 @@ bool Scene::remove(const MeshHandle handle) {
     return true;
 }
 
+//! The subsets and instances that used the material are left without one, so their slots show empty.
 bool Scene::remove(const MaterialHandle handle) {
     if (!materials.erase(handle))
         return false;
+    for (Mesh& mesh : meshes.getValues())
+        for (MeshSubset& subset : mesh.subsets)
+            if (subset.material == handle)
+                subset.material = {};
+    for (Instance& instance : instances.getValues())
+        if (instance.material == handle)
+            instance.material = {};
     change.mark(Change::MaterialSet);
     return true;
 }
@@ -105,6 +115,12 @@ bool Scene::remove(const TextureHandle handle) {
         return false;
     change.mark(Change::Textures);
     return true;
+}
+
+void Scene::releaseTextureData() {
+    for (std::uint32_t dense = 0; dense < textures.size(); ++dense)
+        if (textures.keyAt(dense) != environment.texture)
+            textures.getValues()[dense].data = {};
 }
 
 bool Scene::remove(const InstanceHandle handle) {
@@ -224,6 +240,19 @@ bool Scene::setInstanceFlags(const InstanceHandle handle, const InstanceFlags fl
     return true;
 }
 
+bool Scene::setInstanceInfo(const InstanceHandle handle, const Core::float4 color, const std::uint32_t passIndex, const float random,
+                            std::vector<Core::float4> attributes) {
+    Instance* instance = instances.find(handle);
+    if (!instance)
+        return false;
+    instance->color = color;
+    instance->passIndex = passIndex;
+    instance->random = random;
+    instance->attributes = std::move(attributes);
+    change.mark(Change::InstanceSet);
+    return true;
+}
+
 bool Scene::setInstanceMaterial(const InstanceHandle handle, const MaterialHandle material) {
     Instance* instance = instances.find(handle);
     if (!instance)
@@ -233,11 +262,62 @@ bool Scene::setInstanceMaterial(const InstanceHandle handle, const MaterialHandl
     return true;
 }
 
+bool Scene::setInstanceLightLinking(const InstanceHandle handle, const std::uint32_t lightSet, const std::uint64_t lightMask) {
+    Instance* instance = instances.find(handle);
+    if (!instance)
+        return false;
+    if (instance->lightSet == lightSet && instance->lightMask == lightMask)
+        return true;
+    instance->lightSet = lightSet;
+    instance->lightMask = lightMask;
+    change.mark(Change::InstanceSet);
+    return true;
+}
+
+bool Scene::setMeshSubsetMaterial(const MeshHandle handle, const std::size_t subset, const MaterialHandle material) {
+    Mesh* mesh = meshes.find(handle);
+    if (!mesh)
+        return false;
+    if (mesh->subsets.empty() && subset == 0)
+        mesh->subsets.push_back({.firstIndex = 0, .indexCount = static_cast<std::uint32_t>(mesh->indices.size())});
+    if (subset >= mesh->subsets.size())
+        return false;
+    mesh->subsets[subset].material = material;
+    change.mark(Change::MaterialSet);
+    return true;
+}
+
 bool Scene::setMeshPositions(const MeshHandle handle, const std::span<const Core::float3> positions) {
     Mesh* mesh = meshes.find(handle);
     if (!mesh || positions.size() != mesh->positions.size())
         return false;
     std::ranges::copy(positions, mesh->positions.begin());
+    mesh->computeBounds();
+    change.markMesh(meshes.denseIndex(handle));
+    return true;
+}
+
+bool Scene::setMesh(const MeshHandle handle, Mesh mesh) {
+    Mesh* target = meshes.find(handle);
+    if (!target)
+        return false;
+    const bool sameTopology = target->hasSameTopology(mesh);
+    *target = std::move(mesh);
+    if (sameTopology)
+        change.markMesh(meshes.denseIndex(handle));
+    else
+        change.markMeshReplaced(meshes.denseIndex(handle));
+    return true;
+}
+
+bool Scene::setMeshVertices(const MeshHandle handle, std::vector<Core::float3> positions, std::vector<std::uint32_t> normals,
+                            std::vector<std::uint32_t> tangents) {
+    Mesh* mesh = meshes.find(handle);
+    if (!mesh || positions.size() != mesh->positions.size() || normals.size() != mesh->normals.size() || tangents.size() != mesh->tangents.size())
+        return false;
+    mesh->positions = std::move(positions);
+    mesh->normals = std::move(normals);
+    mesh->tangents = std::move(tangents);
     mesh->computeBounds();
     change.markMesh(meshes.denseIndex(handle));
     return true;
@@ -258,6 +338,12 @@ bool Scene::setLight(const LightHandle handle, const Light& light) {
     Light* target = lights.find(handle);
     if (!target)
         return false;
+    Light same = light;
+    //! Each sync compiles the node tree of a light again, so equal programs count as the same graph.
+    if (same.graph && target->graph && same.graph->hasSameProgram(*target->graph))
+        same.graph = target->graph;
+    if (*target == same)
+        return true;
     const bool moved = target->transform != light.transform;
     *target = light;
     change.markLight(lights.denseIndex(handle));
@@ -266,10 +352,26 @@ bool Scene::setLight(const LightHandle handle, const Light& light) {
     return true;
 }
 
+bool Scene::setVolume(const VolumeHandle handle, const Volume& volume) {
+    Volume* target = volumes.find(handle);
+    if (!target)
+        return false;
+    *target = volume;
+    change.mark(Change::Volumes);
+    return true;
+}
+
 bool Scene::setCamera(const CameraHandle handle, const Camera& camera) {
     Camera* target = cameras.find(handle);
     if (!target)
         return false;
+    Camera same = camera;
+    same.previousTransform = target->previousTransform;
+    //! An unchanged camera keeps the accumulation; it stops moving, so its previous transform becomes the current one.
+    if (same == *target) {
+        target->previousTransform = target->transform;
+        return true;
+    }
     const Core::Transform previous = target->transform;
     *target = camera;
     target->previousTransform = previous;
@@ -285,6 +387,8 @@ void Scene::setActiveCamera(const CameraHandle handle) {
 }
 
 void Scene::setEnvironment(const Environment& value) {
+    if (environment == value)
+        return;
     environment = value;
     change.mark(Change::Environment);
 }

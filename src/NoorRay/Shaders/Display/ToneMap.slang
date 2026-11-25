@@ -51,7 +51,8 @@ ToneMapVaryings coverDisplay(uint vertex) {
 }
 
 float4 displayFilm(DisplayArguments arguments, uint2 pixel) {
-    float3 radiance = max(arguments.source[pixel.y * arguments.width + pixel.x].xyz, float3(0.0, 0.0, 0.0));
+    const float3 film = arguments.image.value != 0 ? arguments.image.Load(int2(pixel)).xyz : arguments.source[pixel.y * arguments.width + pixel.x].xyz;
+    float3 radiance = max(film, float3(0.0, 0.0, 0.0));
     if (arguments.splatted != 0) {
         const float4 splat = arguments.splats.Load(int2(pixel));
         radiance = max(splat.rgb, float3(0.0, 0.0, 0.0)) + (1.0 - saturate(splat.a)) * radiance;

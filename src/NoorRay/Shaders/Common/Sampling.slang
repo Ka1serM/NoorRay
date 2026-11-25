@@ -48,6 +48,24 @@ float3 sampleUniformSphere(float2 u) {
 }
 
 //! Directions inside the cone around +Z with the given cosine.
+//! The u of sampleConcentricDisk that gives the point p of the unit disk.
+float2 inverseConcentricDisk(float2 p) {
+    const float radius = length(p);
+    float phi = atan2(p.y, p.x);
+    if (phi < -pi / 4.0)
+        phi += twoPi;
+    float2 offset;
+    if (phi < pi / 4.0)
+        offset = float2(radius, phi * radius / (pi / 4.0));
+    else if (phi < 3.0 * pi / 4.0)
+        offset = float2(-(phi - pi / 2.0) * radius / (pi / 4.0), radius);
+    else if (phi < 5.0 * pi / 4.0)
+        offset = float2(-radius, -(phi - pi) * radius / (pi / 4.0));
+    else
+        offset = float2((phi - 3.0 * pi / 2.0) * radius / (pi / 4.0), -radius);
+    return 0.5 + 0.5 * offset;
+}
+
 float3 sampleUniformCone(float2 u, float cosThetaMax) {
     const float cosTheta = 1.0 - u.x * (1.0 - cosThetaMax);
     const float sinTheta = safeSqrt(1.0 - cosTheta * cosTheta);

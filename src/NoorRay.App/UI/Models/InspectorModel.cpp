@@ -4,6 +4,7 @@ namespace NoorRay::App {
 
 void bind(Rml::DataModelConstructor& model, InspectorModel& inspector, EnvironmentModel& environment) {
     if (auto handle = model.RegisterStruct<MaterialLink>()) {
+        handle.RegisterMember("label", &MaterialLink::label);
         handle.RegisterMember("name", &MaterialLink::name);
         handle.RegisterMember("sceneIndex", &MaterialLink::sceneIndex);
     }
@@ -32,9 +33,8 @@ void bind(Rml::DataModelConstructor& model, InspectorModel& inspector, Environme
     inspectorFields.RegisterMember("materials", &InspectorModel::materials);
     inspectorFields.RegisterMember("materialOverride", &InspectorModel::materialOverride);
     inspectorFields.RegisterMember("lightType", &InspectorModel::lightType);
-    inspectorFields.RegisterMember("colorR", &InspectorModel::colorR);
-    inspectorFields.RegisterMember("colorG", &InspectorModel::colorG);
-    inspectorFields.RegisterMember("colorB", &InspectorModel::colorB);
+    inspectorFields.RegisterMember("color", &InspectorModel::color);
+    inspectorFields.RegisterMember("colorOpen", &InspectorModel::colorOpen);
     inspectorFields.RegisterMember("power", &InspectorModel::power);
     inspectorFields.RegisterMember("radius", &InspectorModel::radius);
     inspectorFields.RegisterMember("width", &InspectorModel::width);
@@ -56,9 +56,8 @@ void bind(Rml::DataModelConstructor& model, InspectorModel& inspector, Environme
     inspectorFields.RegisterMember("shDegree", &InspectorModel::shDegree);
     auto environmentFields = model.RegisterStruct<EnvironmentModel>();
     environmentFields.RegisterMember("textureName", &EnvironmentModel::textureName);
-    environmentFields.RegisterMember("colorR", &EnvironmentModel::colorR);
-    environmentFields.RegisterMember("colorG", &EnvironmentModel::colorG);
-    environmentFields.RegisterMember("colorB", &EnvironmentModel::colorB);
+    environmentFields.RegisterMember("color", &EnvironmentModel::color);
+    environmentFields.RegisterMember("colorOpen", &EnvironmentModel::colorOpen);
     environmentFields.RegisterMember("strength", &EnvironmentModel::strength);
     environmentFields.RegisterMember("rotation", &EnvironmentModel::rotation);
     environmentFields.RegisterMember("visibleToCamera", &EnvironmentModel::visibleToCamera);

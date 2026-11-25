@@ -6,7 +6,7 @@
 
 namespace NoorRay::App {
 
-//! ImGui-style number fields: an up or down drag on a .num changes the value, a click edits the text, .num-up and .num-down step it, and a .slider beside a .num sets it from its min to its max; the attributes step (default 0.1), speed (change per pixel, default step / 10), min, max and integer set the behaviour; Shift is ten times faster and Ctrl ten times slower.
+//! Number fields: a drag on a .num changes it, a click edits it, .num-up, .num-down and a .slider set it, by step (0.1), speed (step / 10), min, max, integer.
 class NumberScrub final : public Rml::EventListener {
 public:
     explicit NumberScrub(Rml::Element& root);
@@ -29,7 +29,7 @@ private:
     Rml::Element* slider = nullptr;
     float startX = 0.0f;
     float startY = 0.0f;
-    float lastY = 0.0f;
+    float lastX = 0.0f;
     float value = 0.0f;
     bool scrubbing = false;
 };

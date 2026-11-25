@@ -1,8 +1,8 @@
 import NoorRHI;
 import SceneRecords;
 import Common.Math;
-
-bool isBackfacing(ShadingContext context) { return context.normal.w > 0.5; }
+import Materials.Graph;
+__exported import Materials.Closure;
 
 float2 selectUv(ShadingContext context, uint uvSet) {
     switch (uvSet) {
@@ -63,7 +63,7 @@ struct MaterialTexels {
 //! A tangent-space normal map; the normals in context face the viewer, so the map turns with them on a back face.
 float3 mapNormal(ShadingContext context, float4 texel, bool mapped, float strength) {
     const float3 normal = context.normal.xyz;
-    if (!mapped)
+    if (!mapped || context.tangent.w == 0.0)
         return normal;
     const bool backfacing = isBackfacing(context);
     const float3 frameNormal = backfacing ? -normal : normal;
@@ -76,8 +76,27 @@ float3 mapNormal(ShadingContext context, float4 texel, bool mapped, float streng
     return strength == 1.0 ? bent : normalize(normal + (bent - normal) * max(strength, 0.0));
 }
 
-BsdfInputs evaluateMaterial(SceneRecord scene, ShadingContext context, uint materialIndex) {
-    const MaterialRecord material = scene.materials[materialIndex];
+BsdfInputs graphInputs(MaterialGraphOutput output, ShadingContext context) {
+    BsdfInputs inputs;
+    inputs.baseColorAlpha = output.baseColorAlpha;
+    inputs.metallicRoughnessIorSpecular = output.metallicRoughnessIorSpecular;
+    inputs.specularTintAnisotropic = output.specularTintAnisotropic;
+    inputs.normalRotation = output.normalRotation;
+    inputs.tangentTransmission = output.tangentTransmission;
+    inputs.coat = output.coat;
+    inputs.coatTint = output.coatTint;
+    inputs.coatNormal = output.coatNormal;
+    inputs.sheen = output.sheen;
+    inputs.sheenTint = output.sheenTint;
+    inputs.emission = output.emission;
+    inputs.thinFilmDispersion = output.thinFilmDispersion;
+    inputs.closure = output.closure;
+    inputs.smoothNormal = float4(context.normal.xyz, 0.0);
+    inputs.subsurface = output.subsurface;
+    return inputs;
+}
+
+BsdfInputs fixedMaterial(MaterialRecord material, ShadingContext context) {
     const MaterialTexels texels = MaterialTexels(material, context);
     float3 baseColor = material.baseColorAlpha.xyz * texels.color(textureSlotBaseColor).xyz;
     if ((material.flags & materialFlagVertexColor) != 0)
@@ -105,13 +124,14 @@ BsdfInputs evaluateMaterial(SceneRecord scene, ShadingContext context, uint mate
     inputs.sheenTint = float4(sheenColor, 0.0);
     inputs.emission = float4(material.emission.xyz * texels.color(textureSlotEmission).xyz, material.emission.w);
     inputs.thinFilmDispersion = float4(material.thinFilmDispersion.xyz, 0.0);
+    inputs.closure = float4(1.0, 1.0, 1.0, 0.0);
+    inputs.smoothNormal = float4(context.normal.xyz, 0.0);
+    inputs.subsurface = float4(0.0, 0.0, 0.0, 0.0);
     return inputs;
 }
 
-float evaluateOpacity(SceneRecord scene, ShadingContext context, uint materialIndex) {
-    const MaterialRecord material = scene.materials[materialIndex];
-    if ((material.flags & materialFlagAlphaTest) == 0)
-        return 1.0;
+//! The alpha of a material without a graph.
+float fixedOpacity(MaterialRecord material, ShadingContext context) {
     float alpha = material.baseColorAlpha.w;
     if (hasSlot(material, textureSlotAlpha)) {
         const MaterialTextureRecord record = slotTexture(material, textureSlotAlpha);
@@ -122,4 +142,27 @@ float evaluateOpacity(SceneRecord scene, ShadingContext context, uint materialIn
     if ((material.flags & materialFlagAlphaMask) != 0)
         return alpha < material.thinFilmDispersion.w ? 0.0 : 1.0;
     return saturate(alpha);
+}
+
+//! An alpha test reads the unfiltered texels at the hit, as Cycles and the shadow rays do: a filtered fine mask lets the camera through at random in each frame.
+ShadingContext alphaTestContext(ShadingContext context) {
+    context.uvGradients = float4(0.0, 0.0, 0.0, 0.0);
+    return context;
+}
+
+//! The material of a hit without a graph for its material kernel; the opacity is 1 without alpha test.
+PackedClosure fixedClosure(SceneRecord scene, ShadingContext context, uint materialIndex) {
+    const MaterialRecord material = scene.materials[materialIndex];
+    return packClosure(fixedMaterial(material, context), (material.flags & materialFlagAlphaTest) != 0 ? fixedOpacity(material, alphaTestContext(context)) : 1.0);
+}
+
+//! The material of a hit with a graph for the material kernel of the graph; its transparency comes from the same run, so an alpha-tested graph is unfiltered.
+PackedClosure graphClosure(SceneRecord scene, ShadingContext context, uint materialIndex) {
+    const MaterialRecord material = scene.materials[materialIndex];
+    if ((material.flags & materialFlagAlphaTest) != 0)
+        context = alphaTestContext(context);
+    const MaterialGraphOutput output = evaluateMaterialGraph(context, graphMaterial(scene.graphParameters + material.graph.y, material.textures));
+    if ((material.flags & materialFlagBumpsSurface) != 0)
+        context.normal.xyz = output.normalRotation.xyz;
+    return packClosure(graphInputs(output, context), (material.flags & materialFlagAlphaTest) != 0 ? saturate(1.0 - output.transparency) : 1.0);
 }

@@ -33,6 +33,8 @@ public:
 
 private:
     void onApply(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
+    void onColor(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
+    void onEnvironmentColor(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
     void onApplyEnvironment(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
     void onClearEnvironment(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
     void onMakeActiveCamera(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);
@@ -41,6 +43,8 @@ private:
     void showMaterials(const Scene::Instance& instance, const Scene::Mesh* mesh);
     Core::Transform readTransform() const;
     void changed();
+    void storeLight(Scene::LightHandle handle, const Scene::Light& light);
+    void storeEnvironment(const Scene::Environment& environment);
 
     RmlKit::UI::Model& model;
     AppModel& app;

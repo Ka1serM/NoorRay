@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "NoorRay/Core/Handle.h"
 #include "NoorRay/Core/Math.h"
@@ -16,6 +17,11 @@ enum class InstanceFlags : std::uint32_t {
     NoShadow = 1u << 1,
     NoCameraRays = 1u << 2,
     DoubleSided = 1u << 3,
+    NoDiffuseRays = 1u << 4,
+    NoGlossyRays = 1u << 5,
+    NoTransmissionRays = 1u << 6,
+    NoVolumeScatterRays = 1u << 7,
+    Holdout = 1u << 8,
 };
 
 constexpr InstanceFlags operator|(const InstanceFlags a, const InstanceFlags b) {
@@ -32,6 +38,15 @@ struct Instance {
     InstanceFlags flags = InstanceFlags::None;
     std::uint32_t id = 0;
     Core::Handle<Material> material;
+    //! Light linking as in Cycles: the light set whose lights reach the surface, and the sets its emission reaches.
+    std::uint32_t lightSet = 0;
+    std::uint64_t lightMask = ~std::uint64_t{0};
+    //! The Object Info node of Cycles: the object colour, pass index and random number.
+    Core::float4 color{1.0f, 1.0f, 1.0f, 1.0f};
+    std::uint32_t passIndex = 0;
+    float random = 0.0f;
+    //! The values that the materials read by slot; the device pads the instances to one length.
+    std::vector<Core::float4> attributes;
 };
 
 }

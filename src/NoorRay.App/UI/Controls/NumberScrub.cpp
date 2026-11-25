@@ -116,8 +116,8 @@ void NumberScrub::press(Rml::Event& event, Rml::Element& field) {
         return;
     pressed = &field;
     scrubbing = false;
-    startX = event.GetParameter<float>("mouse_x", 0.0f);
-    startY = lastY = event.GetParameter<float>("mouse_y", 0.0f);
+    startX = lastX = event.GetParameter<float>("mouse_x", 0.0f);
+    startY = event.GetParameter<float>("mouse_y", 0.0f);
     value = parse(input->GetAttribute<Rml::String>("value", ""));
 }
 
@@ -133,14 +133,14 @@ void NumberScrub::move(Rml::Event& event) {
     if (!scrubbing) {
         scrubbing = true;
         pressed->SetClass("scrubbing", true);
-        lastY = startY;
+        lastX = startX;
     }
     const float density = root.GetContext() ? root.GetContext()->GetDensityIndependentPixelRatio() : 1.0f;
     const float stepSize = attribute(*pressed, "step", 0.1f);
     const float speed = attribute(*pressed, "speed", stepSize * 0.1f);
-    //! Up raises the value, as in Cinema 4D.
-    value += (lastY - y) / density * speed * modifier(event);
-    lastY = y;
+    //! Right raises the value.
+    value += (x - lastX) / density * speed * modifier(event);
+    lastX = x;
     commit(*pressed, value);
 }
 

@@ -103,8 +103,8 @@ private:
     Rml::Mesh& mesh;
 };
 
-constexpr std::array<const char*, ViewportOverlay::iconCount> iconSources{
-    "/UI/Icons/light-point.svg", "/UI/Icons/light-spot.svg", "/UI/Icons/light-sun.svg", "/UI/Icons/light-area.svg", "/UI/Icons/object-camera.svg"};
+constexpr std::array<const char*, ViewportOverlay::iconCount> iconSources{"/UI/Icons/light-point.svg", "/UI/Icons/light-spot.svg", "/UI/Icons/light-sun.svg",
+                                                                          "/UI/Icons/light-area.svg", "/UI/Icons/object-camera.svg"};
 
 int lightIcon(const Scene::LightType type) {
     switch (type) {
@@ -124,20 +124,28 @@ int lightIcon(const Scene::LightType type) {
 
 constexpr int cameraIcon = 4;
 
-void paintIcon(Rml::Mesh& mesh, const int icon, const Vec2 center, const float radius, const Rml::ColourbPremultiplied colour) {
+//! layer 0 is the neutral body of the icon, drawn as it is; layer 1 is its glow as brightness alone, which the colour tints.
+void paintIconLayer(Rml::Mesh& mesh, const int icon, const int layer, const Vec2 center, const float radius, const Rml::ColourbPremultiplied colour) {
     const int first = static_cast<int>(mesh.vertices.size());
     const float left = static_cast<float>(icon) / ViewportOverlay::iconCount;
     const float right = static_cast<float>(icon + 1) / ViewportOverlay::iconCount;
-    mesh.vertices.push_back({center + Vec2(-radius, -radius), colour, {left, 0.0f}});
-    mesh.vertices.push_back({center + Vec2(radius, -radius), colour, {right, 0.0f}});
-    mesh.vertices.push_back({center + Vec2(radius, radius), colour, {right, 1.0f}});
-    mesh.vertices.push_back({center + Vec2(-radius, radius), colour, {left, 1.0f}});
+    const float top = 0.5f * static_cast<float>(layer);
+    const float bottom = top + 0.5f;
+    mesh.vertices.push_back({center + Vec2(-radius, -radius), colour, {left, top}});
+    mesh.vertices.push_back({center + Vec2(radius, -radius), colour, {right, top}});
+    mesh.vertices.push_back({center + Vec2(radius, radius), colour, {right, bottom}});
+    mesh.vertices.push_back({center + Vec2(-radius, radius), colour, {left, bottom}});
     mesh.indices.insert(mesh.indices.end(), {first, first + 1, first + 2, first, first + 2, first + 3});
+}
+
+void paintIcon(Rml::Mesh& mesh, const int icon, const Vec2 center, const float radius, const Rml::ColourbPremultiplied colour) {
+    paintIconLayer(mesh, icon, 0, center, radius, Rml::Colourb(255, 255, 255).ToPremultiplied());
+    paintIconLayer(mesh, icon, 1, center, radius, colour);
 }
 
 Rml::Colourb lightColour(const Core::float3 color) {
     const float scale = 1.0f / std::max(Core::maxComponent(color), 1e-4f);
-    const auto channel = [&](const float value) { return static_cast<Rml::byte>(std::lround(255.0f * (0.45f + 0.55f * std::clamp(value * scale, 0.0f, 1.0f)))); };
+    const auto channel = [&](const float value) { return static_cast<Rml::byte>(std::lround(255.0f * std::clamp(value * scale, 0.0f, 1.0f))); };
     return {channel(color.x), channel(color.y), channel(color.z), 255};
 }
 
@@ -155,8 +163,8 @@ Core::float3 axisVector(const int axis) {
     return {axis == 0 ? 1.0f : 0.0f, axis == 1 ? 1.0f : 0.0f, axis == 2 ? 1.0f : 0.0f};
 }
 
-//! Scale works along the object's own axes, so it never shears a rotated object; move and rotate use the world axes.
-//! Each object axis is turned toward its world axis, so a flipped or mirrored object shows the same handle directions as move.
+//! Scale uses the object axes, each turned toward its world axis, so it never shears and shows the handles of translate; translate and rotate use the world
+//! axes.
 std::array<Core::float3, 3> gizmoAxes(const Core::Transform& target, const GizmoMode mode) {
     std::array<Core::float3, 3> axes{axisVector(0), axisVector(1), axisVector(2)};
     if (mode != GizmoMode::Scale)
@@ -236,7 +244,7 @@ OverlayView::Ray OverlayView::rayAt(const Rml::Vector2f pixel) const {
 }
 
 std::optional<ViewportOverlay::Gizmo> ViewportOverlay::layout(const OverlayView& view, const Core::Transform& target, const float density,
-                                                               const GizmoMode mode) const {
+                                                              const GizmoMode mode) const {
     const Core::float3 origin = target.getTranslation();
     const std::optional<OverlayView::Projected> center = view.project(origin);
     if (!center)
@@ -331,8 +339,8 @@ Rml::Mesh ViewportOverlay::build(const Scene::Scene& scene, const OverlayView& v
             const float half = scaleBox * gizmo->scale;
             const Vec2 end = gizmo->ends[axis];
             painter.line(gizmo->center, end - direction * half, lineWidth * gizmo->scale, colour);
-            painter.polygon({end + (direction + side) * half, end + (direction - side) * half, end - (direction + side) * half, end - (direction - side) * half},
-                            colour);
+            painter.polygon(
+                {end + (direction + side) * half, end + (direction - side) * half, end - (direction + side) * half, end - (direction - side) * half}, colour);
             continue;
         }
         const Vec2 base = gizmo->ends[axis] - direction * (arrowLength * gizmo->scale);
@@ -406,7 +414,8 @@ int ViewportOverlay::iconCell(const float density) {
 }
 
 std::vector<Rml::byte> ViewportOverlay::paintIconAtlas(const int cell) {
-    std::vector<Rml::byte> pixels(static_cast<std::size_t>(cell) * cell * iconCount * 4);
+    std::vector<Rml::byte> pixels(static_cast<std::size_t>(cell) * cell * iconCount * 4 * 2);
+    const std::size_t glowOffset = static_cast<std::size_t>(cell) * cell * iconCount * 4;
     const int rowPixels = cell * iconCount;
     //! A one pixel gutter keeps the bilinear filter from reading the neighbouring cell.
     const int inner = cell - 2;
@@ -429,13 +438,25 @@ std::vector<Rml::byte> ViewportOverlay::paintIconAtlas(const int cell) {
         const int top = (cell - height) / 2;
         for (int y = 0; y < height; ++y) {
             const auto* const row = reinterpret_cast<const std::uint32_t*>(bitmap.data() + static_cast<std::ptrdiff_t>(y) * bitmap.stride());
-            Rml::byte* target = pixels.data() + (static_cast<std::size_t>(top + y) * rowPixels + left) * 4;
+            Rml::byte* body = pixels.data() + (static_cast<std::size_t>(top + y) * rowPixels + left) * 4;
+            Rml::byte* glow = body + glowOffset;
             for (int x = 0; x < width; ++x) {
+                //! Saturated pixels are the glow of the icon: they keep their brightness and lose their hue, so the light colour alone tints them.
                 const std::uint32_t argb = row[x];
-                *target++ = static_cast<Rml::byte>(argb >> 16);
-                *target++ = static_cast<Rml::byte>(argb >> 8);
-                *target++ = static_cast<Rml::byte>(argb);
-                *target++ = static_cast<Rml::byte>(argb >> 24);
+                const float red = static_cast<float>((argb >> 16) & 0xffu);
+                const float green = static_cast<float>((argb >> 8) & 0xffu);
+                const float blue = static_cast<float>(argb & 0xffu);
+                const float alpha = static_cast<float>(argb >> 24);
+                const float high = std::max({red, green, blue});
+                const float saturation = high > 0.0f ? (high - std::min({red, green, blue})) / high : 0.0f;
+                const float share = std::clamp((saturation - 0.12f) / 0.18f, 0.0f, 1.0f);
+                const auto byte = [](const float value) { return static_cast<Rml::byte>(std::lround(std::clamp(value, 0.0f, 255.0f))); };
+                for (const float channel : {red, green, blue})
+                    *body++ = byte(channel * (1.0f - share));
+                *body++ = byte(alpha * (1.0f - share));
+                for (int channel = 0; channel < 3; ++channel)
+                    *glow++ = byte(high * share);
+                *glow++ = byte(alpha * share);
             }
         }
     }
@@ -552,6 +573,10 @@ std::optional<Core::Transform> transformOf(const Scene::Scene& scene, const Sele
         const Scene::GaussianCloud* cloud = scene.find(*handle);
         return cloud ? std::optional(cloud->transform) : std::nullopt;
     }
+    if (const auto* handle = std::get_if<Scene::NodeHandle>(&selection)) {
+        const Scene::Node* node = scene.find(*handle);
+        return node ? std::optional(node->worldTransform) : std::nullopt;
+    }
     return std::nullopt;
 }
 
@@ -577,7 +602,16 @@ void setTransform(Scene::Scene& scene, const Selection& selection, const Core::T
             cloud->transform = transform;
             scene.markGaussiansChanged();
         }
-    }
+    } else if (const auto* handle = std::get_if<Scene::NodeHandle>(&selection))
+        setNodeWorldTransform(scene, *handle, transform);
+}
+
+void setNodeWorldTransform(Scene::Scene& scene, const Scene::NodeHandle handle, const Core::Transform& world) {
+    const Scene::Node* node = scene.find(handle);
+    if (!node)
+        return;
+    const Scene::Node* parent = scene.find(node->parent);
+    scene.setLocalTransform(handle, parent ? parent->worldTransform.inverse() * world : world);
 }
 
 }

@@ -14,6 +14,8 @@ float square(float x) { return x * x; }
 float3 square(float3 x) { return x * x; }
 float maxComponent(float3 v) { return max(v.x, max(v.y, v.z)); }
 float luminance(float3 rgb) { return dot(rgb, float3(0.2126, 0.7152, 0.0722)); }
+//! The Blackman-Harris window over [0, 1], whose integral over [0, 1] is 0.35875.
+float blackmanHarris(float t) { return 0.35875 - 0.48829 * cos(twoPi * t) + 0.14128 * cos(2.0 * twoPi * t) - 0.01168 * cos(3.0 * twoPi * t); }
 float safeSqrt(float x) { return sqrt(max(x, 0.0)); }
 float safeDivide(float a, float b) { return b != 0.0 ? a / b : 0.0; }
 float3 safeNormalize(float3 v) {
@@ -22,6 +24,7 @@ float3 safeNormalize(float3 v) {
 }
 bool isFiniteValue(float3 v) { return all(!isnan(v) && !isinf(v)); }
 float3 sanitize(float3 v) { return isFiniteValue(v) ? v : float3(0.0, 0.0, 0.0); }
+float4 sanitize(float4 v) { return all(!isnan(v) && !isinf(v)) ? v : float4(0.0, 0.0, 0.0, 0.0); }
 
 //! Rows of a 3x4 affine transform, as InstanceData stores them.
 float3 transformPoint(float4 rows[3], float3 p) { return float3(dot(rows[0].xyz, p) + rows[0].w, dot(rows[1].xyz, p) + rows[1].w, dot(rows[2].xyz, p) + rows[2].w); }
@@ -60,6 +63,27 @@ float4 unpackTangent(uint packed) {
 float2 unpackHalf2(uint packed) { return float2(f16tof32(packed & 0xffffu), f16tof32(packed >> 16)); }
 uint packHalf2(float2 value) { return f32tof16(value.x) | (f32tof16(value.y) << 16); }
 
+//! Three non-negative values with one shared exponent, 9 mantissa bits each.
+uint packRgb9e5(float3 value) {
+    const float3 clamped = clamp(value, 0.0, 65408.0);
+    const float largest = max(clamped.x, max(clamped.y, clamped.z));
+    if (!(largest > 0.0))
+        return 0u;
+    int exponent = max(-16, int(floor(log2(largest)))) + 16;
+    float scale = exp2(float(exponent - 24));
+    if (round(largest / scale) >= 512.0) {
+        scale *= 2.0;
+        ++exponent;
+    }
+    const uint3 mantissa = uint3(round(clamped / scale));
+    return mantissa.x | (mantissa.y << 9) | (mantissa.z << 18) | (uint(exponent) << 27);
+}
+
+float3 unpackRgb9e5(uint packed) {
+    const float scale = exp2(float(int(packed >> 27) - 24));
+    return float3(packed & 0x1ffu, (packed >> 9) & 0x1ffu, (packed >> 18) & 0x1ffu) * scale;
+}
+
 float4 unpackUnorm4x8(uint packed) {
     return float4(float(packed & 0xffu), float((packed >> 8) & 0xffu), float((packed >> 16) & 0xffu), float(packed >> 24)) / 255.0;
 }
@@ -90,3 +114,12 @@ float3 equirectToDirection(float2 uv) {
     const float theta = uv.y * pi;
     return float3(sin(theta) * sin(phi), cos(theta), -sin(theta) * cos(phi));
 }
+
+//! The inverse of unpackTangent.
+uint packTangent(float3 tangent, float bitangentSign) {
+    const uint octahedral = packOctahedral(tangent);
+    const uint v15 = uint(int(octahedral) >> 17) & 0x7fffu;
+    return (octahedral & 0xffffu) | (v15 << 16) | (bitangentSign < 0.0 ? 0x80000000u : 0u);
+}
+
+float3 loadFloat3(Ptr<float> values, uint index) { return float3(values[3 * index], values[3 * index + 1], values[3 * index + 2]); }

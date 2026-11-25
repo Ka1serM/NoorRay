@@ -27,6 +27,8 @@ public:
     static Scene::Texture fromRgba8(std::string name, std::uint32_t width, std::uint32_t height, std::span<const std::uint8_t> pixels, bool srgb);
     static Scene::Texture fromRgbaFloat(std::string name, std::uint32_t width, std::uint32_t height, std::span<const float> pixels);
 
+    static float srgbToLinear(float encoded);
+
 private:
     Scene::Scene& scene;
     std::map<std::pair<std::string, ColorSpace>, Scene::TextureHandle> loaded;

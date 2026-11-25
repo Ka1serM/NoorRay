@@ -21,7 +21,7 @@ float sheenAlbedo(float cosine, float roughness) {
     return lerp(lerp(sheenTable(y0, x0), sheenTable(y0, x0 + 1), tx), lerp(sheenTable(y0 + 1, x0), sheenTable(y0 + 1, x0 + 1), tx), ty);
 }
 
-//! Estevez and Kulla 2017 Charlie distribution with the Neubelt and Pettineo visibility; returns f * cos(i) in a local frame. It exceeds unit albedo at grazing views, so callers divide by max(sheenAlbedo, 1).
+//! Estevez and Kulla's Charlie sheen with Neubelt and Pettineo visibility, as f * cos(i); it passes unit albedo at grazing views, see sheenAlbedo.
 float charlieSheen(float3 o, float3 i, float roughness) {
     if (o.z <= 0.0 || i.z <= 0.0)
         return 0.0;

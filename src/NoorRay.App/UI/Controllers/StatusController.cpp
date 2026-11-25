@@ -47,13 +47,15 @@ void StatusController::frame() {
     StatusModel& status = app.status;
     const int samples = static_cast<int>(renderer.getSampleCount());
     const bool restarted = samples < status.samples;
-    if (now - lastPublish < publishInterval && !restarted && renderer.isComplete() == status.complete)
+    std::string compiling = renderer.getCompileNotice();
+    if (now - lastPublish < publishInterval && !restarted && renderer.isComplete() == status.complete && compiling == status.compiling)
         return;
     lastPublish = now;
     const Gpu::GpuSceneStats stats = session.getGpuScene().getStats();
     status.samples = samples;
     status.maxSamples = static_cast<int>(renderer.getSettings().maxSamples);
     status.complete = renderer.isComplete();
+    status.compiling = std::move(compiling);
     if (now - lastTiming >= timingInterval) {
         lastTiming = now;
         status.frameTime = smoothedSeconds > 0.0 ? std::format("{:.1f} ms", smoothedSeconds * 1e3) : Rml::String();

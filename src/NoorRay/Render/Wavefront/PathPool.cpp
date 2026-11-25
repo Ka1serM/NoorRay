@@ -10,7 +10,8 @@ std::expected<void, Core::Error> PathPool::open(NoorRHI::Device& device, const s
         ((result = result ? buffers.open(device, capacity) : result), ...);
         return Core::check(std::move(result));
     };
-    if (auto opened = openAll(origin, direction, throughput, radiance, state, hit, hitInstance, shadowOrigin, shadowDirection, shadowRadiance, pathBin);
+    if (auto opened = openAll(origin, direction, throughput, radiance, state, hit, hitInstance, shadowOrigin, shadowDirection, shadowRadiance, pathBin,
+                              closures, lightPath, minRayPdf, primaryDirection, receiver, shadowEntry);
         !opened)
         return opened;
     record = {
@@ -25,8 +26,13 @@ std::expected<void, Core::Error> PathPool::open(NoorRHI::Device& device, const s
         .shadowDirection = shadowDirection.getPtr(),
         .shadowRadiance = shadowRadiance.getPtr(),
         .pathBin = pathBin.getPtr(),
+        .closures = closures.getPtr(),
+        .lightPath = lightPath.getPtr(),
+        .minRayPdf = minRayPdf.getPtr(),
+        .primaryDirection = primaryDirection.getPtr(),
+        .receiver = receiver.getPtr(),
         .capacity = capacity,
-        .unused = 0,
+        .shadowEntry = shadowEntry.getPtr(),
     };
     return {};
 }

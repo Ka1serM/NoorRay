@@ -14,10 +14,10 @@
 #include "NoorRay/Core/Log.h"
 #include "NoorRay/Core/MappedFile.h"
 #include "NoorRay/Import/MeshBuilder.h"
-#include "NoorRay/Scene/Scene.h"
 #include "NoorRay/Import/PbrtParser.h"
 #include "NoorRay/Import/PlyFile.h"
 #include "NoorRay/Materials/TextureCache.h"
+#include "NoorRay/Scene/Scene.h"
 #include "NoorRay/Spectral/Blackbody.h"
 
 namespace NoorRay::Import {
@@ -366,7 +366,8 @@ private:
         return loadTexture(found->second.path, colorSpace, found->second.transform);
     }
 
-    std::optional<Scene::MaterialTexture> loadTexture(const std::filesystem::path& path, const Materials::ColorSpace colorSpace, const Scene::UvTransform& transform = {}) {
+    std::optional<Scene::MaterialTexture> loadTexture(const std::filesystem::path& path, const Materials::ColorSpace colorSpace,
+                                                      const Scene::UvTransform& transform = {}) {
         std::expected<Scene::TextureHandle, Core::Error> handle = textureCache.load(path, colorSpace);
         if (!handle) {
             Core::Log::warning("pbrt texture '{}' is skipped: {}", path.string(), handle.error().message);
@@ -460,7 +461,8 @@ private:
             applyDiffuse();
         }
         if (const std::string normalMap = command.getString("normalmap"); !normalMap.empty())
-            material.texture(Scene::TextureSlot::Normal) = loadTexture((command.source.parent_path() / normalMap).lexically_normal(), Materials::ColorSpace::NonColor);
+            material.texture(Scene::TextureSlot::Normal) =
+                loadTexture((command.source.parent_path() / normalMap).lexically_normal(), Materials::ColorSpace::NonColor);
         materials.push_back(std::move(material));
         return static_cast<std::int32_t>(materials.size() - 1);
     }

@@ -31,6 +31,8 @@ struct MaterialEditorModel {
     int sceneIndex = -1;
     Rml::String name;
     Rml::String alphaMode = "opaque";
+    //! The material has a node tree, which the node editor edits in place of the fields.
+    bool nodes = false;
     std::vector<MaterialParameterRow> parameters;
     int parameterIndex = 0;
     //! The colour parameter whose picker is open, or -1.

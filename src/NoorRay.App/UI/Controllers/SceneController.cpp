@@ -5,19 +5,24 @@
 #include <cctype>
 #include <format>
 #include <limits>
+#include <memory>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 #include <RmlUi/Core/Element.h>
 
 #include "NoorRay.App/UI/Controllers/InspectorController.h"
 #include "NoorRay.App/UI/Controllers/MaterialController.h"
+#include "NoorRay.App/UI/Controllers/NodeGraphController.h"
 #include "NoorRay.App/UI/Controls/ViewportElement.h"
 #include "NoorRay.App/UI/Models/AppModel.h"
 #include "NoorRay/Import/EnvironmentImporter.h"
 #include "NoorRay/Import/Primitives.h"
 #include "NoorRay/Import/SceneImporter.h"
+#include "NoorRay/Materials/NodeCatalog.h"
+#include "NoorRay/Materials/NodeCompiler.h"
 #include "RmlKit/UI/Backend/FileDialog.h"
 #include "RmlKit/UI/Models/Model.h"
 
@@ -68,12 +73,41 @@ const char* lightIcon(const Scene::LightType type) {
     }
 }
 
+//! An empty is a node, not an object, so its object is none.
 Scene::NodeObject nodeObjectOf(const Selection& selection) {
-    return std::visit([](const auto& handle) -> Scene::NodeObject { return handle; }, selection);
+    return std::visit(
+        [](const auto& handle) -> Scene::NodeObject {
+            if constexpr (std::is_same_v<std::decay_t<decltype(handle)>, Scene::NodeHandle>)
+                return {};
+            else
+                return handle;
+        },
+        selection);
+}
+
+Scene::NodeHandle nodeOf(const Scene::Scene& scene, const Selection& selection) {
+    if (const auto* node = std::get_if<Scene::NodeHandle>(&selection))
+        return *node;
+    if (std::holds_alternative<std::monostate>(selection))
+        return {};
+    return scene.findNode(nodeObjectOf(selection));
 }
 
 Selection selectionOf(const Scene::NodeObject& object) {
     return std::visit([](const auto& handle) -> Selection { return handle; }, object);
+}
+
+SceneController::EditAction editActionOf(const Rml::VariantList& arguments, const char* event) {
+    if (arguments.size() != 1)
+        RmlKit::UI::fatal(std::format("{} takes one argument: the action", event));
+    const Rml::String action = arguments[0].Get<Rml::String>();
+    using enum SceneController::EditAction;
+    constexpr std::array<std::pair<std::string_view, SceneController::EditAction>, 6> actions{
+        {{"delete", Delete}, {"cut", Cut}, {"copy", Copy}, {"paste", Paste}, {"duplicate", Duplicate}, {"selectAll", SelectAll}}};
+    for (const auto& [name, value] : actions)
+        if (action == name)
+            return value;
+    RmlKit::UI::fatal(std::format("{} does not know the action {}", event, action));
 }
 
 std::uint64_t nodeKey(const Scene::NodeHandle handle) {
@@ -81,13 +115,22 @@ std::uint64_t nodeKey(const Scene::NodeHandle handle) {
 }
 
 OutlinerRow describe(const Scene::Scene& scene, const Scene::Node& node) {
-    OutlinerRow row{.name = node.name, .kind = "Group", .icon = "coord-system"};
+    OutlinerRow row{.name = node.name, .kind = "Empty", .icon = "coord-system"};
     if (const auto* instance = std::get_if<Scene::InstanceHandle>(&node.object)) {
         row.kind = "Mesh";
-        row.icon = "shape-cube";
         const Scene::Instance* object = scene.find(*instance);
-        const std::uint32_t material = object ? scene.getMaterials().denseIndex(object->material) : Scene::MaterialHandle::invalidIndex;
-        row.material = material == Scene::MaterialHandle::invalidIndex ? -1 : static_cast<int>(material);
+        const Scene::Mesh* mesh = object ? scene.find(object->mesh) : nullptr;
+        //! The added primitives name their meshes, so the name tells the shape; other meshes show the cube.
+        row.icon = mesh && mesh->name == "Sphere" ? "shape-sphere" : mesh && mesh->name == "Plane" ? "shape-plane" : "shape-cube";
+        const auto effective = [&](const Scene::MaterialHandle material) {
+            const std::uint32_t index = scene.getMaterials().denseIndex(object->material ? object->material : material);
+            return index == Scene::MaterialHandle::invalidIndex ? -1 : static_cast<int>(index);
+        };
+        if (mesh && !mesh->subsets.empty())
+            for (const Scene::MeshSubset& subset : mesh->subsets)
+                row.slots.push_back(effective(subset.material));
+        else if (object)
+            row.slots.push_back(effective({}));
     } else if (const auto* light = std::get_if<Scene::LightHandle>(&node.object)) {
         const Scene::Light* object = scene.find(*light);
         row.kind = "Light";
@@ -105,6 +148,16 @@ OutlinerRow describe(const Scene::Scene& scene, const Scene::Node& node) {
     }
     return row;
 }
+
+//! The slot index of the material slot an element is in, or -1 when it is not in one.
+int slotOf(Rml::Element* element) {
+    for (; element && !element->HasAttribute("row"); element = element->GetParentNode())
+        if (element->HasAttribute("slot"))
+            return element->GetAttribute<int>("slot", -1);
+    return -1;
+}
+
+constexpr RmlKit::UI::GridLayout materialLayout{.minItemWidth = 72, .heightPerWidth = 0, .fixedHeight = 84, .headerHeight = 0, .gap = 8};
 
 Rml::Element* rowElementOf(Rml::Element* element) {
     while (element && !element->HasAttribute("row"))
@@ -172,8 +225,9 @@ std::string copyName(const std::string& name, const Objects& objects) {
 }
 
 SceneController::SceneController(RmlKit::UI::Model& model, AppModel& app, SDL_Window* window, Session::Session& session, ViewportElementInstancer& viewports,
-                                 InspectorController& inspector, MaterialController& materials)
-    : model(model), app(app), window(window), session(session), viewports(viewports), inspector(inspector), materials(materials) {
+                                 InspectorController& inspector, MaterialController& materials, NodeGraphController& nodeGraph)
+    : model(model), app(app), window(window), session(session), viewports(viewports), inspector(inspector), materials(materials), nodeGraph(nodeGraph),
+      materialGrid(model, "materialGridViewport", "outliner", app.outliner.materialGrid, materialLayout) {
     model.bindEvent("sceneOpen", &SceneController::onOpen, this);
     model.bindEvent("sceneImport", &SceneController::onImport, this);
     model.bindEvent("environmentImport", &SceneController::onImportEnvironment, this);
@@ -181,28 +235,30 @@ SceneController::SceneController(RmlKit::UI::Model& model, AppModel& app, SDL_Wi
     model.bindEvent("sceneNew", &SceneController::onNew, this);
     model.bindEvent("sceneAdd", &SceneController::onAdd, this);
     model.bindEvent("outlinerSelect", &SceneController::onSelect, this);
-    model.bindEvent("outlinerRemove", &SceneController::onRemove, this);
     model.bindEvent("outlinerFilter", &SceneController::onFilter, this);
     model.bindEvent("viewportFrame", &SceneController::onFrame, this);
-    model.bindEvent("sceneCopy", &SceneController::onCopy, this);
-    model.bindEvent("scenePaste", &SceneController::onPaste, this);
-    model.bindEvent("sceneDuplicate", &SceneController::onDuplicate, this);
+    model.bindEvent("edit", &SceneController::onEdit, this);
     model.bindEvent("outlinerToggle", &SceneController::onToggle, this);
     model.bindEvent("outlinerDragMove", &SceneController::onDragMove, this);
     model.bindEvent("outlinerDragOut", &SceneController::onDragOut, this);
     model.bindEvent("outlinerDrop", &SceneController::onDrop, this);
+    model.bindEvent("outlinerSlotDragEnd", &SceneController::onSlotDragEnd, this);
     model.bindEvent("outlinerClearMaterial", &SceneController::onClearMaterial, this);
     model.bindEvent("materialCreate", &SceneController::onCreateMaterial, this);
+    model.bindEvent("materialSelect", &SceneController::onSelectMaterial, this);
+    model.bindEvent("materialEdit", &SceneController::onEditMaterial, this);
+    materials.renamed = [this] { showMaterials(); };
     viewports.getEvents().fileDrop = [this](std::filesystem::path path) { openFile(path, false); };
     viewports.getEvents().pick = [this](const Session::PickResult& picked) { select(picked); };
     viewports.getEvents().selection = [this] { return this->inspector.getSelection(); };
     viewports.getEvents().select = [this](const Selection& selected) {
+        editList = EditList::Objects;
         select(selected);
         refresh();
     };
     viewports.getEvents().moved = [this] { this->inspector.showSelectedTransform(); };
     viewports.getEvents().tool = [this] {
-        return this->app.tool == "scale" ? GizmoMode::Scale : this->app.tool == "rotate" ? GizmoMode::Rotate : GizmoMode::Move;
+        return this->app.tool == "scale" ? GizmoMode::Scale : this->app.tool == "rotate" ? GizmoMode::Rotate : GizmoMode::Translate;
     };
     refresh();
 }
@@ -234,10 +290,14 @@ void SceneController::openFile(const std::filesystem::path& path, const bool rep
         scenePath = path;
     app.outliner.fileName = scenePath.filename().string();
     model.report(ReportLevel::Done, "scene", std::format("Opened {}.", path.filename().string()));
+    //! An animated file brings its own cameras, so the view looks through the active one instead of framing the scene.
     viewports.followActiveCamera();
-    viewports.frameScene();
+    if (session.getAnimation().isEmpty())
+        viewports.frameScene();
     select(Selection{});
     sceneChanged();
+    if (viewports.getEvents().opened)
+        viewports.getEvents().opened();
 }
 
 //! An HDRI lights the current scene instead of replacing it, so it never clears the scene or moves the view.
@@ -322,8 +382,9 @@ void SceneController::onAdd(Rml::DataModelHandle, Rml::Event&, const Rml::Varian
         const Scene::CameraHandle handle = scene.addCamera(camera);
         scene.addNode({camera.name, camera.transform, {}, handle});
         added = handle;
-    } else if (what == "null") {
-        selectGroup(scene.addNode({"Null", {}, {}, {}}));
+    } else if (what == "empty") {
+        editList = EditList::Objects;
+        selectGroup(scene.addNode({"Empty", {}, {}, {}}));
         sceneChanged();
         return;
     } else
@@ -332,24 +393,12 @@ void SceneController::onAdd(Rml::DataModelHandle, Rml::Event&, const Rml::Varian
     sceneChanged();
 }
 
-void SceneController::onSelect(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
+void SceneController::onSelect(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments) {
     const std::size_t index = RmlKit::UI::Model::indexArgument(arguments, "outlinerSelect", rowNodes.size());
-    const Scene::Node* node = session.getScene().find(rowNodes[index]);
-    if (!node)
-        return;
-    if (std::holds_alternative<std::monostate>(node->object))
-        selectGroup(rowNodes[index]);
-    else
-        select(selectionOf(node->object));
+    editList = EditList::Objects;
+    selectedNodes.click(rowNodes, index, RmlKit::UI::listClickOf(event));
+    showSelection();
     refresh();
-}
-
-void SceneController::onRemove(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
-    RmlKit::UI::Model::requireNoArguments(arguments, "outlinerRemove");
-    Scene::Scene& scene = session.getScene();
-    scene.remove(selectedGroup ? selectedGroup : scene.findNode(nodeObjectOf(inspector.getSelection())));
-    select(Selection{});
-    sceneChanged();
 }
 
 void SceneController::onFilter(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
@@ -362,20 +411,83 @@ void SceneController::onFrame(Rml::DataModelHandle, Rml::Event&, const Rml::Vari
     viewports.frameScene();
 }
 
-void SceneController::onCopy(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
-    RmlKit::UI::Model::requireNoArguments(arguments, "sceneCopy");
-    if (Clipboard copied = copySelection(); !std::holds_alternative<std::monostate>(copied))
-        clipboard = std::move(copied);
+//! The edit hotkeys and the Edit menu act on the list the user clicked last, so one key set works for objects and materials.
+void SceneController::onEdit(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
+    const EditAction action = editActionOf(arguments, "edit");
+    if (editList == EditList::Materials)
+        editMaterials(action);
+    else
+        editObjects(action);
 }
 
-void SceneController::onPaste(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
-    RmlKit::UI::Model::requireNoArguments(arguments, "scenePaste");
-    paste(clipboard);
+void SceneController::onEditMaterial(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
+    editList = EditList::Materials;
+    editMaterials(editActionOf(arguments, "materialEdit"));
 }
 
-void SceneController::onDuplicate(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
-    RmlKit::UI::Model::requireNoArguments(arguments, "sceneDuplicate");
-    paste(copySelection());
+void SceneController::editObjects(const EditAction action) {
+    switch (action) {
+    case EditAction::Delete:
+        deleteSelection();
+        break;
+    case EditAction::Cut:
+        if (std::vector<ClipObject> copied = copySelection(); !copied.empty()) {
+            clipboard = std::move(copied);
+            deleteSelection();
+        }
+        break;
+    case EditAction::Copy:
+        if (std::vector<ClipObject> copied = copySelection(); !copied.empty())
+            clipboard = std::move(copied);
+        break;
+    case EditAction::Paste:
+        paste(clipboard);
+        break;
+    case EditAction::Duplicate:
+        paste(copySelection());
+        break;
+    case EditAction::SelectAll:
+        selectedNodes.selectAll(rowNodes);
+        showSelection();
+        refresh();
+        break;
+    }
+}
+
+void SceneController::editMaterials(const EditAction action) {
+    const Core::SlotMap<Scene::Material>& all = session.getScene().getMaterials();
+    const auto copy = [&] {
+        std::vector<Scene::Material> copied;
+        for (const Scene::MaterialHandle handle : selectedMaterials.items())
+            if (const Scene::Material* material = all.find(handle))
+                copied.push_back(*material);
+        return copied;
+    };
+    switch (action) {
+    case EditAction::Delete:
+        deleteSelectedMaterials();
+        break;
+    case EditAction::Cut:
+        if (std::vector<Scene::Material> copied = copy(); !copied.empty()) {
+            copiedMaterials = std::move(copied);
+            deleteSelectedMaterials();
+        }
+        break;
+    case EditAction::Copy:
+        if (std::vector<Scene::Material> copied = copy(); !copied.empty())
+            copiedMaterials = std::move(copied);
+        break;
+    case EditAction::Paste:
+        pasteMaterials(copiedMaterials);
+        break;
+    case EditAction::Duplicate:
+        pasteMaterials(copy());
+        break;
+    case EditAction::SelectAll:
+        selectedMaterials.selectAll(materialOrder());
+        showMaterials();
+        break;
+    }
 }
 
 void SceneController::onToggle(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments) {
@@ -404,8 +516,9 @@ void SceneController::onDrop(Rml::DataModelHandle, Rml::Event& event, const Rml:
         return;
     const Rml::Element* dragged = draggedElement(event);
     const Scene::NodeHandle targetNode = target.row < 0 ? Scene::NodeHandle{} : rowNodes[static_cast<std::size_t>(target.row)];
+    slotDropped = dragged->HasAttribute("slot-row");
     if (const int material = dragged->GetAttribute<int>("material-index", -1); material >= 0)
-        dropMaterial(material, targetNode);
+        dropMaterial(material, targetNode, target.slot);
     else
         moveNode(rowNodes[static_cast<std::size_t>(dragged->GetAttribute<int>("row", -1))], targetNode, target.place);
 }
@@ -422,7 +535,13 @@ SceneController::DropTarget SceneController::findDropTarget(const Rml::Event& ev
         if (row < 0 || static_cast<std::size_t>(material) >= scene.getMaterials().size())
             return {};
         const Scene::Node* node = scene.find(rowNodes[static_cast<std::size_t>(row)]);
-        return node && std::holds_alternative<Scene::InstanceHandle>(node->object) ? DropTarget{row, DropPlace::Into} : DropTarget{};
+        if (!node || !std::holds_alternative<Scene::InstanceHandle>(node->object))
+            return {};
+        //! A material dragged out of a slot lands only on a slot, so a drop on a row name empties its slot.
+        const int slot = slotOf(event.GetTargetElement());
+        if (dragged->HasAttribute("slot-row") && slot < 0)
+            return {};
+        return {row, DropPlace::Into, slot};
     }
     const int draggedRow = dragged->GetAttribute<int>("row", -1);
     if (draggedRow < 0 || static_cast<std::size_t>(draggedRow) >= rowNodes.size())
@@ -441,21 +560,48 @@ SceneController::DropTarget SceneController::findDropTarget(const Rml::Event& ev
 
 void SceneController::showDropTarget(const DropTarget& target) {
     const int row = target.place == DropPlace::End ? -1 : target.row;
-    const char* place = target.place == DropPlace::Before ? "before" : target.place == DropPlace::After ? "after" : "into";
-    if (app.outliner.dropRow == row && (row < 0 || app.outliner.dropPlace == place))
+    const char* place = target.slot >= 0 ? "slot" : target.place == DropPlace::Before ? "before" : target.place == DropPlace::After ? "after" : "into";
+    if (app.outliner.dropRow == row && app.outliner.dropSlot == target.slot && (row < 0 || app.outliner.dropPlace == place))
         return;
     app.outliner.dropRow = row;
+    app.outliner.dropSlot = target.slot;
     app.outliner.dropPlace = place;
     model.dirty("outliner");
 }
 
-void SceneController::dropMaterial(const int material, const Scene::NodeHandle target) {
+void SceneController::onSlotDragEnd(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
+    if (arguments.size() != 2)
+        RmlKit::UI::fatal("outlinerSlotDragEnd takes two arguments: the row and the slot");
+    const int row = arguments[0].Get<int>(-1), slot = arguments[1].Get<int>(-1);
+    showDropTarget({});
+    if (std::exchange(slotDropped, false) || row < 0 || static_cast<std::size_t>(row) >= rowNodes.size() || slot < 0)
+        return;
+    setSlotMaterial(rowNodes[static_cast<std::size_t>(row)], slot, {});
+}
+
+void SceneController::dropMaterial(const int material, const Scene::NodeHandle target, const int slot) {
+    setSlotMaterial(target, slot, session.getScene().getMaterials().keyAt(static_cast<std::uint32_t>(material)));
+}
+
+//! Slots belong to the mesh, as in Blender, so a mesh shared by several objects changes in all of them; an object material is first spread over the slots. Slot
+//! -1 is every slot, and an empty material empties the slot.
+void SceneController::setSlotMaterial(const Scene::NodeHandle target, const int slot, const Scene::MaterialHandle material) {
     Scene::Scene& scene = session.getScene();
     const Scene::Node* node = scene.find(target);
     const auto* instance = node ? std::get_if<Scene::InstanceHandle>(&node->object) : nullptr;
-    if (!instance)
+    const Scene::Instance* object = instance ? scene.find(*instance) : nullptr;
+    const Scene::Mesh* mesh = object ? scene.find(object->mesh) : nullptr;
+    if (!mesh)
         return;
-    scene.setInstanceMaterial(*instance, scene.getMaterials().keyAt(static_cast<std::uint32_t>(material)));
+    const Scene::MaterialHandle spread = object->material;
+    const Scene::MeshHandle meshHandle = object->mesh;
+    const std::size_t slots = std::max<std::size_t>(mesh->subsets.size(), 1);
+    scene.setInstanceMaterial(*instance, {});
+    for (std::size_t index = 0; index < slots; ++index)
+        if (slot < 0 || static_cast<std::size_t>(slot) == index)
+            scene.setMeshSubsetMaterial(meshHandle, index, material);
+        else if (spread)
+            scene.setMeshSubsetMaterial(meshHandle, index, spread);
     select(Selection{*instance});
     sceneChanged();
 }
@@ -494,40 +640,120 @@ void SceneController::onClearMaterial(Rml::DataModelHandle, Rml::Event&, const R
     sceneChanged();
 }
 
+//! The argument is true for a node material, whose node tree is the one Blender gives a new material.
 void SceneController::onCreateMaterial(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
-    RmlKit::UI::Model::requireNoArguments(arguments, "materialCreate");
+    if (arguments.size() != 1)
+        RmlKit::UI::fatal("materialCreate takes one argument: whether the material uses nodes");
+    const bool nodes = arguments[0].Get<bool>(false);
     Scene::Scene& scene = session.getScene();
     Scene::Material material;
     material.name = std::ranges::none_of(scene.getMaterials().getValues(), [](const Scene::Material& other) { return other.name == "Material"; })
                         ? std::string("Material")
                         : copyName("Material", scene.getMaterials());
-    materials.edit(scene.addMaterial(std::move(material)));
+    if (nodes) {
+        auto tree = std::make_shared<Materials::NodeTree>();
+        Materials::NodeCatalog::addDefaultNodes(*tree, Materials::NodeTreeKind::Material);
+        material.nodeTree = std::move(tree);
+    }
+    const Scene::MaterialHandle added = addMaterial(std::move(material));
+    if (nodes)
+        if (auto compiled = Materials::NodeCompiler::compileMaterial(scene, added, false); !compiled)
+            model.report(ReportLevel::Error, "material", std::format("NoorRay cannot compile the new node material: {}", compiled.error().message));
+    editList = EditList::Materials;
+    selectedMaterials.selectOnly(added);
+    materials.edit(added);
+    sceneChanged();
+    if (nodes && nodeMaterialCreated)
+        nodeMaterialCreated(added);
+}
+
+//! A pasted material keeps its name when the scene no longer has it, as after a cut, and gets a numbered name otherwise.
+Scene::MaterialHandle SceneController::addMaterial(Scene::Material material) {
+    Scene::Scene& scene = session.getScene();
+    const Core::SlotMap<Scene::Material>& all = scene.getMaterials();
+    if (std::ranges::any_of(all.getValues(), [&](const Scene::Material& other) { return other.name == material.name; }))
+        material.name = copyName(material.name, all);
+    return scene.addMaterial(std::move(material));
+}
+
+std::vector<Scene::MaterialHandle> SceneController::materialOrder() const {
+    const Core::SlotMap<Scene::Material>& all = session.getScene().getMaterials();
+    std::vector<Scene::MaterialHandle> order;
+    order.reserve(all.size());
+    for (std::uint32_t index = 0; index < all.size(); ++index)
+        order.push_back(all.keyAt(index));
+    return order;
+}
+
+void SceneController::pasteMaterials(const std::span<const Scene::Material> copied) {
+    if (copied.empty())
+        return;
+    std::vector<Scene::MaterialHandle> added;
+    for (const Scene::Material& material : copied)
+        added.push_back(addMaterial(material));
+    selectedMaterials.set(std::move(added));
     sceneChanged();
 }
 
-SceneController::Clipboard SceneController::copySelection() const {
-    const Scene::Scene& scene = session.getScene();
-    return std::visit(
-        [&](const auto& handle) -> Clipboard {
-            if constexpr (std::is_same_v<std::decay_t<decltype(handle)>, std::monostate>)
-                return {};
-            else if (const auto* object = scene.find(handle))
-                return *object;
-            else
-                return {};
-        },
-        inspector.getSelection());
+void SceneController::onSelectMaterial(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments) {
+    const std::vector<Scene::MaterialHandle> order = materialOrder();
+    const std::size_t index = RmlKit::UI::Model::indexArgument(arguments, "materialSelect", order.size());
+    editList = EditList::Materials;
+    selectedMaterials.click(order, index, RmlKit::UI::listClickOf(event));
+    if (const std::optional<Scene::MaterialHandle> primary = selectedMaterials.primary())
+        nodeGraph.showMaterial(*primary);
+    showMaterials();
 }
 
-//! The copy lands where the original is, selected, so the gizmo moves it off the original.
-void SceneController::paste(const Clipboard& copied) {
+//! The slots that used the materials become empty; the inspector is shown again, since its material links name dense indices.
+void SceneController::deleteSelectedMaterials() {
+    if (selectedMaterials.empty())
+        return;
     Scene::Scene& scene = session.getScene();
-    const Selection added = std::visit(
+    for (const Scene::MaterialHandle handle : selectedMaterials.items())
+        scene.remove(handle);
+    selectedMaterials.clear();
+    inspector.show(inspector.getSelection());
+    sceneChanged();
+}
+
+//! Groups hold no object, so they are not copied.
+std::vector<SceneController::ClipObject> SceneController::copySelection() const {
+    const Scene::Scene& scene = session.getScene();
+    std::vector<ClipObject> copied;
+    for (const Scene::NodeHandle handle : selectedNodes.items())
+        if (const Scene::Node* node = scene.find(handle))
+            std::visit(
+                [&](const auto& object) {
+                    if constexpr (!std::is_same_v<std::decay_t<decltype(object)>, std::monostate>)
+                        if (const auto* value = scene.find(object))
+                            copied.emplace_back(*value);
+                },
+                node->object);
+    return copied;
+}
+
+//! The copies land where the originals are, selected, so the gizmo moves them off the originals.
+void SceneController::paste(const std::span<const ClipObject> copied) {
+    Scene::Scene& scene = session.getScene();
+    std::vector<Scene::NodeHandle> added;
+    for (const ClipObject& object : copied)
+        if (const Selection handle = pasteObject(object); !std::holds_alternative<std::monostate>(handle))
+            added.push_back(scene.findNode(nodeObjectOf(handle)));
+    if (added.empty())
+        return;
+    editList = EditList::Objects;
+    selectedNodes.set(std::move(added));
+    showSelection();
+    sceneChanged();
+}
+
+Selection SceneController::pasteObject(const ClipObject& copied) {
+    Scene::Scene& scene = session.getScene();
+    return std::visit(
         [&](const auto& object) -> Selection {
             using Object = std::decay_t<decltype(object)>;
-            if constexpr (std::is_same_v<Object, std::monostate>)
-                return {};
-            else if constexpr (std::is_same_v<Object, Scene::Instance>) {
+            if constexpr (std::is_same_v<Object, Scene::Instance>) {
                 const Scene::Mesh* mesh = scene.find(object.mesh);
                 if (!mesh)
                     return {};
@@ -560,13 +786,19 @@ void SceneController::paste(const Clipboard& copied) {
             }
         },
         copied);
-    if (std::holds_alternative<std::monostate>(added))
-        return;
-    select(added);
+}
+
+//! Removing a node removes its children, so a selected child of a removed node is already gone.
+void SceneController::deleteSelection() {
+    Scene::Scene& scene = session.getScene();
+    for (const Scene::NodeHandle handle : selectedNodes.items())
+        scene.remove(handle);
+    select(Selection{});
     sceneChanged();
 }
 
 void SceneController::select(const Session::PickResult& picked) {
+    editList = EditList::Objects;
     if (const auto* instance = std::get_if<Scene::InstanceHandle>(&picked))
         select(Selection{*instance});
     else if (const auto* cloud = std::get_if<Scene::GaussianCloudHandle>(&picked))
@@ -577,18 +809,32 @@ void SceneController::select(const Session::PickResult& picked) {
 }
 
 void SceneController::select(const Selection& selected) {
-    selectedGroup = {};
-    inspector.show(selected);
+    selectedNodes.clear();
     if (!std::holds_alternative<std::monostate>(selected))
-        expandTo(session.getScene().findNode(nodeObjectOf(selected)));
-    if (!std::holds_alternative<std::monostate>(selected))
-        app.inspector.tab = "object";
+        if (const Scene::NodeHandle node = nodeOf(session.getScene(), selected))
+            selectedNodes.selectOnly(node);
+    showSelection();
 }
 
 void SceneController::selectGroup(const Scene::NodeHandle group) {
-    select(Selection{});
-    selectedGroup = group;
-    expandTo(group);
+    selectedNodes.selectOnly(group);
+    showSelection();
+}
+
+//! The inspector shows the primary node; a node without an object is an empty, shown by its node.
+void SceneController::showSelection() {
+    const Scene::Scene& scene = session.getScene();
+    const std::optional<Scene::NodeHandle> primary = selectedNodes.primary();
+    const Scene::Node* node = primary ? scene.find(*primary) : nullptr;
+    Selection shown = node ? selectionOf(node->object) : Selection{};
+    if (node && std::holds_alternative<std::monostate>(shown))
+        shown = *primary;
+    inspector.show(shown);
+    nodeGraph.showSelection(shown);
+    for (const Scene::NodeHandle handle : selectedNodes.items())
+        expandTo(handle);
+    if (!std::holds_alternative<std::monostate>(shown))
+        app.inspector.tab = "object";
 }
 
 void SceneController::expandTo(const Scene::NodeHandle handle) {
@@ -601,6 +847,7 @@ void SceneController::sceneChanged() {
     viewports.invalidate();
     inspector.showEnvironment();
     materials.refresh();
+    nodeGraph.refresh();
     refresh();
 }
 
@@ -613,11 +860,10 @@ bool SceneController::addRows(const Scene::NodeHandle handle, const int depth) {
     const std::size_t mark = rows.size();
     const bool filtering = !app.outliner.filter.empty();
     OutlinerRow row = describe(scene, *node);
-    const Selection selection = selectionOf(node->object);
     row.depth = depth;
     row.parent = !node->children.empty();
     row.expanded = filtering || !collapsedNodes.contains(nodeKey(handle));
-    row.selected = handle == selectedGroup || (!std::holds_alternative<std::monostate>(selection) && selection == inspector.getSelection());
+    row.selected = selectedNodes.contains(handle);
     rows.push_back(std::move(row));
     rowNodes.push_back(handle);
     bool matches = contains(node->name, app.outliner.filter);
@@ -634,16 +880,25 @@ bool SceneController::addRows(const Scene::NodeHandle handle, const int depth) {
 
 void SceneController::refresh() {
     const Scene::Scene& scene = session.getScene();
-    if (selectedGroup && !scene.find(selectedGroup))
-        selectedGroup = {};
+    selectedNodes.keepIf([&](const Scene::NodeHandle handle) { return scene.find(handle) != nullptr; });
     app.outliner.rows.clear();
     rowNodes.clear();
     for (const Scene::NodeHandle root : scene.getRootNodes())
         addRows(root, 0);
-    app.outliner.materials.clear();
-    for (const Scene::Material& material : scene.getMaterials().getValues())
-        app.outliner.materials.push_back(material.name);
-    model.dirty("outliner");
+    showMaterials();
 }
 
+void SceneController::showMaterials() {
+    const Core::SlotMap<Scene::Material>& all = session.getScene().getMaterials();
+    selectedMaterials.keepIf([&](const Scene::MaterialHandle handle) { return all.contains(handle); });
+    app.outliner.selectedMaterials = static_cast<int>(selectedMaterials.size());
+    RmlKit::UI::GridSection<MaterialCard> section;
+    for (std::uint32_t index = 0; index < all.size(); ++index)
+        section.items.push_back({.index = static_cast<int>(index),
+                                 .name = all.getValues()[index].name,
+                                 .selected = selectedMaterials.contains(all.keyAt(index)),
+                                 .nodes = all.getValues()[index].nodeTree != nullptr});
+    materialGrid.setSections({std::move(section)});
+    model.dirty("outliner");
+}
 }

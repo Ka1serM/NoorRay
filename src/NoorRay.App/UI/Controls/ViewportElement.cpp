@@ -26,8 +26,7 @@ constexpr float orbitSpeed = 0.006f;
 constexpr float dollySpeed = 0.05f;
 constexpr float clickSlop = 3.0f;
 constexpr float maxFlyStep = 0.1f;
-//! A live window resize changes the size on every frame; the render targets follow at most this often, so the old ones are not dropped and allocated again each
-//! frame.
+//! The render targets follow a live window resize at most this often, so they are not allocated again on each frame.
 constexpr std::chrono::milliseconds resizeSettle{150};
 //! The viewport returns to full resolution once the camera has rested this long, so a pause between scroll steps keeps the low resolution.
 constexpr std::chrono::milliseconds motionSettle{200};
@@ -285,7 +284,9 @@ void ViewportElement::OnUpdate() {
     if (!IsVisible(true))
         return;
     flyStep();
-    const bool ticking = instancer.getEvents().tick && instancer.getEvents().tick();
+    bool ticking = false;
+    for (const std::function<bool()>& tick : instancer.getEvents().ticks)
+        ticking = tick() || ticking;
     if (instancer.getCamera().animate())
         instancer.applyCamera();
     Session::Session& session = instancer.getSession();
@@ -293,6 +294,12 @@ void ViewportElement::OnUpdate() {
         gizmo.sync(*this, active->transform);
     if (std::optional<Session::PickResult> picked = session.takePick())
         instancer.getEvents().pick(*picked);
+    if (ViewportSource* source = instancer.getSource()) {
+        recordSource(*source);
+        if (ticking || instancer.getDrag() == ViewDrag::Look || instancer.getCamera().isAnimating())
+            requestDraw();
+        return;
+    }
     if (drawnGeneration != instancer.getGeneration())
         failed = false;
     if (failed)
@@ -318,8 +325,32 @@ void ViewportElement::OnUpdate() {
         requestDraw();
 }
 
+void ViewportElement::recordSource(ViewportSource& source) {
+    const Scene::Camera* active = instancer.getSession().getScene().findActiveCamera();
+    const Rml::Vector2f size = GetBox().GetSize(Rml::BoxArea::Content);
+    const std::uint32_t divisor = isCameraMoving() ? std::max(instancer.getMotionDivisor(), 1u) : 1u;
+    const auto width = static_cast<std::uint32_t>(std::round(size.x / static_cast<float>(divisor)));
+    const auto height = static_cast<std::uint32_t>(std::round(size.y / static_cast<float>(divisor)));
+    if (!active || width == 0 || height == 0)
+        return;
+    std::expected<bool, Core::Error> recorded = source.record(instancer.getRenderer().record(), *active, width, height);
+    if (!recorded) {
+        instancer.setSource(nullptr);
+        instancer.getEvents().error(recorded.error().message);
+        return;
+    }
+    if (*recorded || divisor > 1)
+        requestDraw();
+}
+
+const NoorRHI::Image& ViewportElement::getDisplay() {
+    if (const ViewportSource* source = instancer.getSource())
+        return source->getDisplay();
+    return instancer.getSession().getRenderer().getDisplay();
+}
+
 void ViewportElement::showDisplay(Rml::RenderManager& renderManager) {
-    const NoorRHI::Image& display = instancer.getSession().getRenderer().getDisplay();
+    const NoorRHI::Image& display = getDisplay();
     if (!display || display.getBackend() == shownDisplay)
         return;
     shownDisplay = display.getBackend();
@@ -348,7 +379,7 @@ void ViewportElement::OnRender() {
 
 GizmoMode ViewportElement::gizmoMode() {
     ViewportEvents& events = instancer.getEvents();
-    return events.tool ? events.tool() : GizmoMode::Move;
+    return events.tool ? events.tool() : GizmoMode::Translate;
 }
 
 float ViewportElement::getDensity() {
@@ -363,7 +394,7 @@ Rml::Vector2f ViewportElement::toContent(const Rml::Vector2f mouse) {
 std::optional<OverlayView> ViewportElement::overlayView() {
     const Scene::Camera* active = instancer.getSession().getScene().findActiveCamera();
     const Rml::Vector2f size = GetBox().GetSize(Rml::BoxArea::Content);
-    if (!active || size.x <= 0.0f || size.y <= 0.0f)
+    if (!active || instancer.getSource() || size.x <= 0.0f || size.y <= 0.0f)
         return std::nullopt;
     return OverlayView(*active, size);
 }
@@ -439,7 +470,7 @@ void ViewportElement::renderOverlay(Rml::RenderManager& renderManager) {
     if (const int cell = ViewportOverlay::iconCell(key.density); cell != iconAtlasCell) {
         iconAtlasCell = cell;
         iconAtlas = renderManager.MakeCallbackTexture([cell](const Rml::CallbackTextureInterface& callback) {
-            return callback.GenerateTexture(ViewportOverlay::paintIconAtlas(cell), {cell * ViewportOverlay::iconCount, cell});
+            return callback.GenerateTexture(ViewportOverlay::paintIconAtlas(cell), {cell * ViewportOverlay::iconCount, 2 * cell});
         });
     }
     if (overlayKey != key) {
@@ -470,11 +501,11 @@ void ViewportElement::OnResize() {
 void ViewportElement::generateGeometry(Rml::RenderManager& renderManager) {
     const Rml::RenderBox box = GetRenderBox(Rml::BoxArea::Content);
     //! Until the render targets follow a resize, the old image covers the box in its own aspect, cropped at the centre rather than stretched.
-    const Render::Renderer& renderer = instancer.getSession().getRenderer();
+    const NoorRHI::Image& display = getDisplay();
     const Rml::Vector2f fill = box.GetFillSize();
     Rml::Vector2f extent(1.0f, 1.0f);
-    if (renderer.getWidth() > 0 && renderer.getHeight() > 0 && fill.x > 0.0f && fill.y > 0.0f) {
-        const float ratio = (fill.x / fill.y) / (float(renderer.getWidth()) / float(renderer.getHeight()));
+    if (display.getWidth() > 0 && display.getHeight() > 0 && fill.x > 0.0f && fill.y > 0.0f) {
+        const float ratio = (fill.x / fill.y) / (float(display.getWidth()) / float(display.getHeight()));
         extent = ratio > 1.0f ? Rml::Vector2f(1.0f, 1.0f / ratio) : Rml::Vector2f(ratio, 1.0f);
     }
     const Rml::Vector2f start = (Rml::Vector2f(1.0f, 1.0f) - extent) * 0.5f;
@@ -487,6 +518,8 @@ void ViewportElementInstancer::beginDrag(const ViewDrag started, const int rmlBu
     if (drag)
         return;
     drag = started;
+    if (started == ViewDrag::Orbit)
+        camera.pivotAhead(getSceneBounds());
     dragButton = toSdlButton(rmlButton);
     dragHeight = std::max(viewportHeight, 1.0f);
     SDL_GetMouseState(&restoreX, &restoreY);
@@ -553,9 +586,22 @@ void ViewportElementInstancer::invalidate() {
         context->RequestNextUpdate(0);
 }
 
+void ViewportElementInstancer::setSource(ViewportSource* value) {
+    source = value;
+    invalidate();
+}
+
+Core::Bounds ViewportElementInstancer::getSceneBounds() const {
+    Core::Bounds bounds = session.getScene().computeBounds();
+    if (source)
+        if (const std::optional<Core::Bounds> sourceBounds = source->getBounds())
+            bounds.grow(*sourceBounds);
+    return bounds;
+}
+
 void ViewportElementInstancer::frameScene() {
     const Scene::Camera* active = session.getScene().findActiveCamera();
-    camera.frame(session.getScene().computeBounds(), active ? active->verticalFov : 0.7f);
+    camera.frame(getSceneBounds(), active ? active->verticalFov : 0.7f);
     applyCamera();
 }
 

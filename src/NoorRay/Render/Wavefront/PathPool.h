@@ -29,6 +29,12 @@ private:
     NoorRHI::Buffer<NoorRHI::float4> shadowDirection;
     NoorRHI::Buffer<NoorRHI::float4> shadowRadiance;
     NoorRHI::Buffer<std::uint32_t> pathBin;
+    NoorRHI::Buffer<Shaders::PackedClosure> closures;
+    NoorRHI::Buffer<NoorRHI::uint2> lightPath;
+    NoorRHI::Buffer<float> minRayPdf;
+    NoorRHI::Buffer<std::uint32_t> primaryDirection;
+    NoorRHI::Buffer<NoorRHI::uint4> receiver;
+    NoorRHI::Buffer<std::uint32_t> shadowEntry;
     Shaders::PathPoolRecord record{};
 };
 

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <vector>
 
 #include <RmlUi/Core/CallbackTexture.h>
 #include <RmlUi/Core/Element.h>
@@ -14,6 +15,7 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
 
+#include "NoorRay.App/Plugins/ViewportSource.h"
 #include "NoorRay.App/UI/Controls/OrbitCamera.h"
 #include "NoorRay.App/UI/Controls/ViewGizmo.h"
 #include "NoorRay.App/UI/Controls/ViewportOverlay.h"
@@ -36,8 +38,10 @@ struct ViewportEvents {
     //! The gizmo moved, scaled or rotated the selection.
     std::function<void()> moved;
     std::function<GizmoMode()> tool;
-    //! Called on every update; true asks for another update, as playback does.
-    std::function<bool()> tick;
+    //! Each runs on every update; true asks for another update, as playback does.
+    std::vector<std::function<bool()>> ticks;
+    //! A scene file opened; the timeline takes the frame range of its animation.
+    std::function<void()> opened;
 };
 
 class ViewportElementInstancer;
@@ -88,6 +92,8 @@ private:
     void resizeTarget();
     bool isCameraMoving();
     void showDisplay(Rml::RenderManager& renderManager);
+    const NoorRHI::Image& getDisplay();
+    void recordSource(ViewportSource& source);
     void generateGeometry(Rml::RenderManager& renderManager);
     std::optional<Rml::Vector2i> toPixel(Rml::Vector2f mouse);
 
@@ -127,7 +133,7 @@ private:
         std::optional<GizmoPart> highlighted;
         Rml::Vector2f size;
         float density = 0.0f;
-        GizmoMode mode = GizmoMode::Move;
+        GizmoMode mode = GizmoMode::Translate;
         bool operator==(const OverlayKey&) const = default;
     };
     std::optional<OverlayKey> overlayKey;
@@ -155,11 +161,14 @@ public:
     //! The scene, the settings or the camera changed: the next update records a new frame and a failed viewport tries again.
     void invalidate();
     void frameScene();
+    Core::Bounds getSceneBounds() const;
     void followActiveCamera();
     void applyCamera();
     //! Fits near and far of the active camera to the scene, which may have grown since the camera last moved.
     void fitClipRange();
     void setContext(Rml::Context* updated) { context = updated; }
+    void setSource(ViewportSource* value);
+    ViewportSource* getSource() const { return source; }
 
     //! Grabs the mouse in relative mode, as the old viewport did; it returns to where the drag began when the button comes up.
     void beginDrag(ViewDrag drag, int rmlButton, float viewportHeight);
@@ -180,6 +189,7 @@ private:
     void endDrag();
 
     SDL_Window* window;
+    ViewportSource* source = nullptr;
     std::uint64_t generation = 1;
     std::uint32_t motionDivisor = 2;
     Rml::Context* context = nullptr;

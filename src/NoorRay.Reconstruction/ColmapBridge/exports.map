@@ -1,0 +1,7 @@
+{
+    global:
+        noorray_colmap_version;
+        noorray_colmap_run;
+    local:
+        *;
+};

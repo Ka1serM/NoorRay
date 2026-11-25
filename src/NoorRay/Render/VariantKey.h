@@ -15,9 +15,10 @@ enum class LinkConstant : std::uint32_t {
     HasDispersion = 1u << 2,
     HasAlphaTest = 1u << 3,
     LitGaussians = 1u << 4,
+    HasSubsurface = 1u << 5,
 };
 
-inline constexpr std::size_t variantCount = 32;
+inline constexpr std::size_t variantCount = 64;
 using KernelVariants = std::array<const NoorRHI::Shader*, variantCount>;
 
 class VariantKey {
@@ -29,6 +30,7 @@ public:
         set(LinkConstant::HasVolumes, content.hasVolumes);
         set(LinkConstant::HasDispersion, content.hasDispersion);
         set(LinkConstant::HasAlphaTest, content.hasAlphaTest);
+        set(LinkConstant::HasSubsurface, content.hasSubsurface);
     }
 
     bool has(const LinkConstant constant) const { return (mask & static_cast<std::uint32_t>(constant)) != 0; }

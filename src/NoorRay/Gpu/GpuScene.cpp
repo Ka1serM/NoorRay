@@ -1,7 +1,9 @@
 #include "NoorRay/Gpu/GpuScene.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 #include "NoorRay/Gpu/BufferUpload.h"
@@ -39,6 +41,10 @@ std::expected<void, Core::Error> GpuScene::uploadInstances(const Scene::Scene& s
     const std::span<const Scene::Instance> sceneInstances = scene.getInstances().getValues();
     const std::span<const std::uint32_t> instanceLights = lights.getInstanceLights();
     std::vector<Shaders::InstanceData> values(sceneInstances.size());
+    std::size_t attributeCount = 0;
+    for (const Scene::Instance& instance : sceneInstances)
+        attributeCount = std::max(attributeCount, instance.attributes.size());
+    std::vector<Core::float4> attributes(sceneInstances.size() * attributeCount);
     for (std::size_t i = 0; i < sceneInstances.size(); ++i) {
         const Scene::Instance& instance = sceneInstances[i];
         Shaders::InstanceData& data = values[i];
@@ -49,9 +55,20 @@ std::expected<void, Core::Error> GpuScene::uploadInstances(const Scene::Scene& s
         const std::uint32_t light = i < instanceLights.size() ? instanceLights[i] : Shaders::invalidIndex;
         if (light != Shaders::invalidIndex)
             flags |= Shaders::instanceFlagEmissive;
+        if (Scene::hasFlag(instance.flags, Scene::InstanceFlags::Holdout))
+            flags |= Shaders::instanceFlagHoldout;
+        flags |= std::min(instance.lightSet, Shaders::lightSetCount - 1) << Shaders::lightSetShift;
         data.meta = {scene.getMeshes().denseIndex(instance.mesh), flags, scene.getMaterials().denseIndex(instance.material), light};
+        data.info = {Core::packHalf2(instance.color.x, instance.color.y), Core::packHalf2(instance.color.z, instance.color.w),
+                     std::min(instance.passIndex, 0xffffu) | static_cast<std::uint32_t>(std::lround(instance.random * 65535.0f)) << 16,
+                     static_cast<std::uint32_t>(i * attributeCount)};
+        std::ranges::copy(instance.attributes, attributes.begin() + std::ptrdiff_t(i * attributeCount));
     }
     if (auto uploaded = uploadValues<Shaders::InstanceData>(*device, instances, values); !uploaded)
+        return uploaded;
+    if (attributes.empty())
+        instanceAttributes = {};
+    else if (auto uploaded = uploadValues<Core::float4>(*device, instanceAttributes, attributes); !uploaded)
         return uploaded;
     return uploadRasterDraws(scene);
 }
@@ -81,11 +98,40 @@ std::expected<void, Core::Error> GpuScene::uploadRecord() {
     return Core::check(record.upload(std::span(&hostRecord, 1)));
 }
 
+void GpuScene::setExactVolumeDensity(const bool exact) {
+    if (exact == volumes.hasExactDensity())
+        return;
+    volumes.setExactDensity(exact);
+    volumeModeChanged = true;
+}
+
+std::expected<void, Core::Error> GpuScene::setLightTree(const bool enabled) {
+    if (lightTree == enabled)
+        return {};
+    lightTree = enabled;
+    fillFlags();
+    return uploadRecord();
+}
+
+void GpuScene::fillFlags() {
+    const std::uint32_t flags = (lightTree ? 0u : Shaders::sceneFlagByPower) | (lights.areVisibleToCamera() ? Shaders::sceneFlagCameraLights : 0u)
+                                | environment.getHidden() << Shaders::sceneHiddenShift;
+    hostRecord.environmentParams.z = std::bit_cast<float>(flags);
+}
+
 std::expected<void, Core::Error> GpuScene::update(Scene::Scene& scene) {
     if (!device)
         return Core::fail(Core::ErrorCode::InvalidState, "the GPU scene is not open");
     const Scene::SceneChange change = scene.takeChange();
-    const Change changes = first ? allChanges : change.getChanges();
+    Change changes = first ? allChanges : change.getChanges();
+    std::expected<bool, Core::Error> averaged = bakes.collectAverages();
+    if (!averaged)
+        return std::unexpected(std::move(averaged.error()));
+    //! A light mean that the device sent back late changes only the light sampling weights.
+    if (*averaged)
+        changes |= Change::Lights;
+    if (std::exchange(volumeModeChanged, false))
+        changes |= Change::Volumes;
     lastChange = changes;
     if (changes == Change::None)
         return {};
@@ -104,75 +150,93 @@ std::expected<void, Core::Error> GpuScene::update(Scene::Scene& scene) {
         meshChange.mark(Change::MeshTopology);
     if (auto result = meshes.update(*device, scene, meshChange, materialFlags); !result)
         return result;
+    std::expected<bool, Core::Error> displaced = displacement.update(*device, scene, change, first, textures, meshes);
+    if (!displaced)
+        return std::unexpected(std::move(displaced.error()));
+    if (first || has(Change::MeshTopology | Change::MeshPositions | Change::MeshReplaced | Change::MaterialSet | Change::InstanceSet) || *displaced)
+        if (auto result = meshes.uploadRecords(*device, scene); !result)
+            return result;
+    //! A displaced mesh moves on the device alone, for the renderer and the acceleration structures as for a position upload.
+    if (*displaced)
+        changes |= Change::MeshPositions;
+    lastChange = changes;
     if (has(Scene::geometryChanges))
         bounds = scene.computeBounds();
     const float sceneRadius = bounds.isEmpty() ? 1.0f : std::max(0.5f * Core::length(bounds.extent()), 1e-3f);
     const bool lightsChanged = has(Change::Lights | Change::InstanceTransforms | Change::InstanceSet | Change::MeshPositions | Change::MeshTopology
-                                   | Change::MaterialSet | Change::MaterialValues | Change::Textures);
-    if (lightsChanged)
-        if (auto result = lights.update(*device, scene, materials.getInfos(), sceneRadius); !result)
+                                   | Change::MeshReplaced | Change::MaterialSet | Change::MaterialValues | Change::Textures | Change::Volumes);
+    if (has(Change::Lights | Change::Textures))
+        if (auto result = bakes.updateLights(*device, scene, textures); !result)
             return result;
-    if (lightsChanged || has(Change::InstanceTransforms | Change::InstanceSet | Change::MeshTopology))
+    if (lightsChanged)
+        if (auto result = lights.update(*device, scene, materials.getInfos(), bakes.getLights()); !result)
+            return result;
+    if (lightsChanged || has(Change::InstanceTransforms | Change::InstanceSet | Change::MeshTopology | Change::MeshReplaced))
         if (auto result = uploadInstances(scene); !result)
             return result;
     if (has(Change::GaussianSet | Change::GaussianValues))
         if (auto result = gaussians.update(*device, scene); !result)
             return result;
     if (has(Change::Volumes))
-        if (auto result = volumes.update(*device, scene); !result)
+        if (auto result = volumes.update(*device, scene, bakes, textures); !result)
             return result;
     if (has(Change::Environment | Change::Textures))
-        if (auto result = environment.update(*device, scene, textures); !result)
+        if (auto result = environment.update(*device, scene, textures, bakes); !result)
             return result;
     if (has(Change::InstanceTransforms))
         accelerationStructures.markInstancesMoved();
-    if (has(Change::InstanceSet | Change::MeshTopology | Change::MeshPositions | Change::MaterialSet))
+    if (has(Change::InstanceSet | Change::MeshTopology | Change::MeshPositions | Change::MeshReplaced | Change::MaterialSet))
         accelerationStructures.markInstanceSetChanged();
     if (has(Change::GaussianSet | Change::GaussianValues))
-        accelerationStructures.markGaussiansChanged();
+        gaussianAccelerationStructure.markChanged();
 
-    content.hasGaussians = gaussians.getCount() > 0;
+    content.hasGaussians = GaussianAccelerationStructure::isAvailable() && gaussians.getGaussianCount() > 0;
     content.hasVolumes = volumes.getCount() > 0;
     content.hasDispersion = (materials.getFlags() & Shaders::materialFlagDispersive) != 0;
     content.hasAlphaTest = (materials.getFlags() & Shaders::materialFlagAlphaTest) != 0;
+    content.hasSubsurface = (materials.getFlags() & Shaders::materialFlagSubsurface) != 0;
     content.hasEmissiveMeshes = std::ranges::any_of(lights.getInstanceLights(), [](const std::uint32_t light) { return light != Shaders::invalidIndex; });
 
     hostRecord.meshes = meshes.getRecords();
     hostRecord.instances = instances.getPtr();
+    hostRecord.instanceAttributes = instanceAttributes.getPtr();
     hostRecord.materials = materials.getRecords();
+    hostRecord.graphParameters = materials.getGraphParameters();
     hostRecord.lights = lights.getRecords();
-    hostRecord.lightAlias = lights.getAlias();
+    hostRecord.lightNodes = lights.getNodes();
+    hostRecord.lightSets = lights.getTreeSets();
+    hostRecord.lightTrails = lights.getTrails();
+    hostRecord.emitterLights = lights.getEmitterLights();
+    hostRecord.emitterRanges = lights.getEmitterRanges();
     hostRecord.gaussianClouds = gaussians.getRecords();
     hostRecord.volumes = volumes.getRecords();
     hostRecord.spectral = spectral.getEntries();
     hostRecord.conductors = spectral.getConductors();
     hostRecord.energyTables = energy.getValues();
-    const bool stale = accelerationStructures.isStale();
-    hostRecord.tlas = stale ? NoorRHI::AccelerationStructureHandle{} : accelerationStructures.getTlas();
-    hostRecord.gaussianTlas = stale ? NoorRHI::AccelerationStructureHandle{} : accelerationStructures.getGaussianTlas();
+    hostRecord.tlas = accelerationStructures.isStale() ? NoorRHI::AccelerationStructureHandle{} : accelerationStructures.getTlas();
+    hostRecord.gaussianTlas = gaussianAccelerationStructure.isStale() ? NoorRHI::AccelerationStructureHandle{} : gaussianAccelerationStructure.getTlas();
     hostRecord.counts = {static_cast<std::uint32_t>(scene.getInstances().size()), lights.getCount(), gaussians.getCount(), volumes.getCount()};
     environment.fill(hostRecord);
-    const float environmentPower = environment.getAverageLuminance() * Core::pi * Core::pi * sceneRadius * sceneRadius;
-    const float lightPower = lights.getTotalPower();
-    float environmentProbability = 0.0f;
-    if (environmentPower > 0.0f)
-        environmentProbability = lightPower > 0.0f ? std::clamp(environmentPower / (environmentPower + lightPower), 0.05f, 0.95f) : 1.0f;
-    hostRecord.environmentParams.y = environmentProbability;
-    hostRecord.environmentParams.z = lightPower;
+    //! The light tree weighs the environment by the irradiance of its average radiance on a surface.
+    hostRecord.environmentParams.y = scene.getEnvironment().sampled ? environment.getAverageLuminance() : 0.0f;
     hostRecord.environmentParams.w = sceneRadius;
+    fillFlags();
     const Core::float3 center = bounds.isEmpty() ? Core::float3{} : bounds.center();
     hostRecord.sceneCenter = {center.x, center.y, center.z, hostRecord.sceneCenter.w};
     first = false;
     return uploadRecord();
 }
 
-std::expected<void, Core::Error> GpuScene::buildAccelerationStructures(const Scene::Scene& scene) {
-    if (!accelerationStructures.isStale())
+std::expected<void, Core::Error> GpuScene::buildAccelerationStructures(const Scene::Scene& scene, const bool tracesGaussians) {
+    const bool tracedGaussians = tracesGaussians && content.hasGaussians;
+    if (!accelerationStructures.isStale() && !gaussianAccelerationStructure.needsBuild(tracedGaussians))
         return {};
     if (auto result = accelerationStructures.build(*device, scene, meshes); !result)
         return result;
+    if (auto result = gaussianAccelerationStructure.build(*device, scene, tracedGaussians); !result)
+        return result;
     hostRecord.tlas = accelerationStructures.getTlas();
-    hostRecord.gaussianTlas = accelerationStructures.getGaussianTlas();
+    hostRecord.gaussianTlas = gaussianAccelerationStructure.getTlas();
     return uploadRecord();
 }
 

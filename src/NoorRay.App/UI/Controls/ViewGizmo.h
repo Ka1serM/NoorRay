@@ -12,7 +12,7 @@ namespace NoorRay::App {
 //! The camera drags of the viewport: the view gizmo's ball orbits, its tools dolly and pan.
 enum class ViewDrag { Orbit, Pan, Look, Dolly };
 
-//! The view gizmo inside a viewport, after ImViewGuizmo: .view-gizmo holds .gizmo-center and .gizmo-rotor with the six .gizmo-axis handles (+X, -X, +Y, -Y, +Z, -Z) and the .spoke-x, .spoke-y and .spoke-z spokes; .view-tools holds .tool-dolly and .tool-pan.
+//! The viewport gizmo, after ImViewGuizmo: .view-gizmo has .gizmo-center, .gizmo-rotor, six .gizmo-axis and three .spoke-*; .view-tools has dolly and pan.
 class ViewGizmo {
 public:
     //! Turns the rotor to the camera; the stylesheet sizes everything, so only transforms and order classes change.

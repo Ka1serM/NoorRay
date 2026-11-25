@@ -16,8 +16,7 @@
 
 namespace NoorRay::Render {
 
-//! Draws the Gaussians as sorted 3DGS splats: project and compact the visible ones, radix sort them back to front, then alpha blend instanced quads
-//! against the visibility depth. A frame with the camera and scene of the last sort only redraws at the new jitter.
+//! Draws the Gaussians as 3DGS splats, compacted, radix sorted back to front and blended over the visibility depth; an unchanged view only redraws.
 class GaussianSplats {
 public:
     static constexpr NoorRHI::ImageFormat format = NoorRHI::ImageFormat::Rgba16Float;

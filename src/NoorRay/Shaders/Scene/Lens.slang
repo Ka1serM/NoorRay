@@ -44,7 +44,9 @@ bool refractLens(float3 incident, float3 normal, float eta, out float3 transmitt
     return true;
 }
 
-float lensIor(LensElementRecord element, float lambda) { return element.medium.y > 0.0 ? cauchyIor(element.medium.x, element.medium.y, lambda) : element.medium.x; }
+float lensIor(LensElementRecord element, float lambda) {
+    return element.medium.y > 0.0 ? cauchyIor(element.medium.x, element.medium.y, lambda) : element.medium.x;
+}
 
 //! Traces a ray from the film toward the scene through all elements, back to front, at one wavelength. dispersive reports a medium with an Abbe number.
 bool traceLens(CameraRecord camera, inout float3 origin, inout float3 direction, float lambda, out bool dispersive) {

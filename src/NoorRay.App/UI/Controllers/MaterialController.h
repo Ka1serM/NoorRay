@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 
 #include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/Event.h>
@@ -28,6 +29,12 @@ public:
     void edit(std::size_t sceneIndex);
     //! Shows the edited material again, or nothing when the scene no longer has it.
     void refresh();
+    Scene::MaterialHandle getMaterial() const { return material; }
+    //! Gives the edited material a node tree with the same result as its fields and compiles it; false when it has a tree already.
+    bool useNodes();
+
+    //! Called when a material name changes, so the drawer shows it.
+    std::function<void()> renamed;
 
 private:
     void onApply(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments);

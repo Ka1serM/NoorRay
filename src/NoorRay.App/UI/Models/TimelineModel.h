@@ -14,7 +14,7 @@ struct TimelineTick {
     bool major = false;
 };
 
-//! The frame range and playback of the timeline. Nothing in the scene is animated yet, so the frame only moves the playhead.
+//! The frame range and playback of the timeline. Opening an animated file sets the range and the rate; the frame drives the animation.
 struct TimelineModel {
     int frame = 1;
     int start = 1;

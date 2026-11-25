@@ -63,7 +63,7 @@ uint nestedUniformScramble(uint x, uint seed) {
     return reversebits(x);
 }
 
-//! Owen-scrambled Sobol (Burley 2020, "Practical Hash-based Owen Scrambling"): four dimensions per pattern; each sample dimension draws a new shuffled, scrambled pattern.
+//! Owen-scrambled Sobol (Burley 2020): four dimensions per pattern; each sample dimension draws a new shuffled, scrambled pattern.
 struct SobolSampler {
     uint index;
     uint seed;

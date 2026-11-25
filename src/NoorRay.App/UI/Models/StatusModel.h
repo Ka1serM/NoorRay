@@ -11,6 +11,8 @@ struct StatusModel {
     bool complete = false;
     Rml::String frameTime;
     Rml::String framesPerSecond;
+    //! What still compiles in the background; the frames render without it until then.
+    Rml::String compiling;
     Rml::String resolution;
     bool loading = false;
     Rml::String loadingText;

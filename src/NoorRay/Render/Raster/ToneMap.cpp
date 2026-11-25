@@ -10,8 +10,9 @@ static_assert(static_cast<std::uint32_t>(ToneMapping::Neutral) == Shaders::toneM
 static_assert(static_cast<std::uint32_t>(ToneMapping::Agx) == Shaders::toneMapAgx);
 
 std::expected<void, Core::Error> ToneMap::record(NoorRHI::Device& device, NoorRHI::CommandList& list, const NoorRHI::Buffer<NoorRHI::float4>& film,
-                                                 const NoorRHI::Image& display, const DisplaySettings& settings, const NoorRHI::Image* splats) {
-    if (film.getSize() < std::size_t{display.getWidth()} * display.getHeight())
+                                                 const NoorRHI::Image& display, const DisplaySettings& settings, const NoorRHI::Image* splats,
+                                                 const NoorRHI::Image* upscaled) {
+    if (!upscaled && film.getSize() < std::size_t{display.getWidth()} * display.getHeight())
         return Core::fail(Core::ErrorCode::InvalidArgument, "the film is smaller than the display image");
     if (!pipeline) {
         const NoorRHI::GraphicsPipelineDesc desc{
@@ -31,6 +32,7 @@ std::expected<void, Core::Error> ToneMap::record(NoorRHI::Device& device, NoorRH
         .toneMap = static_cast<std::uint32_t>(settings.toneMapping),
         .splats = splats ? splats->getSampledHandle() : NoorRHI::TextureHandle{},
         .splatted = splats ? 1u : 0u,
+        .image = upscaled ? upscaled->getSampledHandle() : NoorRHI::TextureHandle{},
     };
     list.pushLabel("ToneMap");
     list.beginRender({.color = &display, .clear = false});
@@ -39,5 +41,4 @@ std::expected<void, Core::Error> ToneMap::record(NoorRHI::Device& device, NoorRH
     list.popLabel();
     return {};
 }
-
 }

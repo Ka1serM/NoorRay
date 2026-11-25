@@ -1,0 +1,36 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "DiffRenderer/Algorithms/Algorithm.h"
+#include "DiffRenderer/Algorithms/PathTracing/PathTracer.h"
+#include "DiffRenderer/Core/Adam.h"
+
+namespace DiffRenderer::Algorithms {
+
+class PathTracing final : public Algorithm {
+public:
+    const Description& getDescription() const override;
+    std::expected<void, NoorRHI::Error> open(NoorRHI::Device& device, const Settings& settings) override;
+    std::expected<Step, NoorRHI::Error> step() override;
+    const Core::Image& getTarget() const override { return target; }
+    const Core::Image& getCurrent() const override { return current; }
+
+private:
+    PathTracer tracer;
+    std::optional<PathScene> scene;
+    PathParameters parameters;
+    PathParameters gradients;
+    Core::Adam albedoOptimizer;
+    Core::Adam translationOptimizer;
+    Core::Image target;
+    Core::Image current;
+    std::vector<float> imageGradient;
+    std::uint32_t iteration = 0;
+    bool boundaryTerm = true;
+};
+
+}

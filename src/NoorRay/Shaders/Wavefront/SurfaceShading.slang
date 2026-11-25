@@ -4,7 +4,7 @@ import Wavefront.PathState;
 import Common.Random;
 import Bsdf.EnergyLut;
 import Scene.SceneSurface;
-import Materials.Material;
+import Materials.Closure;
 
 EnergyLut sceneEnergyLut(SceneRecord scene) {
     EnergyLut lut;
@@ -13,7 +13,7 @@ EnergyLut sceneEnergyLut(SceneRecord scene) {
 }
 
 //! Stochastic opacity: the same hit on the same ray always gets the same decision.
-bool passesOpacity(WavefrontFrame frame, PathState path, Surface surface, uint salt) {
+bool passesOpacity(WavefrontFrame frame, PathState path, float opacity, uint salt) {
     Random random = makeRandom(raySeed(frame, path, salt));
-    return random.next() < evaluateOpacity(frame.scene[0], surface.context, surface.material);
+    return random.next() < opacity;
 }

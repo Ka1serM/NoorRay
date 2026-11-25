@@ -2,24 +2,27 @@
 
 #include <expected>
 #include <filesystem>
-#include <span>
+#include <memory>
 
 #include "NoorRay/Core/Error.h"
 #include "NoorRay/Core/MappedFile.h"
+#include "NoorRay/Format/Animation.h"
+#include "NoorRay/Format/SceneCodec.h"
 #include "NoorRay/Scene/Scene.h"
 
 namespace NoorRay::Format {
 
-//! A NoorRay scene file (.nrs): a NoorRayScene flatbuffer that is verified once and then read in place.
+//! A NoorRay scene file (.nrs), memory-mapped; SceneCodec.h gives its layout.
 class SceneFile {
 public:
     [[nodiscard]] std::expected<void, Core::Error> open(const std::filesystem::path& path);
-    [[nodiscard]] static std::expected<void, Core::Error> verify(std::span<const std::byte> bytes);
-    [[nodiscard]] static std::expected<void, Core::Error> load(std::span<const std::byte> bytes, Scene::Scene& scene);
-    [[nodiscard]] std::expected<void, Core::Error> load(Scene::Scene& scene) const { return load(file.getBytes(), scene); }
+    //! Adds the file contents to the scene and gives the animation of the file, which is empty for a still scene.
+    [[nodiscard]] std::expected<Animation, Core::Error> load(Scene::Scene& scene) const;
 
 private:
-    Core::MappedFile file;
+    //! Shared with the animation, which reads key frames from it.
+    std::shared_ptr<Core::MappedFile> file;
+    FileHeader header;
 };
 
 }

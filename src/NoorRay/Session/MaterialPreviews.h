@@ -17,8 +17,7 @@
 
 namespace NoorRay::Session {
 
-//! Renders materials onto a sphere in a small NoorRay scene of its own and keeps each image, keyed by the material's contents, so an unchanged material renders
-//! once.
+//! Renders materials onto a sphere in a scene of its own and keeps each image by the material contents, so an unchanged material renders once.
 class MaterialPreviews {
 public:
     static constexpr std::uint32_t defaultSize = 128;

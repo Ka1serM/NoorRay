@@ -25,6 +25,8 @@ struct MeshGpu {
     NoorRHI::Buffer<std::uint32_t> colors;
     NoorRHI::Buffer<std::uint32_t> triangleMaterials;
     NoorRHI::AccelerationStructure blas;
+    NoorRHI::Ptr<float> restPositions;
+    NoorRHI::Ptr<float> restNormals;
     bool blasStale = true;
     bool blasRefit = false;
     bool opaque = true;
@@ -36,6 +38,9 @@ public:
     [[nodiscard]] std::expected<void, Core::Error> update(NoorRHI::Device& device, const Scene::Scene& scene, const Scene::SceneChange& change,
                                                           std::span<const std::uint32_t> materialFlags);
 
+    //! Runs after MeshDisplacement::update, which sets the rest streams.
+    [[nodiscard]] std::expected<void, Core::Error> uploadRecords(NoorRHI::Device& device, const Scene::Scene& scene);
+
     NoorRHI::Ptr<Shaders::MeshRecord> getRecords() const { return records.getPtr(); }
     std::uint32_t getCount() const { return static_cast<std::uint32_t>(dense.size()); }
     MeshGpu& getMesh(const std::uint32_t denseIndex) { return *dense[denseIndex]; }
@@ -44,6 +49,7 @@ public:
 
 private:
     [[nodiscard]] static std::expected<void, Core::Error> upload(NoorRHI::Device& device, const Scene::Mesh& mesh, MeshGpu& gpu);
+    [[nodiscard]] static std::expected<void, Core::Error> uploadVertices(const Scene::Mesh& mesh, MeshGpu& gpu);
     [[nodiscard]] static std::expected<void, Core::Error> uploadMaterials(NoorRHI::Device& device, const Scene::Scene& scene, const Scene::Mesh& mesh,
                                                                           std::span<const std::uint32_t> materialFlags, bool alphaTestedOverride, MeshGpu& gpu);
 

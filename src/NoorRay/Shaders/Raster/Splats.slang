@@ -94,7 +94,7 @@ void projectSplat(SplatArguments arguments, uint index) {
     if (any(center < -extent) || any(center > pixels + extent))
         return;
     const float3 cameraObject = transformPoint(cloud.worldToObject, cameraPosition(camera));
-    const float3 color = srgbToLinear(evaluateGaussianSh(cloud, local, gaussian.mean - cameraObject));
+    const float3 color = decodeGaussianColor(evaluateGaussianSh(cloud, local, gaussian.mean - cameraObject));
     arguments.splats[index * 2] = asuint(float4(ndc, gaussian.opacity));
     arguments.splats[index * 2 + 1] =
         uint4(packHalves(axis1.x, axis1.y), packHalves(axis2.x, axis2.y), packHalves(color.r, color.g), packHalves(color.b, 0.0));

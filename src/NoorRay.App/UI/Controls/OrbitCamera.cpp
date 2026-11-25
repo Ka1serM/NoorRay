@@ -1,6 +1,7 @@
 #include "NoorRay.App/UI/Controls/OrbitCamera.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace NoorRay::App {
@@ -11,6 +12,8 @@ constexpr float pi = 3.14159265f;
 constexpr float pitchLimit = 0.5f * pi;
 constexpr float minDistance = 1e-4f;
 constexpr float snapSeconds = 0.35f;
+//! Inside the bounds the pivot stays within this part of their radius, so that it is close ahead of the camera.
+constexpr float insidePivotFraction = 0.25f;
 
 }
 
@@ -39,6 +42,37 @@ void OrbitCamera::orbit(const float yawRadians, const float pitchRadians) {
     yaw += yawRadians;
     pitch = std::clamp(pitch + pitchRadians, -pitchLimit, pitchLimit);
     snapping = false;
+}
+
+void OrbitCamera::pivotAhead(const Core::Bounds& bounds) {
+    if (bounds.min.x > bounds.max.x)
+        return;
+    const Core::float3 eye = getEye();
+    const Core::float3 forward = getOffset() * -1.0f;
+    float near = 0.0f;
+    float far = INFINITY;
+    const std::array<float, 3> origin{eye.x, eye.y, eye.z};
+    const std::array<float, 3> direction{forward.x, forward.y, forward.z};
+    const std::array<float, 3> lower{bounds.min.x, bounds.min.y, bounds.min.z};
+    const std::array<float, 3> upper{bounds.max.x, bounds.max.y, bounds.max.z};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (std::abs(direction[axis]) < 1e-8f) {
+            if (origin[axis] < lower[axis] || origin[axis] > upper[axis])
+                return;
+            continue;
+        }
+        const float first = (lower[axis] - origin[axis]) / direction[axis];
+        const float second = (upper[axis] - origin[axis]) / direction[axis];
+        near = std::max(near, std::min(first, second));
+        far = std::min(far, std::max(first, second));
+    }
+    //! A view that misses the bounds keeps its pivot.
+    if (near > far || far <= 0.0f)
+        return;
+    const float radius = std::max(Core::length(bounds.max - bounds.min) * 0.5f, minDistance);
+    const float ahead = near > 0.0f ? 0.5f * (near + far) : std::min(0.5f * far, insidePivotFraction * radius);
+    distance = std::max(ahead, minDistance);
+    target = eye + forward * distance;
 }
 
 void OrbitCamera::look(const float yawRadians, const float pitchRadians) {

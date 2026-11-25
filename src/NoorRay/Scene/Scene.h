@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -46,6 +48,8 @@ public:
     bool remove(MeshHandle handle);
     bool remove(MaterialHandle handle);
     bool remove(TextureHandle handle);
+    //! Frees the texels of every texture but the environment map, which the GPU scene reads again; only after the GPU scene took them.
+    void releaseTextureData();
     bool remove(InstanceHandle handle);
     bool remove(LightHandle handle);
     bool remove(GaussianCloudHandle handle);
@@ -61,10 +65,37 @@ public:
     //! Moves the node to position index among the children of parent, or of the roots, and keeps its world transform. A node never moves below itself.
     bool setParent(NodeHandle handle, NodeHandle parent, std::size_t index);
     bool setInstanceFlags(InstanceHandle handle, InstanceFlags flags);
+    bool setInstanceInfo(InstanceHandle handle, Core::float4 color, std::uint32_t passIndex, float random, std::vector<Core::float4> attributes);
     bool setInstanceMaterial(InstanceHandle handle, MaterialHandle material);
+    bool setInstanceLightLinking(InstanceHandle handle, std::uint32_t lightSet, std::uint64_t lightMask);
+    //! Sets the material of one subset; subset 0 of a mesh without subsets becomes one subset over the whole mesh.
+    bool setMeshSubsetMaterial(MeshHandle handle, std::size_t subset, MaterialHandle material);
     bool setMeshPositions(MeshHandle handle, std::span<const Core::float3> positions);
+    //! Replaces the mesh data; a mesh with the same topology only updates its vertex streams.
+    bool setMesh(MeshHandle handle, Mesh mesh);
+    //! Replaces the positions, normals and tangents of a mesh; each stream keeps its length, or is empty where the mesh has none.
+    bool setMeshVertices(MeshHandle handle, std::vector<Core::float3> positions, std::vector<std::uint32_t> normals, std::vector<std::uint32_t> tangents);
+    //! Lets write(mesh) change the streams of a mesh in place, at the same sizes; with indices, the mesh builds its acceleration structure again.
+    template <class Write>
+    bool updateMesh(const MeshHandle handle, const bool indices, Write&& write) {
+        Mesh* mesh = meshes.find(handle);
+        if (!mesh)
+            return false;
+        const std::array sizes{mesh->positions.size(), mesh->indices.size(), mesh->normals.size(), mesh->tangents.size(), mesh->colors.size()};
+        if (!write(*mesh))
+            return false;
+        if (sizes != std::array{mesh->positions.size(), mesh->indices.size(), mesh->normals.size(), mesh->tangents.size(), mesh->colors.size()})
+            return false;
+        mesh->computeBounds();
+        if (indices)
+            change.markMeshReplaced(meshes.denseIndex(handle));
+        else
+            change.markMesh(meshes.denseIndex(handle));
+        return true;
+    }
     bool setMaterial(MaterialHandle handle, const Material& material);
     bool setLight(LightHandle handle, const Light& light);
+    bool setVolume(VolumeHandle handle, const Volume& volume);
     bool setCamera(CameraHandle handle, const Camera& camera);
     void setActiveCamera(CameraHandle handle);
     void setEnvironment(const Environment& environment);

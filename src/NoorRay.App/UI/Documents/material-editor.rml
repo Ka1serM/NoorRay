@@ -22,10 +22,13 @@
         </div>
         <div class="float-body">
             <div class="empty-state" data-if="material.sceneIndex &lt; 0">
-                <div class="preview-sphere large dim"></div>
                 <p class="empty-message">Click a material in the material manager to edit it.</p>
             </div>
-            <div class="material-columns" data-if="material.sceneIndex &gt;= 0">
+            <div class="empty-state" data-if="material.sceneIndex &gt;= 0 &amp;&amp; material.nodes">
+                <materialpreview class="preview-sphere large" data-attr-material="material.sceneIndex"></materialpreview>
+                <p class="empty-message">This material uses nodes. Edit it in the node editor.</p>
+            </div>
+            <div class="material-columns" data-if="material.sceneIndex &gt;= 0 &amp;&amp; !material.nodes">
                 <div class="material-left">
                     <div class="material-preview-frame"><materialpreview class="preview-sphere large" data-attr-material="material.sceneIndex"></materialpreview></div>
                     <div class="input name-field"><input class="input-field" type="text" data-value="material.name" data-event-change="materialRename()"/></div>
@@ -52,7 +55,8 @@
             </div>
         </div>
         <div class="float-footer">
-            <button class="button node-editor" tooltip="Not available yet"><span>Node Editor</span></button>
+            <button class="button node-editor" data-if="material.sceneIndex &gt;= 0 &amp;&amp; material.nodes" tooltip="Open the node tree of the material" data-event-click="materialNodes()"><span>Node Editor</span></button>
+            <button class="button node-editor" data-if="material.sceneIndex &gt;= 0 &amp;&amp; !material.nodes" tooltip="Convert the material to a node tree and open the node editor" data-event-click="materialUseNodes()"><span>Use Nodes</span></button>
         </div>
     </div>
     <div id="tooltip" class="tooltip floating"></div>

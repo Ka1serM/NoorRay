@@ -23,6 +23,7 @@ void bind(Rml::DataModelConstructor& model, MaterialEditorModel& editor) {
     fields.RegisterMember("sceneIndex", &MaterialEditorModel::sceneIndex);
     fields.RegisterMember("name", &MaterialEditorModel::name);
     fields.RegisterMember("alphaMode", &MaterialEditorModel::alphaMode);
+    fields.RegisterMember("nodes", &MaterialEditorModel::nodes);
     fields.RegisterMember("parameters", &MaterialEditorModel::parameters);
     fields.RegisterMember("parameterIndex", &MaterialEditorModel::parameterIndex);
     fields.RegisterMember("pickerParameter", &MaterialEditorModel::pickerParameter);

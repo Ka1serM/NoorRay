@@ -16,7 +16,7 @@
       "name": "windows",
       "hidden": true,
       "inherits": "base",
-      "description": "llvm-mingw: Clang, libc++ and LLD for Windows, from a Windows or Linux host. Its bin folder is in PATH.",
+      "description": "llvm-mingw: Clang, libc++ and LLD for Windows, from a Windows or Linux host. Its bin folder is in PATH. A Windows host also needs MSYS2's usr\\bin in PATH.",
       "cacheVariables": {
         "PLATFORM": "Windows",
         "CMAKE_SYSTEM_NAME": "Windows",
@@ -151,6 +151,20 @@
       ]
     },
     {
+      "name": "linux-portable-release",
+      "displayName": "Linux Portable Release",
+      "description": "The Python module for the Blender extension zip, built against glibc 2.28 in the container of tools/build_portable_linux.sh.",
+      "inherits": [
+        "linux",
+        "release"
+      ],
+      "cacheVariables": {
+        "NOORRAY_BUILD_APP": "OFF",
+        "NOORRAY_BUILD_RECONSTRUCTION": "OFF",
+        "Python_EXECUTABLE": "/opt/python/cp311-cp311/bin/python3"
+      }
+    },
+    {
       "name": "linux-webgpu-debug",
       "displayName": "Linux WebGPU Debug",
       "inherits": [
@@ -240,6 +254,10 @@
       "configurePreset": "linux-release"
     },
     {
+      "name": "linux-portable-release",
+      "configurePreset": "linux-portable-release"
+    },
+    {
       "name": "linux-webgpu-debug",
       "configurePreset": "linux-webgpu-debug"
     },
@@ -262,6 +280,15 @@
     {
       "name": "web-release",
       "configurePreset": "web-release"
+    },
+    {
+      "name": "blender-addon",
+      "displayName": "Blender Addon",
+      "description": "The Blender extension zip for Linux and Windows. It builds the windows-release module too.",
+      "configurePreset": "linux-release",
+      "targets": [
+        "NoorRay.Blender.Zip"
+      ]
     }
   ],
   "testPresets": [
@@ -270,6 +297,9 @@
       "configurePreset": "windows-debug",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -277,6 +307,9 @@
       "configurePreset": "windows-relwithdebinfo",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -284,6 +317,9 @@
       "configurePreset": "windows-release",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -291,6 +327,9 @@
       "configurePreset": "windows-webgpu-debug",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -298,6 +337,9 @@
       "configurePreset": "windows-webgpu-relwithdebinfo",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -305,6 +347,9 @@
       "configurePreset": "windows-webgpu-release",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -312,6 +357,9 @@
       "configurePreset": "linux-debug",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -319,6 +367,9 @@
       "configurePreset": "linux-relwithdebinfo",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -326,6 +377,9 @@
       "configurePreset": "linux-release",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -333,6 +387,9 @@
       "configurePreset": "linux-webgpu-debug",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -340,6 +397,9 @@
       "configurePreset": "linux-webgpu-relwithdebinfo",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     },
     {
@@ -347,6 +407,9 @@
       "configurePreset": "linux-webgpu-release",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8
       }
     }
   ],
@@ -362,6 +425,10 @@
         {
           "type": "build",
           "name": "windows-debug"
+        },
+        {
+          "type": "test",
+          "name": "windows-debug"
         }
       ]
     },
@@ -375,6 +442,10 @@
         },
         {
           "type": "build",
+          "name": "windows-relwithdebinfo"
+        },
+        {
+          "type": "test",
           "name": "windows-relwithdebinfo"
         }
       ]
@@ -390,6 +461,10 @@
         {
           "type": "build",
           "name": "windows-release"
+        },
+        {
+          "type": "test",
+          "name": "windows-release"
         }
       ]
     },
@@ -403,6 +478,10 @@
         },
         {
           "type": "build",
+          "name": "windows-webgpu-debug"
+        },
+        {
+          "type": "test",
           "name": "windows-webgpu-debug"
         }
       ]
@@ -418,6 +497,10 @@
         {
           "type": "build",
           "name": "windows-webgpu-relwithdebinfo"
+        },
+        {
+          "type": "test",
+          "name": "windows-webgpu-relwithdebinfo"
         }
       ]
     },
@@ -431,6 +514,10 @@
         },
         {
           "type": "build",
+          "name": "windows-webgpu-release"
+        },
+        {
+          "type": "test",
           "name": "windows-webgpu-release"
         }
       ]
@@ -446,6 +533,10 @@
         {
           "type": "build",
           "name": "linux-debug"
+        },
+        {
+          "type": "test",
+          "name": "linux-debug"
         }
       ]
     },
@@ -459,6 +550,10 @@
         },
         {
           "type": "build",
+          "name": "linux-relwithdebinfo"
+        },
+        {
+          "type": "test",
           "name": "linux-relwithdebinfo"
         }
       ]
@@ -474,6 +569,10 @@
         {
           "type": "build",
           "name": "linux-release"
+        },
+        {
+          "type": "test",
+          "name": "linux-release"
         }
       ]
     },
@@ -487,6 +586,10 @@
         },
         {
           "type": "build",
+          "name": "linux-webgpu-debug"
+        },
+        {
+          "type": "test",
           "name": "linux-webgpu-debug"
         }
       ]
@@ -502,6 +605,10 @@
         {
           "type": "build",
           "name": "linux-webgpu-relwithdebinfo"
+        },
+        {
+          "type": "test",
+          "name": "linux-webgpu-relwithdebinfo"
         }
       ]
     },
@@ -515,6 +622,10 @@
         },
         {
           "type": "build",
+          "name": "linux-webgpu-release"
+        },
+        {
+          "type": "test",
           "name": "linux-webgpu-release"
         }
       ]
@@ -558,6 +669,20 @@
         {
           "type": "build",
           "name": "web-release"
+        }
+      ]
+    },
+    {
+      "name": "blender-addon",
+      "displayName": "Blender Addon",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-release"
+        },
+        {
+          "type": "build",
+          "name": "blender-addon"
         }
       ]
     }

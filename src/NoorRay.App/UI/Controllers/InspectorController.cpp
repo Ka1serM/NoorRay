@@ -7,14 +7,20 @@
 #include <string_view>
 #include <variant>
 
+#include "NoorRay.App/UI/Controls/ColorHex.h"
 #include "NoorRay.App/UI/Controls/FieldCommit.h"
 #include "NoorRay.App/UI/Controls/ViewportElement.h"
+#include "NoorRay.App/UI/Controls/ViewportOverlay.h"
 #include "NoorRay.App/UI/Models/AppModel.h"
+#include "NoorRay/Materials/NodeCatalog.h"
+#include "NoorRay/Materials/NodeCompiler.h"
 #include "RmlKit/UI/Models/Model.h"
 
 namespace NoorRay::App {
 
 namespace {
+
+using RmlKit::UI::ReportLevel;
 
 constexpr float degrees = 180.0f / Core::pi;
 constexpr float millimetres = 1000.0f;
@@ -72,6 +78,8 @@ InspectorController::InspectorController(RmlKit::UI::Model& model, AppModel& app
     : model(model), app(app), session(session), viewports(viewports) {
     model.bindEvent("inspectorApply", &InspectorController::onApply, this);
     model.bindEvent("environmentApply", &InspectorController::onApplyEnvironment, this);
+    model.bindEvent("inspectorColor", &InspectorController::onColor, this);
+    model.bindEvent("environmentColor", &InspectorController::onEnvironmentColor, this);
     model.bindEvent("environmentClear", &InspectorController::onClearEnvironment, this);
     model.bindEvent("inspectorMakeActiveCamera", &InspectorController::onMakeActiveCamera, this);
 }
@@ -100,27 +108,37 @@ Core::Transform InspectorController::readTransform() const {
 void InspectorController::showMaterials(const Scene::Instance& instance, const Scene::Mesh* mesh) {
     const Scene::Scene& scene = session.getScene();
     std::vector<MaterialLink>& links = app.inspector.materials;
-    const auto add = [&](const Scene::MaterialHandle handle) {
+    const auto add = [&](Rml::String label, const Scene::MaterialHandle handle) {
         const Scene::Material* material = scene.find(handle);
-        const int index = static_cast<int>(scene.getMaterials().denseIndex(handle));
-        if (material && std::ranges::none_of(links, [&](const MaterialLink& link) { return link.sceneIndex == index; }))
-            links.push_back({material->name, index});
+        if (!material) {
+            links.push_back({std::move(label), "Empty", -1});
+            return;
+        }
+        links.push_back({std::move(label), material->name, static_cast<int>(scene.getMaterials().denseIndex(handle))});
     };
     app.inspector.materialOverride = scene.find(instance.material) != nullptr;
     if (app.inspector.materialOverride) {
-        add(instance.material);
+        add("Object", instance.material);
         return;
     }
-    if (mesh)
-        for (const Scene::MeshSubset& subset : mesh->subsets)
-            add(subset.material);
+    //! A mesh without subsets has one slot, as in the outliner.
+    if (!mesh || mesh->subsets.empty()) {
+        add("Slot 1", {});
+        return;
+    }
+    for (std::size_t slot = 0; slot < mesh->subsets.size(); ++slot)
+        add(std::format("Slot {}", slot + 1), mesh->subsets[slot].material);
 }
 
 void InspectorController::showSelectedTransform() {
     const Scene::Scene& scene = session.getScene();
     std::visit(
         [&](const auto& handle) {
-            if constexpr (!std::is_same_v<std::decay_t<decltype(handle)>, std::monostate>)
+            using Handle = std::decay_t<decltype(handle)>;
+            if constexpr (std::is_same_v<Handle, Scene::NodeHandle>) {
+                if (const Scene::Node* node = scene.find(handle))
+                    showTransform(node->worldTransform);
+            } else if constexpr (!std::is_same_v<Handle, std::monostate>)
                 if (const auto* item = scene.find(handle))
                     showTransform(item->transform);
         },
@@ -158,9 +176,7 @@ void InspectorController::show(const Selection& selected) {
             inspector.heading = "Light";
             inspector.name = light->name;
             inspector.lightType = nameOf(lightTypeNames, light->type);
-            inspector.colorR = light->color.x;
-            inspector.colorG = light->color.y;
-            inspector.colorB = light->color.z;
+            inspector.color = hexOf(light->color);
             inspector.power = light->power;
             inspector.radius = light->radius;
             inspector.width = light->width;
@@ -202,6 +218,13 @@ void InspectorController::show(const Selection& selected) {
             inspector.heading = "Volume";
             inspector.name = volume->name;
         }
+    } else if (const auto* handle = std::get_if<Scene::NodeHandle>(&selection)) {
+        if (const Scene::Node* node = scene.find(*handle)) {
+            inspector.kind = "empty";
+            inspector.heading = "Empty";
+            inspector.name = node->name;
+            showTransform(node->worldTransform);
+        }
     }
     model.dirty("inspector");
 }
@@ -211,9 +234,7 @@ void InspectorController::showEnvironment() {
     const Scene::Texture* texture = session.getScene().find(environment.texture);
     EnvironmentModel& shown = app.environment;
     shown.textureName = texture ? Rml::String(texture->name) : Rml::String();
-    shown.colorR = environment.color.x;
-    shown.colorG = environment.color.y;
-    shown.colorB = environment.color.z;
+    shown.color = hexOf(environment.color);
     shown.strength = environment.strength;
     shown.rotation = environment.rotation * degrees;
     shown.visibleToCamera = environment.visibleToCamera;
@@ -253,7 +274,6 @@ void InspectorController::onApply(Rml::DataModelHandle, Rml::Event& event, const
             return;
         Scene::Light light = *current;
         light.type = valueOf(lightTypeNames, inspector.lightType, light.type);
-        light.color = {std::max<float>(inspector.colorR, 0.0f), std::max<float>(inspector.colorG, 0.0f), std::max<float>(inspector.colorB, 0.0f)};
         light.power = std::max<float>(inspector.power, 0.0f);
         light.radius = std::max<float>(inspector.radius, 0.0f);
         light.width = std::max<float>(inspector.width, 1e-4f);
@@ -262,7 +282,7 @@ void InspectorController::onApply(Rml::DataModelHandle, Rml::Event& event, const
         light.spotBlend = std::clamp<float>(inspector.spotBlend, 0.0f, 1.0f);
         light.angle = std::clamp<float>(inspector.angle, 0.0f, 90.0f) / degrees;
         light.transform = readTransform();
-        scene.setLight(*handle, light);
+        storeLight(*handle, light);
     } else if (const auto* handle = std::get_if<Scene::CameraHandle>(&selection)) {
         const Scene::Camera* current = scene.find(*handle);
         if (!current)
@@ -287,6 +307,10 @@ void InspectorController::onApply(Rml::DataModelHandle, Rml::Event& event, const
             return;
         cloud->transform = readTransform();
         scene.markGaussiansChanged();
+    } else if (const auto* handle = std::get_if<Scene::NodeHandle>(&selection)) {
+        if (!scene.find(*handle))
+            return;
+        setNodeWorldTransform(scene, *handle, readTransform());
     }
     changed();
 }
@@ -297,11 +321,77 @@ void InspectorController::onApplyEnvironment(Rml::DataModelHandle, Rml::Event& e
     RmlKit::UI::Model::requireNoArguments(arguments, "environmentApply");
     Scene::Environment environment = session.getScene().getEnvironment();
     const EnvironmentModel& shown = app.environment;
-    environment.color = {std::max<float>(shown.colorR, 0.0f), std::max<float>(shown.colorG, 0.0f), std::max<float>(shown.colorB, 0.0f)};
     environment.strength = std::max<float>(shown.strength, 0.0f);
     environment.rotation = shown.rotation / degrees;
     environment.visibleToCamera = shown.visibleToCamera;
-    session.getScene().setEnvironment(environment);
+    storeEnvironment(environment);
+    viewports.invalidate();
+    model.dirty("environment");
+}
+
+//! A light with nodes takes the power and colour through its tree, so that the next compile of the tree keeps them.
+void InspectorController::storeLight(const Scene::LightHandle handle, const Scene::Light& light) {
+    Scene::Scene& scene = session.getScene();
+    scene.setLight(handle, light);
+    if (!light.nodeTree)
+        return;
+    const std::expected<std::vector<std::string>, Core::Error> before = Materials::NodeCompiler::compileLight(scene, handle, false);
+    if (!before) {
+        model.report(ReportLevel::Error, "inspector", std::format("NoorRay cannot compile the nodes of {}: {}", light.name, before.error().message));
+        return;
+    }
+    Scene::Light compiled = *scene.find(handle);
+    auto tree = std::make_shared<Materials::NodeTree>(*compiled.nodeTree);
+    Materials::NodeCatalog::setLightOutput(*tree, compiled, light.power, light.color);
+    compiled.nodeTree = std::move(tree);
+    scene.setLight(handle, compiled);
+    if (const auto after = Materials::NodeCompiler::compileLight(scene, handle, false); !after)
+        model.report(ReportLevel::Error, "inspector", std::format("NoorRay cannot compile the nodes of {}: {}", light.name, after.error().message));
+}
+
+//! A world with nodes takes the values through its tree; a value that the tree cannot hold stays as it was, and the inspector tells why.
+void InspectorController::storeEnvironment(const Scene::Environment& environment) {
+    Scene::Scene& scene = session.getScene();
+    const Scene::Environment& current = scene.getEnvironment();
+    if (!current.nodeTree) {
+        scene.setEnvironment(environment);
+        return;
+    }
+    auto tree = std::make_shared<Materials::NodeTree>(*current.nodeTree);
+    if (const auto written = Materials::NodeCatalog::setEnvironmentOutput(*tree, current, environment); !written) {
+        model.report(ReportLevel::Warning, "inspector", std::format("NoorRay cannot change the world: {}", written.error().message));
+        showEnvironment();
+        return;
+    }
+    Scene::Environment changed = current;
+    changed.nodeTree = std::move(tree);
+    scene.setEnvironment(changed);
+    if (const auto compiled = Materials::NodeCompiler::compileEnvironment(scene, false); !compiled)
+        model.report(ReportLevel::Error, "inspector", std::format("NoorRay cannot compile the world nodes: {}", compiled.error().message));
+}
+
+//! The colour picker writes #rrggbb; only a picked colour replaces the light colour, so a colour above one stays until it is picked over.
+void InspectorController::onColor(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
+    RmlKit::UI::Model::requireNoArguments(arguments, "inspectorColor");
+    const auto* handle = std::get_if<Scene::LightHandle>(&selection);
+    const Scene::Light* current = handle ? session.getScene().find(*handle) : nullptr;
+    const std::optional<Core::float3> color = colorOfHex(app.inspector.color);
+    if (!current || !color || hexOf(current->color) == app.inspector.color)
+        return;
+    Scene::Light light = *current;
+    light.color = *color;
+    storeLight(*handle, light);
+    changed();
+}
+
+void InspectorController::onEnvironmentColor(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
+    RmlKit::UI::Model::requireNoArguments(arguments, "environmentColor");
+    Scene::Environment environment = session.getScene().getEnvironment();
+    const std::optional<Core::float3> color = colorOfHex(app.environment.color);
+    if (!color || hexOf(environment.color) == app.environment.color)
+        return;
+    environment.color = *color;
+    storeEnvironment(environment);
     viewports.invalidate();
     model.dirty("environment");
 }
@@ -326,6 +416,7 @@ void InspectorController::onMakeActiveCamera(Rml::DataModelHandle, Rml::Event&, 
     if (!handle)
         return;
     session.getScene().setActiveCamera(*handle);
+    session.getRenderer().resetHistory();
     viewports.followActiveCamera();
     app.inspector.activeCamera = true;
     changed();

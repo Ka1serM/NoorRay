@@ -31,9 +31,23 @@ if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" OR NOT CMAKE_CXX_COMPILER_ID STREQUA
 endif()
 
 option(NOORRAY_BUILD_APP "Build NoorRay.App" ON)
+option(NOORRAY_BUILD_PYTHON "Build NoorRay.Python and the Blender addon" ON)
+option(NOORRAY_GAUSSIAN_TRACING "Trace Gaussian splats in the path tracer: their proxy acceleration structures and the Gaussian shader variants" ON)
 set(NOORRAY_USD_ROOT "" CACHE PATH "An OpenUSD build with include/pxr and lib/. Empty: no USD import.")
 if(PLATFORM_WEB)
     set(NOORRAY_USD_ROOT "" CACHE PATH "" FORCE)
+endif()
+option(NOORRAY_OPENDLSS_RR "Build the denoiser plugin NoorRay.OpenDlssRr: DLSS Ray Reconstruction as plain Vulkan (external/OpenDLSS-RR)" ON)
+if(PLATFORM_WEB OR NOORRHI_BACKEND STREQUAL "WebGpu")
+    set(NOORRAY_OPENDLSS_RR OFF CACHE BOOL "" FORCE)
+endif()
+
+option(NOORRAY_BUILD_RECONSTRUCTION "Build DiffRenderer, its command line tool and tests, and the Differentiable Rendering plugin of NoorRay.App" ON)
+set(NOORRAY_DATASETS "${PROJECT_SOURCE_DIR}/data" CACHE PATH "The datasets folder of the DiffRenderer command line tool, with mip360/, nerf_synthetic/ and msd/.")
+set(NOORRAY_COLMAP_PREFIX "/usr/local" CACHE PATH "The install prefix of the COLMAP libraries and their CMake config, which the Differentiable Rendering plugin links.")
+#! The plugin links COLMAP, which needs libstdc++, through a bridge library that only Linux builds.
+if(NOT PLATFORM_LINUX)
+    set(NOORRAY_BUILD_RECONSTRUCTION OFF CACHE BOOL "" FORCE)
 endif()
 
 include(external/NoorRHI/cmake/CompilerOptions.cmake)
@@ -44,6 +58,14 @@ if(NOORRAY_BUILD_APP)
     set(RMLKIT_UI_SOURCE_DIR "${PROJECT_SOURCE_DIR}/src/NoorRay.App")
     set(RMLKIT_ASSET_SOURCE_DIR "${PROJECT_SOURCE_DIR}/src/NoorRay.App")
     include(external/RmlKit/cmake/App.cmake)
+endif()
+
+if(PLATFORM_WEB)
+    set(NOORRAY_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+endif()
+#! The Python module is a shared object, so every static library that it links must be position-independent.
+if(NOORRAY_BUILD_PYTHON)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
 function(noorray_code_options target)

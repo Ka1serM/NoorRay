@@ -127,9 +127,9 @@ conflict yourself.
 - Python files, functions, and variables use snake_case. Python classes use
   PascalCase.
 - `src/NoorRay/` is the rendering library. It has no UI code and no app code.
-  The app (`NoorRay.App`), the command line tool (`NoorRay.Cli`), the Hydra
-  delegate, the Blender addon, and the Python module use the library through
-  `Session`. Unreal-type features (landscapes, spline meshes) go into
+  The app (`NoorRay.App`), the command line tool (`NoorRay.Cli`), the Python
+  module (`NoorRay.Python`), and the Blender addon on top of it use the library
+  through `Session`. Unreal-type features (landscapes, spline meshes) go into
   UnrealKit or verylia.
 - The GPU code uses NoorRHI only. Shaders are Slang and use `Ptr<T>`,
   `AtomicPtr<T>`, and the texture handles of NoorRHI, so that every kernel

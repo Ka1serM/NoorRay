@@ -1,0 +1,139 @@
+<rml>
+<head>
+    <title>Node editor</title>
+    <link type="text/rcss" href="/UI/RmlKit/Styles/window-buttons.rcss"/>
+    <link type="text/rcss" href="/UI/RmlKit/Styles/color-picker.rcss"/>
+    <link type="text/rcss" href="../Styles/theme.rcss"/>
+    <link type="text/rcss" href="../Styles/noorray.rcss"/>
+    <link type="text/rcss" href="/UI/Platform/WindowButtons/style.rcss"/>
+</head>
+<body id="node-editor" class="tool-window-body" data-model="app">
+    <div class="tool-window">
+        <div class="float-header">
+            <div class="window-drag-region"></div>
+            <div class="window-buttons start" data-if="windowButtons &amp;&amp; windowButtonsStart.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                <button class="title-button" data-for="button : windowButtonsStart" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+            </div>
+            <div class="node-path">
+                <button class="node-crumb" data-class-on="nodeGraph.path.size == 0" tooltip="Show the tree of the owner" data-event-click="nodeGraphUp(0)"><span class="clip">{{ nodeGraph.owner }}</span></button>
+                <div class="node-path-step" data-for="name, d : nodeGraph.path"><svg class="node-path-arrow" src="/UI/Icons/forward-small.svg"/><button class="node-crumb" data-class-on="d + 1 == nodeGraph.path.size" tooltip="Leave the groups below this one" data-event-click="nodeGraphUp(d + 1)"><span class="clip">{{ name }}</span></button></div>
+            </div>
+            <div class="node-tools">
+                <button class="node-tool" data-class-disabled="!nodeGraph.canUndo" tooltip="Undo" hotkey="Ctrl+Z" data-event-click="nodeGraphUndo()"><svg src="/UI/Icons/undo.svg"/></button>
+                <button class="node-tool" data-class-disabled="!nodeGraph.canRedo" tooltip="Redo" hotkey="Ctrl+Shift+Z" data-event-click="nodeGraphRedo()"><svg src="/UI/Icons/redo.svg"/></button>
+                <button class="node-tool" tooltip="Frame all nodes" hotkey="Home" data-event-click="nodeGraphFrame()"><svg src="/UI/Icons/frame.svg"/></button>
+                <button class="node-tool" tooltip="Show the node tree of the world" data-event-click="nodeGraphWorld()"><svg src="/UI/RmlKit/Icons/icon-globe.svg"/><span>World</span></button>
+            </div>
+            <div class="window-buttons end" data-if="windowButtons &amp;&amp; windowButtonsEnd.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                <button class="title-button" data-for="button : windowButtonsEnd" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+            </div>
+        </div>
+        <div class="node-editor-body">
+            <div class="node-graph-area">
+                <nodegraph class="node-graph">
+                    <div class="node-canvas">
+                        <div class="node-frame-label" data-for="frame : nodeGraph.frames" data-style-left="frame.x / 12 + 'em'" data-style-top="frame.y / 12 + 'em'" data-style-width="frame.width / 12 + 'em'"><span class="clip">{{ frame.label }}</span></div>
+                        <div class="node" data-for="node, i : nodeGraph.nodes" data-attr-node="i" data-class-selected="node.selected" data-class-active="node.active" data-class-muted="node.muted" data-class-collapsed="node.hidden" data-class-reroute="node.reroute" data-style-left="node.x / 11 + 'em'" data-style-top="node.y / 11 + 'em'" data-style-width="node.width / 11 + 'em'" data-style-height="node.height / 11 + 'em'">
+                            <div class="node-header" data-attr-category="node.category" data-event-dblclick="nodeGraphEnter(i)"><span class="clip">{{ node.title }}</span><svg class="node-group-icon" data-if="node.group" src="/UI/Icons/forward-small.svg"/></div>
+                            <div class="node-body" data-if="!node.hidden">
+                                <div class="node-row output" data-for="socket : node.outputs"><span class="node-name clip">{{ socket.name }}</span><div class="node-socket" output data-attr-socket="socket.socket" data-class-dim="socket.dim" data-style-background-color="socket.color"></div></div>
+                                <div class="node-input" data-for="socket, s : node.inputs">
+                                    <div class="node-row">
+                                        <div class="node-socket" data-attr-socket="socket.socket" data-class-dim="socket.dim" data-style-background-color="socket.color"></div>
+                                        <span class="node-name clip" data-if="socket.editor == '' || socket.editor == 'vector' || socket.editor == 'color' || socket.editor == 'text'">{{ socket.name }}</span>
+                                        <div class="num node-num" data-if="socket.editor == 'number'" step="0.01" speed="0.005"><span class="node-num-label clip">{{ socket.name }}</span><input class="input-field" type="text" data-value="socket.x" data-event-change="nodeGraphValue(i, s)"/></div>
+                                        <div class="num node-num" data-if="socket.editor == 'integer'" step="1" speed="0.1" integer><span class="node-num-label clip">{{ socket.name }}</span><input class="input-field" type="text" data-value="socket.x" data-event-change="nodeGraphValue(i, s)"/></div>
+                                        <label class="toggle node-toggle" data-if="socket.editor == 'toggle'"><input type="checkbox" data-checked="socket.checked" data-event-change="nodeGraphValue(i, s)"/><span class="toggle-knob"></span><span class="clip">{{ socket.name }}</span></label>
+                                        <div class="node-swatch" data-if="socket.editor == 'color'" data-style-background-color="socket.editor == 'color' ? socket.swatch : 'transparent'" tooltip="Pick a colour" data-event-click="nodeGraphPick(i, s)"></div>
+                                        <span class="node-text clip" data-if="socket.editor == 'text'">{{ socket.text }}</span>
+                                    </div>
+                                    <div class="node-row" data-if="socket.editor == 'vector'"><div class="num node-num" step="0.01" speed="0.005"><span class="node-num-label">X</span><input class="input-field" type="text" data-value="socket.x" data-event-change="nodeGraphValue(i, s)"/></div></div>
+                                    <div class="node-row" data-if="socket.editor == 'vector' &amp;&amp; socket.components &gt; 1"><div class="num node-num" step="0.01" speed="0.005"><span class="node-num-label">Y</span><input class="input-field" type="text" data-value="socket.y" data-event-change="nodeGraphValue(i, s)"/></div></div>
+                                    <div class="node-row" data-if="socket.editor == 'vector' &amp;&amp; socket.components &gt; 2"><div class="num node-num" step="0.01" speed="0.005"><span class="node-num-label">Z</span><input class="input-field" type="text" data-value="socket.z" data-event-change="nodeGraphValue(i, s)"/></div></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="node-menu" data-if="nodeGraph.menu.open" data-style-left="nodeGraph.menu.x + 'dp'" data-style-top="nodeGraph.menu.y + 'dp'">
+                        <div class="node-menu-head">
+                            <button class="node-menu-back" data-if="nodeGraph.menu.category != '' &amp;&amp; nodeGraph.menu.search == ''" tooltip="Show all categories" data-event-click="nodeMenuBack()"><svg src="/UI/Icons/back-small.svg"/></button>
+                            <div class="input node-menu-field"><svg class="node-menu-icon" src="/UI/RmlKit/Icons/icon-search.svg"/><input class="input-field node-menu-search" type="text" placeholder="Search nodes" data-value="nodeGraph.menu.search" data-event-change="nodeMenuSearch()"/></div>
+                        </div>
+                        <p class="node-menu-title" data-if="nodeGraph.menu.category != '' &amp;&amp; nodeGraph.menu.search == ''">{{ nodeGraph.menu.category }}</p>
+                        <div class="node-menu-list">
+                            <div class="node-menu-item" data-for="item, k : nodeGraph.menu.items" data-class-active="nodeGraph.menu.active == k" data-event-click="nodeMenuPick(k)"><span class="clip">{{ item.name }}</span><span class="node-menu-category clip" data-if="item.type != '' &amp;&amp; nodeGraph.menu.search != ''">{{ item.category }}</span><svg class="node-menu-arrow" data-if="item.type == ''" src="/UI/Icons/forward-small.svg"/></div>
+                            <p class="node-menu-empty" data-if="nodeGraph.menu.items.size == 0">No node matches the search.</p>
+                        </div>
+                    </div>
+                </nodegraph>
+                <p class="node-empty" data-if="!nodeGraph.hasOwner">Select a material or a light, or show the world.</p>
+                <div class="node-empty use-nodes" data-if="nodeGraph.hasOwner &amp;&amp; !nodeGraph.hasTree"><p>{{ nodeGraph.owner }} has no node tree.</p><button class="button" tooltip="Give it the default node tree" data-event-click="nodeGraphUseNodes()"><span>Use Nodes</span></button></div>
+                <div class="node-status" data-class-error="nodeGraph.error != ''" data-class-warning="nodeGraph.error == '' &amp;&amp; nodeGraph.warnings.size &gt; 0">
+                    <span class="node-status-text clip" data-if="nodeGraph.error != ''">{{ nodeGraph.error }}</span>
+                    <span class="node-status-text clip" data-if="nodeGraph.error == '' &amp;&amp; nodeGraph.warnings.size &gt; 0">{{ nodeGraph.warnings.size == 1 ? nodeGraph.warnings[0] : nodeGraph.warnings[0] + ' (' + nodeGraph.warnings.size + ' warnings)' }}</span>
+                    <span class="node-status-text clip" data-if="nodeGraph.error == '' &amp;&amp; nodeGraph.warnings.size == 0 &amp;&amp; nodeGraph.notice != ''">{{ nodeGraph.notice }}</span>
+                    <span class="node-status-text dim clip" data-if="nodeGraph.error == '' &amp;&amp; nodeGraph.warnings.size == 0 &amp;&amp; nodeGraph.notice == ''">Shift+A adds a node. Drag from a socket to link. Ctrl+right-drag cuts links.</span>
+                </div>
+            </div>
+            <splitter class="vertical" min-size="220" max-size="560" default-size="300"></splitter>
+            <div class="node-pane scroll-y">
+                <p class="node-pane-empty" data-if="!nodeGraph.panel.shown">Click a node to show its settings.</p>
+                <div class="node-pane-body" data-if="nodeGraph.panel.shown">
+                    <p class="node-pane-type clip">{{ nodeGraph.panel.type }}</p>
+                    <p class="type-label">Name</p>
+                    <div class="input"><input class="input-field" type="text" data-value="nodeGraph.panel.name" data-event-change="nodePanelName()"/></div>
+                    <p class="type-label">Label</p>
+                    <div class="input"><input class="input-field" type="text" placeholder="None" data-value="nodeGraph.panel.label" data-event-change="nodePanelLabel()"/></div>
+                    <p class="node-pane-section" data-if="nodeGraph.panel.settings.size &gt; 0">Settings</p>
+                    <div class="node-setting" data-for="setting, p : nodeGraph.panel.settings">
+                        <p class="type-label" data-if="setting.editor != 'toggle'">{{ setting.label }}</p>
+                        <select data-if="setting.editor == 'enum' || setting.editor == 'image'" data-value="setting.text" data-event-change="nodePanelSetting(p)"><option data-for="option : setting.options" data-attr-value="option.value">{{ option.name }}</option></select>
+                        <div class="input" data-if="setting.editor == 'text'"><input class="input-field" type="text" data-value="setting.text" data-event-change="nodePanelSetting(p)"/></div>
+                        <div class="num" data-if="setting.editor == 'number'" step="0.01" speed="0.005"><input class="input-field" type="text" data-value="setting.number" data-event-change="nodePanelSetting(p)"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div>
+                        <div class="num" data-if="setting.editor == 'integer'" step="1" speed="0.1" integer><input class="input-field" type="text" data-value="setting.number" data-event-change="nodePanelSetting(p)"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div>
+                        <label class="toggle" data-if="setting.editor == 'toggle'"><input type="checkbox" data-checked="setting.checked" data-event-change="nodePanelSetting(p)"/><span class="toggle-knob"></span><span class="clip">{{ setting.label }}</span></label>
+                        <div class="node-ramp" data-if="setting.editor == 'ramp'">
+                            <div class="node-ramp-bar" data-style-decorator="setting.gradient"></div>
+                            <div class="node-ramp-stop" data-for="stop, k : setting.stops">
+                                <div class="node-swatch" data-class-open="nodeGraph.panel.pickerSetting == p &amp;&amp; nodeGraph.panel.pickerStop == k" data-style-background-color="stop.swatch" tooltip="Pick the colour of the stop" data-event-click="nodePanelStopPick(p, k)"></div>
+                                <div class="num" step="0.01" speed="0.002" min="0" max="1" tooltip="Position"><span class="node-num-label">Pos</span><input class="input-field" type="text" data-value="stop.position" data-event-change="nodePanelStop(p, k)"/></div>
+                                <div class="num" step="0.01" speed="0.005" min="0" max="1" tooltip="Alpha"><span class="node-num-label">A</span><input class="input-field" type="text" data-value="stop.alpha" data-event-change="nodePanelStop(p, k)"/></div>
+                                <button class="node-row-remove" data-if="setting.stops.size &gt; 1" tooltip="Remove the stop" data-event-click="nodePanelStopRemove(p, k)"><svg src="/UI/RmlKit/Icons/icon-x.svg"/></button>
+                            </div>
+                            <color-picker data-if="nodeGraph.panel.pickerSetting == p" data-value="nodeGraph.panel.pickerColor" data-event-change="nodePanelColor()"></color-picker>
+                            <button class="button node-row-add" tooltip="Add a stop in the widest gap" data-event-click="nodePanelStopAdd(p)"><svg src="/UI/RmlKit/Icons/icon-plus.svg"/><span>Add stop</span></button>
+                        </div>
+                        <div class="node-curve" data-if="setting.editor == 'curve'">
+                            <div class="node-curve-point" data-for="point, k : setting.points">
+                                <div class="num" step="0.01" speed="0.005"><span class="node-num-label">X</span><input class="input-field" type="text" data-value="point.x" data-event-change="nodePanelPoint(p, k)"/></div>
+                                <div class="num" step="0.01" speed="0.005"><span class="node-num-label">Y</span><input class="input-field" type="text" data-value="point.y" data-event-change="nodePanelPoint(p, k)"/></div>
+                                <button class="node-row-remove" data-if="setting.points.size &gt; 2" tooltip="Remove the point" data-event-click="nodePanelPointRemove(p, k)"><svg src="/UI/RmlKit/Icons/icon-x.svg"/></button>
+                            </div>
+                            <button class="button node-row-add" tooltip="Add a point in the widest gap" data-event-click="nodePanelPointAdd(p)"><svg src="/UI/RmlKit/Icons/icon-plus.svg"/><span>Add point</span></button>
+                        </div>
+                    </div>
+                    <p class="node-pane-section" data-if="nodeGraph.panel.inputs.size &gt; 0">Inputs</p>
+                    <div class="node-pane-input" data-for="socket, s : nodeGraph.panel.inputs">
+                        <div class="node-pane-row">
+                            <div class="node-socket" data-style-background-color="socket.color"></div>
+                            <span class="node-pane-name clip">{{ socket.name }}</span>
+                            <div class="num" data-if="socket.editor == 'number'" step="0.01" speed="0.005"><input class="input-field" type="text" data-value="socket.x" data-event-change="nodePanelValue(s)"/></div>
+                            <div class="num" data-if="socket.editor == 'integer'" step="1" speed="0.1" integer><input class="input-field" type="text" data-value="socket.x" data-event-change="nodePanelValue(s)"/></div>
+                            <label class="toggle" data-if="socket.editor == 'toggle'"><input type="checkbox" data-checked="socket.checked" data-event-change="nodePanelValue(s)"/><span class="toggle-knob"></span></label>
+                            <div class="node-swatch wide" data-if="socket.editor == 'color'" data-class-open="nodeGraph.panel.pickerInput == s" data-style-background-color="socket.editor == 'color' ? socket.swatch : 'transparent'" tooltip="Pick a colour" data-event-click="nodePanelPick(s)"></div>
+                            <span class="node-text clip" data-if="socket.editor == 'text'">{{ socket.text }}</span>
+                        </div>
+                        <div class="node-pane-vector" data-if="socket.editor == 'vector'">
+                            <div class="num" step="0.01" speed="0.005"><span class="node-num-label">X</span><input class="input-field" type="text" data-value="socket.x" data-event-change="nodePanelValue(s)"/></div>
+                            <div class="num" data-if="socket.components &gt; 1" step="0.01" speed="0.005"><span class="node-num-label">Y</span><input class="input-field" type="text" data-value="socket.y" data-event-change="nodePanelValue(s)"/></div>
+                            <div class="num" data-if="socket.components &gt; 2" step="0.01" speed="0.005"><span class="node-num-label">Z</span><input class="input-field" type="text" data-value="socket.z" data-event-change="nodePanelValue(s)"/></div>
+                        </div>
+                        <color-picker data-if="socket.editor == 'color' &amp;&amp; nodeGraph.panel.pickerInput == s" data-value="nodeGraph.panel.pickerColor" data-event-change="nodePanelColor()"></color-picker>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="tooltip" class="tooltip floating"></div>
+</body>
+</rml>

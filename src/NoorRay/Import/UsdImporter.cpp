@@ -141,8 +141,8 @@ public:
                 if (!mesh)
                     return std::unexpected(std::move(mesh.error()));
                 if (mesh->isValid())
-                    object = scene.addInstance(
-                        {transform, transform, *mesh, Scene::InstanceFlags::None, static_cast<std::uint32_t>(scene.getInstances().size())});
+                    object =
+                        scene.addInstance({transform, transform, *mesh, Scene::InstanceFlags::None, static_cast<std::uint32_t>(scene.getInstances().size())});
             } else if (prim.IsA<pxr::UsdGeomCamera>()) {
                 object = addCamera(pxr::UsdGeomCamera(prim), transform);
             } else if (prim.HasAPI<pxr::UsdLuxLightAPI>()) {

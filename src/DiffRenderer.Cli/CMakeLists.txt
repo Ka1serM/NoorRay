@@ -1,0 +1,5 @@
+add_executable(DiffRenderer.Cli Main.cpp)
+diffrenderer_code_options(DiffRenderer.Cli)
+target_link_libraries(DiffRenderer.Cli PRIVATE DiffRenderer::DiffRenderer)
+set_target_properties(DiffRenderer.Cli PROPERTIES OUTPUT_NAME diffrenderer)
+target_compile_definitions(DiffRenderer.Cli PRIVATE DIFFRENDERER_DATA_ROOT="${NOORRAY_DATASETS}")

@@ -10,7 +10,7 @@ import Common.RayCone;
 import Lights.Lights;
 import Lights.Environment;
 import Bsdf.Principled;
-import Materials.Material;
+import Materials.Closure;
 import Scene.SceneSurface;
 import Spectral.Wavelengths;
 
@@ -36,7 +36,7 @@ void endRasterPath(WavefrontFrame frame, uint slot, PathState path) {
 }
 
 //! The surface, material and BSDF as the path tracer, shaded in RGB without secondary rays.
-void shadeRasterPath(WavefrontFrame frame, uint parity, uint bin, uint slot) {
+void shadeRasterPath(WavefrontFrame frame, uint parity, uint slot) {
     const SceneRecord scene = frame.scene[0];
     PathState path = loadPath(frame.pool, slot);
     const PathHit hit = loadHit(frame.pool, slot);
@@ -44,13 +44,14 @@ void shadeRasterPath(WavefrontFrame frame, uint parity, uint bin, uint slot) {
     const Surface surface = loadSurface(scene, hit.instance, hit.primitive, hit.barycentrics, path.direction, hit.t, propagate(path.cone, hit.t));
     const ShadingContext context = surface.context;
 
-    if (hasAlphaTest && path.hasFlag(pathFlagAlphaCandidate) && !passesOpacity(frame, path, surface, 2)) {
+    const PackedClosure closure = frame.pool.closures[slot];
+    if (hasAlphaTest && path.hasFlag(pathFlagAlphaCandidate) && !passesOpacity(frame, path, closureOpacity(closure), 2)) {
         addRadiance(frame, path, wavelengths, path.throughput * wavelengths.upsample(backgroundRadiance(scene, path.direction)));
         endRasterPath(frame, slot, path);
         return;
     }
 
-    const BsdfInputs inputs = evaluateMaterial(scene, context, surface.material);
+    const BsdfInputs inputs = unpackClosure(closure);
     const float3 view = -path.direction;
     const PrincipledBsdf bsdf = makePrincipled(inputs, view, context.geometricNormal.xyz, isBackfacing(context), wavelengths, sceneEnergyLut(scene), false);
     const float3 normal = safeNormalize(inputs.normalRotation.xyz);

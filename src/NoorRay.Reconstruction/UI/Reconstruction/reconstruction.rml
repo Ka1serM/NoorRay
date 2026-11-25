@@ -1,0 +1,104 @@
+<rml>
+<head>
+    <title>Differentiable Rendering</title>
+    <link type="text/rcss" href="/UI/RmlKit/Styles/window-buttons.rcss"/>
+    <link type="text/rcss" href="/UI/Styles/theme.rcss"/>
+    <link type="text/rcss" href="/UI/Styles/noorray.rcss"/>
+    <link type="text/rcss" href="/UI/Platform/WindowButtons/style.rcss"/>
+    <link type="text/rcss" href="reconstruction.rcss"/>
+</head>
+<body class="tool-window-body" data-model="app">
+    <div class="tool-window">
+        <div class="float-header">
+            <div class="window-drag-region"></div>
+            <div class="window-buttons start" data-if="windowButtons &amp;&amp; windowButtonsStart.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                <button class="title-button" data-for="button : windowButtonsStart" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+            </div>
+            <div class="float-handle"><div class="grip"></div></div>
+            <span class="float-title clip">Differentiable Rendering</span>
+            <div class="window-buttons end" data-if="windowButtons &amp;&amp; windowButtonsEnd.size &gt; 0" data-class-windows="windowButtonStyle == 'windows'" data-class-gnome="windowButtonStyle == 'gnome'" data-class-kde="windowButtonStyle == 'kde'" data-class-macos="windowButtonStyle == 'macos'" data-class-gtk="windowButtonStyle == 'gtk'" data-class-backdrop="!windowFocused" data-class-maximized="windowMaximized">
+                <button class="title-button" data-for="button : windowButtonsEnd" data-class-close="button == 'close'" data-class-minimize="button == 'minimize'" data-class-maximize="button == 'maximize'" data-event-click="windowButton(button)"><svg data-attr-src="'/UI/RmlKit/Icons/window-' + (windowButtonStyle == 'gtk' ? 'gnome' : windowButtonStyle) + '-' + (button == 'maximize' &amp;&amp; windowMaximized ? 'restore' : button) + '.svg'"/></button>
+            </div>
+        </div>
+        <div class="float-body recon-body">
+            <div class="recon-column">
+                <p class="recon-section">Datasets</p>
+                <div class="attr-row"><p class="attr-label">Folder</p><div class="attr-control recon-folder"><p class="recon-root clip">{{ recon.datasetsRoot }}</p><button class="button" data-event-click="reconDatasetsRoot()"><span>Change…</span></button><button class="button" data-event-click="reconRescan()"><span>Rescan</span></button></div></div>
+                <div class="recon-datasets">
+                    <button class="recon-dataset" data-for="row, i : recon.datasets" data-class-on="row.folder == recon.folder" data-class-disabled="recon.busy" data-event-click="reconDataset(i)">
+                        <span class="recon-dataset-name">{{ row.group != '' ? row.group + ' / ' : '' }}{{ row.name }}</span>
+                        <span class="recon-dataset-kind">{{ row.kind }}</span>
+                    </button>
+                    <p class="attr-note" data-if="recon.datasets.size == 0">This folder has no datasets: a dataset is a folder with photographs, with sparse/0, or with transforms_train.json, directly in it or one folder below.</p>
+                </div>
+
+                <p class="recon-section">Other folder</p>
+                <div class="attr-row"><p class="attr-label">Path</p><div class="attr-control recon-folder"><div class="input recon-path"><input class="input-field" type="text" data-value="recon.folder"/></div><button class="button" data-event-click="reconOpen()"><span>Browse…</span></button></div></div>
+                <div class="attr-row"><p class="attr-label"></p><div class="attr-control"><button class="button primary" data-class-disabled="recon.folder == ''" data-event-click="reconLoad()"><span>Load</span></button></div></div>
+                <div class="attr-row"><p class="attr-label"></p><p class="attr-note">COLMAP finds the camera poses of plain photographs first; a folder with sparse/0 or an earlier colmap/ result skips it.</p></div>
+                <div class="attr-row"><p class="attr-label">State</p><div class="attr-control"><p class="recon-state" data-class-failed="recon.failed">{{ recon.stage }}{{ recon.busy ? '  ' + recon.progress + ' %' : '' }}</p></div></div>
+                <div class="attr-row" data-if="recon.message != ''"><p class="attr-label"></p><p class="attr-note">{{ recon.message }}</p></div>
+                <div class="recon-bar" data-if="recon.busy"><div class="recon-bar-fill" data-style-width="recon.progress + '%'"></div></div>
+            </div>
+            <div class="recon-column">
+                <p class="recon-section">Representation</p>
+                <div class="recon-methods">
+                    <button class="recon-method" data-for="row, i : recon.methods" data-class-on="row.id == recon.method" data-event-click="reconMethod(i)">
+                        <span class="recon-method-name">{{ row.name }}</span>
+                        <span class="recon-method-detail">{{ row.renderer }}</span>
+                    </button>
+                </div>
+
+                <div class="attr-row"><p class="attr-label">Iterations</p><div class="attr-control slider-row">
+                    <div class="num recon-count" step="500" min="100" max="100000" speed="10" integer><input class="input-field" type="text" data-value="recon.iterations"/><div class="num-spin"><div class="num-up"></div><div class="num-down"></div></div></div>
+                    <div class="slider recon-slider" min="1000" max="30000"><div class="slider-fill" data-style-width="(recon.iterations &lt; 1000 ? 0 : (recon.iterations &gt; 30000 ? 30000 : recon.iterations) - 1000) / 29000 * 100 + '%'"></div></div>
+                </div></div>
+                <div class="attr-row"><p class="attr-label"></p><p class="attr-note">A new count applies when the training starts again.</p></div>
+
+                <div class="recon-actions">
+                    <button class="button primary wide" data-if="!recon.training" data-class-disabled="!recon.ready" data-event-click="reconTrain()"><span>{{ recon.trained ? 'Continue' : 'Train' }}</span></button>
+                    <button class="button wide" data-if="recon.training" data-event-click="reconTrain()"><span>Pause</span></button>
+                    <button class="button" data-class-disabled="!recon.ready" data-event-click="reconRestart()"><span>Restart</span></button>
+                </div>
+
+                <div class="recon-stats">
+                    <div class="meta-item"><p class="meta-label">Iteration</p><p class="meta-value">{{ recon.iteration }}</p></div>
+                    <div class="meta-item"><p class="meta-label">Loss</p><p class="meta-value">{{ recon.loss }}</p></div>
+                    <div class="meta-item"><p class="meta-label">Test PSNR</p><p class="meta-value">{{ recon.psnr }}</p></div>
+                    <div class="meta-item"><p class="meta-label">Speed</p><p class="meta-value">{{ recon.speed }}</p></div>
+                    <div class="meta-item"><p class="meta-label">Primitives</p><p class="meta-value">{{ recon.primitives }}</p></div>
+                </div>
+
+                <div class="recon-chart" data-class-empty="!recon.hasHistory">
+                    <div class="recon-chart-legend"><span class="recon-chart-key loss"></span><span>Loss (log)</span><span class="recon-chart-key psnr" data-if="recon.hasPsnr"></span><span data-if="recon.hasPsnr">Test PSNR</span></div>
+                    <div class="recon-chart-body">
+                        <div class="recon-chart-axis left"><p>{{ recon.hasHistory ? recon.lossHigh : '' }}</p><p>{{ recon.hasHistory ? recon.lossLow : '' }}</p></div>
+                        <div class="recon-chart-area">
+                            <trainingchart class="recon-chart-plot"/>
+                            <p class="recon-chart-empty" data-if="!recon.hasHistory">The loss shows here while the method trains.</p>
+                        </div>
+                        <div class="recon-chart-axis right"><p>{{ recon.hasPsnr ? recon.psnrHigh : '' }}</p><p>{{ recon.hasPsnr ? recon.psnrLow : '' }}</p></div>
+                    </div>
+                    <div class="recon-chart-iterations"><p>0</p><p>{{ recon.iterationSpan }} it</p></div>
+                </div>
+
+                <p class="recon-section">Scene</p>
+                <div class="attr-row"><p class="attr-label">{{ recon.resultIsMesh ? 'Mesh' : 'Gaussians' }}</p><div class="attr-control recon-views">
+                    <button class="button" data-class-disabled="!recon.trained || !recon.hasResult || recon.adding" data-event-click="reconAdd()"><span>{{ recon.added ? 'Update in scene' : 'Add to scene' }}</span></button>
+                    <label class="toggle" data-if="recon.added"><input type="checkbox" data-checked="recon.live" data-event-change="reconLive()"/><span class="toggle-knob"></span><span>Live</span></label>
+                </div></div>
+                <div class="attr-row"><p class="attr-label"></p><p class="attr-note">The path tracer renders the result with the meshes, lights and volumes of the scene. Live updates it while the method trains.</p></div>
+
+                <p class="recon-section">Viewport</p>
+                <div class="attr-row"><p class="attr-label">Photograph</p><div class="attr-control recon-views">
+                    <button class="button" data-class-disabled="recon.viewCount == 0" data-event-click="reconView(-1)"><span>‹</span></button>
+                    <p class="recon-view">{{ recon.viewCount > 0 ? (recon.view + 1) + ' / ' + recon.viewCount : '–' }}</p>
+                    <button class="button" data-class-disabled="recon.viewCount == 0" data-event-click="reconView(1)"><span>›</span></button>
+                </div></div>
+                <div class="attr-row"><p class="attr-label"></p><p class="attr-note">Moves the viewport camera to a training photograph. The viewport shows the method's own render; orbit, pan and fly as usual.</p></div>
+                <div class="attr-row"><p class="attr-label"></p><div class="attr-control"><button class="button" data-class-primary="recon.previewing" data-class-disabled="!recon.ready" data-event-click="reconPathTracer()"><span>{{ recon.previewing ? 'Back to scene' : 'Show training preview' }}</span></button></div></div>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

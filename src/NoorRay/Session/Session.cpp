@@ -18,10 +18,13 @@ bool isColorSlot(const Scene::TextureSlot slot) {
 }
 
 bool isTextureUsed(const Scene::Scene& scene, const Scene::TextureHandle texture) {
-    if (scene.getEnvironment().texture == texture)
+    const Scene::Environment& environment = scene.getEnvironment();
+    if (environment.texture == texture || std::ranges::contains(environment.graphTextures, texture, &Scene::MaterialTexture::texture))
         return true;
     return std::ranges::any_of(scene.getMaterials().getValues(), [&](const Scene::Material& material) {
-        return std::ranges::any_of(material.textures, [&](const std::optional<Scene::MaterialTexture>& slot) { return slot && slot->texture == texture; });
+        return std::ranges::any_of(material.textures, [&](const std::optional<Scene::MaterialTexture>& slot) { return slot && slot->texture == texture; })
+               || std::ranges::any_of(material.graphTextures, [&](const Scene::MaterialTexture& slot) { return slot.texture == texture; })
+               || std::ranges::contains(material.displacementTextures, texture, &Scene::MaterialTexture::texture);
     });
 }
 
@@ -42,9 +45,21 @@ std::expected<void, Core::Error> Session::open(NoorRHI::Device& openedDevice, co
 }
 
 std::expected<void, Core::Error> Session::importFile(const std::filesystem::path& path) {
-    if (auto imported = Import::SceneImporter::import(path, scene); !imported)
-        return imported;
+    std::expected<Format::Animation, Core::Error> imported = Import::SceneImporter::import(path, scene);
+    if (!imported)
+        return std::unexpected(std::move(imported.error()));
+    if (!imported->isEmpty()) {
+        if (!animation.isEmpty())
+            return Core::fail(Core::ErrorCode::InvalidState, "the session already has an animated file");
+        animation = std::move(*imported);
+        if (std::expected<void, Core::Error> applied = animation.apply(animation.getFirstFrame(), scene); !applied)
+            return applied;
+    }
     return ensureCamera();
+}
+
+std::expected<void, Core::Error> Session::setFrame(const int frame) {
+    return animation.apply(frame, scene);
 }
 
 std::expected<void, Core::Error> Session::saveFile(const std::filesystem::path& path) const {
@@ -57,6 +72,7 @@ std::expected<void, Core::Error> Session::resize(const std::uint32_t width, cons
 
 void Session::clear() {
     scene.clear();
+    animation = {};
     renderer.restartAccumulation();
 }
 
@@ -67,7 +83,8 @@ std::expected<void, Core::Error> Session::loadMaterialTexture(const Scene::Mater
     if (!current)
         return Core::fail(Core::ErrorCode::InvalidState, "the material does not exist");
     Materials::TextureCache cache(scene);
-    std::expected<Scene::TextureHandle, Core::Error> texture = cache.load(path, isColorSlot(slot) ? Materials::ColorSpace::Srgb : Materials::ColorSpace::NonColor);
+    std::expected<Scene::TextureHandle, Core::Error> texture =
+        cache.load(path, isColorSlot(slot) ? Materials::ColorSpace::Srgb : Materials::ColorSpace::NonColor);
     if (!texture)
         return std::unexpected(std::move(texture.error()));
     Scene::Material changed = *current;
@@ -128,7 +145,7 @@ std::expected<void, Core::Error> Session::record(NoorRHI::CommandList& list) {
     if (auto updated = gpuScene.update(scene); !updated)
         return updated;
     if (renderer.getSettings().shading == Render::Shading::PathTraced)
-        if (auto built = gpuScene.buildAccelerationStructures(scene); !built)
+        if (auto built = gpuScene.buildAccelerationStructures(scene, renderer.getSettings().getWavefrontSettings().tracesGaussians()); !built)
             return built;
     return renderer.record(list, gpuScene, *scene.findActiveCamera());
 }
@@ -136,7 +153,10 @@ std::expected<void, Core::Error> Session::record(NoorRHI::CommandList& list) {
 void Session::requestPick(NoorRHI::CommandList& list, const std::uint32_t x, const std::uint32_t y) {
     if (pickPending || x >= renderer.getWidth() || y >= renderer.getHeight())
         return;
-    list.download(renderer.getTargets().getObjectIds(), pickReadback, std::size_t{y} * renderer.getWidth() + x);
+    //! The object IDs have the render resolution, which is lower than the display while FSR upscales.
+    const std::uint32_t renderX = static_cast<std::uint32_t>(std::uint64_t{x} * renderer.getRenderWidth() / renderer.getWidth());
+    const std::uint32_t renderY = static_cast<std::uint32_t>(std::uint64_t{y} * renderer.getRenderHeight() / renderer.getHeight());
+    list.download(renderer.getTargets().getObjectIds(), pickReadback, std::size_t{renderY} * renderer.getRenderWidth() + renderX);
     pickPending = true;
 }
 

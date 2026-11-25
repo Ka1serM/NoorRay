@@ -9,6 +9,9 @@
 #include <numbers>
 
 #include <tiny_gltf.h>
+//! tinygltf includes windows.h, whose near and far macros hide the camera fields.
+#undef near
+#undef far
 
 #include "NoorRay/Core/Log.h"
 #include "NoorRay/Import/GltfMaterial.h"

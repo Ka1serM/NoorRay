@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <vector>
 
 namespace NoorRay::Scene {
 
@@ -19,6 +21,7 @@ enum class Change : std::uint32_t {
     Volumes = 1u << 10,
     Camera = 1u << 11,
     Environment = 1u << 12,
+    MeshReplaced = 1u << 13,
 };
 
 constexpr Change operator|(const Change a, const Change b) {
@@ -31,13 +34,13 @@ constexpr Change& operator|=(Change& a, const Change b) {
     return a = a | b;
 }
 
-inline constexpr Change geometryChanges =
-    Change::InstanceTransforms | Change::InstanceSet | Change::MeshPositions | Change::MeshTopology | Change::GaussianValues | Change::GaussianSet;
+inline constexpr Change geometryChanges = Change::InstanceTransforms | Change::InstanceSet | Change::MeshPositions | Change::MeshTopology | Change::MeshReplaced
+                                          | Change::GaussianValues | Change::GaussianSet;
 //! Changes that make cached path radiance stale, so ReSTIR reservoirs need validation.
 inline constexpr Change lightingChanges =
     geometryChanges | Change::MaterialValues | Change::MaterialSet | Change::Textures | Change::Lights | Change::Volumes | Change::Environment;
 
-//! The changes since the last GpuScene update, with the dirty dense index range of each kind that only needs a range upload.
+//! The changes since the last GpuScene update, with the dirty dense index range of each kind that only needs a range upload, and the exact dirty meshes.
 class SceneChange {
 public:
     struct Range {
@@ -49,6 +52,22 @@ public:
             end = index + 1 > end ? index + 1 : end;
         }
         bool isEmpty() const { return begin >= end; }
+        bool contains(const std::uint32_t index) const { return index >= begin && index < end; }
+    };
+
+    //! Sorted dense indices; a mesh between two dirty meshes is often large and unchanged.
+    struct IndexSet {
+        std::vector<std::uint32_t> values;
+
+        void add(const std::uint32_t index) {
+            const auto position = std::ranges::lower_bound(values, index);
+            if (position == values.end() || *position != index)
+                values.insert(position, index);
+        }
+        bool isEmpty() const { return values.empty(); }
+        bool contains(const std::uint32_t index) const { return std::ranges::binary_search(values, index); }
+        auto begin() const { return values.begin(); }
+        auto end() const { return values.end(); }
     };
 
     void mark(const Change change) { changes |= change; }
@@ -59,6 +78,10 @@ public:
     void markMesh(const std::uint32_t index) {
         changes |= Change::MeshPositions;
         meshes.add(index);
+    }
+    void markMeshReplaced(const std::uint32_t index) {
+        changes |= Change::MeshReplaced;
+        replacedMeshes.add(index);
     }
     void markMaterial(const std::uint32_t index) {
         changes |= Change::MaterialValues;
@@ -73,14 +96,16 @@ public:
     bool isEmpty() const { return changes == Change::None; }
     Change getChanges() const { return changes; }
     const Range& getInstanceRange() const { return instances; }
-    const Range& getMeshRange() const { return meshes; }
+    const IndexSet& getMeshes() const { return meshes; }
+    const IndexSet& getReplacedMeshes() const { return replacedMeshes; }
     const Range& getMaterialRange() const { return materials; }
     const Range& getLightRange() const { return lights; }
 
 private:
     Change changes = Change::None;
     Range instances;
-    Range meshes;
+    IndexSet meshes;
+    IndexSet replacedMeshes;
     Range materials;
     Range lights;
 };

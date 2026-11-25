@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <format>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <variant>
@@ -12,6 +13,8 @@
 #include "NoorRay.App/UI/Controls/FieldCommit.h"
 #include "NoorRay.App/UI/Controls/ViewportElement.h"
 #include "NoorRay.App/UI/Models/AppModel.h"
+#include "NoorRay/Materials/NodeCatalog.h"
+#include "NoorRay/Materials/NodeCompiler.h"
 #include "RmlKit/UI/Backend/FileDialog.h"
 #include "RmlKit/UI/Models/Model.h"
 
@@ -180,6 +183,7 @@ void MaterialController::refresh() {
     editor.sceneIndex = static_cast<int>(scene.getMaterials().denseIndex(material));
     editor.name = current->name;
     editor.alphaMode = Rml::String(alphaModeNames[static_cast<std::size_t>(current->alphaMode)]);
+    editor.nodes = current->nodeTree != nullptr;
     for (const MaterialField& field : materialFields)
         editor.parameters.push_back(makeRow(field, *current, scene));
     editor.parameterIndex = std::clamp(editor.parameterIndex, 0, static_cast<int>(editor.parameters.size()) - 1);
@@ -242,15 +246,15 @@ void MaterialController::onRename(Rml::DataModelHandle, Rml::Event& event, const
     const Scene::Material* current = session.getScene().find(material);
     if (!current || app.materialEditor.name.empty() || app.materialEditor.name == current->name)
         return;
-    Scene::Material renamed = *current;
-    renamed.name = app.materialEditor.name;
-    session.getScene().setMaterial(material, renamed);
+    Scene::Material named = *current;
+    named.name = app.materialEditor.name;
+    session.getScene().setMaterial(material, named);
     const std::size_t index = session.getScene().getMaterials().denseIndex(material);
-    if (index < app.outliner.materials.size())
-        app.outliner.materials[index] = renamed.name;
+    if (renamed)
+        renamed();
     for (MaterialLink& link : app.inspector.materials)
         if (link.sceneIndex == static_cast<int>(index))
-            link.name = renamed.name;
+            link.name = named.name;
     model.dirty("outliner");
     model.dirty("inspector");
     changed();
@@ -309,6 +313,22 @@ void MaterialController::onTextureChannel(Rml::DataModelHandle, Rml::Event&, con
     changedMaterial.texture(*slot)->channel = channel;
     session.getScene().setMaterial(material, changedMaterial);
     changed();
+}
+
+bool MaterialController::useNodes() {
+    Scene::Scene& scene = session.getScene();
+    const Scene::Material* current = scene.find(material);
+    if (!current || current->nodeTree)
+        return false;
+    auto tree = std::make_shared<Materials::NodeTree>();
+    Materials::NodeCatalog::addMaterialNodes(*tree, *current);
+    Scene::Material converted = *current;
+    converted.nodeTree = std::move(tree);
+    scene.setMaterial(material, converted);
+    if (auto compiled = Materials::NodeCompiler::compileMaterial(scene, material, false); !compiled)
+        model.report(ReportLevel::Error, "material", std::format("NoorRay cannot compile the nodes of {}: {}", converted.name, compiled.error().message));
+    changed();
+    return true;
 }
 
 void MaterialController::changed() {

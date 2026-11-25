@@ -6,6 +6,7 @@
 
 #include "NoorRay/Core/Hash.h"
 #include "NoorRay/Import/Primitives.h"
+#include "NoorRay/Materials/Graph.h"
 #include "NoorRay/Render/Raster/ToneMap.h"
 
 namespace NoorRay::Session {
@@ -58,6 +59,13 @@ std::uint64_t MaterialPreviews::hashMaterial(const Scene::Scene& scene, const Sc
     hash = mix(mix(mix(hash, material.specularTint), material.sheenColor), material.emissionColor);
     for (const std::optional<Scene::MaterialTexture>& texture : material.textures)
         hash = texture ? hashTexture(scene, *texture, Core::combineHash(hash, 1)) : Core::combineHash(hash, 0);
+    if (!material.graph)
+        return hash;
+    hash = Core::combineHash(hash, material.graph->getHash());
+    for (const Core::float4& value : material.graphParameters)
+        hash = mix(mix(hash, Core::float3{value.x, value.y, value.z}), value.w);
+    for (const Scene::MaterialTexture& texture : material.graphTextures)
+        hash = hashTexture(scene, texture, hash);
     return hash;
 }
 
@@ -99,6 +107,7 @@ std::expected<void, Core::Error> MaterialPreviews::open(NoorRHI::Device& openedD
     Render::RendererSettings settings = Render::RendererSettings::pathTraced();
     settings.primaryVisibility = Render::PrimaryVisibility::Traced;
     settings.reuse = Render::Reuse::Off;
+    settings.denoiser = Render::Denoiser::Off;
     settings.accumulate = true;
     settings.maxSamples = std::max(samples, 1u);
     settings.wavefront.maxDepth = previewDepth;
@@ -157,6 +166,19 @@ std::expected<void, Core::Error> MaterialPreviews::begin(const Scene::Scene& sou
             }
             slot->texture = scene.addTexture(*texture);
             started.textures.push_back(slot->texture);
+        }
+        for (Scene::MaterialTexture& slot : shown.graphTextures) {
+            const Scene::Texture* texture = source.find(slot.texture);
+            if (!texture) {
+                shown.graph.reset();
+                break;
+            }
+            slot.texture = scene.addTexture(*texture);
+            started.textures.push_back(slot.texture);
+        }
+        if (!shown.graph) {
+            shown.graphParameters.clear();
+            shown.graphTextures.clear();
         }
         scene.setMaterial(sphereMaterial, shown);
         session.getRenderer().restartAccumulation();

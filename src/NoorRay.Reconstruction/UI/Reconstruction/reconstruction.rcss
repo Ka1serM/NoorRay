@@ -1,0 +1,87 @@
+.recon-body { flex-direction: row; gap: 24dp; overflow: hidden; padding-bottom: 0; }
+
+/*! Each column scrolls on its own, so its rows keep their height instead of shrinking to fit. */
+.recon-column { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 10dp; overflow-y: auto; padding-bottom: 20dp; }
+
+.recon-column > * { flex-shrink: 0; }
+
+.recon-folder { display: flex; align-items: center; gap: 8dp; }
+
+.recon-path { flex: 1 1 0; min-width: 0; }
+
+.recon-state { font-size: 12dp; color: #fafafa; }
+
+.recon-state.failed { color: #ff6467; }
+
+.recon-bar { height: 4dp; border-radius: 2dp; background-color: #ffffff0f; }
+
+.recon-bar-fill { height: 4dp; border-radius: 2dp; background-color: #e5e5e5; }
+
+.recon-section { margin-top: 10dp; font-size: 11dp; color: #666666; }
+
+.recon-methods { display: flex; flex-direction: column; gap: 4dp; }
+
+.recon-method { display: flex; flex-direction: column; gap: 2dp; padding: 8dp 10dp; border-width: 1dp; border-color: #ffffff0f; border-radius: 8dp; background-color: #0f0f0f; }
+
+.recon-method:hover { background-color: #1d1d1d; }
+
+.recon-method.on { border-color: #e5e5e5; background-color: #1d1d1d; }
+
+.recon-method-name { font-size: 12dp; color: #fafafa; }
+
+.recon-method-detail { font-size: 11dp; color: #a1a1a1; }
+
+.recon-actions { display: flex; gap: 8dp; margin-top: 4dp; }
+
+.recon-stats { display: flex; flex-wrap: wrap; gap: 12dp 20dp; padding: 10dp 12dp; border-radius: 8dp; background-color: #0f0f0f; }
+
+/*! The training chart: the loss on a log scale on the left axis and the test PSNR on the right axis, over the iterations */
+.recon-chart { display: flex; flex-direction: column; gap: 6dp; margin-top: 8dp; padding: 10dp 12dp; border-radius: 8dp; background-color: #0f0f0f; }
+
+.recon-chart-legend { display: flex; align-items: center; gap: 6dp; font-size: 11dp; color: #a1a1a1; }
+
+.recon-chart-key { width: 10dp; height: 2dp; border-radius: 1dp; }
+
+.recon-chart-key.loss { background-color: #4fa3ff; }
+
+.recon-chart-key.psnr { margin-left: 8dp; background-color: #f5a524; }
+
+.recon-chart-body { display: flex; gap: 8dp; height: 140dp; }
+
+.recon-chart-axis { flex: 0 0 auto; display: flex; flex-direction: column; justify-content: space-between; width: 48dp; font-size: 10dp; color: #fafafa59; }
+
+.recon-chart-axis.left { text-align: right; }
+
+.recon-chart-area { position: relative; flex: 1 1 0; min-width: 0; }
+
+.recon-chart-plot { display: block; width: 100%; height: 100%; }
+
+.recon-chart-empty { position: absolute; left: 0; right: 0; top: 60dp; text-align: center; font-size: 11dp; color: #fafafa59; }
+
+.recon-chart-iterations { display: flex; justify-content: space-between; margin: 0 56dp; font-size: 10dp; color: #fafafa59; }
+
+.recon-views { display: flex; align-items: center; gap: 8dp; }
+
+.recon-view { min-width: 64dp; font-size: 12dp; color: #fafafa; text-align: center; }
+
+.recon-root { flex: 1 1 0; min-width: 0; font-size: 12dp; color: #a1a1a1; }
+
+.recon-datasets { flex: 1 1 auto; min-height: 120dp; display: flex; flex-direction: column; gap: 2dp; overflow-y: auto; }
+
+.recon-dataset { display: flex; align-items: center; gap: 8dp; padding: 6dp 10dp; border-radius: 6dp; }
+
+.recon-dataset:hover { background-color: #1d1d1d; }
+
+.recon-dataset.on { background-color: #1d1d1d; }
+
+.recon-dataset.disabled { opacity: 0.5; pointer-events: none; }
+
+.recon-dataset-name { flex: 1 1 0; min-width: 0; font-size: 12dp; color: #fafafa; }
+
+.recon-dataset-kind { font-size: 11dp; color: #a1a1a1; }
+
+.recon-count { flex: 0 0 88dp; }
+
+.recon-slider { height: 6dp; border-radius: 3dp; background-color: #1d1d1d; }
+
+.recon-slider .slider-fill { border-radius: 3dp; }

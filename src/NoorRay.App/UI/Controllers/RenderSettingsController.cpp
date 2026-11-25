@@ -8,14 +8,20 @@
 #include "NoorRay.App/UI/Controls/FieldCommit.h"
 #include "NoorRay.App/UI/Controls/ViewportElement.h"
 #include "NoorRay.App/UI/Models/AppModel.h"
+#include "NoorRay/Gpu/GaussianAccelerationStructure.h"
+#include "NoorRay/Render/RenderOptions.h"
+#include "NoorRay/Render/Upscale/DlssRr.h"
 #include "RmlKit/UI/Models/Model.h"
 
 namespace NoorRay::App {
 
 namespace {
 
-constexpr std::array<std::string_view, 2> gaussianShadingNames{"emissive", "scattering"};
-constexpr std::array<std::string_view, 3> toneMappingNames{"linear", "neutral", "agx"};
+//! The denoiser names of the add-on, in the order of Render::Denoiser.
+constexpr std::array<std::string_view, 3> denoiserNames{"off", "nrd", "openDlssRr"};
+constexpr std::array<std::string_view, 3> reuseNames{"off", "di", "pt"};
+constexpr std::array<std::string_view, 3> gaussianShadingNames{"off", "emissive", "scattering"};
+constexpr std::array<std::string_view, 5> upscaleQualityNames{"native", "quality", "balanced", "performance", "ultraPerformance"};
 
 template <class Enum, std::size_t count>
 Rml::String nameOf(const std::array<std::string_view, count>& names, const Enum value) {
@@ -34,66 +40,69 @@ Enum valueOf(const std::array<std::string_view, count>& names, const Rml::String
 
 RenderSettingsController::RenderSettingsController(RmlKit::UI::Model& model, AppModel& app, Session::Session& session, ViewportElementInstancer& viewports)
     : model(model), app(app), session(session), viewports(viewports) {
-    model.bindEvent("renderMode", &RenderSettingsController::onMode, this);
+    model.bindEvent("renderMode", &RenderSettingsController::onApply, this);
     model.bindEvent("renderApply", &RenderSettingsController::onApply, this);
     model.bindEvent("renderRestart", &RenderSettingsController::onRestart, this);
-    show(session.getRenderer().getSettings());
+    app.renderSettings.openDlssRrBuilt = Render::DlssRr::isBuilt();
+    if (!app.renderSettings.openDlssRrBuilt)
+        app.renderSettings.denoiser = "nrd";
+    app.renderSettings.gaussianTracingBuilt = Gpu::GaussianAccelerationStructure::isAvailable();
+    //! The editor starts with the defaults of the Blender add-on and of Cycles.
+    apply(read());
 }
 
-void RenderSettingsController::show(const Render::RendererSettings& settings) {
-    RenderSettingsModel& shown = app.renderSettings;
-    shown.mode = settings.shading == Render::Shading::Raster ? "raster" : "pathTraced";
-    shown.tracedCameraRays = settings.primaryVisibility == Render::PrimaryVisibility::Traced;
-    shown.pathReuse = settings.reuse != Render::Reuse::Off;
-    shown.accumulate = settings.accumulate;
-    shown.maxSamples = static_cast<int>(settings.maxSamples);
-    shown.maxDepth = static_cast<int>(settings.wavefront.maxDepth);
-    shown.rouletteStart = static_cast<int>(settings.wavefront.rouletteStart);
-    shown.indirectClamp = settings.wavefront.indirectClamp;
-    shown.gaussianShading = nameOf(gaussianShadingNames, settings.wavefront.gaussianShading);
-    shown.toneMapping = nameOf(toneMappingNames, settings.display.toneMapping);
-    shown.exposure = settings.display.exposure;
-    model.dirty("renderSettings");
+Render::RenderOptions RenderSettingsController::readOptions() const {
+    const RenderSettingsModel& shown = app.renderSettings;
+    Render::RenderOptions options;
+    options.samples = static_cast<std::uint32_t>(std::max(shown.maxFrames, 0));
+    options.denoiser = valueOf<Render::Denoiser>(denoiserNames, shown.denoiser);
+    options.lightTree = shown.lightTree;
+    options.visibilityCache = shown.visibilityCache;
+    options.gaussianShading = valueOf<Render::GaussianShading>(gaussianShadingNames, shown.gaussianShading);
+    options.seed = static_cast<std::uint32_t>(std::max(shown.seed, 0));
+    options.temporal = shown.temporal;
+    options.reuse = valueOf<Render::Reuse>(reuseNames, shown.reuse);
+    options.radianceCache = shown.radianceCache;
+    options.upscale = shown.upscale;
+    options.renderScale = Render::upscaleQualityScales[static_cast<std::size_t>(valueOf<Render::UpscaleQuality>(upscaleQualityNames, shown.upscaleQuality))];
+    options.sharpness = std::clamp<float>(shown.sharpness, 0.0f, 1.0f);
+    const auto bounces = [](const int value) { return static_cast<std::uint32_t>(std::clamp(value, 0, 1024)); };
+    options.maxBounces = bounces(shown.maxBounces);
+    options.diffuseBounces = bounces(shown.diffuseBounces);
+    options.glossyBounces = bounces(shown.glossyBounces);
+    options.transmissionBounces = bounces(shown.transmissionBounces);
+    options.volumeBounces = bounces(shown.volumeBounces);
+    options.transparentBounces = bounces(shown.transparentBounces);
+    options.clampDirect = std::max<float>(shown.clampDirect, 0.0f);
+    options.clampIndirect = std::max<float>(shown.clampIndirect, 0.0f);
+    options.filterGlossy = std::max<float>(shown.filterGlossy, 0.0f);
+    options.exposure = std::max<float>(shown.filmExposure, 0.0f);
+    options.filterWidth = std::clamp<float>(shown.pixelFilter, 0.01f, 10.0f);
+    return options;
 }
 
 Render::RendererSettings RenderSettingsController::read() const {
-    const RenderSettingsModel& shown = app.renderSettings;
-    Render::RendererSettings settings = session.getRenderer().getSettings();
-    const bool raster = shown.mode == "raster";
-    settings.shading = raster ? Render::Shading::Raster : Render::Shading::PathTraced;
-    settings.primaryVisibility = !raster && shown.tracedCameraRays ? Render::PrimaryVisibility::Traced : Render::PrimaryVisibility::Raster;
-    settings.reuse = !raster && shown.pathReuse ? Render::Reuse::DiPt : Render::Reuse::Off;
-    settings.accumulate = shown.accumulate;
-    settings.maxSamples = static_cast<std::uint32_t>(std::max(shown.maxSamples, 0));
-    settings.wavefront.maxDepth = static_cast<std::uint32_t>(std::clamp(shown.maxDepth, 1, 256));
-    settings.wavefront.rouletteStart = static_cast<std::uint32_t>(std::max(shown.rouletteStart, 0));
-    settings.wavefront.indirectClamp = std::max<float>(shown.indirectClamp, 0.0f);
-    settings.wavefront.gaussianShading = valueOf<Render::GaussianShading>(gaussianShadingNames, shown.gaussianShading);
-    settings.display.toneMapping = valueOf<Render::ToneMapping>(toneMappingNames, shown.toneMapping);
-    settings.display.exposure = shown.exposure;
+    Render::RendererSettings settings = readOptions().toRendererSettings();
+    settings.display = session.getRenderer().getSettings().display;
+    if (app.renderSettings.mode == "raster")
+        settings.shading = Render::Shading::Raster;
     return settings;
 }
 
 void RenderSettingsController::apply(const Render::RendererSettings& settings) {
+    //! RELAX and FSR keep their history over camera moves, so a smaller viewport while moving only discards it.
+    const Render::RendererSettings validated = settings.validated(false);
+    const bool temporal = validated.temporal && (validated.denoiser != Render::Denoiser::Off || validated.upscaler != Render::Upscaler::Off);
+    viewports.setMotionDivisor(temporal ? 1 : app.renderSettings.motionDivisor);
     session.getRenderer().setSettings(settings);
-    show(settings);
+    model.dirty("renderSettings");
     viewports.invalidate();
-}
-
-void RenderSettingsController::onMode(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments) {
-    RmlKit::UI::Model::requireNoArguments(arguments, "renderMode");
-    const Render::RendererSettings current = session.getRenderer().getSettings();
-    Render::RendererSettings settings = app.renderSettings.mode == "raster" ? Render::RendererSettings::viewport() : Render::RendererSettings::pathTraced();
-    settings.display = current.display;
-    settings.maxSamples = current.maxSamples;
-    apply(settings);
 }
 
 void RenderSettingsController::onApply(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments) {
     if (!FieldCommit::isCommit(event))
         return;
     RmlKit::UI::Model::requireNoArguments(arguments, "renderApply");
-    viewports.setMotionDivisor(app.renderSettings.motionDivisor);
     apply(read());
 }
 

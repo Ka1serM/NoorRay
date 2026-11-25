@@ -1,0 +1,10 @@
+add_executable(DiffRenderer.Tests Main.cpp LossTests.cpp SortTests.cpp AdamTests.cpp ComparisonTests.cpp MeshTextureTests.cpp SdfMethodTests.cpp)
+diffrenderer_code_options(DiffRenderer.Tests)
+target_link_libraries(DiffRenderer.Tests PRIVATE DiffRenderer::DiffRenderer)
+if(NOORRAY_GAUSSIAN_TRACING)
+    target_sources(DiffRenderer.Tests PRIVATE GaussianTracingTests.cpp GaussianMethodTests.cpp)
+    target_link_libraries(DiffRenderer.Tests PRIVATE DiffRendererMethodsGaussianTracingShaders)
+    target_include_directories(DiffRenderer.Tests PRIVATE "${PROJECT_SOURCE_DIR}/src/DiffRenderer/Methods/GaussianTracing/Shaders"
+                                                          "${PROJECT_SOURCE_DIR}/src/DiffRenderer/Shaders")
+endif()
+set_target_properties(DiffRenderer.Tests PROPERTIES OUTPUT_NAME diffrenderer-tests)

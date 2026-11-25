@@ -23,24 +23,7 @@ std::string getExtension(const std::filesystem::path& path) {
     return extension;
 }
 
-}
-
-bool SceneImporter::isSupported(const std::filesystem::path& path) {
-    const std::string extension = getExtension(path);
-    return extension == ".nrs" || extension == ".gltf" || extension == ".glb" || extension == ".obj" || extension == ".ply" || extension == ".pbrt"
-           || extension == ".usd" || extension == ".usda" || extension == ".usdc" || extension == ".usdz" || EnvironmentImporter::isSupported(path);
-}
-
-std::expected<void, Core::Error> SceneImporter::import(const std::filesystem::path& path, Scene::Scene& scene) {
-    if (!std::filesystem::exists(path))
-        return Core::fail(Core::ErrorCode::Io, std::format("the file '{}' does not exist", path.string()));
-    const std::string extension = getExtension(path);
-    if (extension == ".nrs") {
-        Format::SceneFile file;
-        if (std::expected<void, Core::Error> opened = file.open(path); !opened)
-            return opened;
-        return file.load(scene);
-    }
+std::expected<void, Core::Error> importStill(const std::filesystem::path& path, const std::string& extension, Scene::Scene& scene) {
     if (extension == ".gltf" || extension == ".glb")
         return GltfImporter::import(path, scene);
     if (extension == ".obj")
@@ -59,5 +42,27 @@ std::expected<void, Core::Error> SceneImporter::import(const std::filesystem::pa
         return EnvironmentImporter::import(path, scene);
     return Core::fail(Core::ErrorCode::Unsupported, std::format("the file type '{}' is not supported", extension));
 }
+}
 
+bool SceneImporter::isSupported(const std::filesystem::path& path) {
+    const std::string extension = getExtension(path);
+    return extension == ".nrs" || extension == ".gltf" || extension == ".glb" || extension == ".obj" || extension == ".ply" || extension == ".pbrt"
+           || extension == ".usd" || extension == ".usda" || extension == ".usdc" || extension == ".usdz" || EnvironmentImporter::isSupported(path);
+}
+
+std::expected<Format::Animation, Core::Error> SceneImporter::import(const std::filesystem::path& path, Scene::Scene& scene) {
+    if (!std::filesystem::exists(path))
+        return Core::fail(Core::ErrorCode::Io, std::format("the file '{}' does not exist", path.string()));
+    const std::string extension = getExtension(path);
+    if (extension == ".nrs") {
+        Format::SceneFile file;
+        if (std::expected<void, Core::Error> opened = file.open(path); !opened)
+            return std::unexpected(std::move(opened.error()));
+        return file.load(scene);
+    }
+    std::expected<void, Core::Error> imported = importStill(path, extension, scene);
+    if (!imported)
+        return std::unexpected(std::move(imported.error()));
+    return Format::Animation{};
+}
 }

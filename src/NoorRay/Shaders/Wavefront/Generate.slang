@@ -1,7 +1,9 @@
 import NoorRHI;
+import Lights.SgLighting;
 import Wavefront.Records;
 import Wavefront.PathState;
 import Wavefront.Queues;
+import Wavefront.RadianceCache;
 import Common.Math;
 import Common.Random;
 import Common.RayCone;
@@ -17,6 +19,35 @@ float tileDither(uint2 pixel) {
     const uint v = x ^ y;
     const uint bits = ((v & 1u) << 7) | ((x & 1u) << 6) | ((v & 2u) << 4) | ((x & 2u) << 3) | ((v & 4u) << 1) | (x & 4u) | ((v & 8u) >> 2) | ((x & 8u) >> 3);
     return (float(bits) + 0.5) / 256.0;
+}
+
+float blackmanHarrisIntegral(float t) {
+    return 0.35875 * t + (-0.48829 * sin(twoPi * t) + 0.07064 * sin(2.0 * twoPi * t) - 0.01168 / 3.0 * sin(3.0 * twoPi * t)) / twoPi;
+}
+
+//! Inverts the integral by Newton steps kept inside the bracket, which bisect where the window is flat.
+float sampleBlackmanHarris(float u) {
+    const float target = u * 0.35875;
+    float low = 0.0;
+    float high = 1.0;
+    float t = u;
+    for (uint i = 0; i < 8; ++i) {
+        const float error = blackmanHarrisIntegral(t) - target;
+        if (error > 0.0)
+            high = t;
+        else
+            low = t;
+        const float next = t - error / max(blackmanHarris(t), 1e-6);
+        t = next > low && next < high ? next : 0.5 * (low + high);
+    }
+    return t;
+}
+
+//! Cycles' pixel filter by importance sampling each axis, so every camera sample has weight one and the mean of the samples is the filtered pixel.
+float2 samplePixelFilter(float2 u, float width) {
+    if (width <= 0.0)
+        return u;
+    return 0.5 + (float2(sampleBlackmanHarris(u.x), sampleBlackmanHarris(u.y)) - 0.5) * width;
 }
 
 //! Per pixel: spreads the path budget evenly, turns its share into whole samples with a carried credit, and appends them to the sample list.
@@ -53,6 +84,9 @@ bool spawnPath(WavefrontFrame frame, CameraRecord camera, uint slot, uint2 entry
     path.flags = pathFlagDelta | (primarySample ? pathFlagPrimarySample : 0u) | (rasterized ? pathFlagRasterPrimary : 0u) |
                  (frame.raster.rgb != 0 ? pathFlagRgb : 0u);
     path.radiance = float3(0.0, 0.0, 0.0);
+    path.diffuseFraction = 1.0;
+    path.primaryDirection = float3(0.0, 0.0, 0.0);
+    path.setReceiver(mediumReceiver());
     SobolSampler cameraSampler = pathSampler(frame, path, patternCamera);
     const float4 u = cameraSampler.next4();
     SobolSampler wavelengthSampler = pathSampler(frame, path, patternWavelength);
@@ -60,7 +94,8 @@ bool spawnPath(WavefrontFrame frame, CameraRecord camera, uint slot, uint2 entry
     path.hero = packHero(hero);
     const Wavelengths wavelengths = pathWavelengths(scene, path);
     const uint2 coordinate = pixelCoordinate(film, path.pixel);
-    const float2 filmPosition = (float2(coordinate) + (rasterized ? frame.raster.jitter : u.xy)) / float2(film.width, film.height);
+    const float2 jitter = rasterized ? frame.raster.jitter : (frame.limits.z >= 0.0 ? frame.limits.zw : samplePixelFilter(u.xy, frame.filter.x));
+    const float2 filmPosition = (float2(coordinate) + jitter) / float2(film.width, film.height);
     const CameraRay ray = generateCameraRay(camera, filmPosition, u.zw, wavelengths.lambda.x);
     path.origin = ray.origin;
     path.direction = ray.direction;
@@ -70,12 +105,20 @@ bool spawnPath(WavefrontFrame frame, CameraRecord camera, uint slot, uint2 entry
     if (ray.dispersive)
         path.setFlag(pathFlagSecondaryTerminated, true);
     if (!ray.valid || ray.weight <= 0.0) {
-        finishPath(film, path);
+        if (frame.options.y == 0)
+            finishPath(film, path);
         path.flags |= pathDepthMask;
         storePath(frame.pool, slot, path);
         return false;
     }
+    //! ReSTIR PT updates the cache in its own path kernels.
+    if (primarySample && frame.options.y == 0 && isRadianceCacheUpdatePixel(frame.cache, coordinate, frame.cache.frameIndex)) {
+        path.setFlag(pathFlagCacheUpdate, true);
+        beginRadianceCacheUpdate(frame.cache, slot);
+    }
     storePath(frame.pool, slot, path);
+    frame.pool.lightPath[slot] = uint2(0u, 0u);
+    frame.pool.minRayPdf[slot] = floatMax;
     return true;
 }
 
